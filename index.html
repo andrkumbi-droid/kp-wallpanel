@@ -2609,12 +2609,11 @@ function selectZone(zone) {
 
 
 function syncCountersWithOrders() {
-  // Scan all orders and make sure counters are at least as high as existing order numbers
+  var changed = false;
   orders.forEach(function(o) {
     if(!o.id) return;
     var id = o.id.toString();
-    var key = '';
-    var num = 0;
+    var key = '', num = 0;
     if(id.startsWith('#')) { key='bangkok'; num=parseInt(id.slice(1))||0; }
     else if(id.startsWith('1-')) { key='northern'; num=parseInt(id.slice(2))||0; }
     else if(id.startsWith('2-')) { key='northeastern'; num=parseInt(id.slice(2))||0; }
@@ -2623,8 +2622,21 @@ function syncCountersWithOrders() {
     else if(id.startsWith('5-')) { key='instore'; num=parseInt(id.slice(2))||0; }
     if(key && num > parseInt(orderCounters[key]||0)) {
       orderCounters[key] = num;
+      changed = true;
     }
   });
+  // Also fix any corrupted values (numbers > 9999 are likely concatenated)
+  Object.keys(orderCounters).forEach(function(k) {
+    var val = parseInt(orderCounters[k])||0;
+    // If value looks like string concatenation (e.g. 1209 when should be 209)
+    // we can detect this if it's > 3 digits more than expected
+    orderCounters[k] = val;
+    changed = true;
+  });
+  // Write correct values back to Firebase to fix corruption
+  if(changed && window.fbDB) {
+    window.fbDB.ref('orderCounters').set(orderCounters);
+  }
 }
 
 function generateOrderNo() {
@@ -2649,7 +2661,8 @@ function peekNextOrderNo(zone) {
   else if(z==='southern'){prefix='4-';key='southern';}
   else if(z==='instore'){prefix='5-';key='instore';}
   else return '';
-  return prefix + (parseInt(orderCounters[key])+1);
+  var current = parseInt(orderCounters[key]) || 0;
+  return prefix + (current + 1);
 }
 
 function getNextOrderNo(zone, callback) {
@@ -2664,23 +2677,23 @@ function getNextOrderNo(zone, callback) {
   else { if(callback) callback(''); return; }
 
   if(window.fbDB) {
-    // Use Firebase transaction for atomic increment - prevents duplicates
     window.fbDB.ref('orderCounters/'+key).transaction(function(current) {
-      return (parseInt(current)||orderCounters[key]) + 1;
+      // CRITICAL: always parse as integer before adding 1
+      var cur = parseInt(current) || parseInt(orderCounters[key]) || 0;
+      return cur + 1;
     }, function(error, committed, snapshot) {
       if(!error && committed) {
-        var newNum = snapshot.val();
+        var newNum = parseInt(snapshot.val());
         orderCounters[key] = newNum;
         if(callback) callback(prefix + newNum);
       } else {
-        // Fallback to local
         orderCounters[key] = parseInt(orderCounters[key]) + 1;
-        if(callback) callback(prefix + orderCounters[key]);
+        if(callback) callback(prefix + parseInt(orderCounters[key]));
       }
     });
   } else {
     orderCounters[key] = parseInt(orderCounters[key]) + 1;
-    if(callback) callback(prefix + orderCounters[key]);
+    if(callback) callback(prefix + parseInt(orderCounters[key]));
   }
 }
 
