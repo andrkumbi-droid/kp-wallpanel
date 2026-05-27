@@ -1136,6 +1136,44 @@ function initials(n){return n.trim().split(' ').map(w=>w[0]).join('').toUpperCas
 
 // MANAGER
 function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();}
+
+function mgCleanup() {
+  // Find all undefined/corrupt orders
+  var bad = orders.filter(function(o){ return !o.id || o.id === 'undefined'; });
+  if(bad.length === 0) { alert('No corrupt orders found! / ไม่มีออเดอร์เสีย'); return; }
+  if(!confirm('Found ' + bad.length + ' corrupt orders. Delete them? / พบ ' + bad.length + ' ออเดอร์เสีย ลบ?')) return;
+  
+  // Delete from Firebase
+  bad.forEach(function(o) {
+    // Find Firebase key
+    if(window.fbDB) {
+      window.fbDB.ref('orders').orderByChild('id').equalTo(o.id).once('value', function(snap) {
+        snap.forEach(function(child) { child.ref.remove(); });
+      });
+    }
+  });
+  
+  // Remove from local array
+  orders = orders.filter(function(o){ return o.id && o.id !== 'undefined'; });
+  
+  // Also clean via Firebase scan
+  if(window.fbDB) {
+    window.fbDB.ref('orders').once('value', function(snap) {
+      var deleted = 0;
+      snap.forEach(function(child) {
+        var o = child.val();
+        if(!o || !o.id || o.id === 'undefined') {
+          child.ref.remove();
+          deleted++;
+        }
+      });
+      alert('Done! Deleted ' + deleted + ' corrupt orders / ลบแล้ว ' + deleted + ' ออเดอร์');
+      ofRenderOrders();
+      mgRender();
+    });
+  }
+}
+
 function mgRender(){mgStock();mgIncoming();mgDrivers();mgRenderStaff();mgRevenue();}
 
 function mgStock(){
@@ -2591,6 +2629,19 @@ function whRenderPacking() {
   }).join('');
 }
 
+
+function whBackToNew(btn) {
+  var id = btn.getAttribute('data-id');
+  var ord = orders.find(function(x){return x.id===id;});
+  if(!ord) return;
+  ord.status = 'new';
+  addStatusLog(ord,'new','Warehouse');
+  whRender();
+  whRenderPacking();
+  ofRenderOrders();
+  syncOrders();
+}
+
 function whDonePacking(btn) {
   var id = btn.getAttribute('data-id');
   var ord = orders.find(function(x){return x.id===id;});
@@ -2624,20 +2675,36 @@ function whRenderPacking() {
     return;
   }
   el.innerHTML = packingOrders.map(function(o) {
-    var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'x'+i.qty;}).join(', ')||'—';
-    var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim';}).map(function(i){return i.code+'x'+i.qty;}).join(', ')||'—';
-    var clips = (o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0);
+    var oid = o.id||o.orderNo||'?';
+    var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return (i.code||'')+'x'+(i.qty||0);}).join(', ')||(o.panels||'—');
+    var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim';}).map(function(i){return (i.code||'')+'x'+(i.qty||0);}).join(', ')||(o.lcorner||'—');
+    var clips = (o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)||(o.clips||0);
     return '<div class="card" style="margin-bottom:12px">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
-      '<span style="font-size:20px;font-weight:800">'+o.id+'</span>'+
+      '<span style="font-size:20px;font-weight:800">'+oid+'</span>'+
       '<span class="badge" style="background:#dbeafe;color:#1d4ed8">Packing</span></div>'+
       '<div style="font-size:13px;color:var(--text2);margin-bottom:8px">'+(o.zone||'')+' · '+(o.customer||'')+'</div>'+
       '<div class="pkbox"><div class="pkrow"><span class="pklbl">Panels</span><span class="pkval">'+panels+'</span></div>'+
       '<div class="pkrow"><span class="pklbl">Edge strips</span><span class="pkval">'+edges+'</span></div>'+
       '<div class="pkrow"><span class="pklbl">Clips</span><span class="pkval">'+clips.toLocaleString()+'</span></div></div>'+
-      '<button class="btn btng" style="margin-top:10px" onclick="whDonePacking(this)" data-id="'+o.id+'">'+
-      '<i class="ti ti-checks"></i> Done packing / แพ็คเสร็จแล้ว</button></div>';
+      '<button class="btn btng" style="margin-top:10px" onclick="whDonePacking(this)" data-id="'+oid+'">'+
+      '<i class="ti ti-checks"></i> Done packing / แพ็คเสร็จแล้ว</button>'+
+      '<button class="btnsm" style="margin-top:6px;width:100%;background:#fee2e2;color:#dc2626;border-color:#fee2e2" onclick="whBackToNew(this)" data-id="'+oid+'">'+
+      '<i class="ti ti-arrow-back-up"></i> ย้ายกลับ New</button></div>';
   }).join('');
+}
+
+
+function whBackToNew(btn) {
+  var id = btn.getAttribute('data-id');
+  var ord = orders.find(function(x){return x.id===id;});
+  if(!ord) return;
+  ord.status = 'new';
+  addStatusLog(ord,'new','Warehouse');
+  whRender();
+  whRenderPacking();
+  ofRenderOrders();
+  syncOrders();
 }
 
 function whDonePacking(btn) {
