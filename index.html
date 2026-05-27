@@ -1138,42 +1138,33 @@ function initials(n){return n.trim().split(' ').map(w=>w[0]).join('').toUpperCas
 function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();}
 
 function mgCleanup() {
-  // Find all undefined/corrupt orders
-  var bad = orders.filter(function(o){ return !o.id || o.id === 'undefined'; });
-  if(bad.length === 0) { alert('No corrupt orders found! / ไม่มีออเดอร์เสีย'); return; }
-  if(!confirm('Found ' + bad.length + ' corrupt orders. Delete them? / พบ ' + bad.length + ' ออเดอร์เสีย ลบ?')) return;
-  
-  // Delete from Firebase
-  bad.forEach(function(o) {
-    // Find Firebase key
-    if(window.fbDB) {
-      window.fbDB.ref('orders').orderByChild('id').equalTo(o.id).once('value', function(snap) {
-        snap.forEach(function(child) { child.ref.remove(); });
-      });
-    }
-  });
-  
-  // Remove from local array
-  orders = orders.filter(function(o){ return o.id && o.id !== 'undefined'; });
-  
-  // Also clean via Firebase scan
-  if(window.fbDB) {
-    window.fbDB.ref('orders').once('value', function(snap) {
-      var deleted = 0;
-      snap.forEach(function(child) {
-        var o = child.val();
-        if(!o || !o.id || o.id === 'undefined') {
-          child.ref.remove();
+  if(!window.fbDB) { alert('Not connected'); return; }
+  window.fbDB.ref('orders').once('value', function(snap) {
+    var toDelete = [];
+    snap.forEach(function(child) {
+      var o = child.val();
+      if(!o || !o.id || o.id === 'undefined' || String(o.id) === 'undefined') {
+        toDelete.push(child.key);
+      }
+    });
+    if(toDelete.length === 0) { alert('No corrupt orders! ✅'); return; }
+    if(!confirm('Delete ' + toDelete.length + ' corrupt orders?')) return;
+    var deleted = 0;
+    toDelete.forEach(function(k) {
+      window.fbDB.ref('orders/' + k).remove(function(err) {
+        if(!err) {
           deleted++;
+          if(deleted === toDelete.length) {
+            orders = orders.filter(function(o){ return o.id && String(o.id) !== 'undefined'; });
+            ofRenderOrders();
+            mgRender();
+            alert('Done! Deleted ' + deleted + ' orders ✅');
+          }
         }
       });
-      alert('Done! Deleted ' + deleted + ' corrupt orders / ลบแล้ว ' + deleted + ' ออเดอร์');
-      ofRenderOrders();
-      mgRender();
     });
-  }
+  });
 }
-
 function mgRender(){mgStock();mgIncoming();mgDrivers();mgRenderStaff();mgRevenue();}
 
 function mgStock(){
