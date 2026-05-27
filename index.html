@@ -2267,32 +2267,75 @@ function ofFilt(f,btn){ofFilt_=f;document.querySelectorAll('.fbtn').forEach(b=>b
 function ofRenderInc(){const el=document.getElementById('of-inc-list');if(!el)return;el.innerHTML=incomingItems.length===0?'<div class="empty"><i class="ti ti-ship" style="font-size:36px;display:block;margin-bottom:8px"></i>No incoming orders</div>':incomingItems.map(i=>'<div class="card" style="margin-bottom:8px"><div class="inc-pill"><i class="ti ti-ship" style="font-size:13px"></i> On the way / กำลังมา</div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:14px;font-weight:600">'+i.code+'</span><span class="badge bwarn">'+fmtD(i.eta)+'</span></div><div style="font-size:12px;color:var(--text2)">'+i.qty.toLocaleString()+' pcs'+(i.sup?' &middot; '+i.sup:'')+'</div>'+(i.notes?'<div style="font-size:12px;color:var(--text2)">'+i.notes+'</div>':'')+'</div>').join('');}
 
 function ofRenderTour(){
+  // OVERVIEW: all ready + loaded orders with driver assignment
+  var overviewEl = document.getElementById('of-tour-overview');
+  if(overviewEl) {
+    var readyOrders = orders.filter(function(o){ return o.status==='ready'||o.status==='loaded'; });
+    if(readyOrders.length===0) {
+      overviewEl.innerHTML = '<div class="empty" style="padding:0.5rem;font-size:13px">No ready orders / ไม่มีออเดอร์พร้อมส่ง</div>';
+    } else {
+      overviewEl.innerHTML = '<div class="card" style="padding:8px 12px">'+
+        readyOrders.map(function(o) {
+          // Find assigned driver
+          var assignedDriver = null;
+          activeTours.forEach(function(t) {
+            if(t.orders.includes(o.id)) assignedDriver = t.driverName;
+          });
+          var statusColor = o.status==='ready' ? 'var(--green)' : 'var(--blue)';
+          var statusLabel = o.status==='ready' ? 'Ready' : 'Loaded';
+          return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">'+
+            '<div>'+
+            '<span style="font-size:15px;font-weight:700">'+o.id+'</span>'+
+            '<span style="font-size:12px;color:var(--text2);margin-left:8px">'+(o.zone||'')+'</span>'+
+            '</div>'+
+            '<div style="display:flex;align-items:center;gap:8px">'+
+            (assignedDriver
+              ? '<span style="font-size:12px;color:var(--blue)"><i class="ti ti-truck" style="font-size:12px"></i> '+assignedDriver+'</span>'
+              : '<span style="font-size:12px;color:var(--text2)">— ไม่มีคนขับ</span>')+
+            '<span class="badge" style="background:'+statusColor+'22;color:'+statusColor+'">'+statusLabel+'</span>'+
+            '</div>'+
+            '</div>';
+        }).join('')+
+        '</div>';
+    }
+  }
+
   // Active tours
   var tourCards = activeTours.map(function(t,ti) {
     var del=t.orders.filter(function(id){return t.status[id]==='delivered';}).length;
     var can=t.orders.filter(function(id){return t.status[id]==='cancelled';}).length;
     var pen=t.orders.length-del-can;
     var pct=t.orders.length>0?Math.round(del/t.orders.length*100):0;
-    return '<div class="tmgmt" style="cursor:pointer" onclick="openTourDetail('+ti+')">'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
+    // Order list with remove button
+    var orderList = t.orders.map(function(id) {
+      var ord = orders.find(function(x){return x.id===id;});
+      var st = t.status[id]||'loaded';
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:13px">'+
+        '<span style="font-weight:600">'+id+'</span>'+
+        '<div style="display:flex;align-items:center;gap:6px">'+
+        '<span style="font-size:11px;color:var(--text2)">'+(ord?ord.zone:'')+'</span>'+
+        (st==='loaded'||st==='ready'
+          ? '<button data-tid="'+t.id+'" data-oid="'+id+'" onclick="rmFromTour(this)" style="font-size:11px;padding:2px 8px;border:1px solid #dc2626;background:#fee2e2;color:#dc2626;border-radius:var(--rs);cursor:pointer">✕ ลบ</button>'
+          : '<span class="badge" style="font-size:10px;background:var(--green-bg);color:var(--green)">'+st+'</span>')+
+        '</div>'+
+        '</div>';
+    }).join('');
+    return '<div class="tmgmt">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px" onclick="openTourDetail('+ti+')" style="cursor:pointer">'+
       '<div style="font-size:15px;font-weight:600"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+'</div>'+
       '<div style="display:flex;align-items:center;gap:6px"><span class="badge bactive">'+t.orders.length+' orders</span><i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2)"></i></div>'+
       '</div>'+
-      '<div class="tstats" style="margin-bottom:8px">'+
-      '<div class="tstat">Pending: <b style="color:var(--orange)">'+pen+'</b></div>'+
-      '<div class="tstat">Delivered: <b style="color:var(--green)">'+del+'</b></div>'+
-      '<div class="tstat">Cancelled: <b style="color:var(--red)">'+can+'</b></div>'+
-      '</div>'+
+      '<div style="margin-bottom:8px">'+orderList+'</div>'+
       '<div style="height:6px;background:var(--bg2);border-radius:3px;overflow:hidden">'+
       '<div style="height:100%;background:var(--green);border-radius:3px;width:'+pct+'%"></div>'+
       '</div>'+
-      '<div style="font-size:11px;color:var(--text2);margin-top:4px;text-align:right">'+pct+'% delivered</div>'+
+      '<div style="font-size:11px;color:var(--text2);margin-top:4px;text-align:right">'+pct+'% delivered &middot; '+pen+' pending</div>'+
       '</div>';
   }).join('');
+
   document.getElementById('of-active-tours').innerHTML = activeTours.length===0
     ? '<div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div>'
     : tourCards;
-
   // Driver select grid
   var dsel=document.getElementById('of-drsel'),noD=document.getElementById('of-nodrivers');
   if(drivers.length===0){dsel.style.display='none';noD.style.display='block';}
@@ -2335,6 +2378,26 @@ function ofSelDr(btn){ofSelDriver=btn.getAttribute("data-did");ofRenderTour();}
 function ofSelOrd(btn){var id=btn.getAttribute("data-oid");if(!ofSelOrders.includes(id))ofSelOrders.push(id);ofRenderTour();}
 function ofDeselOrd(id){ofSelOrders=ofSelOrders.filter(function(x){return x!==id;});ofRenderTour();}
 function ofDeselOrdBtn(btn){ofDeselOrd(btn.getAttribute("data-oid"));}
+
+function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.getAttribute("data-oid");
+  var t = activeTours.find(function(x){return x.id===tourId;});
+  if(!t) return;
+  // Remove order from tour
+  t.orders = t.orders.filter(function(id){return id!==orderId;});
+  delete t.status[orderId];
+  // Set order back to ready
+  var ord = orders.find(function(x){return x.id===orderId;});
+  if(ord) { ord.status='ready'; addStatusLog(ord,'ready','Office'); }
+  // If tour is now empty, remove it
+  if(t.orders.length===0) {
+    activeTours = activeTours.filter(function(x){return x.id!==tourId;});
+  }
+  ofRenderTour();
+  ofRenderOrders();
+  syncTours();
+  syncOrders();
+}
+
 function ofCreateTour(){
   const res=document.getElementById('of-tres');res.style.display='block';
   if(!ofSelDriver){res.style.background=OL;res.style.color=OT;res.textContent='Select a driver first / เลือกคนขับก่อน';return;}
