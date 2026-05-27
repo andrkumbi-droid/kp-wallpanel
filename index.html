@@ -310,10 +310,11 @@ textarea{resize:none}
     // Listen to all shared data
     db.ref('orders').on('value', snap => {
       orders = snap.val() ? Object.values(snap.val()) : [];
-      // Re-render if on relevant screen
       if(document.getElementById('s-office').classList.contains('active')) ofRenderOrders();
       if(document.getElementById('mgv-revenue').classList.contains('active')) mgRevenue();
       document.getElementById('of-cnt').textContent = orders.length;
+      try{payUpdateBadge();}catch(e){}
+      try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
     });
 
     db.ref('wOrders').on('value', snap => {
@@ -742,6 +743,7 @@ textarea{resize:none}
       <button type="button" class="fbtn" onclick="payFilt('paid',this)" style="background:#dcfce7;color:#166534;border-color:#86efac">✅ Paid</button>
       <button type="button" class="fbtn" onclick="payFilt('all',this)">All</button>
     </div>
+    <div id="pay-debug" style="font-size:11px;color:var(--text2);margin-bottom:8px;padding:4px 8px;background:var(--bg2);border-radius:4px"></div>
     <div id="pay-list"></div>
   </div></div>
   <div class="view" id="ofv-sales"><div class="sec">
@@ -3222,6 +3224,94 @@ function deleteIncoming(btn) {
 }
 
 function drVerify(){const res=document.getElementById('dr-vres');res.style.display='block';const bad=dTour.filter(id=>{const c=dChecks[id]||{};return !c.p||!c.l||!c.c;});if(bad.length===0){res.style.background=GL;res.style.color=GT;res.textContent='✓ All verified — ready to go! / ตรวจสอบครบแล้ว';}else{res.style.background=OL;res.style.color=OT;res.textContent='Not fully checked: '+bad.join(', ');}}
+
+// ── PAYMENT TRACKING (moved to main block) ──
+var payFilt_ = 'unpaid';
+
+function payUpdateBadge() {
+  var cnt = document.getElementById('oft-pay-cnt');
+  if(!cnt) return;
+  var unpaid = orders.filter(function(o){ return o.status==='delivered' && !o.payMethod; });
+  if(unpaid.length > 0) { cnt.textContent = unpaid.length; cnt.style.display='inline-flex'; }
+  else { cnt.style.display='none'; }
+}
+
+function payFilt(f, btn) {
+  payFilt_ = f;
+  document.querySelectorAll('#pay-filter-bar .fbtn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  _payRenderNow();
+}
+
+function payRender() { _payRenderNow(); }
+
+function _payRenderNow() {
+  payUpdateBadge();
+  var list = document.getElementById('pay-list');
+  if(!list) return;
+  var delivered = orders.filter(function(o){ return o.status==='delivered'; });
+  delivered.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+  var filtered = delivered.filter(function(o){
+    if(payFilt_==='unpaid') return !o.payMethod;
+    if(payFilt_==='paid')   return !!o.payMethod;
+    return true;
+  });
+  if(filtered.length===0) {
+    var msg = payFilt_==='unpaid' ? '\u{1F389} All delivered orders are paid!' : 'No paid orders yet';
+    list.innerHTML = '<div class="empty"><i class="ti ti-circle-check" style="font-size:36px;display:block;margin-bottom:8px;color:var(--green)"></i>'+msg+'</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(function(o) {
+    var paid = !!o.payMethod;
+    var bg     = paid ? '#f0fdf4' : '#fef2f2';
+    var border = paid ? '#16a34a' : '#dc2626';
+    var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+' x'+i.qty;}).join(', ')||o.panels||'--';
+    var cashChk   = o.payMethod==='cash';
+    var onlineChk = o.payMethod==='online';
+    var oid = o.id;
+    return '<div style="background:'+bg+';border:1.5px solid '+border+';border-radius:var(--r);padding:12px 14px;margin-bottom:10px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+      +'<span style="font-size:18px;font-weight:800;color:#111">'+o.id+'</span>'
+      +'<span class="badge" style="background:'+(paid?'#dcfce7':'#fee2e2')+';color:'+(paid?'#166534':'#991b1b')+'">'+(paid?'Paid':'Unpaid')+'</span>'
+      +'</div>'
+      +'<div style="font-size:13px;font-weight:600;color:#333;margin-bottom:2px">'+(o.customer||'--')+'</div>'
+      +'<div style="font-size:12px;color:#666;margin-bottom:6px">'+(o.zone||'')+(o.date?' - '+fmtD(o.date):'')+'</div>'
+      +(o.phone?'<div style="font-size:12px;margin-bottom:6px"><a href="tel:'+o.phone+'" style="color:var(--blue);font-weight:600">'+o.phone+'</a></div>':'')
+      +(o.address?'<div style="font-size:12px;color:#555;margin-bottom:8px;line-height:1.4">'+o.address+'</div>':'')
+      +'<div style="font-size:12px;background:rgba(0,0,0,0.04);border-radius:var(--rs);padding:7px 10px;margin-bottom:10px;color:#333">'+panels+(o.total?' - '+o.total:'')+'</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
+      +'<button type="button" onclick="paySetMethod(''+oid+'','cash')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+(cashChk?'#16a34a':'#d1d5db')+';background:'+(cashChk?'#dcfce7':'#fff')+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+(cashChk?'#166534':'#374151')+'">'
+      +'<div style="width:20px;height:20px;border-radius:5px;border:2px solid '+(cashChk?'#16a34a':'#d1d5db')+';background:'+(cashChk?'#16a34a':'#fff')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+(cashChk?'<i class="ti ti-check" style="font-size:12px;color:#fff"></i>':'')+'</div>Cash</button>'
+      +'<button type="button" onclick="paySetMethod(''+oid+'','online')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+(onlineChk?'#1d4ed8':'#d1d5db')+';background:'+(onlineChk?'#dbeafe':'#fff')+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+(onlineChk?'#1d4ed8':'#374151')+'">'
+      +'<div style="width:20px;height:20px;border-radius:5px;border:2px solid '+(onlineChk?'#1d4ed8':'#d1d5db')+';background:'+(onlineChk?'#1d4ed8':'#fff')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+(onlineChk?'<i class="ti ti-check" style="font-size:12px;color:#fff"></i>':'')+'</div>Online</button>'
+      +'</div>'
+      +(paid?'<div style="font-size:11px;color:#6b7280;margin-top:8px;display:flex;justify-content:space-between">'
+      +'<span>'+(o.payMethod==='cash'?'Cash':'Online')+(o.paidBy?' - '+o.paidBy:'')+(o.paidAt?' - '+o.paidAt:'')+'</span>'
+      +'<button type="button" onclick="payClear(''+oid+'')" style="background:none;border:none;font-size:11px;color:#9ca3af;cursor:pointer;padding:0">undo</button>'
+      +'</div>':'')
+      +'</div>';
+  }).join('');
+}
+
+function paySetMethod(id, method) {
+  var o = orders.find(function(x){ return x.id===id; });
+  if(!o) return;
+  if(o.payMethod === method) { payClear(id); return; }
+  o.payMethod = method;
+  var now = new Date();
+  o.paidAt = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  o.paidBy = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+  syncOrders();
+  _payRenderNow();
+}
+
+function payClear(id) {
+  var o = orders.find(function(x){ return x.id===id; });
+  if(!o) return;
+  delete o.payMethod; delete o.paidAt; delete o.paidBy;
+  syncOrders();
+  _payRenderNow();
+}
 </script>
 
 <div class="modal-overlay" id="staff-modal"><div class="modal">
@@ -3432,134 +3522,7 @@ function drVerify(){const res=document.getElementById('dr-vres');res.style.displ
 </div>
 
 <script>
-// ── PAYMENT TRACKING ──
-var payFilt_ = 'unpaid';
-
-function payUpdateBadge() {
-  var cnt = document.getElementById('oft-pay-cnt');
-  if(!cnt) return;
-  var unpaid = orders.filter(function(o){ return o.status==='delivered' && !o.payMethod; });
-  if(unpaid.length > 0) { cnt.textContent = unpaid.length; cnt.style.display='inline-flex'; }
-  else { cnt.style.display='none'; }
-}
-
-}
-function payFilt(f, btn) {
-  payFilt_ = f;
-  document.querySelectorAll('#pay-filter-bar .fbtn').forEach(function(b){
-    b.classList.remove('active');
-    b.style.fontWeight = '';
-  });
-  btn.classList.add('active');
-  payRender();
-}
-
-function payRender() {
-  payUpdateBadge();
-  var list = document.getElementById('pay-list');
-  if(!list) return;
-  // Always fetch fresh from Firebase to ensure we see all delivered orders
-  if(window.fbDB) {
-    list.innerHTML = '<div class="empty" style="color:var(--text2)"><i class="ti ti-loader" style="font-size:24px;display:block;margin-bottom:8px"></i>Loading...</div>';
-    window.fbDB.ref('orders').once('value', function(snap) {
-      var raw = snap.val();
-      if(raw) {
-        // Merge into orders array — update existing, add new
-        var fresh = Object.values(raw);
-        fresh.forEach(function(fo) {
-          var idx = orders.findIndex(function(o){ return o.id === fo.id; });
-          if(idx >= 0) orders[idx] = fo; else orders.push(fo);
-        });
-      }
-      _payRenderNow();
-    });
-  } else {
-    _payRenderNow();
-  }
-}
-function _payRenderNow() {
-  payUpdateBadge();
-  var list = document.getElementById('pay-list');
-  if(!list) return;
-  var delivered = orders.filter(function(o){ return o.status==='delivered'; });
-  // Sort by date desc
-  delivered.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
-  var filtered = delivered.filter(function(o){
-    if(payFilt_==='unpaid') return !o.payMethod;
-    if(payFilt_==='paid')   return !!o.payMethod;
-    return true;
-  });
-  if(filtered.length===0) {
-    var msg = payFilt_==='unpaid' ? '🎉 All delivered orders are paid!' : 'No paid orders yet';
-    list.innerHTML = '<div class="empty"><i class="ti ti-circle-check" style="font-size:36px;display:block;margin-bottom:8px;color:var(--green)"></i>'+msg+'</div>';
-    return;
-  }
-  list.innerHTML = filtered.map(function(o) {
-    var paid = !!o.payMethod;
-    var bg   = paid ? '#f0fdf4' : '#fef2f2';
-    var border = paid ? '#16a34a' : '#dc2626';
-    var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+' ×'+i.qty;}).join(', ')||o.panels||'—';
-    var cashChk  = o.payMethod==='cash';
-    var onlineChk= o.payMethod==='online';
-    return '<div style="background:'+bg+';border:1.5px solid '+border+';border-radius:var(--r);padding:12px 14px;margin-bottom:10px">'+
-      // Header row
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
-      '<span style="font-size:18px;font-weight:800;color:#111">'+o.id+'</span>'+
-      '<span class="badge" style="background:'+(paid?'#dcfce7':'#fee2e2')+';color:'+(paid?'#166534':'#991b1b')+'">'+(paid?'✅ Paid':'⏳ Unpaid')+'</span>'+
-      '</div>'+
-      // Customer + date
-      '<div style="font-size:13px;font-weight:600;color:#333;margin-bottom:2px">'+(o.customer||'—')+'</div>'+
-      '<div style="font-size:12px;color:#666;margin-bottom:6px">'+(o.zone||'')+(o.date?' · '+fmtD(o.date):'')+'</div>'+
-      // Phone
-      (o.phone?'<div style="font-size:12px;margin-bottom:6px"><i class="ti ti-phone" style="font-size:12px;vertical-align:-1px;color:#666"></i> <a href="tel:'+o.phone+'" style="color:var(--blue);font-weight:600">'+o.phone+'</a></div>':'')+
-      // Address
-      (o.address?'<div style="font-size:12px;color:#555;margin-bottom:6px;line-height:1.4"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px;color:#888"></i> '+o.address+'</div>':'')+
-      // Products
-      '<div style="font-size:12px;background:rgba(0,0,0,0.04);border-radius:var(--rs);padding:7px 10px;margin-bottom:10px;color:#333">'+
-      '<i class="ti ti-package" style="font-size:12px;vertical-align:-1px;color:#888"></i> '+panels+
-      (o.total?'<span style="float:right;font-weight:700;color:#111">'+o.total+'</span>':'')+
-      '</div>'+
-      // Payment checkboxes
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
-      '<button type="button" onclick="paySetMethod(\''+o.id+'\',\'cash\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+(cashChk?'#16a34a':'#d1d5db')+';background:'+(cashChk?'#dcfce7':'#fff')+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+(cashChk?'#166534':'#374151')+'">'+
-      '<div style="width:20px;height:20px;border-radius:5px;border:2px solid '+(cashChk?'#16a34a':'#d1d5db')+';background:'+(cashChk?'#16a34a':'#fff')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+
-      (cashChk?'<i class="ti ti-check" style="font-size:12px;color:#fff"></i>':'')+
-      '</div>💵 Cash</button>'+
-      '<button type="button" onclick="paySetMethod(\''+o.id+'\',\'online\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+(onlineChk?'#1d4ed8':'#d1d5db')+';background:'+(onlineChk?'#dbeafe':'#fff')+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+(onlineChk?'#1d4ed8':'#374151')+'">'+
-      '<div style="width:20px;height:20px;border-radius:5px;border:2px solid '+(onlineChk?'#1d4ed8':'#d1d5db')+';background:'+(onlineChk?'#1d4ed8':'#fff')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+
-      (onlineChk?'<i class="ti ti-check" style="font-size:12px;color:#fff"></i>':'')+
-      '</div>📱 Online</button>'+
-      '</div>'+
-      // Paid by / undo
-      (paid?'<div style="font-size:11px;color:#6b7280;margin-top:8px;display:flex;justify-content:space-between;align-items:center">'+
-      '<span>'+(o.payMethod==='cash'?'💵 Cash':'📱 Online')+(o.paidBy?' · '+o.paidBy:'')+(o.paidAt?' · '+o.paidAt:'')+'</span>'+
-      '<button type="button" onclick="payClear(\''+o.id+'\')" style="background:none;border:none;font-size:11px;color:#9ca3af;cursor:pointer;padding:0">undo</button>'+
-      '</div>':'')+
-      '</div>';
-  }).join('');
-}
-
-function paySetMethod(id, method) {
-  var o = orders.find(function(x){ return x.id===id; });
-  if(!o) return;
-  // Toggle off if already selected
-  if(o.payMethod === method) { payClear(id); return; }
-  o.payMethod = method;
-  var now = new Date();
-  o.paidAt = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
-  o.paidBy = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
-  syncOrders();
-  payRender();
-}
-
-function payClear(id) {
-  var o = orders.find(function(x){ return x.id===id; });
-  if(!o) return;
-  delete o.payMethod; delete o.paidAt; delete o.paidBy;
-  syncOrders();
-  payRender();
-}
-
+// ── EXTERNAL ORDERS ──
 var extFilt_ = 'pending';
 var editExtId = null;
 
@@ -3584,7 +3547,7 @@ function extRender() {
   if(!list) return;
   var filtered = extOrders.filter(function(e){
     if(extFilt_ === 'pending') return e.status === 'pending';
-    if(extFilt_ === 'paid') return e.status === 'paid';
+    if(extFilt_ === 'paid')    return e.status === 'paid';
     return true;
   });
   filtered.sort(function(a,b){
@@ -3597,30 +3560,31 @@ function extRender() {
     return;
   }
   list.innerHTML = filtered.map(function(e) {
-    var ip = e.status === 'pending';
-    var bc = ip ? 'var(--orange)' : 'var(--green)';
+    var ip  = e.status === 'pending';
+    var bc  = ip ? 'var(--orange)' : 'var(--green)';
     var amt = (e.amt||0).toLocaleString();
-    return '<div class="card" style="border-left:4px solid '+bc+';margin-bottom:10px">'+
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'+
-      '<div><span style="font-size:17px;font-weight:700">'+e.ordNo+'</span>'+
-      (e.cust?'<span style="font-size:12px;color:var(--text2);margin-left:8px">'+e.cust+'</span>':'')+
-      '</div>'+
-      '<span class="badge '+(ip?'bwarn':'bready')+'">'+(ip?'⏳ Pending':'✅ Paid')+'</span>'+
-      '</div>'+
-      '<div style="font-size:12px;color:var(--text2);margin-bottom:8px">'+
-      (e.zone||'')+(e.shipped?' · '+fmtD(e.shipped):'')+
-      (e.phone?' · <a href="tel:'+e.phone+'" style="color:var(--blue)">'+e.phone+'</a>':'')+
-      (e.paidBy?'<br>Paid by: '+e.paidBy+(e.paidAt?' · '+e.paidAt:''):'')+
-      '</div>'+
-      (e.notes?'<div style="font-size:12px;color:var(--text2);margin-bottom:8px;background:var(--bg2);padding:6px 8px;border-radius:var(--rs)">'+e.notes+'</div>':'')+
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">'+
-      '<span style="font-size:16px;font-weight:700;color:'+(ip?'var(--orange-t)':'var(--green-t)')+'">'+amt+' ฿</span>'+
-      '<div style="display:flex;gap:6px">'+
-      '<button type="button" class="btnsm" onclick="openExtModal(''+e.eid+'')"><i class="ti ti-pencil"></i></button>'+
-      (ip?'<button type="button" class="btn btng" style="margin-top:0;padding:7px 14px;font-size:13px;-webkit-tap-highlight-color:transparent" onclick="markExtPaid(''+e.eid+'')"><i class="ti ti-cash"></i> Mark Paid</button>':
-          '<button type="button" class="btnsm" onclick="markExtUnpaid(''+e.eid+'')"><i class="ti ti-arrow-back-up"></i> Undo</button>')+
-      '</div></div>'+
-      '</div>';
+    var eid = e.eid;
+    return '<div class="card" style="border-left:4px solid '+bc+';margin-bottom:10px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
+      +'<div><span style="font-size:17px;font-weight:700">'+e.ordNo+'</span>'
+      +(e.cust?'<span style="font-size:12px;color:var(--text2);margin-left:8px">'+e.cust+'</span>':'')
+      +'</div>'
+      +'<span class="badge '+(ip?'bwarn':'bready')+'">'+(ip?'⏳ Pending':'✅ Paid')+'</span>'
+      +'</div>'
+      +'<div style="font-size:12px;color:var(--text2);margin-bottom:8px">'
+      +(e.zone||'')+(e.shipped?' · '+fmtD(e.shipped):'')
+      +(e.phone?' · <a href="tel:'+e.phone+'" style="color:var(--blue)">'+e.phone+'</a>':'')
+      +(e.paidBy?'<br>Paid by: '+e.paidBy+(e.paidAt?' · '+e.paidAt:''):'')
+      +'</div>'
+      +(e.notes?'<div style="font-size:12px;color:var(--text2);margin-bottom:8px;background:var(--bg2);padding:6px 8px;border-radius:var(--rs)">'+e.notes+'</div>':'')
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">'
+      +'<span style="font-size:16px;font-weight:700;color:'+(ip?'var(--orange-t)':'var(--green-t)')+'">'+amt+' ฿</span>'
+      +'<div style="display:flex;gap:6px">'
+      +'<button type="button" class="btnsm" onclick="openExtModal(\''+eid+'\')"><i class="ti ti-pencil"></i></button>'
+      +(ip?'<button type="button" class="btn btng" style="margin-top:0;padding:7px 14px;font-size:13px;-webkit-tap-highlight-color:transparent" onclick="markExtPaid(\''+eid+'\')"><i class="ti ti-cash"></i> Mark Paid</button>'
+         :'<button type="button" class="btnsm" onclick="markExtUnpaid(\''+eid+'\')"><i class="ti ti-arrow-back-up"></i> Undo</button>')
+      +'</div></div>'
+      +'</div>';
   }).join('');
 }
 
@@ -3631,13 +3595,13 @@ function openExtModal(eid) {
   if(eid) {
     var e = extOrders.find(function(x){ return x.eid === eid; });
     if(!e) return;
-    document.getElementById('ext-no').value = e.ordNo||'';
-    document.getElementById('ext-cust').value = e.cust||'';
-    document.getElementById('ext-phone').value = e.phone||'';
-    document.getElementById('ext-zone').value = e.zone||'Bangkok';
-    document.getElementById('ext-amt').value = e.amt||'';
+    document.getElementById('ext-no').value      = e.ordNo||'';
+    document.getElementById('ext-cust').value    = e.cust||'';
+    document.getElementById('ext-phone').value   = e.phone||'';
+    document.getElementById('ext-zone').value    = e.zone||'Bangkok';
+    document.getElementById('ext-amt').value     = e.amt||'';
     document.getElementById('ext-shipped').value = e.shipped||'';
-    document.getElementById('ext-notes').value = e.notes||'';
+    document.getElementById('ext-notes').value   = e.notes||'';
     delBtn.style.display = 'block';
   } else {
     ['ext-no','ext-cust','ext-phone','ext-amt','ext-notes'].forEach(function(id){ document.getElementById(id).value=''; });
@@ -3660,11 +3624,11 @@ function saveExtModal() {
   if(!cust)  { alert('Enter customer name'); return; }
   var data = {
     ordNo: ordNo, cust: cust,
-    phone: document.getElementById('ext-phone').value.trim(),
-    zone:  document.getElementById('ext-zone').value,
-    amt:   parseFloat(document.getElementById('ext-amt').value)||0,
+    phone:   document.getElementById('ext-phone').value.trim(),
+    zone:    document.getElementById('ext-zone').value,
+    amt:     parseFloat(document.getElementById('ext-amt').value)||0,
     shipped: document.getElementById('ext-shipped').value,
-    notes: document.getElementById('ext-notes').value.trim()
+    notes:   document.getElementById('ext-notes').value.trim()
   };
   if(editExtId) {
     var e = extOrders.find(function(x){ return x.eid===editExtId; });
@@ -3690,9 +3654,9 @@ function markExtPaid(eid) {
   var e = extOrders.find(function(x){ return x.eid===eid; });
   if(!e) return;
   var now = new Date();
-  e.status = 'paid';
-  e.paidAt = now.toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' '+now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
-  e.paidBy = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+  e.status  = 'paid';
+  e.paidAt  = now.toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' '+now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  e.paidBy  = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
   if(e.amt > 0) {
     revOrders.push({rid:'r'+Date.now(),id:e.ordNo,cust:e.cust,amt:e.amt,date:now.toISOString().split('T')[0],zone:e.zone,month:mkey(now.toISOString()),src:'external'});
     syncRevOrders();
