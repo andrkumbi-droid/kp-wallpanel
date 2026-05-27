@@ -1198,16 +1198,16 @@ function mgRevenue(){
   const now=new Date(),ms=new Set();revOrders.forEach(o=>{if(o.month)ms.add(o.month);});for(let i=0;i<6;i++){const d=new Date(now.getFullYear(),now.getMonth()-i,1);ms.add(d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0'));}
   const months=[...ms].sort().reverse();if(!selMonth||!months.includes(selMonth))selMonth=months[0]||'';
   document.getElementById('mg-msel').innerHTML=months.map(m=>{const[y,mo]=m.split('-');return`<button type="button" class="mbtn ${m===selMonth?'active':''}" onclick="selM('${m}')">${MN[parseInt(mo)-1]} ${y}</button>`;}).join('');
-  // Only count paid orders
-  function mgIsPaid(r) {
-    if(r.src==='external') return true;
-    var ord=orders.find(function(o){return o.id===r.id;});
-    return ord ? !!ord.payMethod : false;
-  }
-  const f=revOrders.filter(o=>o.month===selMonth&&mgIsPaid(o)),tot=f.reduce((a,o)=>a+o.amt,0);
+  // Use orders directly — only paid (payMethod set) delivered orders
+  function mgGetAmt(o){ return parseFloat((o.total||'0').toString().replace(/[^0-9.]/g,''))||0; }
+  const f=orders.filter(function(o){
+    if(o.status!=='delivered'||!o.payMethod) return false;
+    var mk=o.date?(new Date(o.date+'T00:00:00').getFullYear()+'-'+(new Date(o.date+'T00:00:00').getMonth()+1).toString().padStart(2,'0')):'';
+    return mk===selMonth;
+  }),tot=f.reduce(function(a,o){return a+mgGetAmt(o);},0);
   document.getElementById('mg-rev-amt').textContent=tot.toLocaleString()+' ฿';
   document.getElementById('mg-rev-cnt').textContent=f.length+' order'+(f.length!==1?'s':'')+' delivered';
-  document.getElementById('mg-rev-list').innerHTML=f.length===0?'<div class="empty" style="padding:1rem;font-size:13px">No delivered orders this month</div>':f.map(o=>`<div class="rrow"><div><div style="font-size:13px;font-weight:600">${o.id}</div><div style="font-size:11px;color:var(--text2)">${o.cust} &middot; ${o.zone} &middot; ${fmtD(o.date)}</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:600;color:var(--green)">${o.amt.toLocaleString()} ฿</div><button type="button" style="background:none;border:none;cursor:pointer;font-size:12px;color:var(--red);margin-top:2px" onclick="delRev('${o.rid}')"><i class="ti ti-trash"></i></button></div></div>`).join('');
+  document.getElementById('mg-rev-list').innerHTML=f.length===0?'<div class="empty" style="padding:1rem;font-size:13px">No paid orders this month</div>':f.map(o=>`<div class="rrow"><div><div style="font-size:13px;font-weight:600">${o.id}</div><div style="font-size:11px;color:var(--text2)">${o.customer||'—'} &middot; ${o.zone} &middot; ${fmtD(o.date)}</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:600;color:var(--green)">${mgGetAmt(o).toLocaleString()} ฿</div></div></div>`).join('');
   document.getElementById('ov-orders').textContent=orders.length;
   document.getElementById('ov-sub').textContent=orders.filter(o=>o.status==='delivered').length+' delivered';
   document.getElementById('ov-low').textContent=stockItems.filter(s=>s.qty<LOW).length;
@@ -1448,28 +1448,25 @@ function ofRenderRevenue() {
   const monthKey = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
   const yearStr = String(now.getFullYear());
 
-  // Only count paid orders (payMethod set on the order, or external orders marked paid)
-  function isPaid(r) {
-    if(r.src === 'external') return true; // external already filtered when marked paid
-    var ord = orders.find(function(o){ return o.id === r.id; });
-    return ord ? !!ord.payMethod : false;
-  }
-  const delivered = (revOrders || []).filter(isPaid);
+  // Directly use orders with payMethod set (paid) — no revOrders needed
+  function getAmt(o) { return parseFloat((o.total||'0').toString().replace(/[^0-9.]/g,''))||0; }
+
+  const paid = orders.filter(function(o){ return o.status==='delivered' && !!o.payMethod; });
 
   // Today
-  const todayOrders = delivered.filter(o => o.date === todayStr);
-  const todayAmt = todayOrders.reduce((a,o) => a + (parseFloat(o.amt)||0), 0);
+  const todayOrders = paid.filter(function(o){ return o.date === todayStr; });
+  const todayAmt = todayOrders.reduce(function(a,o){ return a+getAmt(o); }, 0);
 
   // This month
-  const monthOrders = delivered.filter(o => o.month === monthKey || (o.date && o.date.startsWith(monthKey)));
-  const monthAmt = monthOrders.reduce((a,o) => a + (parseFloat(o.amt)||0), 0);
+  const monthOrders = paid.filter(function(o){ return o.date && o.date.startsWith(monthKey); });
+  const monthAmt = monthOrders.reduce(function(a,o){ return a+getAmt(o); }, 0);
 
   // This year
-  const yearOrders = delivered.filter(o => o.date && o.date.startsWith(yearStr));
-  const yearAmt = yearOrders.reduce((a,o) => a + (parseFloat(o.amt)||0), 0);
+  const yearOrders = paid.filter(function(o){ return o.date && o.date.startsWith(yearStr); });
+  const yearAmt = yearOrders.reduce(function(a,o){ return a+getAmt(o); }, 0);
 
   // Update UI
-  const el = (id) => document.getElementById(id);
+  const el = function(id){ return document.getElementById(id); };
   if(el('of-rev-today')) el('of-rev-today').textContent = todayAmt.toLocaleString();
   if(el('of-rev-today-cnt')) el('of-rev-today-cnt').textContent = todayOrders.length + ' orders';
   if(el('of-rev-month')) el('of-rev-month').textContent = monthAmt.toLocaleString();
@@ -1482,7 +1479,7 @@ function ofRenderSales() {
   // Build month list from orders
   const now = new Date();
   const ms = new Set();
-  orders.forEach(o => { if(o.date) { const d = new Date(o.date+'T00:00:00'); if(!isNaN(d)) ms.add(d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0')); } });
+  orders.filter(o=>o.status==='delivered'&&o.payMethod).forEach(o => { if(o.date) { const d = new Date(o.date+'T00:00:00'); if(!isNaN(d)) ms.add(d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0')); } });
   for(let i=0;i<6;i++){const d=new Date(now.getFullYear(),now.getMonth()-i,1);ms.add(d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0'));}
   const months=[...ms].sort().reverse();
   if(!ofSalesMonth||!months.includes(ofSalesMonth)) ofSalesMonth=months[0]||'';
@@ -1504,6 +1501,8 @@ function ofRenderSales() {
     const mk = d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0');
     return mk === ofSalesMonth;
   });
+  // Also build month list from ALL orders (not just paid) so months show up
+  // (month selector already built above from all orders)
 
   // Parse panels and lcorner strings like "KP009 × 50 · KP027 × 100"
   const panelTotals = {};
