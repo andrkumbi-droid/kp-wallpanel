@@ -1202,7 +1202,7 @@ function mgRevenue(){
   function mgGetAmt(o){ return parseFloat((o.total||'0').toString().replace(/[^0-9.]/g,''))||0; }
   const f=orders.filter(function(o){
     if(o.status!=='delivered'||!o.payMethod) return false;
-    var mk=o.date?(new Date(o.date+'T00:00:00').getFullYear()+'-'+(new Date(o.date+'T00:00:00').getMonth()+1).toString().padStart(2,'0')):'';
+    var pd=o.payDate||o.date||'';var mk=pd?(new Date(pd+'T00:00:00').getFullYear()+'-'+(new Date(pd+'T00:00:00').getMonth()+1).toString().padStart(2,'0')):'';
     return mk===selMonth;
   }),tot=f.reduce(function(a,o){return a+mgGetAmt(o);},0);
   document.getElementById('mg-rev-amt').textContent=tot.toLocaleString()+' ฿';
@@ -1450,19 +1450,20 @@ function ofRenderRevenue() {
 
   // Directly use orders with payMethod set (paid) — no revOrders needed
   function getAmt(o) { return parseFloat((o.total||'0').toString().replace(/[^0-9.]/g,''))||0; }
+  function pDate(o) { return o.payDate || o.date || ''; } // use payDate if manually set
 
   const paid = orders.filter(function(o){ return o.status==='delivered' && !!o.payMethod; });
 
   // Today
-  const todayOrders = paid.filter(function(o){ return o.date === todayStr; });
+  const todayOrders = paid.filter(function(o){ return pDate(o) === todayStr; });
   const todayAmt = todayOrders.reduce(function(a,o){ return a+getAmt(o); }, 0);
 
   // This month
-  const monthOrders = paid.filter(function(o){ return o.date && o.date.startsWith(monthKey); });
+  const monthOrders = paid.filter(function(o){ return pDate(o).startsWith(monthKey); });
   const monthAmt = monthOrders.reduce(function(a,o){ return a+getAmt(o); }, 0);
 
   // This year
-  const yearOrders = paid.filter(function(o){ return o.date && o.date.startsWith(yearStr); });
+  const yearOrders = paid.filter(function(o){ return pDate(o).startsWith(yearStr); });
   const yearAmt = yearOrders.reduce(function(a,o){ return a+getAmt(o); }, 0);
 
   // Update UI
@@ -1496,7 +1497,7 @@ function ofRenderSales() {
     if(o.status !== 'delivered') return false;
     if(!o.payMethod) return false;
     if(!o.date) return false;
-    const d = new Date(o.date+'T00:00:00');
+    const pd = o.payDate||o.date||''; const d = new Date(pd+'T00:00:00');
     if(isNaN(d)) return false;
     const mk = d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0');
     return mk === ofSalesMonth;
@@ -3268,10 +3269,19 @@ function _payRenderNow() {
       +'<button type="button" onclick="paySetMethod(\''+oid+'\',\'online\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+oborder+';background:'+obg+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+ocol+'">'
       +'<div style="width:20px;height:20px;border-radius:5px;border:2px solid '+oborder+';background:'+obgbox+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+(onlineChk?'<i class="ti ti-check" style="font-size:12px;color:#fff"></i>':'')+'</div>Online</button>'
       +'</div>'
-      +(paid?'<div style="font-size:11px;color:#6b7280;margin-top:8px;display:flex;justify-content:space-between">'
-      +'<span>'+(o.payMethod==='cash'?'Cash':'Online')+(o.paidBy?' - '+o.paidBy:'')+(o.paidAt?' - '+o.paidAt:'')+'</span>'
-      +'<button type="button" onclick="payClear(\''+oid+'\')" style="background:none;border:none;font-size:11px;color:#9ca3af;cursor:pointer;padding:0">undo</button>'
-      +'</div>':'')
+      +(paid?
+        '<div style="margin-top:10px;padding:8px 10px;background:rgba(0,0,0,0.04);border-radius:var(--rs)">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+        +'<span style="font-size:11px;color:#6b7280">'+(o.payMethod==='cash'?'Cash':'Online')+(o.paidBy?' · '+o.paidBy:'')+(o.paidAt?' · '+o.paidAt:'')+'</span>'
+        +'<button type="button" onclick="payClear(\''+oid+'\')" style="background:none;border:none;font-size:11px;color:#9ca3af;cursor:pointer;padding:0;-webkit-tap-highlight-color:transparent">undo</button>'
+        +'</div>'
+        +'<div style="display:flex;align-items:center;gap:6px;margin-top:6px">'
+        +'<label style="font-size:11px;color:#6b7280;white-space:nowrap">Payment date:</label>'
+        +'<input type="date" value="'+(o.payDate||o.date||'')
+        +'" onchange="payDateChange(\''+oid+'\',this.value)" style="flex:1;font-size:12px;padding:4px 6px;border:1px solid #d1d5db;border-radius:var(--rs);background:#fff;color:#374151;min-width:0">'
+        +'</div>'
+        +'</div>'
+       :'')
       +'</div>';
   }).join('');
 }
@@ -3295,9 +3305,18 @@ function paySetMethod(id, method) {
 function payClear(id) {
   var o = orders.find(function(x){ return x.id===id; });
   if(!o) return;
-  delete o.payMethod; delete o.paidAt; delete o.paidBy;
+  delete o.payMethod; delete o.paidAt; delete o.paidBy; delete o.payDate;
   syncOrders();
   _payRenderNow();
+  try{ofRenderRevenue();}catch(e){}
+  try{mgRevenue();}catch(e){}
+}
+
+function payDateChange(id, dateVal) {
+  var o = orders.find(function(x){ return x.id===id; });
+  if(!o) return;
+  o.payDate = dateVal;
+  syncOrders();
   try{ofRenderRevenue();}catch(e){}
   try{mgRevenue();}catch(e){}
 }
