@@ -720,7 +720,7 @@ textarea{resize:none}
       <label class="fl" style="margin-top:12px">Add ready orders / เพิ่มออเดอร์</label>
       <div id="of-avail" style="margin-top:4px"></div>
       <div id="of-selected" style="margin-top:8px"></div>
-      <button class="btn btnp" style="margin-top:12px" onclick="ofCreateTour()"><i class="ti ti-send"></i> Send to driver / ส่งให้คนขับ</button>
+      <button class="btn btnp" style="margin-top:12px" id="of-send-btn" onclick="ofCreateTour()"><i class="ti ti-send"></i> <span id="of-send-label">Send to driver / ส่งให้คนขับ</span></button>
       <div id="of-tres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-top:8px;font-size:13px"></div>
     </div>
   </div></div>
@@ -2376,7 +2376,17 @@ function ofRenderTour(){
     }).join('');
 }
 
-function ofSelDr(btn){ofSelDriver=btn.getAttribute("data-did");ofRenderTour();}
+function ofSelDr(btn){
+  ofSelDriver=btn.getAttribute("data-did");
+  ofRenderTour();
+  // Update button label based on driver state
+  const lbl=document.getElementById('of-send-label');
+  if(lbl){
+    const et=activeTours.find(t=>t.driverId===ofSelDriver);
+    if(et&&!et.driving) lbl.textContent='Add to tour / เพิ่มในทัวร์';
+    else lbl.textContent='Send to driver / ส่งให้คนขับ';
+  }
+}
 function ofSelOrd(btn){var id=btn.getAttribute("data-oid");if(!ofSelOrders.includes(id))ofSelOrders.push(id);ofRenderTour();}
 function ofDeselOrd(id){ofSelOrders=ofSelOrders.filter(function(x){return x!==id;});ofRenderTour();}
 function ofDeselOrdBtn(btn){ofDeselOrd(btn.getAttribute("data-oid"));}
@@ -2405,12 +2415,9 @@ function ofCreateTour(){
   if(!ofSelDriver){res.style.background=OL;res.style.color=OT;res.textContent='Select a driver first / เลือกคนขับก่อน';return;}
   if(ofSelOrders.length===0){res.style.background=OL;res.style.color=OT;res.textContent='Add at least one order';return;}
   const d=drivers.find(x=>x.id===ofSelDriver);
-  const existingTour=activeTours.find(t=>t.driverId===ofSelDriver);if(existingTour&&!existingTour.driving){res.style.background=OL;res.style.color=OT;res.textContent=d.name+' is still loading — depart first / ออกรถก่อน';return;}
+  const existingTour=activeTours.find(t=>t.driverId===ofSelDriver);
   const status={};ofSelOrders.forEach(id=>{
-    // Keep status as 'ready' - driver will set to 'loaded' himself
     status[id]='ready';
-    const ord=orders.find(x=>x.id===id);
-    // Don't change order status - stays 'ready'
     if(!dAllOrders.find(x=>x.id===id)){
       const src=orders.find(x=>x.id===id);
       if(src){dAllOrders.push({id:src.id,customer:src.customer,phone:src.phone,address:src.address,boxes:src.boxes,panels:src.panels,lcorner:src.lcorner,clips:src.clips});
@@ -2418,8 +2425,18 @@ function ofCreateTour(){
     }
     dStatus[id]='ready';
   });
-  const now=new Date();activeTours.push({id:'t'+Date.now(),driverId:ofSelDriver,driverName:d.name,orders:[...ofSelOrders],status,checks:{},created:now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')});
-  res.style.background=GL;res.style.color=GT;res.textContent='✓ Tour sent to '+d.name+'! '+ofSelOrders.length+' orders';
+  if(existingTour && !existingTour.driving){
+    // Driver still loading — just add orders to existing tour
+    ofSelOrders.forEach(id=>{
+      if(!existingTour.orders.includes(id)) existingTour.orders.push(id);
+      existingTour.status[id]='ready';
+    });
+    res.style.background=GL;res.style.color=GT;res.textContent='✓ '+ofSelOrders.length+' orders added to '+d.name+"'s tour!";
+  } else {
+    // Driver is driving (or no tour) — create a new tour
+    const now=new Date();activeTours.push({id:'t'+Date.now(),driverId:ofSelDriver,driverName:d.name,orders:[...ofSelOrders],status,checks:{},created:now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')});
+    res.style.background=GL;res.style.color=GT;res.textContent='✓ New tour sent to '+d.name+'! '+ofSelOrders.length+' orders';
+  }
   ofSelDriver=null;ofSelOrders=[];setTimeout(()=>{res.style.display='none';},3000);
   ofRenderTour();ofRenderOrders();mgRender();syncTours();syncOrders();}
 function ofEndTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"))return;activeTours.splice(i,1);ofRenderTour();mgRender();syncTours();}
