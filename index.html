@@ -829,6 +829,8 @@ textarea{resize:none}
 <!-- DRIVER TOUR -->
 <div class="screen" id="s-driver-tour"><div class="pb">
   <div class="header"><button class="back-btn" onclick="drBack()"><i class="ti ti-arrow-left"></i></button><div><div class="h-title" id="dt-title">My Tour</div><div class="h-sub">KP Wallpanel</div></div></div>
+  <!-- Depart / Back banner -->
+  <div id="dr-status-bar" style="padding:10px 16px 4px"></div>
   <div class="tabs t2">
     <button class="tab active" onclick="drt('ready')" id="drt-ready">Ready to Load / พร้อมขึ้นรถ <span class="tc tcb" id="dr-r-cnt">0</span></button>
     <button class="tab" onclick="drt('tour')" id="drt-tour">My Tour / แผนการส่ง <span class="tc tcw" id="dr-t-cnt">0</span></button>
@@ -2344,10 +2346,10 @@ function ofRenderTour(){
     dsel.innerHTML=drivers.map(function(d){
       var ht=activeTours.find(function(t){return t.driverId===d.id;});
       var isSel=ofSelDriver===d.id;
-      return '<button class="drselbtn '+(isSel?'sel':'')+(ht?' ontour':'')+'" data-did="'+d.id+'" onclick="ofSelDr(this)">'+
+      var isDriving=ht&&ht.driving;return '<button class="drselbtn '+(isSel?'sel':'')+(ht?' ontour':'')+'" data-did="'+d.id+'" onclick="ofSelDr(this)">'+
         '<div style="width:36px;height:36px;border-radius:50%;background:var(--blue-l);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:var(--blue-t);margin:0 auto 6px">'+initials(d.name)+'</div>'+
         '<div style="font-size:12px;font-weight:600">'+d.name+'</div>'+
-        (ht?'<div style="font-size:11px;color:var(--green);margin-top:2px">On tour</div>':'')+
+        (ht?(isDriving?'<div style="font-size:11px;color:var(--green);margin-top:2px">🚚 Driving</div>':'<div style="font-size:11px;color:var(--orange);margin-top:2px">Loading...</div>'):'')+
         (d.phone?'<div style="font-size:11px;color:var(--text2);margin-top:1px">'+d.phone+'</div>':'')+
         '</button>';
     }).join('');
@@ -2403,7 +2405,7 @@ function ofCreateTour(){
   if(!ofSelDriver){res.style.background=OL;res.style.color=OT;res.textContent='Select a driver first / เลือกคนขับก่อน';return;}
   if(ofSelOrders.length===0){res.style.background=OL;res.style.color=OT;res.textContent='Add at least one order';return;}
   const d=drivers.find(x=>x.id===ofSelDriver);
-  if(activeTours.find(t=>t.driverId===ofSelDriver)){res.style.background=OL;res.style.color=OT;res.textContent=d.name+' already has an active tour';return;}
+  const existingTour=activeTours.find(t=>t.driverId===ofSelDriver);if(existingTour&&!existingTour.driving){res.style.background=OL;res.style.color=OT;res.textContent=d.name+' is still loading — depart first / ออกรถก่อน';return;}
   const status={};ofSelOrders.forEach(id=>{
     // Keep status as 'ready' - driver will set to 'loaded' himself
     status[id]='ready';
@@ -2537,7 +2539,7 @@ function drLoginRender(){
 }
 
 function drLogin(id){currentDriverId=id;const d=drivers.find(x=>x.id===id);document.getElementById('dt-title').textContent=d.name+"'s Tour";document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));document.getElementById('s-driver-tour').classList.add('active');window.scrollTo(0,0);drt('ready');}
-function drt(t){document.querySelectorAll('#s-driver-tour .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-driver-tour .view').forEach(x=>x.classList.remove('active'));document.getElementById('drt-'+t).classList.add('active');document.getElementById('drv-'+t).classList.add('active');if(t==='tour')drTour();else drReady();}
+function drt(t){document.querySelectorAll('#s-driver-tour .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-driver-tour .view').forEach(x=>x.classList.remove('active'));document.getElementById('drt-'+t).classList.add('active');document.getElementById('drv-'+t).classList.add('active');if(t==='tour')drTour();else drReady();drRenderStatusBar();}
 
 function drReady(){
   const tour = activeTours.find(t=>t.driverId===currentDriverId);
@@ -2602,8 +2604,52 @@ function drReady(){
     }).join('');
   }
 }
-function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();}
+function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drReady();drRenderStatusBar();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();syncOrders();syncTours();}
 function drUnload(id){dStatus[id]='ready';dTour=dTour.filter(x=>x!==id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord)ord.status='ready';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='ready';drReady();syncOrders();syncTours();}
+
+function drRenderStatusBar(){
+  var bar=document.getElementById('dr-status-bar');
+  if(!bar)return;
+  var tour=activeTours.find(function(t){return t.driverId===currentDriverId;});
+  if(!tour){bar.innerHTML='';return;}
+  if(tour.driving){
+    bar.innerHTML='<div style="background:var(--green-bg);border:1px solid var(--green-l);border-radius:var(--r);padding:12px 14px;display:flex;align-items:center;gap:10px;margin-bottom:2px">'+
+      '<span style="font-size:22px">\u{1F69A}</span>'+
+      '<div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--green-t)">On the road / \u0e01\u0e33\u0e25\u0e31\u0e07\u0e2d\u0e2d\u0e01\u0e23\u0e16</div><div style="font-size:11px;color:var(--text2)">Departed '+(tour.departedAt||'')+'</div></div>'+
+      '<button onclick="drBackFree()" style="background:var(--red);color:#fff;border:none;border-radius:var(--rs);padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;line-height:1.4"><i class=\"ti ti-home-check\"></i><br>\u{1F3C1} Back & Free</button>'+
+      '</div>';
+  } else {
+    var loaded=orders.filter(function(o){return tour.orders.includes(o.id)&&o.status==="loaded";});
+    if(loaded.length===0){bar.innerHTML='';return;}
+    bar.innerHTML='<div style="background:var(--blue-bg);border:1px solid var(--blue-l);border-radius:var(--r);padding:12px 14px;display:flex;align-items:center;gap:10px;margin-bottom:2px">'+
+      '<span style="font-size:22px">\u{1F4E6}</span>'+
+      '<div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--blue-t)">Ready to depart / \u0e1e\u0e23\u0e49\u0e2d\u0e21\u0e2d\u0e2d\u0e01</div><div style="font-size:11px;color:var(--text2)">'+loaded.length+' orders loaded</div></div>'+
+      '<button onclick="drDepart()" style="background:var(--blue);color:#fff;border:none;border-radius:var(--rs);padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;line-height:1.4"><i class=\"ti ti-truck\"></i><br>\u{1F680} Depart!</button>'+
+      '</div>';
+  }
+}
+
+function drDepart(){
+  var tour=activeTours.find(function(t){return t.driverId===currentDriverId;});
+  if(!tour)return;
+  var loaded=orders.filter(function(o){return tour.orders.includes(o.id)&&o.status==="loaded";});
+  if(loaded.length===0){alert('Load orders onto truck first!');return;}
+  var now=new Date();
+  tour.driving=true;
+  tour.departedAt=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  drRenderStatusBar();
+  syncTours();
+}
+
+function drBackFree(){
+  if(!confirm('Back at warehouse? / \u0e01\u0e25\u0e31\u0e1a\u0e16\u0e36\u0e07\u0e42\u0e01\u0e14\u0e31\u0e07\u0e41\u0e25\u0e49\u0e27?'))return;
+  var tour=activeTours.find(function(t){return t.driverId===currentDriverId;});
+  if(!tour)return;
+  tour.driving=false;
+  tour.departedAt=null;
+  drRenderStatusBar();
+  syncTours();
+}
 
 function drTour(){
   const myTour=dTour.filter(id=>dAllOrders.find(x=>x.id===id));
