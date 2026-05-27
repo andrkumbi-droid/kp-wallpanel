@@ -383,6 +383,11 @@ textarea{resize:none}
         auditLog = raw ? Object.values(raw).reverse() : [];
         try{if(document.getElementById('mgv-audit')&&document.getElementById('mgv-audit').classList.contains('active'))_auditRenderNow();}catch(e){}
       });
+      db.ref('shippers').on('value', function(snap) {
+        if(snap.val()) shippers = snap.val();
+        try{if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active'))mgRenderShippers();}catch(e){}
+        try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
+      });
       db.ref('orderCounters').on('value', function(snap) {
         if(snap.val()) Object.assign(orderCounters, snap.val());
       });
@@ -503,6 +508,20 @@ textarea{resize:none}
       <input type="number" id="mgr-pin-confirm" placeholder="Repeat PIN" maxlength="4" oninput="if(this.value.length>4)this.value=this.value.slice(0,4)" style="max-width:200px">
       <button type="button" class="btn btng" style="max-width:200px;margin-top:12px" onclick="saveMgrPin()"><i class="ti ti-lock"></i> Save PIN / บันทึกรหัส</button>
       <div id="mgr-pin-save-msg" style="font-size:13px;margin-top:8px;display:none"></div>
+    </div>
+
+    <div style="height:1px;background:var(--border);margin:16px 0"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="stit" style="margin-bottom:0">🚚 Shippers / บริษัทขนส่ง</div>
+      <button type="button" class="btnsm btnsmp" onclick="openShipperAdd()"><i class="ti ti-plus"></i> Add</button>
+    </div>
+    <div id="mg-shipper-list"></div>
+    <div id="mg-shipper-add" style="display:none;margin-top:8px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="mg-shipper-input" placeholder="Shipper name..." style="flex:1;padding:9px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)" onkeydown="if(event.key==='Enter')saveShipper()">
+        <button type="button" class="btnsm btnsmp" onclick="saveShipper()"><i class="ti ti-check"></i></button>
+        <button type="button" class="btnsm" onclick="closeShipperAdd()"><i class="ti ti-x"></i></button>
+      </div>
     </div>
 
   </div></div>
@@ -718,15 +737,6 @@ textarea{resize:none}
       <button type="button" class="fbtn" onclick="payFilt('all',this)">All</button>
       <select id="pay-shipper-filter" onchange="payShipperFilt(this.value)" style="padding:5px 8px;border-radius:20px;border:1px solid var(--border);background:var(--bg);font-size:12px;color:var(--text);cursor:pointer;margin-left:4px">
         <option value="">🚚 All shippers</option>
-      <option value="ส่งเอง">ส่งเอง</option>
-      <option value="ธวัชชัย TCH">ธวัชชัย TCH</option>
-      <option value="CT">CT</option>
-      <option value="คู่บุญ KBD">คู่บุญ KBD</option>
-      <option value="PT">PT</option>
-      <option value="มีชัย">มีชัย</option>
-      <option value="เอสพี สุภาภัณฑ์">เอสพี สุภาภัณฑ์</option>
-      <option value="บี.เอส.">บี.เอส.</option>
-      <option value="สหะหล่มสัก">สหะหล่มสัก</option>
       </select>
     </div>
     <div id="pay-list"></div>
@@ -1131,6 +1141,7 @@ const BC={new:'bnew',packing:'bpacking',ready:'bready',loaded:'bloaded',delivere
 const GL='#D1FAE5',GT='#065F46',OL='#FEF3C7',OT='#92400E';
 
 let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[],extOrders=[];
+var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
 let ofFilt_='all',ofSelDriver=null,ofSelOrders=[],currentDriverId=null;
 let editId=null,editSM=null,editIM=null,editDM=null,selMonth='';
@@ -2930,6 +2941,7 @@ function delStaffM() {
   closeStaffM(); mgRenderStaff(); syncStaff();
 }
 function mgRenderStaff() {
+  mgRenderShippers();
   const el = document.getElementById('mg-staff-list');
   if(!el) return;
   el.innerHTML = staffList.length === 0
@@ -3351,6 +3363,13 @@ function _payRenderNow() {
   payUpdateBadge();
   var list = document.getElementById('pay-list');
   if(!list) return;
+  // Refresh shipper filter dropdown with current shippers
+  var sf = document.getElementById('pay-shipper-filter');
+  if(sf) {
+    var cur = sf.value;
+    sf.innerHTML = '<option value="">🚚 All shippers</option>'
+      + shippers.map(function(s){return '<option value="'+s+'"'+(cur===s?' selected':'')+'>'+s+'</option>';}).join('');
+  }
   var delivered = orders.filter(function(o){ return o.status==='delivered'; });
   delivered.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
 
@@ -3416,7 +3435,7 @@ function _payRenderNow() {
       +'<label style="font-size:11px;color:#6b7280;white-space:nowrap;flex-shrink:0">🚚 Shipper:</label>'
       +'<select onchange="paySetShipper(\''+oid+'\',this.value)" style="flex:1;padding:5px 8px;border-radius:var(--rs);border:1px solid #d1d5db;background:#fff;font-size:12px;color:#374151;cursor:pointer">'
       +'<option value="">— select —</option>'
-      +'<option value="ส่งเอง"'+(o.shipper==="ส่งเอง"?' selected':'')+'>ส่งเอง</option>'+'<option value="ธวัชชัย TCH"'+(o.shipper==="ธวัชชัย TCH"?' selected':'')+'>ธวัชชัย TCH</option>'+'<option value="CT"'+(o.shipper==="CT"?' selected':'')+'>CT</option>'+'<option value="คู่บุญ KBD"'+(o.shipper==="คู่บุญ KBD"?' selected':'')+'>คู่บุญ KBD</option>'+'<option value="PT"'+(o.shipper==="PT"?' selected':'')+'>PT</option>'+'<option value="มีชัย"'+(o.shipper==="มีชัย"?' selected':'')+'>มีชัย</option>'+'<option value="เอสพี สุภาภัณฑ์"'+(o.shipper==="เอสพี สุภาภัณฑ์"?' selected':'')+'>เอสพี สุภาภัณฑ์</option>'+'<option value="บี.เอส."'+(o.shipper==="บี.เอส."?' selected':'')+'>บี.เอส.</option>'+'<option value="สหะหล่มสัก"'+(o.shipper==="สหะหล่มสัก"?' selected':'')+'>สหะหล่มสัก</option>'
+      +shippers.map(function(s){return '<option value="'+s+'"'+(o.shipper===s?' selected':'')+'>'+s+'</option>';}).join('')
       +'</select>'
       +'</div>'
       +'<div style="font-size:12px;background:rgba(0,0,0,0.04);border-radius:var(--rs);padding:7px 10px;margin-bottom:10px;color:#333">'+panels+(o.total?' - '+o.total:'')+'</div>'
@@ -3733,8 +3752,57 @@ function payDateChange(id, dateVal) {
 </div>
 
 <script>
+// ── SHIPPER MANAGEMENT ──
+function syncShippers() {
+  if(window.fbDB) window.fbDB.ref('shippers').set(shippers);
+}
+
+function mgRenderShippers() {
+  var list = document.getElementById('mg-shipper-list');
+  if(!list) return;
+  if(shippers.length === 0) {
+    list.innerHTML = '<div class="empty" style="padding:12px;font-size:13px">No shippers yet</div>';
+    return;
+  }
+  list.innerHTML = shippers.map(function(s, i) {
+    return '<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg2);border-radius:var(--rs);margin-bottom:6px">'
+      +'<span style="font-size:18px">🚚</span>'
+      +'<span style="flex:1;font-size:13px;font-weight:500">'+s+'</span>'
+      +'<button type="button" class="btnsm" onclick="deleteShipper('+i+')" style="color:var(--red);border-color:var(--red)"><i class="ti ti-trash"></i></button>'
+      +'</div>';
+  }).join('');
+}
+
+function openShipperAdd() {
+  document.getElementById('mg-shipper-add').style.display = 'block';
+  document.getElementById('mg-shipper-input').value = '';
+  setTimeout(function(){ document.getElementById('mg-shipper-input').focus(); }, 100);
+}
+
+function closeShipperAdd() {
+  document.getElementById('mg-shipper-add').style.display = 'none';
+}
+
+function saveShipper() {
+  var val = (document.getElementById('mg-shipper-input').value||'').trim();
+  if(!val) return;
+  if(shippers.indexOf(val) >= 0) { alert('Already exists / มีอยู่แล้ว'); return; }
+  shippers.push(val);
+  syncShippers();
+  mgRenderShippers();
+  closeShipperAdd();
+}
+
+function deleteShipper(idx) {
+  var name = shippers[idx];
+  if(!confirm('Remove "'+name+'"?')) return;
+  shippers.splice(idx, 1);
+  syncShippers();
+  mgRenderShippers();
+}
+
 // ── EXTERNAL ORDERS ──
-// ── DELIVERY MODAL + PHOTO UPLOAD ──
+var extFilt_ = 'pending';
 var _deliveryId = null;
 var _deliveryPhotoUrl = null;
 
