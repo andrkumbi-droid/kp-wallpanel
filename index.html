@@ -333,6 +333,7 @@ textarea{resize:none}
         try{document.getElementById('of-cnt').textContent=orders.length;}catch(e){}
         try{payUpdateBadge();}catch(e){}
         try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
+        try{if(document.getElementById('ofv-sales')&&document.getElementById('ofv-sales').classList.contains('active'))ofDailyRender();}catch(e){}
       });
       db.ref('wOrders').on('value', function(snap) {
         wOrders = snap.val() ? Object.values(snap.val()) : [];
@@ -511,6 +512,7 @@ textarea{resize:none}
     <div class="stit">Log / ประวัติสต็อก</div>
     <div class="card" id="ov-log"><div class="empty" style="padding:1rem;font-size:13px">No activity yet</div></div>
   </div></div>
+
 </div></div>
 
 
@@ -760,6 +762,28 @@ textarea{resize:none}
     <div id="of-sales-lcorner-detail" style="display:none;margin-bottom:8px">
       <div class="card" id="of-sales-lcorner-list"><div class="empty" style="padding:1rem;font-size:13px">No data yet</div></div>
     </div>
+  <!-- Daily Orders section -->
+    <div style="height:1px;background:var(--border);margin:16px 0"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="stit" style="margin-bottom:0">📅 Daily Orders / ยอดรายวัน</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <input type="date" id="of-daily-date" onchange="ofDailyRender()" style="flex:1;padding:9px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">
+      <button type="button" onclick="ofDailyToday()" style="padding:9px 14px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg2);font-size:12px;font-weight:600;cursor:pointer;color:var(--text2);white-space:nowrap;-webkit-tap-highlight-color:transparent">Today</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+      <div style="background:var(--blue-bg);border:1.5px solid var(--blue-l);border-radius:var(--r);padding:12px 14px">
+        <div style="font-size:10px;font-weight:700;color:var(--blue-t);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Orders</div>
+        <div style="font-size:26px;font-weight:800;color:var(--blue-t);line-height:1" id="of-daily-cnt">0</div>
+        <div style="font-size:11px;color:var(--blue-t);margin-top:2px">this day</div>
+      </div>
+      <div style="background:#fef3c7;border:1.5px solid #fcd34d;border-radius:var(--r);padding:12px 14px">
+        <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Theoretical ฿</div>
+        <div style="font-size:26px;font-weight:800;color:#92400e;line-height:1" id="of-daily-amt">0</div>
+        <div style="font-size:11px;color:#92400e;margin-top:2px">incl. unpaid</div>
+      </div>
+    </div>
+    <div id="of-daily-list"></div>
   </div></div>
   <div class="view" id="ofv-inc"><div class="sec">
     <div class="stit">Incoming from China / สินค้าจากจีน</div>
@@ -1194,6 +1218,58 @@ function mgDrivers(){
   document.getElementById('mg-tours').innerHTML=activeTours.length===0?'<div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div>':activeTours.map((t,ti)=>{const del=t.orders.filter(id=>t.status[id]==='delivered').length,can=t.orders.filter(id=>t.status[id]==='cancelled').length,pen=t.orders.length-del-can;return`<div class="tmgmt"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div><div style="font-size:15px;font-weight:600"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>${t.driverName}</div><div style="font-size:11px;color:var(--text2);margin-top:2px">Started ${t.created}</div></div><span class="badge bactive">Active</span></div><div>${t.orders.map(id=>`<div class="tordr"><span style="font-weight:600">${id}</span><span class="badge ${t.status[id]==='delivered'?'bready':t.status[id]==='cancelled'?'bcancelled':'bloaded'}">${t.status[id]==='delivered'?'Delivered':t.status[id]==='cancelled'?'Cancelled':'On route'}</span></div>`).join('')}</div><div class="tstats"><div class="tstat">On route: <b>${pen}</b></div><div class="tstat">Delivered: <b style="color:var(--green)">${del}</b></div><div class="tstat">Cancelled: <b style="color:var(--red)">${can}</b></div></div><button type="button" class="btn btng" style="margin-top:10px" onclick="endTour(${ti})"><i class="ti ti-flag-check"></i> End ${t.driverName}'s tour</button></div>`;}).join('');
 }
 
+function ofDailyToday() {
+  var el = document.getElementById('of-daily-date');
+  if(el) { el.valueAsDate = new Date(); ofDailyRender(); }
+}
+
+function ofDailyRender() {
+  var dateEl = document.getElementById('of-daily-date');
+  if(!dateEl) return;
+  if(!dateEl.value) { dateEl.valueAsDate = new Date(); }
+  var selDate = dateEl.value;
+
+  var dayOrders = orders.filter(function(o) {
+    return o.status !== 'cancelled' && o.date === selDate;
+  }).slice().reverse();
+
+  var total = dayOrders.reduce(function(a,o) {
+    return a + (parseFloat((o.total||'0').toString().replace(/[^0-9.]/g,''))||0);
+  }, 0);
+
+  var cntEl = document.getElementById('of-daily-cnt');
+  var amtEl = document.getElementById('of-daily-amt');
+  if(cntEl) cntEl.textContent = dayOrders.length;
+  if(amtEl) amtEl.textContent = total.toLocaleString();
+
+  var list = document.getElementById('of-daily-list');
+  if(!list) return;
+
+  if(dayOrders.length === 0) {
+    list.innerHTML = '<div class="empty"><i class="ti ti-calendar-off" style="font-size:36px;display:block;margin-bottom:8px"></i>No orders on this day</div>';
+    return;
+  }
+
+  list.innerHTML = dayOrders.map(function(o) {
+    var amt = parseFloat((o.total||'0').toString().replace(/[^0-9.]/g,''))||0;
+    var isPaid = !!o.payMethod;
+    var statusColors = {'new':'#dbeafe:#1d4ed8','packing':'#fef3c7:#92400e','ready':'#d1fae5:#065f46','loaded':'#dbeafe:#1d4ed8','delivered':'#d1fae5:#065f46','cancelled':'#fee2e2:#991b1b'};
+    var sc = (statusColors[o.status]||'#f3f4f6:#374151').split(':');
+    var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+' x'+i.qty;}).join(', ')||o.panels||'—';
+    return '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:8px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+      +'<span style="font-size:15px;font-weight:700">'+o.id+'</span>'
+      +'<div style="display:flex;align-items:center;gap:6px">'
+      +(isPaid?'<span style="font-size:11px;font-weight:600;color:#16a34a">✅ Paid</span>':'<span style="font-size:11px;font-weight:600;color:#dc2626">⏳ Unpaid</span>')
+      +'<span class="badge" style="background:'+sc[0]+';color:'+sc[1]+'">'+o.status+'</span>'
+      +'</div></div>'
+      +'<div style="font-size:12px;color:var(--text2);margin-bottom:4px">'+(o.customer||'—')+' · '+(o.zone||'')+(o.phone?' · '+o.phone:'')+'</div>'
+      +'<div style="font-size:12px;color:var(--text2);margin-bottom:6px">'+panels+'</div>'
+      +'<div style="font-size:15px;font-weight:700;color:'+(isPaid?'var(--green)':'#d97706')+'">'+amt.toLocaleString()+' ฿</div>'
+      +'</div>';
+  }).join('');
+}
+
 function mgRevenue(){
   const now=new Date(),ms=new Set();revOrders.forEach(o=>{if(o.month)ms.add(o.month);});for(let i=0;i<6;i++){const d=new Date(now.getFullYear(),now.getMonth()-i,1);ms.add(d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0'));}
   const months=[...ms].sort().reverse();if(!selMonth||!months.includes(selMonth))selMonth=months[0]||'';
@@ -1240,7 +1316,7 @@ function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id)
 function delRev(rid){if(!confirm('Remove from revenue?'))return;revOrders=revOrders.filter(x=>x.rid!==rid);mgRevenue();syncRevOrders();}
 
 // OFFICE
-function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();}if(t==='ext')extRender();if(t==='pay')payRender();}
+function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='ext')extRender();if(t==='pay')payRender();}
 
 function ofRenderStock(){
   const rl = items => items.length === 0
