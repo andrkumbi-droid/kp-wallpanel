@@ -276,6 +276,7 @@ textarea{resize:none}
   <!-- Firebase Compat (global scope) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
   <script>
   (function() {
 
@@ -373,6 +374,11 @@ textarea{resize:none}
         try{if(document.getElementById('ofv-ext')&&document.getElementById('ofv-ext').classList.contains('active'))extRender();}catch(e){}
         try{extUpdateBadge();}catch(e){}
       });
+      db.ref('auditLog').orderByChild('ts').limitToLast(200).on('value', function(snap) {
+        var raw = snap.val();
+        auditLog = raw ? Object.values(raw).reverse() : [];
+        try{if(document.getElementById('mgv-audit')&&document.getElementById('mgv-audit').classList.contains('active'))_auditRenderNow();}catch(e){}
+      });
       db.ref('orderCounters').on('value', function(snap) {
         if(snap.val()) Object.assign(orderCounters, snap.val());
       });
@@ -447,12 +453,13 @@ textarea{resize:none}
 <!-- MANAGER -->
 <div class="screen" id="s-manager"><div class="pb">
   <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div><div class="h-title">Management</div><div class="h-sub">KP Wallpanel</div></div></div>
-  <div class="tabs" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr">
+  <div class="tabs" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr">
     <button type="button" class="tab active" onclick="mgt('stock')" id="mgt-stock">Stock / สต็อก</button>
     <button type="button" class="tab" onclick="mgt('incoming')" id="mgt-incoming">Incoming / ขาเข้า</button>
     <button type="button" class="tab" onclick="mgt('drivers')" id="mgt-drivers">Drivers / คนขับ</button>
     <button type="button" class="tab" onclick="mgt('staff')" id="mgt-staff">Staff / พนักงาน</button>
     <button type="button" class="tab" onclick="mgt('revenue')" id="mgt-revenue">Revenue / รายได้</button>
+    <button type="button" class="tab" onclick="mgt('audit')" id="mgt-audit">Audit Log</button>
   </div>
   <div class="view active" id="mgv-stock"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="stit" style="margin-bottom:0">Stock / สต็อก</div><div style="display:flex;gap:6px"><button type="button" class="btnsm" onclick="mgCleanup()" style="background:#fee2e2;color:#dc2626;border-color:#fee2e2"><i class="ti ti-trash"></i> Cleanup</button><button type="button" class="btnsm btnsmp" onclick="openSM(null)"><i class="ti ti-plus"></i> Add</button></div></div>
@@ -511,6 +518,20 @@ textarea{resize:none}
     <div id="ov-alerts"></div>
     <div class="stit">Log / ประวัติสต็อก</div>
     <div class="card" id="ov-log"><div class="empty" style="padding:1rem;font-size:13px">No activity yet</div></div>
+  </div></div>
+
+  <div class="view" id="mgv-audit"><div class="sec">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div class="stit" style="margin-bottom:0">Audit Log / ประวัติการทำงาน</div>
+      <button type="button" onclick="auditRender()" style="padding:6px 10px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg2);font-size:12px;cursor:pointer;color:var(--text2)"><i class="ti ti-refresh"></i></button>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px" id="audit-filter-bar">
+      <button type="button" class="fbtn active" onclick="auditFilt('all',this)">All</button>
+      <button type="button" class="fbtn" onclick="auditFilt('status',this)">Status</button>
+      <button type="button" class="fbtn" onclick="auditFilt('payment',this)">Payment</button>
+      <button type="button" class="fbtn" onclick="auditFilt('delete',this)">Deleted</button>
+    </div>
+    <div id="audit-list"></div>
   </div></div>
 
 </div></div>
@@ -1135,7 +1156,7 @@ function addLog(m,t){const n=new Date();stockLog.push({m,t,ts:n.getHours().toStr
 function initials(n){return n.trim().split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);}
 
 // MANAGER
-function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();}
+function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();if(t==='audit')auditRender();}
 
 function mgCleanup() {
   if(!window.fbDB) { alert('Not connected'); return; }
@@ -2246,6 +2267,7 @@ function ofCreate(){
   document.getElementById('of-cnt').textContent=orders.length;addLog('Order '+no+' created','+');
   ['of-no','of-cust','of-phone','of-loc'].forEach(x=>document.getElementById(x).value='');document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';;document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='none';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').valueAsDate=new Date();
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
+  try{var cByN=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';auditAdd({type:'create',orderId:no,by:cByN});}catch(e){}
   // Auto open receipt
   setTimeout(() => { openReceiptForOrder(no); }, 400);
 }
@@ -2254,6 +2276,9 @@ function ofCreate(){
 function quickStatus(btn) {
   var id = btn.getAttribute('data-id');
   var newStatus = btn.getAttribute('data-status');
+  if(newStatus === 'cancelled') {
+    if(!confirm('Cancel order ' + id + '?\nThis cannot be undone! / ยืนยันการยกเลิก?')) return;
+  }
   const o = orders.find(x => x.id === id);
   if(!o) return;
   const old = o.status;
@@ -2285,6 +2310,7 @@ function quickStatus(btn) {
   syncOrders();syncRevOrders();
   ofRenderOrders();mgRender();
   try{payUpdateBadge();}catch(e){}
+  try{auditAdd({type:'status',orderId:id,from:old,to:newStatus,by:byName});}catch(e){}
   try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}
 }
 
@@ -2812,9 +2838,35 @@ function drTour(){
 function drChk(id,f){if(!dChecks[id])dChecks[id]={p:false,l:false,c:false};dChecks[id][f]=!dChecks[id][f];drTour();}
 function drUp(i){const mt=dTour.filter(id=>dAllOrders.find(x=>x.id===id));if(i===0)return;[dTour[i-1],dTour[i]]=[dTour[i],dTour[i-1]];drTour();}
 function drDn(i){const mt=dTour.filter(id=>dAllOrders.find(x=>x.id===id));if(i===mt.length-1)return;[dTour[i],dTour[i+1]]=[dTour[i+1],dTour[i]];drTour();}
-function drDeliver(id){dStatus[id]='delivered';dTour=dTour.filter(x=>x!==id);if(!dDone.includes(id))dDone.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord){addStatusLog(ord,'delivered','Driver');ord.status='delivered';const amt=parseFloat((ord.total+'').replace(/[^0-9.]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:ord.id,cust:ord.customer,amt,date:new Date().toISOString().split('T')[0],zone:ord.zone,month:mkey(new Date().toISOString())});addLog('Order '+id+' delivered: '+amt.toLocaleString()+' ฿','+');}}const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='delivered';drTour();drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();try{payUpdateBadge();}catch(e){}}
+function drDeliver(id){
+  openDeliveryModal(id);
+}
+function drDoDeliver(id, photoUrl){
+  dStatus[id]='delivered';dTour=dTour.filter(x=>x!==id);if(!dDone.includes(id))dDone.push(id);delete dChecks[id];
+  const ord=orders.find(x=>x.id===id);
+  if(ord){
+    addStatusLog(ord,'delivered','Driver');
+    ord.status='delivered';
+    if(photoUrl) ord.deliveryPhoto=photoUrl;
+    const amt=parseFloat((ord.total+'').replace(/[^0-9.]/g,''))||0;
+    if(amt>0){revOrders.push({rid:'r'+Date.now(),id:ord.id,cust:ord.customer,amt,date:new Date().toISOString().split('T')[0],zone:ord.zone,month:mkey(new Date().toISOString())});addLog('Order '+id+' delivered: '+amt.toLocaleString()+' ฿','+');}
+  }
+  const tour=activeTours.find(t=>t.driverId===currentDriverId);
+  if(tour)tour.status[id]='delivered';
+  drTour();drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;
+  ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();try{payUpdateBadge();}catch(e){}
+}
 function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';revOrders=revOrders.filter(x=>x.id!==id);const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
-function drCancel(id){dStatus[id]='cancelled';dTour=dTour.filter(x=>x!==id);if(!dDone.includes(id))dDone.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord)ord.status='cancelled';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='cancelled';drTour();drReady();ofRenderOrders();syncOrders();syncTours();}
+function drCancel(id){
+  const ord=orders.find(x=>x.id===id);
+  const name=ord?ord.id:id;
+  if(!confirm('Cancel order '+name+'?\nThis cannot be undone / ยืนยันการยกเลิก?')) return;
+  dStatus[id]='cancelled';dTour=dTour.filter(x=>x!==id);if(!dDone.includes(id))dDone.push(id);delete dChecks[id];
+  if(ord){ord.status='cancelled';addStatusLog(ord,'cancelled','Driver');}
+  const tour=activeTours.find(t=>t.driverId===currentDriverId);
+  if(tour)tour.status[id]='cancelled';
+  drTour();drReady();ofRenderOrders();syncOrders();syncTours();
+}
 function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();}
 
 // ── STAFF MODAL FUNCTIONS ──
@@ -2887,7 +2939,7 @@ function ofLoginRender() {
 
 function deleteOrder(btn) {
   var id = btn.getAttribute('data-id');
-  if(!confirm('Delete order ' + id + '? Cannot be undone!')) return;
+  if(!confirm('Delete order ' + id + '?\nThis CANNOT be undone! / ลบออเดอร์?')) return;
   // Remove from orders array
   orders = orders.filter(function(o) { return o.id !== id; });
   // Remove from wOrders
@@ -2907,6 +2959,7 @@ function deleteOrder(btn) {
   ofRenderOrders();
   mgRender();
   addLog('Order '+id+' deleted', '-');
+  try{var byN2=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';auditAdd({type:'delete',orderId:id,by:byN2});}catch(e){}
 }
 
 
@@ -3373,9 +3426,9 @@ function paySetMethod(id, method) {
   o.paidBy = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
   syncOrders();
   _payRenderNow();
-  // Update revenue immediately since paid status changed
   try{ofRenderRevenue();}catch(e){}
   try{mgRevenue();}catch(e){}
+  try{var byN=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';auditAdd({type:'payment',orderId:id,method:method,by:byN});}catch(e){}
 }
 
 function payClear(id) {
@@ -3580,6 +3633,38 @@ function payDateChange(id, dateVal) {
   </div>
 </div>
 
+<!-- DELIVERY CONFIRMATION MODAL -->
+<div class="modal-overlay" id="delivery-modal">
+  <div class="modal">
+    <div class="mhdr">
+      <span class="mtit">✅ Confirm Delivery / ยืนยันการส่ง</span>
+      <button type="button" class="mclose" onclick="closeDeliveryModal()"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="delivery-modal-order" style="font-size:18px;font-weight:700;margin-bottom:4px"></div>
+    <div id="delivery-modal-cust" style="font-size:13px;color:var(--text2);margin-bottom:16px"></div>
+
+    <!-- Photo upload -->
+    <div style="margin-bottom:14px">
+      <label class="fl" style="margin-top:0">📷 Delivery photo (optional)</label>
+      <div id="delivery-photo-preview" style="display:none;margin-bottom:8px">
+        <img id="delivery-photo-img" src="" style="width:100%;border-radius:var(--rs);max-height:200px;object-fit:cover">
+        <button type="button" onclick="clearDeliveryPhoto()" style="background:none;border:none;color:var(--red);font-size:12px;cursor:pointer;margin-top:4px"><i class="ti ti-trash"></i> Remove photo</button>
+      </div>
+      <div id="delivery-photo-upload" style="border:2px dashed var(--border);border-radius:var(--rs);padding:20px;text-align:center;cursor:pointer;background:var(--bg2)" onclick="document.getElementById('delivery-photo-input').click()">
+        <i class="ti ti-camera" style="font-size:28px;color:var(--text2);display:block;margin-bottom:6px"></i>
+        <div style="font-size:13px;color:var(--text2)">Tap to take photo / เลือกรูป</div>
+      </div>
+      <input type="file" id="delivery-photo-input" accept="image/*" capture="environment" style="display:none" onchange="handleDeliveryPhoto(this)">
+      <div id="delivery-upload-progress" style="display:none;font-size:12px;color:var(--blue);margin-top:6px;text-align:center"><i class="ti ti-loader"></i> Uploading...</div>
+    </div>
+
+    <button type="button" class="btn btng" id="delivery-confirm-btn" onclick="confirmDelivery()" style="margin-top:4px">
+      <i class="ti ti-check"></i> Confirm Delivered / ยืนยัน
+    </button>
+    <button type="button" class="btn" onclick="closeDeliveryModal()" style="margin-top:6px">Cancel</button>
+  </div>
+</div>
+
 <!-- EXTERNAL ORDER MODAL -->
 <div class="modal-overlay" id="ext-modal">
   <div class="modal">
@@ -3614,6 +3699,181 @@ function payDateChange(id, dateVal) {
 
 <script>
 // ── EXTERNAL ORDERS ──
+// ── DELIVERY MODAL + PHOTO UPLOAD ──
+var _deliveryId = null;
+var _deliveryPhotoUrl = null;
+
+function openDeliveryModal(id) {
+  _deliveryId = id;
+  _deliveryPhotoUrl = null;
+  var ord = orders.find(function(o){ return o.id===id; });
+  document.getElementById('delivery-modal-order').textContent = id;
+  document.getElementById('delivery-modal-cust').textContent = ord ? (ord.customer||'')+(ord.zone?' · '+ord.zone:'') : '';
+  document.getElementById('delivery-photo-preview').style.display = 'none';
+  document.getElementById('delivery-photo-upload').style.display = 'block';
+  document.getElementById('delivery-upload-progress').style.display = 'none';
+  document.getElementById('delivery-photo-input').value = '';
+  document.getElementById('delivery-confirm-btn').disabled = false;
+  document.getElementById('delivery-modal').classList.add('open');
+}
+
+function closeDeliveryModal() {
+  document.getElementById('delivery-modal').classList.remove('open');
+  _deliveryId = null;
+  _deliveryPhotoUrl = null;
+}
+
+function clearDeliveryPhoto() {
+  _deliveryPhotoUrl = null;
+  document.getElementById('delivery-photo-preview').style.display = 'none';
+  document.getElementById('delivery-photo-upload').style.display = 'block';
+}
+
+function handleDeliveryPhoto(input) {
+  var file = input.files[0];
+  if(!file) return;
+  var progressEl = document.getElementById('delivery-upload-progress');
+  var confirmBtn = document.getElementById('delivery-confirm-btn');
+  progressEl.style.display = 'block';
+  confirmBtn.disabled = true;
+
+  // Resize image before upload
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var img = new Image();
+    img.onload = function() {
+      var canvas = document.createElement('canvas');
+      var maxW = 1200, maxH = 1200;
+      var w = img.width, h = img.height;
+      if(w > maxW) { h = Math.round(h*maxW/w); w = maxW; }
+      if(h > maxH) { w = Math.round(w*maxH/h); h = maxH; }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob(function(blob) {
+        uploadToFirebaseStorage(blob, file.name);
+      }, 'image/jpeg', 0.8);
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function uploadToFirebaseStorage(blob, filename) {
+  var progressEl = document.getElementById('delivery-upload-progress');
+  var confirmBtn = document.getElementById('delivery-confirm-btn');
+  try {
+    var storage = firebase.storage();
+    var ref = storage.ref('delivery-photos/' + _deliveryId + '_' + Date.now() + '.jpg');
+    var task = ref.put(blob);
+    task.on('state_changed',
+      function(snap) {
+        var pct = Math.round(snap.bytesTransferred/snap.totalBytes*100);
+        progressEl.innerHTML = '<i class="ti ti-loader"></i> Uploading ' + pct + '%...';
+      },
+      function(err) {
+        console.error('Upload error:', err);
+        progressEl.textContent = '⚠️ Upload failed — you can still confirm without photo';
+        progressEl.style.color = 'var(--orange)';
+        confirmBtn.disabled = false;
+      },
+      function() {
+        task.snapshot.ref.getDownloadURL().then(function(url) {
+          _deliveryPhotoUrl = url;
+          var previewImg = document.getElementById('delivery-photo-img');
+          previewImg.src = url;
+          document.getElementById('delivery-photo-preview').style.display = 'block';
+          document.getElementById('delivery-photo-upload').style.display = 'none';
+          progressEl.style.display = 'none';
+          confirmBtn.disabled = false;
+        });
+      }
+    );
+  } catch(e) {
+    progressEl.textContent = '⚠️ Storage not enabled — confirm without photo';
+    progressEl.style.color = 'var(--orange)';
+    confirmBtn.disabled = false;
+  }
+}
+
+function confirmDelivery() {
+  if(!_deliveryId) return;
+  var id = _deliveryId;
+  var photo = _deliveryPhotoUrl;
+  closeDeliveryModal();
+  drDoDeliver(id, photo);
+  // Add audit log entry
+  auditAdd({type:'status', orderId:id, from:'loaded', to:'delivered', by:'Driver', photo:photo||null});
+}
+
+// ── AUDIT LOG ──
+var auditLog = [];
+var auditFilt_ = 'all';
+
+function auditAdd(entry) {
+  var now = new Date();
+  entry.ts = now.toISOString();
+  entry.time = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  entry.dateStr = now.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+  auditLog.unshift(entry); // newest first
+  if(window.fbDB) window.fbDB.ref('auditLog').push(entry);
+}
+
+function auditFilt(f, btn) {
+  auditFilt_ = f;
+  document.querySelectorAll('#audit-filter-bar .fbtn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  auditRender();
+}
+
+function auditRender() {
+  var list = document.getElementById('audit-list');
+  if(!list) return;
+  // Fetch fresh from Firebase
+  if(window.fbDB) {
+    window.fbDB.ref('auditLog').orderByChild('ts').limitToLast(200).once('value', function(snap) {
+      var raw = snap.val();
+      auditLog = raw ? Object.values(raw).reverse() : [];
+      _auditRenderNow();
+    });
+  } else { _auditRenderNow(); }
+}
+
+function _auditRenderNow() {
+  var list = document.getElementById('audit-list');
+  if(!list) return;
+  var filtered = auditLog.filter(function(e) {
+    if(auditFilt_==='all') return true;
+    if(auditFilt_==='status') return e.type==='status';
+    if(auditFilt_==='payment') return e.type==='payment';
+    if(auditFilt_==='delete') return e.type==='delete';
+    return true;
+  });
+  if(filtered.length===0) {
+    list.innerHTML = '<div class="empty"><i class="ti ti-list-check" style="font-size:36px;display:block;margin-bottom:8px"></i>No entries yet</div>';
+    return;
+  }
+  var icons = {status:'ti-refresh',payment:'ti-cash',delete:'ti-trash',create:'ti-plus'};
+  var colors = {status:'var(--blue)',payment:'var(--green)',delete:'var(--red)',create:'var(--green)'};
+  list.innerHTML = filtered.map(function(e) {
+    var icon = icons[e.type]||'ti-activity';
+    var color = colors[e.type]||'var(--text2)';
+    var desc = '';
+    if(e.type==='status') desc = (e.orderId||'')+(e.from?' '+e.from+' → '+e.to:'');
+    else if(e.type==='payment') desc = (e.orderId||'')+' marked '+(e.method||'paid');
+    else if(e.type==='delete') desc = (e.orderId||'')+' deleted';
+    else if(e.type==='create') desc = (e.orderId||'')+' created';
+    else desc = e.desc||'';
+    return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">'
+      +'<div style="width:32px;height:32px;border-radius:50%;background:'+color+'22;display:flex;align-items:center;justify-content:center;flex-shrink:0">'
+      +'<i class="ti '+icon+'" style="font-size:14px;color:'+color+'"></i></div>'
+      +'<div style="flex:1;min-width:0">'
+      +'<div style="font-size:13px;font-weight:600;color:var(--text)">'+desc+'</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'+(e.by||'System')+' · '+(e.dateStr||'')+' '+(e.time||'')+'</div>'
+      +(e.photo?'<img src="'+e.photo+'" style="width:100%;max-height:120px;object-fit:cover;border-radius:var(--rs);margin-top:6px">':'')
+      +'</div></div>';
+  }).join('');
+}
+
 var extFilt_ = 'pending';
 var editExtId = null;
 
