@@ -393,6 +393,8 @@ textarea{resize:none}
         try{if(document.getElementById('mgv-revenue').classList.contains('active'))mgRevenue();}catch(e){}
           try{if(document.getElementById('ofv-sales').classList.contains('active'))ofRenderRevenue();}catch(e){}
         try{document.getElementById('of-cnt').textContent=orders.length;}catch(e){}
+        try{payUpdateBadge();}catch(e){}
+        try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}
       });
       db.ref('wOrders').on('value', function(snap) {
         wOrders = snap.val() ? Object.values(snap.val()) : [];
@@ -426,6 +428,11 @@ textarea{resize:none}
       });
       db.ref('stockLog').on('value', function(snap) {
         stockLog = snap.val() ? Object.values(snap.val()) : [];
+      });
+      db.ref('extOrders').on('value', function(snap) {
+        extOrders = snap.val() ? Object.values(snap.val()) : [];
+        try{if(document.getElementById('ofv-ext')&&document.getElementById('ofv-ext').classList.contains('active'))extRender();}catch(e){}
+        try{extUpdateBadge();}catch(e){}
       });
     }
     // Defer until app JS is loaded
@@ -605,12 +612,14 @@ textarea{resize:none}
 <!-- OFFICE -->
 <div class="screen" id="s-office"><div class="pb">
   <div class="header"><button class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div style="flex:1"><div class="h-title">Office / Sales</div><div class="h-sub" id="of-logged-in-name">KP Wallpanel</div></div><button onclick="ofLogout()" style="background:none;border:0.5px solid var(--border);border-radius:var(--rs);padding:6px 10px;font-size:12px;font-weight:500;cursor:pointer;color:var(--text2);display:flex;align-items:center;gap:4px;flex-shrink:0"><i class="ti ti-logout" style="font-size:14px"></i> Logout</button></div>
-  <div class="tabs" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr">
+  <div class="tabs" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr 1fr">
     <button class="tab active" onclick="oft('new')" id="oft-new">New Order</button>
     <button class="tab" onclick="oft('orders')" id="oft-orders">Orders <span class="tc tcw" id="of-cnt">0</span></button>
     <button class="tab" onclick="oft('tour')" id="oft-tour">Tour Plan</button>
+    <button class="tab" onclick="oft('pay')" id="oft-pay">Payment <span class="tc" id="oft-pay-cnt" style="background:#fee2e2;color:#991b1b;display:none"></span></button>
     <button class="tab" onclick="oft('sales')" id="oft-sales">Sales</button>
     <button class="tab" onclick="oft('inc')" id="oft-inc">Incoming</button>
+    <button class="tab" onclick="oft('ext')" id="oft-ext">External <span class="tc" id="oft-ext-cnt" style="background:#fde8ff;color:#7e22ce;display:none"></span></button>
   </div>
   <div class="view active" id="ofv-new"><div class="sec"><div class="card">
     <label class="fl">Zone / โซน</label>
@@ -724,6 +733,17 @@ textarea{resize:none}
       <div id="of-tres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-top:8px;font-size:13px"></div>
     </div>
   </div></div>
+  <div class="view" id="ofv-pay"><div class="sec">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div class="stit" style="margin-bottom:0">Payment Tracking / ติดตามการชำระ</div>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap" id="pay-filter-bar">
+      <button type="button" class="fbtn active" onclick="payFilt('unpaid',this)" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5">⏳ Unpaid</button>
+      <button type="button" class="fbtn" onclick="payFilt('paid',this)" style="background:#dcfce7;color:#166534;border-color:#86efac">✅ Paid</button>
+      <button type="button" class="fbtn" onclick="payFilt('all',this)">All</button>
+    </div>
+    <div id="pay-list"></div>
+  </div></div>
   <div class="view" id="ofv-sales"><div class="sec">
     <!-- Revenue Overview -->
     <div class="stit">Revenue / รายได้</div>
@@ -792,6 +812,19 @@ textarea{resize:none}
   <div class="view" id="ofv-inc"><div class="sec">
     <div class="stit">Incoming from China / สินค้าจากจีน</div>
     <div id="of-inc-list"><div class="empty"><i class="ti ti-ship" style="font-size:36px;display:block;margin-bottom:8px"></i>No incoming orders</div></div>
+  </div></div>
+  <div class="view" id="ofv-ext"><div class="sec">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div class="stit" style="margin-bottom:0">External Shipments / จัดส่งภายนอก</div>
+      <button type="button" onclick="openExtModal(null)" style="background:var(--blue);color:#fff;border:none;border-radius:var(--rs);padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent"><i class="ti ti-plus"></i> Add</button>
+    </div>
+    <!-- Filter pills -->
+    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap" id="ext-filter-bar">
+      <button type="button" class="fbtn active" onclick="extFilt('pending',this)">⏳ Pending</button>
+      <button type="button" class="fbtn" onclick="extFilt('paid',this)">✅ Paid</button>
+      <button type="button" class="fbtn" onclick="extFilt('all',this)">All</button>
+    </div>
+    <div id="ext-list"></div>
   </div></div>
 </div></div>
 
@@ -1088,6 +1121,7 @@ function syncOrders() { if(window.fbDB) { const obj = {}; orders.forEach((o,i) =
 function syncWOrders() { if(window.fbDB) { const obj = {}; wOrders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('wOrders').set(obj); } }
 function syncTours() { if(window.fbDB) { const obj = {}; activeTours.forEach((t,i) => obj[t.id] = t); window.fbDB.ref('activeTours').set(obj); } }
 function syncRevOrders() { if(window.fbDB) { const obj = {}; revOrders.forEach((r,i) => obj[r.rid] = r); window.fbDB.ref('revOrders').set(obj); } }
+function syncExtOrders() { if(window.fbDB) { const obj = {}; extOrders.forEach((e) => obj[e.eid] = e); window.fbDB.ref('extOrders').set(obj); } }
 function syncLog() { if(window.fbDB) { const obj = {}; stockLog.forEach((l,i) => obj['l'+i+'_'+Date.now()] = l); window.fbDB.ref('stockLog').set(obj); } }
 
 const LOW=500;
@@ -1096,7 +1130,7 @@ const SL={new:'New / ใหม่',packing:'Packing / กำลังแพ็�
 const BC={new:'bnew',packing:'bpacking',ready:'bready',loaded:'bloaded',delivered:'bdelivered',cancelled:'bcancelled'};
 const GL='#D1FAE5',GT='#065F46',OL='#FEF3C7',OT='#92400E';
 
-let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[];
+let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[],extOrders=[];
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
 let ofFilt_='all',ofSelDriver=null,ofSelOrders=[],currentDriverId=null;
 let editId=null,editSM=null,editIM=null,editDM=null,selMonth='';
@@ -1260,7 +1294,7 @@ function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id)
 function delRev(rid){if(!confirm('Remove from revenue?'))return;revOrders=revOrders.filter(x=>x.rid!==rid);mgRevenue();syncRevOrders();}
 
 // OFFICE
-function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();}}
+function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();}if(t==='ext')extRender();if(t==='pay')payRender();}
 
 function ofRenderStock(){
   const rl = items => items.length === 0
@@ -3362,6 +3396,293 @@ function drVerify(){const res=document.getElementById('dr-vres');res.style.displ
     <div id="rev-detail-list" style="overflow-y:auto;flex:1"></div>
   </div>
 </div>
+
+<!-- EXTERNAL ORDER MODAL -->
+<div class="modal-overlay" id="ext-modal">
+  <div class="modal">
+    <div class="mhdr">
+      <span class="mtit" id="ext-modal-title">Add External Shipment</span>
+      <button class="mclose" onclick="closeExtModal()"><i class="ti ti-x"></i></button>
+    </div>
+    <label class="fl" style="margin-top:0">Order No. / เลขออเดอร์</label>
+    <input type="text" id="ext-no" placeholder="e.g. EXT-001 / #679">
+    <label class="fl">Customer / ลูกค้า</label>
+    <input type="text" id="ext-cust" placeholder="Name">
+    <label class="fl">Phone <span style="font-size:11px;color:var(--text2)">(optional)</span></label>
+    <input type="tel" id="ext-phone" placeholder="08x-xxx-xxxx">
+    <label class="fl">Zone / โซน</label>
+    <select id="ext-zone">
+      <option value="Bangkok">Bangkok</option>
+      <option value="Northern">Northern</option>
+      <option value="Northeastern">Northeastern</option>
+      <option value="Eastern">Eastern</option>
+      <option value="Southern">Southern</option>
+    </select>
+    <label class="fl">Amount / ยอดเงิน (฿)</label>
+    <input type="number" id="ext-amt" placeholder="0" min="0">
+    <label class="fl">Shipped date / วันที่ส่ง</label>
+    <input type="date" id="ext-shipped">
+    <label class="fl">Notes <span style="font-size:11px;color:var(--text2)">(optional)</span></label>
+    <input type="text" id="ext-notes" placeholder="Products, details...">
+    <button class="btn btng" style="margin-top:14px" onclick="saveExtModal()"><i class="ti ti-check"></i> Save / บันทึก</button>
+    <button class="btn btnr" id="ext-del-btn" style="display:none;margin-top:6px" onclick="deleteExtOrder()"><i class="ti ti-trash"></i> Delete</button>
+  </div>
+</div>
+
+<script>
+// ── PAYMENT TRACKING ──
+var payFilt_ = 'unpaid';
+
+function payUpdateBadge() {
+  var cnt = document.getElementById('oft-pay-cnt');
+  if(!cnt) return;
+  var unpaid = orders.filter(function(o){ return o.status==='delivered' && !o.payMethod; });
+  if(unpaid.length > 0) { cnt.textContent = unpaid.length; cnt.style.display='inline-flex'; }
+  else { cnt.style.display='none'; }
+}
+
+function payFilt(f, btn) {
+  payFilt_ = f;
+  document.querySelectorAll('#pay-filter-bar .fbtn').forEach(function(b){
+    b.classList.remove('active');
+    b.style.fontWeight = '';
+  });
+  btn.classList.add('active');
+  payRender();
+}
+
+function payRender() {
+  payUpdateBadge();
+  var list = document.getElementById('pay-list');
+  if(!list) return;
+  var delivered = orders.filter(function(o){ return o.status==='delivered'; });
+  // Sort by date desc
+  delivered.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+  var filtered = delivered.filter(function(o){
+    if(payFilt_==='unpaid') return !o.payMethod;
+    if(payFilt_==='paid')   return !!o.payMethod;
+    return true;
+  });
+  if(filtered.length===0) {
+    var msg = payFilt_==='unpaid' ? '🎉 All delivered orders are paid!' : 'No paid orders yet';
+    list.innerHTML = '<div class="empty"><i class="ti ti-circle-check" style="font-size:36px;display:block;margin-bottom:8px;color:var(--green)"></i>'+msg+'</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(function(o) {
+    var paid = !!o.payMethod;
+    var bg   = paid ? '#f0fdf4' : '#fef2f2';
+    var border = paid ? '#16a34a' : '#dc2626';
+    var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+' ×'+i.qty;}).join(', ')||o.panels||'—';
+    var cashChk  = o.payMethod==='cash';
+    var onlineChk= o.payMethod==='online';
+    return '<div style="background:'+bg+';border:1.5px solid '+border+';border-radius:var(--r);padding:12px 14px;margin-bottom:10px">'+
+      // Header row
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
+      '<span style="font-size:18px;font-weight:800;color:#111">'+o.id+'</span>'+
+      '<span class="badge" style="background:'+(paid?'#dcfce7':'#fee2e2')+';color:'+(paid?'#166534':'#991b1b')+'">'+(paid?'✅ Paid':'⏳ Unpaid')+'</span>'+
+      '</div>'+
+      // Customer + date
+      '<div style="font-size:13px;font-weight:600;color:#333;margin-bottom:2px">'+(o.customer||'—')+'</div>'+
+      '<div style="font-size:12px;color:#666;margin-bottom:6px">'+(o.zone||'')+(o.date?' · '+fmtD(o.date):'')+'</div>'+
+      // Phone
+      (o.phone?'<div style="font-size:12px;margin-bottom:6px"><i class="ti ti-phone" style="font-size:12px;vertical-align:-1px;color:#666"></i> <a href="tel:'+o.phone+'" style="color:var(--blue);font-weight:600">'+o.phone+'</a></div>':'')+
+      // Address
+      (o.address?'<div style="font-size:12px;color:#555;margin-bottom:6px;line-height:1.4"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px;color:#888"></i> '+o.address+'</div>':'')+
+      // Products
+      '<div style="font-size:12px;background:rgba(0,0,0,0.04);border-radius:var(--rs);padding:7px 10px;margin-bottom:10px;color:#333">'+
+      '<i class="ti ti-package" style="font-size:12px;vertical-align:-1px;color:#888"></i> '+panels+
+      (o.total?'<span style="float:right;font-weight:700;color:#111">'+o.total+'</span>':'')+
+      '</div>'+
+      // Payment checkboxes
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
+      '<button type="button" onclick="paySetMethod(\''+o.id+'\',\'cash\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+(cashChk?'#16a34a':'#d1d5db')+';background:'+(cashChk?'#dcfce7':'#fff')+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+(cashChk?'#166534':'#374151')+'">'+
+      '<div style="width:20px;height:20px;border-radius:5px;border:2px solid '+(cashChk?'#16a34a':'#d1d5db')+';background:'+(cashChk?'#16a34a':'#fff')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+
+      (cashChk?'<i class="ti ti-check" style="font-size:12px;color:#fff"></i>':'')+
+      '</div>💵 Cash</button>'+
+      '<button type="button" onclick="paySetMethod(\''+o.id+'\',\'online\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+(onlineChk?'#1d4ed8':'#d1d5db')+';background:'+(onlineChk?'#dbeafe':'#fff')+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+(onlineChk?'#1d4ed8':'#374151')+'">'+
+      '<div style="width:20px;height:20px;border-radius:5px;border:2px solid '+(onlineChk?'#1d4ed8':'#d1d5db')+';background:'+(onlineChk?'#1d4ed8':'#fff')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+
+      (onlineChk?'<i class="ti ti-check" style="font-size:12px;color:#fff"></i>':'')+
+      '</div>📱 Online</button>'+
+      '</div>'+
+      // Paid by / undo
+      (paid?'<div style="font-size:11px;color:#6b7280;margin-top:8px;display:flex;justify-content:space-between;align-items:center">'+
+      '<span>'+(o.payMethod==='cash'?'💵 Cash':'📱 Online')+(o.paidBy?' · '+o.paidBy:'')+(o.paidAt?' · '+o.paidAt:'')+'</span>'+
+      '<button type="button" onclick="payClear(\''+o.id+'\')" style="background:none;border:none;font-size:11px;color:#9ca3af;cursor:pointer;padding:0">undo</button>'+
+      '</div>':'')+
+      '</div>';
+  }).join('');
+}
+
+function paySetMethod(id, method) {
+  var o = orders.find(function(x){ return x.id===id; });
+  if(!o) return;
+  // Toggle off if already selected
+  if(o.payMethod === method) { payClear(id); return; }
+  o.payMethod = method;
+  var now = new Date();
+  o.paidAt = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  o.paidBy = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+  syncOrders();
+  payRender();
+}
+
+function payClear(id) {
+  var o = orders.find(function(x){ return x.id===id; });
+  if(!o) return;
+  delete o.payMethod; delete o.paidAt; delete o.paidBy;
+  syncOrders();
+  payRender();
+}
+
+var extFilt_ = 'pending';
+var editExtId = null;
+
+function extUpdateBadge() {
+  var cnt = document.getElementById('oft-ext-cnt');
+  if(!cnt) return;
+  var pending = extOrders.filter(function(e){ return e.status === 'pending'; });
+  if(pending.length > 0) { cnt.textContent = pending.length; cnt.style.display = 'inline-flex'; }
+  else { cnt.style.display = 'none'; }
+}
+
+function extFilt(f, btn) {
+  extFilt_ = f;
+  document.querySelectorAll('#ext-filter-bar .fbtn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  extRender();
+}
+
+function extRender() {
+  extUpdateBadge();
+  var list = document.getElementById('ext-list');
+  if(!list) return;
+  var filtered = extOrders.filter(function(e){
+    if(extFilt_ === 'pending') return e.status === 'pending';
+    if(extFilt_ === 'paid') return e.status === 'paid';
+    return true;
+  });
+  filtered.sort(function(a,b){
+    if(a.status === b.status) return (b.shipped||'').localeCompare(a.shipped||'');
+    return a.status === 'pending' ? -1 : 1;
+  });
+  if(filtered.length === 0) {
+    var msg = extFilt_==='pending' ? '🎉 No pending payments! / ไม่มียอดค้างชำระ' : 'No entries yet';
+    list.innerHTML = '<div class="empty"><i class="ti ti-building-store" style="font-size:36px;display:block;margin-bottom:8px"></i>'+msg+'</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(function(e) {
+    var ip = e.status === 'pending';
+    var bc = ip ? 'var(--orange)' : 'var(--green)';
+    var amt = (e.amt||0).toLocaleString();
+    return '<div class="card" style="border-left:4px solid '+bc+';margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'+
+      '<div><span style="font-size:17px;font-weight:700">'+e.ordNo+'</span>'+
+      (e.cust?'<span style="font-size:12px;color:var(--text2);margin-left:8px">'+e.cust+'</span>':'')+
+      '</div>'+
+      '<span class="badge '+(ip?'bwarn':'bready')+'">'+(ip?'⏳ Pending':'✅ Paid')+'</span>'+
+      '</div>'+
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:8px">'+
+      (e.zone||'')+(e.shipped?' · '+fmtD(e.shipped):'')+
+      (e.phone?' · <a href="tel:'+e.phone+'" style="color:var(--blue)">'+e.phone+'</a>':'')+
+      (e.paidBy?'<br>Paid by: '+e.paidBy+(e.paidAt?' · '+e.paidAt:''):'')+
+      '</div>'+
+      (e.notes?'<div style="font-size:12px;color:var(--text2);margin-bottom:8px;background:var(--bg2);padding:6px 8px;border-radius:var(--rs)">'+e.notes+'</div>':'')+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">'+
+      '<span style="font-size:16px;font-weight:700;color:'+(ip?'var(--orange-t)':'var(--green-t)')+'">'+amt+' ฿</span>'+
+      '<div style="display:flex;gap:6px">'+
+      '<button type="button" class="btnsm" onclick="openExtModal(''+e.eid+'')"><i class="ti ti-pencil"></i></button>'+
+      (ip?'<button type="button" class="btn btng" style="margin-top:0;padding:7px 14px;font-size:13px;-webkit-tap-highlight-color:transparent" onclick="markExtPaid(''+e.eid+'')"><i class="ti ti-cash"></i> Mark Paid</button>':
+          '<button type="button" class="btnsm" onclick="markExtUnpaid(''+e.eid+'')"><i class="ti ti-arrow-back-up"></i> Undo</button>')+
+      '</div></div>'+
+      '</div>';
+  }).join('');
+}
+
+function openExtModal(eid) {
+  editExtId = eid;
+  var delBtn = document.getElementById('ext-del-btn');
+  document.getElementById('ext-modal-title').textContent = eid ? 'Edit Shipment' : 'Add External Shipment';
+  if(eid) {
+    var e = extOrders.find(function(x){ return x.eid === eid; });
+    if(!e) return;
+    document.getElementById('ext-no').value = e.ordNo||'';
+    document.getElementById('ext-cust').value = e.cust||'';
+    document.getElementById('ext-phone').value = e.phone||'';
+    document.getElementById('ext-zone').value = e.zone||'Bangkok';
+    document.getElementById('ext-amt').value = e.amt||'';
+    document.getElementById('ext-shipped').value = e.shipped||'';
+    document.getElementById('ext-notes').value = e.notes||'';
+    delBtn.style.display = 'block';
+  } else {
+    ['ext-no','ext-cust','ext-phone','ext-amt','ext-notes'].forEach(function(id){ document.getElementById(id).value=''; });
+    document.getElementById('ext-zone').value = 'Bangkok';
+    document.getElementById('ext-shipped').valueAsDate = new Date();
+    delBtn.style.display = 'none';
+  }
+  document.getElementById('ext-modal').classList.add('open');
+}
+
+function closeExtModal() {
+  document.getElementById('ext-modal').classList.remove('open');
+  editExtId = null;
+}
+
+function saveExtModal() {
+  var ordNo = document.getElementById('ext-no').value.trim();
+  var cust  = document.getElementById('ext-cust').value.trim();
+  if(!ordNo) { alert('Enter order number'); return; }
+  if(!cust)  { alert('Enter customer name'); return; }
+  var data = {
+    ordNo: ordNo, cust: cust,
+    phone: document.getElementById('ext-phone').value.trim(),
+    zone:  document.getElementById('ext-zone').value,
+    amt:   parseFloat(document.getElementById('ext-amt').value)||0,
+    shipped: document.getElementById('ext-shipped').value,
+    notes: document.getElementById('ext-notes').value.trim()
+  };
+  if(editExtId) {
+    var e = extOrders.find(function(x){ return x.eid===editExtId; });
+    if(e) Object.assign(e, data);
+  } else {
+    data.eid = 'ext'+Date.now();
+    data.status = 'pending';
+    data.createdBy = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+    extOrders.push(data);
+  }
+  closeExtModal(); syncExtOrders(); extRender();
+}
+
+function deleteExtOrder() {
+  if(!editExtId) return;
+  var e = extOrders.find(function(x){ return x.eid===editExtId; });
+  if(!confirm('Delete '+(e?e.ordNo:'this entry')+'?')) return;
+  extOrders = extOrders.filter(function(x){ return x.eid!==editExtId; });
+  closeExtModal(); syncExtOrders(); extRender();
+}
+
+function markExtPaid(eid) {
+  var e = extOrders.find(function(x){ return x.eid===eid; });
+  if(!e) return;
+  var now = new Date();
+  e.status = 'paid';
+  e.paidAt = now.toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' '+now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  e.paidBy = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+  if(e.amt > 0) {
+    revOrders.push({rid:'r'+Date.now(),id:e.ordNo,cust:e.cust,amt:e.amt,date:now.toISOString().split('T')[0],zone:e.zone,month:mkey(now.toISOString()),src:'external'});
+    syncRevOrders();
+  }
+  syncExtOrders(); extRender();
+}
+
+function markExtUnpaid(eid) {
+  var e = extOrders.find(function(x){ return x.eid===eid; });
+  if(!e) return;
+  e.status = 'pending';
+  revOrders = revOrders.filter(function(r){ return !(r.id===e.ordNo && r.src==='external'); });
+  delete e.paidAt; delete e.paidBy;
+  syncExtOrders(); syncRevOrders(); extRender();
+}
+</script>
 
 </body>
 </html>
