@@ -2362,7 +2362,7 @@ function whRender(){
     :stockItems.map(s=>'<div class="srow"><span class="scode">'+s.code+'</span><span class="sqty '+(s.qty<LOW?'low':'')+'">'+s.qty.toLocaleString()+' pcs</span><span class="badge '+(s.qty<LOW?'blow':'bok')+'">'+(s.qty<LOW?'Low':'OK')+'</span></div>').join('');
 }
 
-function whPack(id){const o=wOrders.find(x=>x.id===id);if(!o)return;const ord=orders.find(x=>x.id===id);if(ord&&ord.status==='new'){alert('Please accept order first');return;}const now=new Date();o.packed=true;o.packedAt='Today '+now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');if(ord)ord.status='ready';if(!dAllOrders.find(x=>x.id===id)){const src=orders.find(x=>x.id===id);if(src){dAllOrders.push({id:src.id,customer:src.customer,phone:src.phone,address:src.address,boxes:src.boxes,panels:src.panels,lcorner:src.lcorner,clips:src.clips});dAllOrders.sort((a,b)=>reg(a.id).s-reg(b.id).s);}}if(!dStatus[id])dStatus[id]='ready';addLog('Order '+id+' packed','+');if(ord){addStatusLog(ord,'ready','Warehouse');}whRender();ofRenderOrders();syncOrders();syncWOrders();}
+function whPack(id){const o=wOrders.find(x=>x.id===id);if(!o)return;const ord=orders.find(x=>x.id===id);if(ord&&ord.status==='new'){alert('Please accept order first / กดรับออเดอร์ก่อน');return;}const now=new Date();o.packed=false;o.packing=true;o.packingAt='Today '+now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');if(ord)ord.status='packing';if(!dAllOrders.find(x=>x.id===id)){const src=orders.find(x=>x.id===id);if(src){dAllOrders.push({id:src.id,customer:src.customer,phone:src.phone,address:src.address,boxes:src.boxes,panels:src.panels,lcorner:src.lcorner,clips:src.clips});dAllOrders.sort((a,b)=>reg(a.id).s-reg(b.id).s);}}if(!dStatus[id])dStatus[id]='ready';addLog('Order '+id+' packing','+');if(ord){addStatusLog(ord,'packing','Warehouse');}whRender();ofRenderOrders();syncOrders();syncWOrders();}
 function whUnpack(id){const o=wOrders.find(x=>x.id===id);if(!o)return;o.packed=false;o.packedAt=null;const ord=orders.find(x=>x.id===id);if(ord)ord.status='new';whRender();ofRenderOrders();syncOrders();syncWOrders();}
 
 // DRIVER
@@ -2436,7 +2436,7 @@ function drReady(){
 }
 
 function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();}
-function drUnload(id){dStatus[id]='ready';dTour=dTour.filter(x=>x!==id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord)ord.status='ready';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='ready';drReady();}
+function drUnload(id){dStatus[id]='ready';dTour=dTour.filter(x=>x!==id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord)ord.status='packing';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='ready';drReady();}
 
 function drTour(){
   const myTour=dTour.filter(id=>dAllOrders.find(x=>x.id===id));
@@ -2585,6 +2585,59 @@ function toggleWhStock() {
   var open = wrap.style.display !== 'none';
   wrap.style.display = open ? 'none' : 'block';
   if(icon) icon.style.transform = open ? '' : 'rotate(180deg)';
+}
+
+
+function whRenderPacking() {
+  var packingOrders = orders.filter(function(o){ return o.status==='packing'; });
+  var cnt = document.getElementById('wh-pkgcnt');
+  if(cnt) cnt.textContent = packingOrders.length;
+
+  var el = document.getElementById('wh-packinglist');
+  if(!el) return;
+
+  if(packingOrders.length === 0) {
+    el.innerHTML = '<div class="empty"><i class="ti ti-package" style="font-size:40px;display:block;margin-bottom:8px"></i>No orders being packed / ไม่มีออเดอร์ที่กำลังแพ็ค</div>';
+    return;
+  }
+
+  el.innerHTML = packingOrders.map(function(o) {
+    var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
+    var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
+    var totalClips = (o.lineItems||[]).filter(function(i){return i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips';}).reduce(function(a,i){return a+(parseInt(i.qty)||0);},0);
+    return '<div class="card" style="margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+      '<span style="font-size:20px;font-weight:800">'+o.id+'</span>'+
+      '<span class="badge" style="background:#dbeafe;color:#1d4ed8">Packing / แพ็คอยู่</span>'+
+      '</div>'+
+      '<div style="font-size:13px;color:var(--text2);margin-bottom:8px">'+o.zone+' · '+o.customer+'</div>'+
+      '<div class="pkbox"><div class="pkrow"><span class="pklbl">Panels / แผ่น</span><span class="pkval">'+panels+'</span></div>'+
+      '<div class="pkrow"><span class="pklbl">Edge strips</span><span class="pkval">'+edges+'</span></div>'+
+      '<div class="pkrow"><span class="pklbl">Clips</span><span class="pkval">'+totalClips.toLocaleString()+'</span></div></div>'+
+      '<button class="btn btng" style="margin-top:10px" onclick="whDonePacking(this)" data-id="'+o.id+'"><i class="ti ti-checks"></i> Done packing / แพ็คเสร็จแล้ว</button>'+
+      '</div>';
+  }).join('');
+}
+
+function whDonePacking(btn) {
+  var id = btn.getAttribute('data-id');
+  var ord = orders.find(function(x){return x.id===id;});
+  if(!ord) return;
+  ord.status = 'ready';
+  var o = wOrders.find(function(x){return x.id===id;});
+  if(o) { o.packed=true; o.packing=false; }
+  if(!dAllOrders.find(function(x){return x.id===id;})) {
+    var src = orders.find(function(x){return x.id===id;});
+    if(src) dAllOrders.push({id:src.id,customer:src.customer,phone:src.phone,address:src.address,boxes:src.boxes,panels:src.panels,lcorner:src.lcorner,clips:src.clips});
+  }
+  if(!dStatus[id]) dStatus[id]='ready';
+  addLog('Order '+id+' packed/ready','+');
+  addStatusLog(ord,'ready','Warehouse');
+  whRender();
+  whRenderPacking();
+  ofRenderOrders();
+  syncOrders();
+  syncWOrders();
 }
 
 function whPackBtn(btn){whPack(btn.getAttribute('data-id'));}
