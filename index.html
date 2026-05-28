@@ -3838,64 +3838,81 @@ function handleDeliveryPhoto(input) {
   var progressEl = document.getElementById('delivery-upload-progress');
   var confirmBtn = document.getElementById('delivery-confirm-btn');
   progressEl.style.display = 'block';
+  progressEl.style.color = 'var(--blue)';
+  progressEl.innerHTML = '<i class="ti ti-loader"></i> Processing...';
   confirmBtn.disabled = true;
 
-  // Resize image before upload
   var reader = new FileReader();
   reader.onload = function(e) {
     var img = new Image();
     img.onload = function() {
       var canvas = document.createElement('canvas');
-      var maxW = 1200, maxH = 1200;
+      // Resize to max 800px for Firebase (keep size small)
+      var maxW = 800, maxH = 800;
       var w = img.width, h = img.height;
       if(w > maxW) { h = Math.round(h*maxW/w); w = maxW; }
       if(h > maxH) { w = Math.round(w*maxH/h); h = maxH; }
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+
+      // Try Firebase Storage first, fall back to Base64 in Realtime DB
       canvas.toBlob(function(blob) {
-        uploadToFirebaseStorage(blob, file.name);
-      }, 'image/jpeg', 0.8);
+        try {
+          var storage = firebase.storage();
+          var ref = storage.ref('delivery-photos/' + _deliveryId + '_' + Date.now() + '.jpg');
+          var task = ref.put(blob);
+          task.on('state_changed',
+            function(snap) {
+              var pct = Math.round(snap.bytesTransferred/snap.totalBytes*100);
+              progressEl.innerHTML = '<i class="ti ti-loader"></i> Uploading ' + pct + '%...';
+            },
+            function(err) {
+              // Storage failed — fall back to Base64
+              console.warn('Storage failed, using Base64:', err);
+              savePhotoAsBase64(canvas);
+            },
+            function() {
+              task.snapshot.ref.getDownloadURL().then(function(url) {
+                _deliveryPhotoUrl = url;
+                showPhotoPreview(url);
+                progressEl.style.display = 'none';
+                confirmBtn.disabled = false;
+              });
+            }
+          );
+        } catch(e) {
+          // Storage not available — use Base64
+          savePhotoAsBase64(canvas);
+        }
+      }, 'image/jpeg', 0.75);
     };
     img.src = e.target.result;
   };
   reader.readAsDataURL(file);
 }
 
-function uploadToFirebaseStorage(blob, filename) {
+function savePhotoAsBase64(canvas) {
   var progressEl = document.getElementById('delivery-upload-progress');
   var confirmBtn = document.getElementById('delivery-confirm-btn');
+  progressEl.innerHTML = '<i class="ti ti-loader"></i> Saving photo...';
   try {
-    var storage = firebase.storage();
-    var ref = storage.ref('delivery-photos/' + _deliveryId + '_' + Date.now() + '.jpg');
-    var task = ref.put(blob);
-    task.on('state_changed',
-      function(snap) {
-        var pct = Math.round(snap.bytesTransferred/snap.totalBytes*100);
-        progressEl.innerHTML = '<i class="ti ti-loader"></i> Uploading ' + pct + '%...';
-      },
-      function(err) {
-        console.error('Upload error:', err);
-        progressEl.textContent = '⚠️ Upload failed — you can still confirm without photo';
-        progressEl.style.color = 'var(--orange)';
-        confirmBtn.disabled = false;
-      },
-      function() {
-        task.snapshot.ref.getDownloadURL().then(function(url) {
-          _deliveryPhotoUrl = url;
-          var previewImg = document.getElementById('delivery-photo-img');
-          previewImg.src = url;
-          document.getElementById('delivery-photo-preview').style.display = 'block';
-          document.getElementById('delivery-photo-upload').style.display = 'none';
-          progressEl.style.display = 'none';
-          confirmBtn.disabled = false;
-        });
-      }
-    );
+    // Compress further for Base64 storage
+    var b64 = canvas.toDataURL('image/jpeg', 0.6);
+    _deliveryPhotoUrl = b64;
+    showPhotoPreview(b64);
+    progressEl.style.display = 'none';
+    confirmBtn.disabled = false;
   } catch(e) {
-    progressEl.textContent = '⚠️ Storage not enabled — confirm without photo';
+    progressEl.textContent = '⚠️ Could not save photo — you can still confirm';
     progressEl.style.color = 'var(--orange)';
     confirmBtn.disabled = false;
   }
+}
+
+function showPhotoPreview(src) {
+  document.getElementById('delivery-photo-img').src = src;
+  document.getElementById('delivery-photo-preview').style.display = 'block';
+  document.getElementById('delivery-photo-upload').style.display = 'none';
 }
 
 function confirmDelivery() {
@@ -3904,7 +3921,6 @@ function confirmDelivery() {
   var photo = _deliveryPhotoUrl;
   closeDeliveryModal();
   drDoDeliver(id, photo);
-  // Add audit log entry
   auditAdd({type:'status', orderId:id, from:'loaded', to:'delivered', by:'Driver', photo:photo||null});
 }
 
