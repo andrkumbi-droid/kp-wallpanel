@@ -490,18 +490,13 @@ textarea{resize:none}
 
   </div></div>
   <div class="view" id="mgv-incoming"><div class="sec">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="stit" style="margin-bottom:0">Incoming / สินค้าขาเข้า</div><button type="button" class="btnsm btnsmp" onclick="openIM(null)"><i class="ti ti-plus"></i> Add</button></div>
-    <div id="mg-incoming"><div class="empty"><i class="ti ti-ship" style="font-size:36px;display:block;margin-bottom:8px"></i>No incoming orders</div></div>
-
-    <!-- CONTAINER TRACKER -->
-    <div style="margin-top:20px;padding-top:16px;border-top:2px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div class="stit" style="margin-bottom:0">🚢 Container Tracker / ติดตามตู้</div>
-        <button type="button" class="btnsm btnsmp" onclick="openCL(null)"><i class="ti ti-plus"></i> Add</button>
-      </div>
-      <div id="cl-list"></div>
-      <div id="cl-stats" style="margin-top:12px"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="stit" style="margin-bottom:0">🚢 Container Tracker</div>
+      <button type="button" class="btnsm btnsmp" onclick="openCL(null)"><i class="ti ti-plus"></i> Add Container</button>
     </div>
+    <div id="cl-pending"></div>
+    <div id="cl-history" style="margin-top:12px"></div>
+    <div id="cl-stats" style="margin-top:4px"></div>
   </div></div>
   <div class="view" id="mgv-drivers"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="stit" style="margin-bottom:0">Drivers / คนขับ</div><button type="button" class="btnsm btnsmp" onclick="openDM(null)"><i class="ti ti-plus"></i> Add</button></div>
@@ -1355,24 +1350,7 @@ function mgStock(){
   const ws=document.getElementById('wh-stock');if(ws)ws.innerHTML=stockItems.length===0?'<div class="empty" style="padding:1rem;font-size:13px">No stock — add in Management</div>':stockItems.map(s=>{const t=['lcorner','utrim','ttrim','pvc'].includes(s.type)?50:LOW;return `<div class="srow"><span class="scode">${s.code}</span><span class="sqty ${s.qty<t?'low':''}">${s.qty.toLocaleString()} pcs</span><span class="badge ${s.qty<t?'blow':'bok'}">${s.qty<t?'Low':'OK'}</span></div>`;}).join('');
 }
 
-function mgIncoming(){
-  document.getElementById('mg-incoming').innerHTML = incomingItems.length===0
-    ? '<div class="empty"><i class="ti ti-ship" style="font-size:36px;display:block;margin-bottom:8px"></i>No incoming orders</div>'
-    : incomingItems.map(function(i) {
-        return '<div class="card" style="margin-bottom:8px">'+
-          '<div class="inc-pill"><i class="ti ti-ship" style="font-size:13px"></i> On the way / กำลังมา</div>'+
-          '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">'+
-          '<div><div style="font-size:16px;font-weight:700;margin-bottom:2px">'+i.code+'</div>'+
-          '<div style="font-size:13px;color:var(--text2)">'+i.qty.toLocaleString()+' pcs'+(i.sup?' &middot; '+i.sup:'')+'</div>'+
-          (i.notes?'<div style="font-size:12px;color:var(--text2);margin-top:2px">'+i.notes+'</div>':'')+
-          '</div><span class="badge bwarn">'+fmtD(i.eta)+'</span></div>'+
-          '<div style="display:flex;gap:8px">'+
-          '<button type="button" class="btn btng" style="flex:1;margin-top:0" onclick="arrived(this)" data-id="'+i.id+'"><i class="ti ti-package-import"></i> Container arrived / ถึงแล้ว</button>'+
-          '<button type="button" class="btnsm" onclick="openIM(this)" data-id="'+i.id+'"><i class="ti ti-pencil"></i></button>'+
-          '<button type="button" class="btnsm" style="background:#FEE2E2;color:#DC2626;border-color:#FEE2E2" onclick="deleteIncoming(this)" data-id="'+i.id+'"><i class="ti ti-trash"></i></button>'+
-          '</div></div>';
-      }).join('');
-}
+function mgIncoming(){ clRender(); }
 
 function mgDrivers(){
   document.getElementById('mg-drivers').innerHTML=drivers.length===0?'<div class="empty"><i class="ti ti-users" style="font-size:36px;display:block;margin-bottom:8px"></i>No drivers yet<br>Add your team</div>':drivers.map(d=>{const tour=activeTours.find(t=>t&&t.driverId===d.id);const tOrds=tour&&tour.orders?tour.orders:[];return`<div class="dcard"><div class="dav">${initials(d.name)}</div><div style="flex:1"><div style="font-size:14px;font-weight:600">${d.name}</div><div style="font-size:12px;color:var(--text2)">${d.phone||'No phone'}${d.vehicle?' &middot; '+d.vehicle:''}</div>${tour?`<div style="font-size:11px;color:var(--green);margin-top:2px"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> On tour &middot; ${tOrds.length} orders</div>`:'<div style="font-size:11px;color:var(--text2);margin-top:2px">Available</div>'}</div><button type="button" class="btnsm" onclick="openDM('${d.id}')"><i class="ti ti-pencil"></i></button></div>`;}).join('');
@@ -1448,7 +1426,7 @@ function mgRevenue(){
   document.getElementById('ov-orders').textContent=orders.length;
   document.getElementById('ov-sub').textContent=orders.filter(o=>o.status==='delivered').length+' delivered';
   document.getElementById('ov-low').textContent=stockItems.filter(s=>s.qty<(['lcorner','utrim','ttrim','pvc'].includes(s.type)?50:LOW)).length;
-  document.getElementById('ov-inc').textContent=incomingItems.length;
+  document.getElementById('ov-inc').textContent=containerLog.filter(function(c){return !c.arrivedWh;}).length;
   document.getElementById('ov-dmg').textContent=stockItems.reduce((a,s)=>a+s.damaged,0);
   document.getElementById('ov-alerts').innerHTML=stockItems.filter(s=>s.qty<(['lcorner','utrim','ttrim','pvc'].includes(s.type)?50:LOW)).map(s=>`<div class="alertbox"><i class="ti ti-alert-triangle" style="font-size:16px;flex-shrink:0"></i><span>${s.code} &mdash; only ${s.qty.toLocaleString()} pcs / เหลือน้อย</span></div>`).join('');
   const log=stockLog.slice(-30).reverse();document.getElementById('ov-log').innerHTML=log.length===0?'<div class="empty" style="padding:1rem;font-size:13px">No activity yet</div>':log.map(l=>`<div class="logrow"><span class="${l.t==='+'?'lp':'lm'}">${l.t==='+'?'&#9650;':'&#9660;'}</span> ${l.m} <span style="float:right;font-size:11px">${l.ts}</span></div>`).join('');
@@ -3912,6 +3890,11 @@ function payDateChange(id, dateVal) {
     <input type="date" id="cl-arrived-th">
     <label class="fl">🏪 Arrived Warehouse / ถึงโกดัง</label>
     <input type="date" id="cl-arrived-wh">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 6px">
+      <span style="font-size:12px;font-weight:700">📦 Products / สินค้าในตู้</span>
+      <button type="button" onclick="clAddLine()" style="background:var(--blue);color:#fff;border:none;border-radius:var(--rs);padding:5px 10px;font-size:12px;cursor:pointer"><i class="ti ti-plus"></i> Add</button>
+    </div>
+    <div id="cl-lines"></div>
     <label class="fl">Notes</label>
     <textarea id="cl-notes" rows="2" placeholder="Optional notes..."></textarea>
     <button type="button" class="btn btnp" style="margin-top:12px" onclick="saveCL()"><i class="ti ti-device-floppy"></i> Save</button>
@@ -4011,110 +3994,173 @@ function clDaysBetween(d1, d2) {
   if(isNaN(a)||isNaN(b)) return null;
   return Math.round((b-a)/(1000*60*60*24));
 }
-
 function clFmtD(d) {
   if(!d) return '—';
   var dt = new Date(d+'T00:00:00');
   return isNaN(dt) ? d : dt.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
 }
-
 function clPhaseLabel(days) {
-  if(days === null) return '<span style="color:var(--text2)">—</span>';
-  var color = days <= 30 ? 'var(--green)' : days <= 60 ? 'var(--orange)' : 'var(--red)';
+  if(days===null) return '<span style="color:var(--text2)">—</span>';
+  var color = days<=30?'var(--green)':days<=60?'var(--orange)':'var(--red)';
   return '<span style="color:'+color+';font-weight:700">'+days+'d</span>';
+}
+function clAddLine(code, qty) {
+  var d = document.createElement('div');
+  d.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 32px;gap:6px;margin-bottom:6px;align-items:center';
+  d.innerHTML = '<input type="text" placeholder="Code (KP009, L001...)" oninput="this.value=this.value.toUpperCase()" value="'+(code||'')+'" style="padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px">'
+    +'<input type="number" placeholder="Qty (pcs)" min="0" value="'+(qty||'')+'" style="padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px">'
+    +'<button type="button" onclick="this.parentElement.remove()" style="width:32px;height:36px;border:1px solid #FEE2E2;background:#FEE2E2;border-radius:var(--rs);cursor:pointer;color:#DC2626;font-size:16px">×</button>';
+  document.getElementById('cl-lines').appendChild(d);
 }
 
 function clRender() {
-  var list = document.getElementById('cl-list');
-  if(!list) return;
-  if(containerLog.length === 0) {
-    list.innerHTML = '<div class="empty" style="padding:16px;font-size:13px"><i class="ti ti-ship" style="font-size:32px;display:block;margin-bottom:8px"></i>No containers tracked yet</div>';
-  } else {
-    list.innerHTML = containerLog.map(function(c) {
-      var d1 = clDaysBetween(c.deposit, c.loading);
-      var d2 = clDaysBetween(c.loading, c.arrivedTh);
-      var d3 = clDaysBetween(c.arrivedTh, c.arrivedWh);
-      var dtot = clDaysBetween(c.deposit, c.arrivedWh);
-      var statusColor = c.arrivedWh ? 'var(--green)' : c.arrivedTh ? 'var(--orange)' : c.loading ? 'var(--blue)' : 'var(--text2)';
-      var statusLabel = c.arrivedWh ? '✅ In Stock' : c.arrivedTh ? '🏪 Customs/Local' : c.loading ? '🛳️ On the way' : '🏭 Production';
-      return '<div class="card" style="margin-bottom:8px;padding:12px 14px">'
-        +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
-        +'<div><div style="font-size:14px;font-weight:700">'+c.supplier+'</div>'
-        +'<div style="font-size:12px;color:var(--text2);margin-top:1px">'+( c.containerNo||'—')+'</div></div>'
-        +'<div style="display:flex;align-items:center;gap:6px">'
-        +'<span style="font-size:11px;font-weight:600;color:'+statusColor+'">'+statusLabel+'</span>'
-        +'<button type="button" class="btnsm" onclick="openCL(\''+c.id+'\')"><i class="ti ti-pencil"></i></button>'
-        +'</div></div>'
-        +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:11px;margin-bottom:6px">'
-        +'<div><span style="color:var(--text2)">💰 Deposit:</span> '+(c.deposit?clFmtD(c.deposit):'—')+'</div>'
-        +'<div><span style="color:var(--text2)">🏭 Loading:</span> '+(c.loading?clFmtD(c.loading):'—')+'</div>'
-        +'<div><span style="color:var(--text2)">🛳️ Thailand:</span> '+(c.arrivedTh?clFmtD(c.arrivedTh):'—')+'</div>'
-        +'<div><span style="color:var(--text2)">🏪 Warehouse:</span> '+(c.arrivedWh?clFmtD(c.arrivedWh):'—')+'</div>'
-        +'</div>'
-        +'<div style="display:flex;gap:10px;background:var(--bg2);border-radius:var(--rs);padding:6px 10px;font-size:11px">'
-        +'<div style="flex:1;text-align:center"><div style="color:var(--text2)">Deposit→Load</div><div>'+clPhaseLabel(d1)+'</div></div>'
-        +'<div style="flex:1;text-align:center"><div style="color:var(--text2)">Load→TH</div><div>'+clPhaseLabel(d2)+'</div></div>'
-        +'<div style="flex:1;text-align:center"><div style="color:var(--text2)">TH→WH</div><div>'+clPhaseLabel(d3)+'</div></div>'
-        +'<div style="flex:1;text-align:center;border-left:1px solid var(--border);padding-left:10px"><div style="color:var(--text2)">Total</div><div>'+clPhaseLabel(dtot)+'</div></div>'
-        +'</div>'
-        +(c.notes?'<div style="font-size:11px;color:var(--text2);margin-top:6px">📝 '+c.notes+'</div>':'')
-        +'</div>';
-    }).join('');
+  var pending = containerLog.filter(function(c){return !c.arrivedWh;});
+  var history = containerLog.filter(function(c){return !!c.arrivedWh;});
+
+  // PENDING section
+  var pEl = document.getElementById('cl-pending');
+  if(pEl) {
+    if(pending.length===0) {
+      pEl.innerHTML = '<div class="empty" style="padding:16px;font-size:13px"><i class="ti ti-ship" style="font-size:32px;display:block;margin-bottom:8px"></i>No pending containers</div>';
+    } else {
+      pEl.innerHTML = '<div class="stit" style="margin-bottom:8px">⏳ Pending / รอมาถึง ('+pending.length+')</div>'
+        + pending.map(function(c){ return clCard(c, true); }).join('');
+    }
+  }
+
+  // HISTORY section
+  var hEl = document.getElementById('cl-history');
+  if(hEl) {
+    if(history.length===0) {
+      hEl.innerHTML = '';
+    } else {
+      hEl.innerHTML = '<div class="stit" style="margin-bottom:8px;margin-top:8px">✅ History / ประวัติ ('+history.length+')</div>'
+        + history.map(function(c){ return clCard(c, false); }).join('');
+    }
   }
   clRenderStats();
+  // Update overview counter
+  var ovEl = document.getElementById('ov-inc');
+  if(ovEl) ovEl.textContent = pending.length;
+}
+
+function clCard(c, isPending) {
+  var d1=clDaysBetween(c.deposit,c.loading), d2=clDaysBetween(c.loading,c.arrivedTh), d3=clDaysBetween(c.arrivedTh,c.arrivedWh), dtot=clDaysBetween(c.deposit,c.arrivedWh);
+  var statusColor = c.arrivedWh?'var(--green)':c.arrivedTh?'var(--orange)':c.loading?'var(--blue)':'var(--text2)';
+  var statusLabel = c.arrivedWh?'✅ In Stock':c.arrivedTh?'🏪 Customs/Local':c.loading?'🛳️ On the way':'🏭 Production';
+  var items = c.items && c.items.length ? c.items : [];
+  var html = '<div class="card" style="margin-bottom:8px;padding:12px 14px'+(isPending?';border-left:4px solid var(--orange)':'')+'">'
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
+    +'<div><div style="font-size:14px;font-weight:700">'+c.supplier+'</div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-top:1px">'+(c.containerNo||'No container #')+'</div></div>'
+    +'<div style="display:flex;align-items:center;gap:6px">'
+    +'<span style="font-size:11px;font-weight:600;color:'+statusColor+'">'+statusLabel+'</span>'
+    +'<button type="button" class="btnsm" onclick="openCL(\''+c.id+'\')"><i class="ti ti-pencil"></i></button>'
+    +'</div></div>';
+
+  // Dates grid
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;font-size:11px;margin-bottom:8px">'
+    +'<div><span style="color:var(--text2)">💰 Deposit:</span> '+(c.deposit?clFmtD(c.deposit):'—')+'</div>'
+    +'<div><span style="color:var(--text2)">🏭 Loading:</span> '+(c.loading?clFmtD(c.loading):'—')+'</div>'
+    +'<div><span style="color:var(--text2)">🛳️ Thailand:</span> '+(c.arrivedTh?clFmtD(c.arrivedTh):'—')+'</div>'
+    +'<div><span style="color:var(--text2)">🏪 Warehouse:</span> '+(c.arrivedWh?clFmtD(c.arrivedWh):'—')+'</div>'
+    +'</div>';
+
+  // Products
+  if(items.length) {
+    html += '<div style="background:var(--bg2);border-radius:var(--rs);padding:6px 10px;margin-bottom:8px">'
+      + items.map(function(i){
+          return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">'
+            +'<span style="font-weight:600">'+i.code+'</span>'
+            +'<span style="color:var(--green);font-weight:700">'+parseInt(i.qty).toLocaleString()+' pcs</span></div>';
+        }).join('')
+      +'</div>';
+  }
+
+  // Phase timing bar
+  html += '<div style="display:flex;gap:8px;background:var(--bg2);border-radius:var(--rs);padding:6px 10px;font-size:11px;margin-bottom:'+(isPending?'8':'0')+'px">'
+    +'<div style="flex:1;text-align:center"><div style="color:var(--text2)">Dep→Load</div>'+clPhaseLabel(d1)+'</div>'
+    +'<div style="flex:1;text-align:center"><div style="color:var(--text2)">Load→TH</div>'+clPhaseLabel(d2)+'</div>'
+    +'<div style="flex:1;text-align:center"><div style="color:var(--text2)">TH→WH</div>'+clPhaseLabel(d3)+'</div>'
+    +'<div style="flex:1;text-align:center;border-left:1px solid var(--border);padding-left:8px"><div style="color:var(--text2)">Total</div>'+clPhaseLabel(dtot)+'</div>'
+    +'</div>';
+
+  // Arrived button for pending
+  if(isPending) {
+    html += '<button type="button" class="btn btng" style="margin-top:0" onclick="clArrived(\''+c.id+'\')">'
+      +'<i class="ti ti-package-import"></i> Container arrived at warehouse / ถึงโกดังแล้ว</button>';
+  }
+
+  if(c.notes) html += '<div style="font-size:11px;color:var(--text2);margin-top:6px">📝 '+c.notes+'</div>';
+  html += '</div>';
+  return html;
+}
+
+function clArrived(id) {
+  var c = containerLog.find(function(x){return x.id===id;});
+  if(!c) return;
+  var today = new Date().toISOString().split('T')[0];
+  if(!confirm('Mark container from '+c.supplier+' as arrived today ('+clFmtD(today)+')?\nThis will add all products to stock.')) return;
+  c.arrivedWh = today;
+  // Add products to stock
+  var items = c.items && c.items.length ? c.items : [];
+  items.forEach(function(item) {
+    if(!item.code || !item.qty) return;
+    var code = item.code.toUpperCase();
+    var qty = parseInt(item.qty)||0;
+    // Determine type
+    var type = 'panel';
+    if(/^L\d/.test(code)||code.startsWith('L0')) type='lcorner';
+    else if(code.startsWith('K-PVC')||code.startsWith('K-P-')) type='utrim';
+    else if(code.startsWith('T0')) type='ttrim';
+    var existing = stockItems.find(function(s){return s.code===code;});
+    if(existing) {
+      existing.qty += qty;
+      addLog(code+' +'+qty.toLocaleString()+' pcs (Container '+c.supplier+')','+');
+    } else {
+      stockItems.push({code:code, type:type, qty:qty, damaged:0, notes:c.supplier});
+      addLog(code+' added '+qty.toLocaleString()+' pcs (Container '+c.supplier+')','+');
+    }
+  });
+  window.fbDB.ref('containerLog/'+id).set(c);
+  syncStockItems();
+  clRender();
+  mgStock();
 }
 
 function clRenderStats() {
   var el = document.getElementById('cl-stats');
   if(!el) return;
-  // Only use completed containers (have arrivedWh)
-  var completed = containerLog.filter(function(c){ return c.deposit && c.loading && c.arrivedTh && c.arrivedWh; });
-  if(completed.length === 0) { el.innerHTML = ''; return; }
-
-  // Group by supplier
-  var suppliers = {};
-  completed.forEach(function(c) {
-    if(!suppliers[c.supplier]) suppliers[c.supplier] = [];
-    suppliers[c.supplier].push(c);
-  });
-
-  function avg(arr) { return arr.length ? Math.round(arr.reduce(function(a,b){return a+b;},0)/arr.length) : null; }
-
-  var html = '<div style="margin-top:4px"><div class="stit" style="margin-bottom:8px">📊 Supplier Averages / ค่าเฉลี่ยต่อ Supplier</div>';
-  Object.keys(suppliers).forEach(function(sup) {
-    var items = suppliers[sup];
-    var d1s = items.map(function(c){return clDaysBetween(c.deposit,c.loading);}).filter(function(x){return x!==null;});
-    var d2s = items.map(function(c){return clDaysBetween(c.loading,c.arrivedTh);}).filter(function(x){return x!==null;});
-    var d3s = items.map(function(c){return clDaysBetween(c.arrivedTh,c.arrivedWh);}).filter(function(x){return x!==null;});
-    var tots = items.map(function(c){return clDaysBetween(c.deposit,c.arrivedWh);}).filter(function(x){return x!==null;});
-    var a1=avg(d1s), a2=avg(d2s), a3=avg(d3s), at=avg(tots);
-    html += '<div class="card" style="margin-bottom:8px;padding:12px 14px">'
-      +'<div style="font-size:14px;font-weight:700;margin-bottom:8px">'+sup+' <span style="font-size:11px;font-weight:400;color:var(--text2)">('+items.length+' container'+(items.length>1?'s':'')+')</span></div>'
+  var completed = containerLog.filter(function(c){ return c.deposit&&c.loading&&c.arrivedTh&&c.arrivedWh; });
+  if(completed.length===0){el.innerHTML='';return;}
+  var suppliers={};
+  completed.forEach(function(c){if(!suppliers[c.supplier])suppliers[c.supplier]=[];suppliers[c.supplier].push(c);});
+  function avg(arr){return arr.length?Math.round(arr.reduce(function(a,b){return a+b;},0)/arr.length):null;}
+  var html='<div style="padding-top:12px;border-top:2px solid var(--border)"><div class="stit" style="margin-bottom:8px">📊 Supplier Averages</div>';
+  Object.keys(suppliers).forEach(function(sup){
+    var its=suppliers[sup];
+    var a1=avg(its.map(function(c){return clDaysBetween(c.deposit,c.loading);}).filter(function(x){return x!==null;}));
+    var a2=avg(its.map(function(c){return clDaysBetween(c.loading,c.arrivedTh);}).filter(function(x){return x!==null;}));
+    var a3=avg(its.map(function(c){return clDaysBetween(c.arrivedTh,c.arrivedWh);}).filter(function(x){return x!==null;}));
+    var at=avg(its.map(function(c){return clDaysBetween(c.deposit,c.arrivedWh);}).filter(function(x){return x!==null;}));
+    html+='<div class="card" style="margin-bottom:8px;padding:12px 14px">'
+      +'<div style="font-size:13px;font-weight:700;margin-bottom:8px">'+sup+' <span style="font-size:11px;font-weight:400;color:var(--text2)">('+its.length+' container'+(its.length>1?'s':'')+')</span></div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;text-align:center">'
-      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 4px"><div style="font-size:10px;color:var(--text2);margin-bottom:3px">Deposit→Load</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+(a1!==null?a1+'d':'—')+'</div></div>'
-      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 4px"><div style="font-size:10px;color:var(--text2);margin-bottom:3px">Load→Thailand</div><div style="font-size:16px;font-weight:700;color:var(--orange)">'+(a2!==null?a2+'d':'—')+'</div></div>'
-      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 4px"><div style="font-size:10px;color:var(--text2);margin-bottom:3px">TH→Warehouse</div><div style="font-size:16px;font-weight:700;color:var(--green)">'+(a3!==null?a3+'d':'—')+'</div></div>'
-      +'<div style="background:var(--blue-bg);border-radius:var(--rs);padding:8px 4px;border:1px solid var(--blue-l)"><div style="font-size:10px;color:var(--blue-t);font-weight:600;margin-bottom:3px">Total avg</div><div style="font-size:16px;font-weight:800;color:var(--blue-t)">'+(at!==null?at+'d':'—')+'</div></div>'
+      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 4px"><div style="font-size:10px;color:var(--text2);margin-bottom:3px">Dep→Load</div><div style="font-size:15px;font-weight:700;color:var(--blue)">'+(a1!==null?a1+'d':'—')+'</div></div>'
+      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 4px"><div style="font-size:10px;color:var(--text2);margin-bottom:3px">Load→TH</div><div style="font-size:15px;font-weight:700;color:var(--orange)">'+(a2!==null?a2+'d':'—')+'</div></div>'
+      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 4px"><div style="font-size:10px;color:var(--text2);margin-bottom:3px">TH→WH</div><div style="font-size:15px;font-weight:700;color:var(--green)">'+(a3!==null?a3+'d':'—')+'</div></div>'
+      +'<div style="background:var(--blue-bg);border-radius:var(--rs);padding:8px 4px;border:1px solid var(--blue-l)"><div style="font-size:10px;color:var(--blue-t);font-weight:600;margin-bottom:3px">Total avg</div><div style="font-size:15px;font-weight:800;color:var(--blue-t)">'+(at!==null?at+'d':'—')+'</div></div>'
       +'</div></div>';
   });
-
-  // Overall average across all suppliers
-  if(Object.keys(suppliers).length > 1) {
-    var allD1 = completed.map(function(c){return clDaysBetween(c.deposit,c.loading);}).filter(function(x){return x!==null;});
-    var allD2 = completed.map(function(c){return clDaysBetween(c.loading,c.arrivedTh);}).filter(function(x){return x!==null;});
-    var allD3 = completed.map(function(c){return clDaysBetween(c.arrivedTh,c.arrivedWh);}).filter(function(x){return x!==null;});
-    var allTot = completed.map(function(c){return clDaysBetween(c.deposit,c.arrivedWh);}).filter(function(x){return x!==null;});
-    html += '<div style="background:var(--green-bg);border:1px solid var(--green-l);border-radius:var(--r);padding:12px 14px;margin-bottom:8px">'
-      +'<div style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--green-t)">🌍 Overall Average (all suppliers)</div>'
-      +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;text-align:center">'
-      +'<div><div style="font-size:10px;color:var(--text2);margin-bottom:2px">Deposit→Load</div><div style="font-size:16px;font-weight:700">'+avg(allD1)+'d</div></div>'
-      +'<div><div style="font-size:10px;color:var(--text2);margin-bottom:2px">Load→Thailand</div><div style="font-size:16px;font-weight:700">'+avg(allD2)+'d</div></div>'
-      +'<div><div style="font-size:10px;color:var(--text2);margin-bottom:2px">TH→Warehouse</div><div style="font-size:16px;font-weight:700">'+avg(allD3)+'d</div></div>'
-      +'<div><div style="font-size:10px;color:var(--green-t);font-weight:600;margin-bottom:2px">Total avg</div><div style="font-size:18px;font-weight:800;color:var(--green-t)">'+avg(allTot)+'d</div></div>'
-      +'</div></div>';
+  if(Object.keys(suppliers).length>1){
+    var at2=avg(completed.map(function(c){return clDaysBetween(c.deposit,c.arrivedWh);}).filter(function(x){return x!==null;}));
+    html+='<div style="background:var(--green-bg);border:1px solid var(--green-l);border-radius:var(--r);padding:10px 14px;margin-bottom:8px;text-align:center">'
+      +'<div style="font-size:12px;color:var(--green-t);font-weight:600;margin-bottom:4px">🌍 Overall avg (all suppliers)</div>'
+      +'<div style="font-size:22px;font-weight:800;color:var(--green-t)">'+(at2!==null?at2+'d':'—')+'</div>'
+      +'<div style="font-size:11px;color:var(--green-t)">Deposit → Warehouse</div></div>';
   }
-  html += '</div>';
-  el.innerHTML = html;
+  html+='</div>';
+  el.innerHTML=html;
 }
 
 function openCL(id) {
@@ -4129,6 +4175,13 @@ function openCL(id) {
   document.getElementById('cl-arrived-th').value = c ? (c.arrivedTh||'') : '';
   document.getElementById('cl-arrived-wh').value = c ? (c.arrivedWh||'') : '';
   document.getElementById('cl-notes').value = c ? (c.notes||'') : '';
+  // Product lines
+  document.getElementById('cl-lines').innerHTML = '';
+  if(c && c.items && c.items.length) {
+    c.items.forEach(function(i){ clAddLine(i.code, i.qty); });
+  } else {
+    clAddLine();
+  }
   document.getElementById('cl-modal').classList.add('open');
 }
 
@@ -4140,16 +4193,26 @@ function closeCL() {
 function saveCL() {
   var sup = (document.getElementById('cl-supplier').value||'').trim();
   if(!sup) { alert('Please enter supplier name'); return; }
+  // Collect product lines
+  var items = [];
+  document.querySelectorAll('#cl-lines > div').forEach(function(row) {
+    var inputs = row.querySelectorAll('input');
+    var code = (inputs[0]&&inputs[0].value||'').trim().toUpperCase();
+    var qty = parseInt(inputs[1]&&inputs[1].value||0)||0;
+    if(code && qty) items.push({code:code, qty:qty});
+  });
+  var old = _clEditId ? containerLog.find(function(x){return x.id===_clEditId;}) : null;
   var entry = {
     id: _clEditId || 'cl'+Date.now(),
     supplier: sup,
     containerNo: (document.getElementById('cl-container-no').value||'').trim(),
-    deposit: document.getElementById('cl-deposit').value || '',
-    loading: document.getElementById('cl-loading').value || '',
-    arrivedTh: document.getElementById('cl-arrived-th').value || '',
-    arrivedWh: document.getElementById('cl-arrived-wh').value || '',
+    deposit: document.getElementById('cl-deposit').value||'',
+    loading: document.getElementById('cl-loading').value||'',
+    arrivedTh: document.getElementById('cl-arrived-th').value||'',
+    arrivedWh: document.getElementById('cl-arrived-wh').value||'',
+    items: items,
     notes: (document.getElementById('cl-notes').value||'').trim(),
-    createdAt: _clEditId ? (containerLog.find(function(x){return x.id===_clEditId;})||{}).createdAt||Date.now() : Date.now()
+    createdAt: old ? (old.createdAt||Date.now()) : Date.now()
   };
   window.fbDB.ref('containerLog/'+entry.id).set(entry);
   closeCL();
