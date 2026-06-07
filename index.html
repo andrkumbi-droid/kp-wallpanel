@@ -482,6 +482,7 @@ textarea{resize:none}
       db.ref('containerLog').on('value', function(snap) {
         containerLog = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);}) : [];
         try{if(document.getElementById('mgv-incoming')&&document.getElementById('mgv-incoming').classList.contains('active'))clRender();}catch(e){}
+        try{if(document.getElementById('ofv-inc')&&document.getElementById('ofv-inc').classList.contains('active'))ofRenderInc();}catch(e){}
       });
 
       db.ref('auditLog').orderByChild('ts').limitToLast(200).on('value', function(snap) {
@@ -1022,8 +1023,12 @@ textarea{resize:none}
     <div id="of-daily-list"></div>
   </div></div>
   <div class="view" id="ofv-inc"><div class="sec">
-    <div class="stit">Incoming from China / สินค้าจากจีน</div>
-    <div id="of-inc-list"><div class="empty"><i class="ti ti-ship" style="font-size:36px;display:block;margin-bottom:8px"></i>No incoming orders</div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="stit" style="margin-bottom:0">🚢 Incoming / ขาเข้า</div>
+      <span id="of-inc-badge" style="font-size:11px;font-weight:700;background:var(--orange-l);color:var(--orange);border-radius:10px;padding:2px 10px"></span>
+    </div>
+    <div id="of-inc-pending"></div>
+    <div id="of-inc-history"></div>
   </div></div>
   <div class="view" id="ofv-pay"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -1131,8 +1136,12 @@ textarea{resize:none}
     <div id="of-daily-list"></div>
   </div></div>
   <div class="view" id="ofv-inc"><div class="sec">
-    <div class="stit">Incoming from China / สินค้าจากจีน</div>
-    <div id="of-inc-list"><div class="empty"><i class="ti ti-ship" style="font-size:36px;display:block;margin-bottom:8px"></i>No incoming orders</div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="stit" style="margin-bottom:0">🚢 Incoming / ขาเข้า</div>
+      <span id="of-inc-badge" style="font-size:11px;font-weight:700;background:var(--orange-l);color:var(--orange);border-radius:10px;padding:2px 10px"></span>
+    </div>
+    <div id="of-inc-pending"></div>
+    <div id="of-inc-history"></div>
   </div></div>
 </div></div>
 
@@ -2972,7 +2981,125 @@ function ofFiltToday(btn){ofTodayOnly_=!ofTodayOnly_;ofFilt_='all';document.quer
 // Zone color helper
 function zoneColor(z){return z==='Bangkok'?'#2563eb':z==='Northern'?'#8b5cf6':z==='Northeastern'?'#f59e0b':z==='Eastern'?'#06b6d4':z==='Southern'?'#ec4899':z==='Instore'?'#16a34a':'#6b7280';}
 function zoneBadge(z){if(!z)return '';return '<span style="background:'+zoneColor(z)+'22;color:'+zoneColor(z)+';border-radius:10px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:4px">'+z+'</span>';}
-function ofRenderInc(){const el=document.getElementById('of-inc-list');if(!el)return;el.innerHTML=incomingItems.length===0?'<div class="empty"><i class="ti ti-ship" style="font-size:36px;display:block;margin-bottom:8px"></i>No incoming orders</div>':incomingItems.map(i=>'<div class="card" style="margin-bottom:8px"><div class="inc-pill"><i class="ti ti-ship" style="font-size:13px"></i> On the way / กำลังมา</div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:14px;font-weight:600">'+i.code+'</span><span class="badge bwarn">'+fmtD(i.eta)+'</span></div><div style="font-size:12px;color:var(--text2)">'+i.qty.toLocaleString()+' pcs'+(i.sup?' &middot; '+i.sup:'')+'</div>'+(i.notes?'<div style="font-size:12px;color:var(--text2)">'+i.notes+'</div>':'')+'</div>').join('');}
+function ofRenderInc() {
+  var pEl = document.getElementById('of-inc-pending');
+  var hEl = document.getElementById('of-inc-history');
+  var badge = document.getElementById('of-inc-badge');
+  if(!pEl) return;
+
+  var pending = containerLog.filter(function(c){ return !c.arrivedWh; });
+  var history = containerLog.filter(function(c){ return !!c.arrivedWh; });
+
+  // Sort pending by estimated arrival
+  var avg = clGetAvgStats ? clGetAvgStats() : {depToLoad:45,loadToTh:30,thToWh:14};
+  function _estArr(c) {
+    if(c.arrivedTh){var d=new Date(c.arrivedTh+'T00:00:00');d.setDate(d.getDate()+Math.round(avg.thToWh||14));return d.getTime();}
+    if(c.loading){var d=new Date(c.loading+'T00:00:00');d.setDate(d.getDate()+Math.round((avg.loadToTh||30)+(avg.thToWh||14)));return d.getTime();}
+    if(c.deposit){var d=new Date(c.deposit+'T00:00:00');d.setDate(d.getDate()+Math.round((avg.depToLoad||45)+(avg.loadToTh||30)+(avg.thToWh||14)));return d.getTime();}
+    return Infinity;
+  }
+  pending.sort(function(a,b){ return _estArr(a)-_estArr(b); });
+
+  if(badge) badge.textContent = pending.length ? pending.length+' pending' : '';
+
+  // Render pending
+  if(pending.length === 0) {
+    pEl.innerHTML = '<div class="empty" style="padding:20px"><i class="ti ti-ship" style="font-size:40px;display:block;margin-bottom:10px"></i>No pending containers</div>';
+  } else {
+    pEl.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">⏳ Pending / รอมาถึง ('+pending.length+')</div>'
+      + pending.map(function(c){ return ofIncCard(c); }).join('');
+  }
+
+  // Render history as dropdown
+  if(hEl) {
+    if(history.length === 0) {
+      hEl.innerHTML = '';
+    } else {
+      hEl.innerHTML = '<details style="margin-top:10px">'
+        + '<summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:8px 4px;user-select:none">'
+        + '<span id="of-inc-hist-arrow" style="font-size:12px;transition:transform .2s">▶</span>'
+        + '<span style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.06em">✅ Arrived / มาถึงแล้ว ('+history.length+')</span>'
+        + '</summary><div style="margin-top:4px">'
+        + history.map(function(c){ return ofIncCard(c); }).join('')
+        + '</div></details>';
+      var det = hEl.querySelector('details');
+      if(det) det.addEventListener('toggle', function(){
+        var arr = document.getElementById('of-inc-hist-arrow');
+        if(arr) arr.style.transform = det.open ? 'rotate(90deg)' : '';
+      });
+    }
+  }
+}
+
+function ofIncCard(c) {
+  // Status
+  var statusColor = c.arrivedWh?'var(--green)':c.arrivedTh?'var(--orange)':c.loading?'var(--blue)':'var(--text2)';
+  var statusLabel = c.arrivedWh?'✅ In Stock':c.arrivedTh?'🏪 In Thailand':c.loading?'🛳️ On the way':'🏭 Production';
+  var items = c.items && c.items.length ? c.items : [];
+  var totalPcs = items.reduce(function(a,i){return a+(parseInt(i.qty)||0);},0);
+
+  // Estimated arrival chip for pending
+  var estChip = '';
+  if(!c.arrivedWh) {
+    var avg2 = clGetAvgStats ? clGetAvgStats() : {depToLoad:45,loadToTh:30,thToWh:14};
+    var estMs = Infinity;
+    if(c.arrivedTh){var d=new Date(c.arrivedTh+'T00:00:00');d.setDate(d.getDate()+Math.round(avg2.thToWh||14));estMs=d.getTime();}
+    else if(c.loading){var d=new Date(c.loading+'T00:00:00');d.setDate(d.getDate()+Math.round((avg2.loadToTh||30)+(avg2.thToWh||14)));estMs=d.getTime();}
+    else if(c.deposit){var d=new Date(c.deposit+'T00:00:00');d.setDate(d.getDate()+Math.round((avg2.depToLoad||45)+(avg2.loadToTh||30)+(avg2.thToWh||14)));estMs=d.getTime();}
+    if(estMs !== Infinity) {
+      var estD = new Date(estMs);
+      var daysLeft = Math.round((estMs - Date.now())/(1000*60*60*24));
+      var dStr = ('0'+(estD.getDate())).slice(-2)+'/'+('0'+(estD.getMonth()+1)).slice(-2);
+      var urgColor = daysLeft<=7?'var(--red)':daysLeft<=20?'var(--orange)':'var(--green)';
+      estChip = '<span style="font-size:11px;font-weight:700;background:'+urgColor+'22;color:'+urgColor+';border-radius:10px;padding:2px 9px;margin-left:6px">~'+dStr+(daysLeft>=0?' · '+daysLeft+'d':'')+' left</span>';
+    }
+  }
+
+  var html = '<div class="card" style="margin-bottom:10px;padding:12px 14px'+(c.arrivedWh?'':';border-left:4px solid var(--orange)')+'">'
+    // Header row
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
+    +'<div>'
+    +'<div style="font-size:15px;font-weight:700">'+c.supplier+'</div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-top:1px">'+(c.containerNo||'No container #')+(c.piNo?' &middot; <span style="color:var(--blue)">'+c.piNo+'</span>':'')+'</div>'
+    +'</div>'
+    +'<span style="font-size:11px;font-weight:700;color:'+statusColor+'">'+statusLabel+'</span>'
+    +'</div>';
+
+  // Estimated arrival badge
+  if(estChip) html += '<div style="margin-bottom:8px">🗓️ Estimated arrival: '+estChip+'</div>';
+
+  // Dates grid
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;font-size:12px;color:var(--text2);margin-bottom:8px">'
+    +'<div>💰 Deposit: <b style="color:var(--text)">'+(c.deposit?clFmtD(c.deposit):'—')+'</b></div>'
+    +'<div>💳 Balance: <b style="color:'+(c.balance?'var(--text)':'var(--red)')+'">'+(c.balance?clFmtD(c.balance):'Unpaid')+'</b></div>'
+    +'<div>🏭 Loading: <b style="color:var(--text)">'+(c.loading?clFmtD(c.loading):'—')+'</b></div>'
+    +'<div>🛳️ Thailand: <b style="color:var(--text)">'+(c.arrivedTh?clFmtD(c.arrivedTh):'—')+'</b></div>'
+    +(c.arrivedWh?'<div>🏪 Warehouse: <b style="color:var(--green)">'+clFmtD(c.arrivedWh)+'</b></div>':'')
+    +'</div>';
+
+  // Products dropdown (read-only)
+  if(items.length) {
+    html += '<details style="margin-bottom:8px">'
+      +'<summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--blue);background:var(--blue-bg);border-radius:var(--rs);padding:6px 10px;list-style:none;display:flex;justify-content:space-between;align-items:center">'
+      +'<span>📦 '+items.length+' product'+(items.length>1?'s':'')+' / สินค้า</span>'
+      +'<span style="font-weight:400;color:var(--text2)">'+totalPcs.toLocaleString()+' pcs total ▾</span>'
+      +'</summary>'
+      +'<div style="background:var(--bg2);border-radius:0 0 var(--rs) var(--rs);padding:6px 10px">'
+      + items.map(function(i){
+          return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)">'
+            +'<span style="font-weight:600">'+i.code+'</span>'
+            +'<span style="color:var(--green);font-weight:700">'+parseInt(i.qty).toLocaleString()+' pcs</span></div>';
+        }).join('')
+      +'</div></details>';
+  }
+
+  // Timeline (read-only)
+  html += clTimeline(c);
+
+  if(c.notes) html += '<div style="font-size:11px;color:var(--text2);margin-top:6px">📝 '+c.notes+'</div>';
+  html += '</div>';
+  return html;
+}
 
 function ofRenderTour(){
   // OVERVIEW: all ready + loaded orders with driver assignment
