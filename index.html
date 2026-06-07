@@ -359,7 +359,12 @@ textarea{resize:none}
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
       });
       db.ref('activeTours').on('value', function(snap) {
-        activeTours = snap.val() ? Object.values(snap.val()) : [];
+        var raw = snap.val() ? Object.values(snap.val()) : [];
+        // Remove empty/corrupt tours from Firebase
+        raw.filter(function(t){ return !t || !t.orders || t.orders.length === 0; }).forEach(function(t){
+          if(t && t.id) db.ref('activeTours/'+t.id).remove();
+        });
+        activeTours = raw.filter(function(t){ return t && t.orders && t.orders.length > 0; });
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
         try{if(document.getElementById('s-office').classList.contains('active'))ofRenderTour();}catch(e){}
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
@@ -372,6 +377,10 @@ textarea{resize:none}
       });
       db.ref('stockLog').on('value', function(snap) {
         stockLog = snap.val() ? Object.values(snap.val()) : [];
+      });
+      db.ref('containerLog').on('value', function(snap) {
+        containerLog = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);}) : [];
+        try{if(document.getElementById('mgv-incoming')&&document.getElementById('mgv-incoming').classList.contains('active'))clRender();}catch(e){}
       });
 
       db.ref('auditLog').orderByChild('ts').limitToLast(200).on('value', function(snap) {
@@ -483,6 +492,16 @@ textarea{resize:none}
   <div class="view" id="mgv-incoming"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="stit" style="margin-bottom:0">Incoming / สินค้าขาเข้า</div><button type="button" class="btnsm btnsmp" onclick="openIM(null)"><i class="ti ti-plus"></i> Add</button></div>
     <div id="mg-incoming"><div class="empty"><i class="ti ti-ship" style="font-size:36px;display:block;margin-bottom:8px"></i>No incoming orders</div></div>
+
+    <!-- CONTAINER TRACKER -->
+    <div style="margin-top:20px;padding-top:16px;border-top:2px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="stit" style="margin-bottom:0">🚢 Container Tracker / ติดตามตู้</div>
+        <button type="button" class="btnsm btnsmp" onclick="openCL(null)"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="cl-list"></div>
+      <div id="cl-stats" style="margin-top:12px"></div>
+    </div>
   </div></div>
   <div class="view" id="mgv-drivers"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="stit" style="margin-bottom:0">Drivers / คนขับ</div><button type="button" class="btnsm btnsmp" onclick="openDM(null)"><i class="ti ti-plus"></i> Add</button></div>
@@ -1234,6 +1253,8 @@ const GL='#D1FAE5',GT='#065F46',OL='#FEF3C7',OT='#92400E';
 
 let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[];
 var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
+var containerLog=[];
+var auditLog=[];
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
 let ofFilt_='all',ofSelDriver=null,ofSelOrders=[],currentDriverId=null;
 let editId=null,editSM=null,editIM=null,editDM=null,selMonth='';
@@ -1274,7 +1295,7 @@ function addLog(m,t){const n=new Date();stockLog.push({m,t,ts:n.getHours().toStr
 function initials(n){return n.trim().split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);}
 
 // MANAGER
-function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();if(t==='audit')auditRender();}
+function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();if(t==='audit')auditRender();if(t==='incoming')clRender();}
 
 function mgCleanup() {
   if(!window.fbDB) { alert('Not connected'); return; }
@@ -3872,6 +3893,32 @@ function payDateChange(id, dateVal) {
   </div>
 </div>
 
+<!-- CONTAINER LOG MODAL -->
+<div class="modal-overlay" id="cl-modal">
+  <div class="modal">
+    <div class="mhdr">
+      <span class="mtit" id="cl-modal-title">🚢 Add Container</span>
+      <button type="button" class="mclose" onclick="closeCL()"><i class="ti ti-x"></i></button>
+    </div>
+    <label class="fl">Supplier / ผู้ผลิต</label>
+    <input type="text" id="cl-supplier" placeholder="e.g. Factory A">
+    <label class="fl">Container No. / หมายเลขตู้</label>
+    <input type="text" id="cl-container-no" placeholder="e.g. TCKU1234567">
+    <label class="fl">📅 Deposit paid / วันจ่ายมัดจำ</label>
+    <input type="date" id="cl-deposit">
+    <label class="fl">🏭 Production done / Loading day</label>
+    <input type="date" id="cl-loading">
+    <label class="fl">🛳️ Arrived Thailand / ถึงไทย</label>
+    <input type="date" id="cl-arrived-th">
+    <label class="fl">🏪 Arrived Warehouse / ถึงโกดัง</label>
+    <input type="date" id="cl-arrived-wh">
+    <label class="fl">Notes</label>
+    <textarea id="cl-notes" rows="2" placeholder="Optional notes..."></textarea>
+    <button type="button" class="btn btnp" style="margin-top:12px" onclick="saveCL()"><i class="ti ti-device-floppy"></i> Save</button>
+    <button type="button" class="btn btnr" id="cl-del-btn" style="display:none" onclick="deleteCLcurrent()"><i class="ti ti-trash"></i> Delete</button>
+  </div>
+</div>
+
 <!-- DELIVERY CONFIRMATION MODAL -->
 <div class="modal-overlay" id="delivery-modal">
   <div class="modal">
@@ -3952,6 +3999,167 @@ function deleteShipper(idx) {
   shippers.splice(idx, 1);
   syncShippers();
   mgRenderShippers();
+}
+
+// ── CONTAINER LOG ──
+
+var _clEditId = null;
+
+function clDaysBetween(d1, d2) {
+  if(!d1 || !d2) return null;
+  var a = new Date(d1+'T00:00:00'), b = new Date(d2+'T00:00:00');
+  if(isNaN(a)||isNaN(b)) return null;
+  return Math.round((b-a)/(1000*60*60*24));
+}
+
+function clFmtD(d) {
+  if(!d) return '—';
+  var dt = new Date(d+'T00:00:00');
+  return isNaN(dt) ? d : dt.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+}
+
+function clPhaseLabel(days) {
+  if(days === null) return '<span style="color:var(--text2)">—</span>';
+  var color = days <= 30 ? 'var(--green)' : days <= 60 ? 'var(--orange)' : 'var(--red)';
+  return '<span style="color:'+color+';font-weight:700">'+days+'d</span>';
+}
+
+function clRender() {
+  var list = document.getElementById('cl-list');
+  if(!list) return;
+  if(containerLog.length === 0) {
+    list.innerHTML = '<div class="empty" style="padding:16px;font-size:13px"><i class="ti ti-ship" style="font-size:32px;display:block;margin-bottom:8px"></i>No containers tracked yet</div>';
+  } else {
+    list.innerHTML = containerLog.map(function(c) {
+      var d1 = clDaysBetween(c.deposit, c.loading);
+      var d2 = clDaysBetween(c.loading, c.arrivedTh);
+      var d3 = clDaysBetween(c.arrivedTh, c.arrivedWh);
+      var dtot = clDaysBetween(c.deposit, c.arrivedWh);
+      var statusColor = c.arrivedWh ? 'var(--green)' : c.arrivedTh ? 'var(--orange)' : c.loading ? 'var(--blue)' : 'var(--text2)';
+      var statusLabel = c.arrivedWh ? '✅ In Stock' : c.arrivedTh ? '🏪 Customs/Local' : c.loading ? '🛳️ On the way' : '🏭 Production';
+      return '<div class="card" style="margin-bottom:8px;padding:12px 14px">'
+        +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
+        +'<div><div style="font-size:14px;font-weight:700">'+c.supplier+'</div>'
+        +'<div style="font-size:12px;color:var(--text2);margin-top:1px">'+( c.containerNo||'—')+'</div></div>'
+        +'<div style="display:flex;align-items:center;gap:6px">'
+        +'<span style="font-size:11px;font-weight:600;color:'+statusColor+'">'+statusLabel+'</span>'
+        +'<button type="button" class="btnsm" onclick="openCL(\''+c.id+'\')"><i class="ti ti-pencil"></i></button>'
+        +'</div></div>'
+        +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:11px;margin-bottom:6px">'
+        +'<div><span style="color:var(--text2)">💰 Deposit:</span> '+(c.deposit?clFmtD(c.deposit):'—')+'</div>'
+        +'<div><span style="color:var(--text2)">🏭 Loading:</span> '+(c.loading?clFmtD(c.loading):'—')+'</div>'
+        +'<div><span style="color:var(--text2)">🛳️ Thailand:</span> '+(c.arrivedTh?clFmtD(c.arrivedTh):'—')+'</div>'
+        +'<div><span style="color:var(--text2)">🏪 Warehouse:</span> '+(c.arrivedWh?clFmtD(c.arrivedWh):'—')+'</div>'
+        +'</div>'
+        +'<div style="display:flex;gap:10px;background:var(--bg2);border-radius:var(--rs);padding:6px 10px;font-size:11px">'
+        +'<div style="flex:1;text-align:center"><div style="color:var(--text2)">Deposit→Load</div><div>'+clPhaseLabel(d1)+'</div></div>'
+        +'<div style="flex:1;text-align:center"><div style="color:var(--text2)">Load→TH</div><div>'+clPhaseLabel(d2)+'</div></div>'
+        +'<div style="flex:1;text-align:center"><div style="color:var(--text2)">TH→WH</div><div>'+clPhaseLabel(d3)+'</div></div>'
+        +'<div style="flex:1;text-align:center;border-left:1px solid var(--border);padding-left:10px"><div style="color:var(--text2)">Total</div><div>'+clPhaseLabel(dtot)+'</div></div>'
+        +'</div>'
+        +(c.notes?'<div style="font-size:11px;color:var(--text2);margin-top:6px">📝 '+c.notes+'</div>':'')
+        +'</div>';
+    }).join('');
+  }
+  clRenderStats();
+}
+
+function clRenderStats() {
+  var el = document.getElementById('cl-stats');
+  if(!el) return;
+  // Only use completed containers (have arrivedWh)
+  var completed = containerLog.filter(function(c){ return c.deposit && c.loading && c.arrivedTh && c.arrivedWh; });
+  if(completed.length === 0) { el.innerHTML = ''; return; }
+
+  // Group by supplier
+  var suppliers = {};
+  completed.forEach(function(c) {
+    if(!suppliers[c.supplier]) suppliers[c.supplier] = [];
+    suppliers[c.supplier].push(c);
+  });
+
+  function avg(arr) { return arr.length ? Math.round(arr.reduce(function(a,b){return a+b;},0)/arr.length) : null; }
+
+  var html = '<div style="margin-top:4px"><div class="stit" style="margin-bottom:8px">📊 Supplier Averages / ค่าเฉลี่ยต่อ Supplier</div>';
+  Object.keys(suppliers).forEach(function(sup) {
+    var items = suppliers[sup];
+    var d1s = items.map(function(c){return clDaysBetween(c.deposit,c.loading);}).filter(function(x){return x!==null;});
+    var d2s = items.map(function(c){return clDaysBetween(c.loading,c.arrivedTh);}).filter(function(x){return x!==null;});
+    var d3s = items.map(function(c){return clDaysBetween(c.arrivedTh,c.arrivedWh);}).filter(function(x){return x!==null;});
+    var tots = items.map(function(c){return clDaysBetween(c.deposit,c.arrivedWh);}).filter(function(x){return x!==null;});
+    var a1=avg(d1s), a2=avg(d2s), a3=avg(d3s), at=avg(tots);
+    html += '<div class="card" style="margin-bottom:8px;padding:12px 14px">'
+      +'<div style="font-size:14px;font-weight:700;margin-bottom:8px">'+sup+' <span style="font-size:11px;font-weight:400;color:var(--text2)">('+items.length+' container'+(items.length>1?'s':'')+')</span></div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;text-align:center">'
+      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 4px"><div style="font-size:10px;color:var(--text2);margin-bottom:3px">Deposit→Load</div><div style="font-size:16px;font-weight:700;color:var(--blue)">'+(a1!==null?a1+'d':'—')+'</div></div>'
+      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 4px"><div style="font-size:10px;color:var(--text2);margin-bottom:3px">Load→Thailand</div><div style="font-size:16px;font-weight:700;color:var(--orange)">'+(a2!==null?a2+'d':'—')+'</div></div>'
+      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 4px"><div style="font-size:10px;color:var(--text2);margin-bottom:3px">TH→Warehouse</div><div style="font-size:16px;font-weight:700;color:var(--green)">'+(a3!==null?a3+'d':'—')+'</div></div>'
+      +'<div style="background:var(--blue-bg);border-radius:var(--rs);padding:8px 4px;border:1px solid var(--blue-l)"><div style="font-size:10px;color:var(--blue-t);font-weight:600;margin-bottom:3px">Total avg</div><div style="font-size:16px;font-weight:800;color:var(--blue-t)">'+(at!==null?at+'d':'—')+'</div></div>'
+      +'</div></div>';
+  });
+
+  // Overall average across all suppliers
+  if(Object.keys(suppliers).length > 1) {
+    var allD1 = completed.map(function(c){return clDaysBetween(c.deposit,c.loading);}).filter(function(x){return x!==null;});
+    var allD2 = completed.map(function(c){return clDaysBetween(c.loading,c.arrivedTh);}).filter(function(x){return x!==null;});
+    var allD3 = completed.map(function(c){return clDaysBetween(c.arrivedTh,c.arrivedWh);}).filter(function(x){return x!==null;});
+    var allTot = completed.map(function(c){return clDaysBetween(c.deposit,c.arrivedWh);}).filter(function(x){return x!==null;});
+    html += '<div style="background:var(--green-bg);border:1px solid var(--green-l);border-radius:var(--r);padding:12px 14px;margin-bottom:8px">'
+      +'<div style="font-size:13px;font-weight:700;margin-bottom:8px;color:var(--green-t)">🌍 Overall Average (all suppliers)</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;text-align:center">'
+      +'<div><div style="font-size:10px;color:var(--text2);margin-bottom:2px">Deposit→Load</div><div style="font-size:16px;font-weight:700">'+avg(allD1)+'d</div></div>'
+      +'<div><div style="font-size:10px;color:var(--text2);margin-bottom:2px">Load→Thailand</div><div style="font-size:16px;font-weight:700">'+avg(allD2)+'d</div></div>'
+      +'<div><div style="font-size:10px;color:var(--text2);margin-bottom:2px">TH→Warehouse</div><div style="font-size:16px;font-weight:700">'+avg(allD3)+'d</div></div>'
+      +'<div><div style="font-size:10px;color:var(--green-t);font-weight:600;margin-bottom:2px">Total avg</div><div style="font-size:18px;font-weight:800;color:var(--green-t)">'+avg(allTot)+'d</div></div>'
+      +'</div></div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function openCL(id) {
+  _clEditId = id;
+  var c = id ? containerLog.find(function(x){return x.id===id;}) : null;
+  document.getElementById('cl-modal-title').textContent = id ? '✏️ Edit Container' : '🚢 Add Container';
+  document.getElementById('cl-del-btn').style.display = id ? 'flex' : 'none';
+  document.getElementById('cl-supplier').value = c ? (c.supplier||'') : '';
+  document.getElementById('cl-container-no').value = c ? (c.containerNo||'') : '';
+  document.getElementById('cl-deposit').value = c ? (c.deposit||'') : '';
+  document.getElementById('cl-loading').value = c ? (c.loading||'') : '';
+  document.getElementById('cl-arrived-th').value = c ? (c.arrivedTh||'') : '';
+  document.getElementById('cl-arrived-wh').value = c ? (c.arrivedWh||'') : '';
+  document.getElementById('cl-notes').value = c ? (c.notes||'') : '';
+  document.getElementById('cl-modal').classList.add('open');
+}
+
+function closeCL() {
+  document.getElementById('cl-modal').classList.remove('open');
+  _clEditId = null;
+}
+
+function saveCL() {
+  var sup = (document.getElementById('cl-supplier').value||'').trim();
+  if(!sup) { alert('Please enter supplier name'); return; }
+  var entry = {
+    id: _clEditId || 'cl'+Date.now(),
+    supplier: sup,
+    containerNo: (document.getElementById('cl-container-no').value||'').trim(),
+    deposit: document.getElementById('cl-deposit').value || '',
+    loading: document.getElementById('cl-loading').value || '',
+    arrivedTh: document.getElementById('cl-arrived-th').value || '',
+    arrivedWh: document.getElementById('cl-arrived-wh').value || '',
+    notes: (document.getElementById('cl-notes').value||'').trim(),
+    createdAt: _clEditId ? (containerLog.find(function(x){return x.id===_clEditId;})||{}).createdAt||Date.now() : Date.now()
+  };
+  window.fbDB.ref('containerLog/'+entry.id).set(entry);
+  closeCL();
+}
+
+function deleteCLcurrent() {
+  if(!_clEditId) return;
+  if(!confirm('Delete this container entry?')) return;
+  window.fbDB.ref('containerLog/'+_clEditId).remove();
+  closeCL();
 }
 
 // ── AUDIT LOG ──
