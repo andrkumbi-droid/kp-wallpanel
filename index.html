@@ -214,6 +214,7 @@ textarea{resize:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
 @keyframes kpFloat{0%{transform:translateY(0) scale(1);opacity:1}100%{transform:translateY(-160px) scale(1.3);opacity:0}}
 @keyframes kpPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.25)}}
+@keyframes slideDown{0%{opacity:0;transform:translateX(-50%) translateY(-10px)}100%{opacity:1;transform:translateX(-50%) translateY(0)}}
 
 
 /* PRINT RECEIPT */
@@ -302,6 +303,7 @@ textarea{resize:none}
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
   <script>
   (function() {
 
@@ -318,6 +320,84 @@ textarea{resize:none}
 
     const app = firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
+
+    // ── PUSH NOTIFICATIONS / FCM ──
+    const VAPID_KEY = 'BI2FDWmGhzUsT0Qe58Bi-u9fINShcRx5ogPSsrMVAHU6xT47Kz8nPX-yE-EbP8vcUzlyAJcsSBAVB62PweaBsZ4';
+    var _fcmMessaging = null;
+    var _fcmToken = null;
+    var _fcmRole = null;
+    var _fcmUserId = null;
+
+    function pushInit(role, userId) {
+      _fcmRole = role;
+      _fcmUserId = userId;
+      if(!('Notification' in window) || !('serviceWorker' in navigator)) return;
+      if(VAPID_KEY === 'PASTE_YOUR_VAPID_KEY_HERE') return; // not configured yet
+      try {
+        _fcmMessaging = firebase.messaging();
+        navigator.serviceWorker.register('/kp-wallpanel/firebase-messaging-sw.js')
+          .then(function(reg) {
+            return _fcmMessaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+          })
+          .then(function(token) {
+            if(!token) return;
+            _fcmToken = token;
+            // Store token under role/userId in Firebase
+            db.ref('fcmTokens/'+role+'/'+userId.replace(/[^a-zA-Z0-9]/g,'_')).set({
+              token: token, updated: Date.now(), role: role, userId: userId
+            });
+          })
+          .catch(function(e){ console.warn('FCM init failed:', e); });
+
+        // Foreground message handler
+        _fcmMessaging.onMessage(function(payload) {
+          var n = payload.notification || {};
+          showInAppNotif(n.title, n.body, payload.data);
+        });
+      } catch(e) { console.warn('FCM error:', e); }
+    }
+
+    function pushRequestPermission(role, userId, callback) {
+      if(!('Notification' in window)) { if(callback) callback(false); return; }
+      if(Notification.permission === 'granted') { pushInit(role, userId); if(callback) callback(true); return; }
+      if(Notification.permission === 'denied') { if(callback) callback(false); return; }
+      Notification.requestPermission().then(function(perm) {
+        if(perm === 'granted') { pushInit(role, userId); if(callback) callback(true); }
+        else { if(callback) callback(false); }
+      });
+    }
+
+    // Send push to all tokens of a role (via Firebase → Cloud Function would be ideal,
+    // but we do client-side in-app notifications + store a trigger in Firebase for SW)
+    function pushSend(targetRole, title, body, data) {
+      // Write a notification record to Firebase — service worker or other clients pick it up
+      db.ref('pushQueue').push({
+        role: targetRole, title: title, body: body,
+        data: data||{}, ts: Date.now(), delivered: false
+      });
+      // Also show in-app for current user if same role
+      if(_fcmRole === targetRole) showInAppNotif(title, body, data);
+    }
+
+    // Listen for incoming push triggers (for clients that are open)
+    db.ref('pushQueue').on('child_added', function(snap) {
+      var n = snap.val();
+      if(!n || n.delivered) return;
+      if(n.role === _fcmRole && n.ts > Date.now() - 30000) {
+        showInAppNotif(n.title, n.body, n.data);
+      }
+    });
+
+    function showInAppNotif(title, body, data) {
+      var el = document.createElement('div');
+      el.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:99999;background:var(--bg);border:1.5px solid var(--border);border-radius:12px;padding:12px 16px;box-shadow:0 4px 20px rgba(0,0,0,0.15);max-width:360px;width:90%;display:flex;align-items:flex-start;gap:10px;animation:slideDown 0.3s ease';
+      el.innerHTML = '<span style="font-size:20px;flex-shrink:0">🔔</span>'
+        +'<div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--text)">'+title+'</div>'
+        +(body?'<div style="font-size:12px;color:var(--text2);margin-top:2px">'+body+'</div>':'')+'</div>'
+        +'<button onclick="this.parentNode.remove()" style="background:none;border:none;cursor:pointer;font-size:18px;color:var(--text2);line-height:1;padding:0;flex-shrink:0">×</button>';
+      document.body.appendChild(el);
+      setTimeout(function(){ if(el.parentNode) el.remove(); }, 5000);
+    }
 
     // ── SYNC HELPERS ──
     function saveToFB(path, data) {
@@ -1301,7 +1381,11 @@ function checkPin() {
     if(payTab) payTab.style.display = s.paymentAccess ? '' : 'none';
     // Store delete access globally
     window.canDeleteOrders = s.deleteAccess || false;
-    oft('new');
+    // Request push permission for office role
+    try{ pushRequestPermission('office', s.id, function(granted){
+      if(granted) showInAppNotif('🔔 Notifications on', 'You\'ll be notified of new orders & deliveries');
+    }); }catch(e){}
+    oft('home');
     ofRenderOrders();
     ofRenderInc();
     ofRenderStock();
@@ -2690,7 +2774,7 @@ function ofCreate(){
   statusLog:[{status:'new',time:ts,by:createdBy}]};
   orders.unshift(o);wOrders.unshift({id:no,zone,boxes:o.boxes,panels:panStr,lcorner:lcStr,clips,packed:false,packedAt:null});
   [...pa,...la].forEach(s=>{const m=s.match(/^([A-Z0-9\-]+)\s*[×x]\s*(\d+)/i);if(m){const st=stockItems.find(x=>x.code===m[1]);if(st){st.qty=Math.max(0,st.qty-parseInt(m[2]));addLog(m[1]+' -'+m[2]+' pcs (order '+no+')','-');}}});
-  var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';addLog('Order '+no+' created','+');
+  var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order'});}catch(e){}
   ['of-no','of-cust','of-phone','of-loc'].forEach(x=>document.getElementById(x).value='');document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';;document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='none';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').valueAsDate=new Date();
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
   try{var cByN=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';auditAdd({type:'create',orderId:no,by:cByN});}catch(e){}
@@ -2980,6 +3064,7 @@ function ofCreateTour(){
     // Driver is driving (or no tour) — create a new tour
     const now=new Date();activeTours.push({id:'t'+Date.now(),driverId:ofSelDriver,driverName:d.name,orders:[...ofSelOrders],status,checks:{},created:now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')});
     res.style.background=GL;res.style.color=GT;res.textContent='✓ New tour sent to '+d.name+'! '+ofSelOrders.length+' orders';
+    try{pushSend('driver_'+ofSelDriver,'🚚 New Tour Ready!',ofSelOrders.length+' order'+(ofSelOrders.length!==1?'s':'')+' assigned to you',{tag:'tour'});}catch(e){}
   }
   ofSelDriver=null;ofSelOrders=[];setTimeout(()=>{res.style.display='none';},3000);
   ofRenderTour();ofRenderOrders();mgRender();syncTours();syncOrders();}
@@ -3109,6 +3194,8 @@ function drLoginRender(){
 function drLogin(id){
   currentDriverId=id;
   const d=drivers.find(x=>x.id===id);
+  // Request push permission for driver
+  try{ pushRequestPermission('driver_'+id, id, null); }catch(e){}
   document.getElementById('dt-title').textContent=d.name+"'s Tour";
 
   // Reconstruct dTour, dAllOrders, dStatus, dDone from Firebase data
@@ -3385,6 +3472,7 @@ function drDeliver(id){
 function drDoDeliver(id, photoUrl){
   dStatus[id]='delivered';dTour=dTour.filter(x=>x!==id);if(!dDone.includes(id))dDone.push(id);delete dChecks[id];
   const ord=orders.find(x=>x.id===id);
+  try{var drName=drivers.find(function(d){return d.id===currentDriverId;});pushSend('office','✅ Delivered: '+id,(drName?drName.name+' · ':'')+(ord?ord.customer:''),{tag:'delivered'});}catch(e){}
   if(ord){
     addStatusLog(ord,'delivered','Driver');
     ord.status='delivered';
