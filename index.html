@@ -514,6 +514,9 @@ textarea{resize:none}
 </head>
 <body>
 
+<!-- OFFLINE INDICATOR -->
+<div id="offline-indicator" style="display:none;position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:99998;background:#dc2626;color:#fff;font-size:12px;font-weight:600;padding:6px 16px;border-radius:0 0 10px 10px;max-width:430px;width:100%;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.2)"></div>
+
 <!-- MENU -->
 
 <!-- NOTIFICATION BANNER -->
@@ -1431,6 +1434,91 @@ const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec
 const SL={new:'New / ใหม่',packing:'Packing / กำลังแพ็ค',ready:'Ready / พร้อมส่ง',loaded:'Loaded / ขึ้นรถแล้ว',delivered:'Delivered / ส่งแล้ว',cancelled:'Cancelled / ยกเลิก'};
 const BC={new:'bnew',packing:'bpacking',ready:'bready',loaded:'bloaded',delivered:'bdelivered',cancelled:'bcancelled'};
 const GL='#D1FAE5',GT='#065F46',OL='#FEF3C7',OT='#92400E';
+
+// ── SERVICE WORKER + OFFLINE ──
+if('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/kp-wallpanel/sw.js').catch(function(){});
+}
+
+var _offlineQueue = JSON.parse(localStorage.getItem('kp-offline-queue')||'[]');
+var _isOnline = navigator.onLine;
+
+function _saveQueue(){ localStorage.setItem('kp-offline-queue', JSON.stringify(_offlineQueue)); }
+
+function offlineEnqueue(type) {
+  // Just mark that this type needs to be synced
+  if(!_offlineQueue.includes(type)) _offlineQueue.push(type);
+  _saveQueue();
+  showOfflineBanner();
+}
+
+function offlineFlush() {
+  if(!_offlineQueue.length || !window.fbDB) return;
+  var q = _offlineQueue.slice();
+  _offlineQueue = [];
+  _saveQueue();
+  q.forEach(function(type) {
+    try {
+      if(type==='orders') syncOrders();
+      else if(type==='tours') syncTours();
+      else if(type==='wOrders') syncWOrders();
+      else if(type==='revOrders') syncRevOrders();
+    } catch(e){}
+  });
+  showInAppNotif('📶 Back online!', q.length+' change'+(q.length>1?'s':'')+' synced to Firebase');
+  updateOfflineIndicator();
+}
+
+function showOfflineBanner() {
+  updateOfflineIndicator();
+}
+
+function updateOfflineIndicator() {
+  var ind = document.getElementById('offline-indicator');
+  if(!ind) return;
+  var hasPending = _offlineQueue.length > 0;
+  if(!_isOnline) {
+    ind.style.display = 'flex';
+    ind.style.background = '#dc2626';
+    ind.innerHTML = '📵 Offline — changes saved locally';
+  } else if(hasPending) {
+    ind.style.display = 'flex';
+    ind.style.background = '#f59e0b';
+    ind.innerHTML = '⏳ Syncing '+_offlineQueue.length+' change'+(hasPending&&_offlineQueue.length>1?'s':'')+'…';
+    setTimeout(function(){ if(ind) ind.style.display='none'; }, 3000);
+  } else {
+    ind.style.display = 'none';
+  }
+}
+
+window.addEventListener('online', function() {
+  _isOnline = true;
+  offlineFlush();
+});
+window.addEventListener('offline', function() {
+  _isOnline = false;
+  updateOfflineIndicator();
+});
+
+// Wrap sync functions to queue when offline
+var _origSyncOrders = null, _origSyncTours = null, _origSyncWOrders = null, _origSyncRevOrders = null;
+function _patchSyncFunctions() {
+  if(_origSyncOrders) return;
+  _origSyncOrders = syncOrders;
+  _origSyncTours = syncTours;
+  _origSyncWOrders = syncWOrders;
+  _origSyncRevOrders = syncRevOrders;
+
+  syncOrders = function() { if(!navigator.onLine){offlineEnqueue('orders');return;} _origSyncOrders(); };
+  syncTours = function() { if(!navigator.onLine){offlineEnqueue('tours');return;} _origSyncTours(); };
+  syncWOrders = function() { if(!navigator.onLine){offlineEnqueue('wOrders');return;} _origSyncWOrders(); };
+  syncRevOrders = function() { if(!navigator.onLine){offlineEnqueue('revOrders');return;} _origSyncRevOrders(); };
+}
+// Patch after DOM ready
+setTimeout(_patchSyncFunctions, 500);
+
+// Flush any leftover queue from previous session
+window.addEventListener('load', function(){ setTimeout(function(){ if(navigator.onLine && _offlineQueue.length) offlineFlush(); }, 2000); });
 
 // ── DARK MODE ──
 function toggleDark(){
@@ -3196,6 +3284,8 @@ function drLogin(id){
   const d=drivers.find(x=>x.id===id);
   // Request push permission for driver
   try{ pushRequestPermission('driver_'+id, id, null); }catch(e){}
+  // Load saved checklist state (works offline)
+  try{ drLoadChecks(); }catch(e){}
   document.getElementById('dt-title').textContent=d.name+"'s Tour";
 
   // Reconstruct dTour, dAllOrders, dStatus, dDone from Firebase data
@@ -3405,7 +3495,8 @@ function drTour(){
   }).join('');
 }
 
-function drChk(id,f){if(!dChecks[id])dChecks[id]={p:false,l:false,c:false};dChecks[id][f]=!dChecks[id][f];drReady();drTour();}
+function drChk(id,f){if(!dChecks[id])dChecks[id]={p:false,l:false,c:false};dChecks[id][f]=!dChecks[id][f];try{localStorage.setItem('kp-checks-'+currentDriverId,JSON.stringify(dChecks));}catch(e){}drReady();drTour();}
+function drLoadChecks(){try{var s=localStorage.getItem('kp-checks-'+currentDriverId);if(s)dChecks=JSON.parse(s);}catch(e){}}
 function drUp(i){const mt=dTour.filter(id=>dAllOrders.find(x=>x.id===id));if(i===0)return;[dTour[i-1],dTour[i]]=[dTour[i],dTour[i-1]];drTour();}
 function drDn(i){const mt=dTour.filter(id=>dAllOrders.find(x=>x.id===id));if(i===mt.length-1)return;[dTour[i],dTour[i+1]]=[dTour[i+1],dTour[i]];drTour();}
 var _deliveryId = null;
