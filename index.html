@@ -2491,13 +2491,14 @@ function ofRenderTour(){
       var zones = {};
       waitingOrders.forEach(function(o) {
         var z = o.zone||'Unknown';
-        if(!zones[z]) zones[z] = {orders:0, panels:0};
+        if(!zones[z]) zones[z] = {orders:0, panels:0, ctn:0};
         zones[z].orders++;
         // Count panels from lineItems
         var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';})
           .reduce(function(a,i){return a+(parseInt(i.qty)||0);},0);
         if(!panels) panels = parseInt(o.panels)||0;
         zones[z].panels += panels;
+        zones[z].ctn += parseInt(o.ctn)||0;
       });
       var zoneColors = {
         'Bangkok':'var(--blue)','Northern':'#8b5cf6','Northeastern':'#f59e0b',
@@ -2513,7 +2514,7 @@ function ofRenderTour(){
           return '<div style="background:var(--bg);border:1.5px solid var(--border);border-left:4px solid '+c+';border-radius:var(--rs);padding:8px 10px">'
             +'<div style="font-size:11px;font-weight:700;color:'+c+'">'+z+'</div>'
             +'<div style="font-size:13px;font-weight:700;margin-top:2px">'+d.orders+' order'+(d.orders!==1?'s':'')+'</div>'
-            +'<div style="font-size:11px;color:var(--text2)">'+d.panels.toLocaleString()+' panels</div>'
+            +'<div style="font-size:11px;color:var(--text2)">'+d.panels.toLocaleString()+' panels'+(d.ctn>0?' · <span style="color:#16A34A;font-weight:600">'+d.ctn+' CTN</span>':'')+'</div>'
             +'</div>';
         }).join('')
         +'</div></div>';
@@ -2589,7 +2590,7 @@ function ofRenderTour(){
     '<div style="font-size:11px;color:var(--text2);margin-bottom:6px;font-weight:700;text-transform:uppercase">Added to tour</div>'+
     ofSelOrders.map(function(id){
       var o=orders.find(function(x){return x.id===id;});if(!o)return '';
-      return '<div class="selrow"><div style="flex:1"><div style="font-size:13px;font-weight:600">'+o.id+' — '+o.customer+'</div><div style="font-size:12px;color:var(--text2)">'+o.zone+' &middot; '+o.panels+'</div></div>'+
+      return '<div class="selrow"><div style="flex:1"><div style="font-size:13px;font-weight:600">'+o.id+' — '+o.customer+'</div><div style="font-size:12px;color:var(--text2)">'+o.zone+' &middot; '+o.panels+(o.ctn&&o.ctn>0?' · <span style="color:#16A34A;font-weight:600">'+o.ctn+' CTN</span>':'')+'</div></div>'+
         '<button type="button" style="background:none;border:none;cursor:pointer;color:var(--red);font-size:18px;padding:2px" data-oid="'+id+'" onclick="ofDeselOrdBtn(this)"><i class="ti ti-x"></i></button></div>';
     }).join('');
 }
@@ -2825,7 +2826,7 @@ function drReady(){
       // Find which driver this order is assigned to
       var assignedTour = activeTours.find(function(t){ return t.orders.includes(o.id); });
       var assignedDriver = assignedTour ? assignedTour.driverName : null;
-      var isMyOrder = assignedTour && assignedTour.driverId === currentDriverId;
+      var isMyOrder = (assignedTour && assignedTour.driverId === currentDriverId) || (tour && tour.orders && tour.orders.includes(o.id));
       var isSomeoneElse = assignedTour && assignedTour.driverId !== currentDriverId;
 
       // Background color
@@ -2860,9 +2861,25 @@ function drReady(){
         if(o.ctn) html+='<div style="display:flex;justify-content:space-between;margin-top:4px;padding-top:4px;border-top:1px solid rgba(0,0,0,0.08);font-weight:700"><span>📦 CTN</span><span style="color:var(--green)">'+o.ctn+' ลัง</span></div>';
         html += '</div>';
       }
-      // Only show Load button for own assigned orders
+      // Only show checklist + Load button for own assigned orders
       if(isMyOrder && o.status==='ready') {
-        html += '<button type="button" class="btn btng" onclick="drLoadBtn(this)" data-id="'+o.id+'"><i class="ti ti-truck"></i> Load on truck / ขึ้นรถ</button>';
+        var rc = dChecks[o.id]||{p:false,l:false,c:false};
+        var allChecked = rc.p && rc.l && rc.c;
+        var ckr = function(f,v){ return '<div class="chkrow" onclick="drChkBtn(this)" data-id="'+o.id+'" data-field="'+f+'"><div class="chkbox '+(v?'on':'')+'">'+( v?'<i class="ti ti-check" style="font-size:12px;color:var(--green)"></i>':'' )+'</div>'; };
+        html += '<details style="margin:6px 0 6px 0"'+(allChecked?'':'')+'>'+
+          '<summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text2);list-style:none;display:flex;align-items:center;gap:5px;padding:6px 10px;background:rgba(0,0,0,0.04);border-radius:8px;user-select:none">'+
+          '<i class="ti ti-clipboard-check" style="font-size:13px"></i> Checklist '+(allChecked?'✅':'▾')+'</summary>'+
+          '<div class="chklist">'+
+          ckr('p',rc.p)+'<span class="chklbl">Panels / แผ่น</span><span class="chkval">'+o.panels+'</span></div>'+
+          ckr('l',rc.l)+'<span class="chklbl">L-Corner</span><span class="chkval">'+(o.lcorner||'—')+'</span></div>'+
+          ckr('c',rc.c)+'<span class="chklbl">Clips</span><span class="chkval">'+((o.clips||0).toLocaleString())+'</span></div>'+
+          (o.ctn?'<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--green-bg);border-radius:var(--rs);margin-top:4px"><span style="font-size:13px;font-weight:700">📦 CTN</span><span style="font-size:16px;font-weight:800;color:var(--green)">'+o.ctn+' ลัง</span></div>':'')+
+          '</div></details>';
+        if(allChecked) {
+          html += '<button type="button" class="btn btng" onclick="drLoadBtn(this)" data-id="'+o.id+'"><i class="ti ti-truck"></i> Load on truck / ขึ้นรถ</button>';
+        } else {
+          html += '<button type="button" class="btn" style="opacity:0.4;cursor:not-allowed;background:#ccc;border-color:#ccc;color:#666" disabled><i class="ti ti-truck"></i> Load on truck / ขึ้นรถ</button>';
+        }
       }
       html += '</div>';
     });
@@ -2953,12 +2970,6 @@ function drTour(){
         '<div class="crow"><i class="ti ti-phone" style="font-size:13px;color:var(--text2)"></i><a class="clink" href="tel:'+o.phone+'">'+o.phone+'</a></div>'+
         '<div class="crow"><i class="ti ti-map-pin" style="font-size:13px;color:var(--text2)"></i><a class="clink" href="'+murl+'" target="_blank">'+o.address+'</a></div>'+
         '</div>'+
-        '<div class="chklist">'+
-        ck('p',c.p)+'<span class="chklbl">Panels / แผ่น</span><span class="chkval">'+o.panels+'</span></div>'+
-        ck('l',c.l)+'<span class="chklbl">L-Corner</span><span class="chkval">'+(o.lcorner||'—')+'</span></div>'+
-        ck('c',c.c)+'<span class="chklbl">Clips</span><span class="chkval">'+((o.clips||0).toLocaleString())+'</span></div>'+
-        (o.ctn?'<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--green-bg);border-radius:var(--rs);margin-top:4px"><span style="font-size:13px;font-weight:700">📦 CTN</span><span style="font-size:16px;font-weight:800;color:var(--green)">'+o.ctn+' ลัง</span></div>':'')+
-        '</div>'+
         '<div class="tfoot"><button type="button" class="btn btng" style="margin-top:0;flex:1" onclick="drDeliverBtn(this)" data-id="'+id+'"><i class="ti ti-check"></i> Delivered / ส่งแล้ว</button><button type="button" class="btncancel" onclick="drCancelBtn(this)" data-id="'+id+'"><i class="ti ti-x"></i> Cancel</button></div>'+
         '</div>';
     }).join('');
@@ -2977,7 +2988,7 @@ function drTour(){
   }).join('');
 }
 
-function drChk(id,f){if(!dChecks[id])dChecks[id]={p:false,l:false,c:false};dChecks[id][f]=!dChecks[id][f];drTour();}
+function drChk(id,f){if(!dChecks[id])dChecks[id]={p:false,l:false,c:false};dChecks[id][f]=!dChecks[id][f];drReady();drTour();}
 function drUp(i){const mt=dTour.filter(id=>dAllOrders.find(x=>x.id===id));if(i===0)return;[dTour[i-1],dTour[i]]=[dTour[i],dTour[i-1]];drTour();}
 function drDn(i){const mt=dTour.filter(id=>dAllOrders.find(x=>x.id===id));if(i===mt.length-1)return;[dTour[i],dTour[i+1]]=[dTour[i+1],dTour[i]];drTour();}
 var _deliveryId = null;
