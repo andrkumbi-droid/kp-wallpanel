@@ -4459,30 +4459,61 @@ function payDateChange(id, dateVal) {
 var calcSegs = [];
 var calcSegId = 0;
 
+var CALC_SHAPES = [
+  {v:'rect',      label:'▭ Rectangle / สี่เหลี่ยม'},
+  {v:'triangle',  label:'△ Triangle / สามเหลี่ยม'},
+  {v:'trapez',    label:'⬠ Trapezoid / สี่เหลี่ยมคางหมู'},
+  {v:'halfcircle',label:'◖ Half-circle / ครึ่งวงกลม'},
+  {v:'circle',    label:'○ Circle / วงกลม'}
+];
+
+function calcShapeArea(s) {
+  var t = s.type || 'rect';
+  if(t === 'rect')       return (parseFloat(s.w)||0) * (parseFloat(s.h)||0);
+  if(t === 'triangle')   return (parseFloat(s.w)||0) * (parseFloat(s.h)||0) / 2;
+  if(t === 'trapez')     return ((parseFloat(s.a)||0) + (parseFloat(s.b)||0)) / 2 * (parseFloat(s.h)||0);
+  if(t === 'halfcircle') return Math.PI * Math.pow(parseFloat(s.r)||0, 2) / 2;
+  if(t === 'circle')     return Math.PI * Math.pow(parseFloat(s.r)||0, 2);
+  return 0;
+}
+
+function calcShapeW(s) { // effective width for layout
+  var t = s.type || 'rect';
+  if(t === 'rect' || t === 'triangle') return parseFloat(s.w)||0;
+  if(t === 'trapez')     return Math.max(parseFloat(s.a)||0, parseFloat(s.b)||0);
+  if(t === 'halfcircle' || t === 'circle') return (parseFloat(s.r)||0) * 2;
+  return 0;
+}
+function calcShapeH(s) { // effective height for layout
+  var t = s.type || 'rect';
+  if(t === 'rect' || t === 'triangle' || t === 'trapez') return parseFloat(s.h)||0;
+  if(t === 'halfcircle') return parseFloat(s.r)||0;
+  if(t === 'circle')     return (parseFloat(s.r)||0) * 2;
+  return 0;
+}
+
 function calcPreset(w) {
   var inp = document.getElementById('calc-pw');
   if(inp) inp.value = w;
-  // Update active state on buttons
   document.querySelectorAll('.calc-preset-btn').forEach(function(b) {
     b.classList.toggle('active', parseFloat(b.textContent) === w);
   });
   calcRun();
 }
-
 function calcPresetDeselect() {
   document.querySelectorAll('.calc-preset-btn').forEach(function(b){ b.classList.remove('active'); });
 }
 
 function calcInit() {
   if(calcSegs.length === 0) {
-    calcSegs = [{id: ++calcSegId, w: '', h: '', subtract: false}];
+    calcSegs = [{id: ++calcSegId, type:'rect', w:'', h:'', a:'', b:'', r:'', subtract:false}];
   }
   calcRenderSegs();
   calcRun();
 }
 
 function calcAddSeg() {
-  calcSegs.push({id: ++calcSegId, w: '', h: '', subtract: false});
+  calcSegs.push({id: ++calcSegId, type:'rect', w:'', h:'', a:'', b:'', r:'', subtract:false});
   calcRenderSegs();
   calcRun();
 }
@@ -4496,15 +4527,35 @@ function calcRemoveSeg(id) {
 
 function calcToggleSub(id) {
   var s = calcSegs.find(function(s){ return s.id === id; });
-  if(s) s.subtract = !s.subtract;
-  calcRenderSegs();
-  calcRun();
+  if(s) { s.subtract = !s.subtract; calcRenderSegs(); calcRun(); }
 }
 
 function calcSegChange(id, field, val) {
   var s = calcSegs.find(function(s){ return s.id === id; });
-  if(s) s[field] = val;
-  calcRun();
+  if(s) { s[field] = val; calcRun(); }
+}
+
+function calcSegType(id, type) {
+  var s = calcSegs.find(function(s){ return s.id === id; });
+  if(s) { s.type = type; calcRenderSegs(); calcRun(); }
+}
+
+function calcInputsForShape(s) {
+  var t = s.type || 'rect';
+  var id = s.id;
+  if(t === 'rect') return ''
+    +'<div><label class="fl">Width / กว้าง (m)</label><input type="number" min="0" step="0.01" value="'+s.w+'" placeholder="3.5" oninput="calcSegChange('+id+',\'w\',this.value)" class="finp"></div>'
+    +'<div><label class="fl">Height / สูง (m)</label><input type="number" min="0" step="0.01" value="'+s.h+'" placeholder="2.8" oninput="calcSegChange('+id+',\'h\',this.value)" class="finp"></div>';
+  if(t === 'triangle') return ''
+    +'<div><label class="fl">Base / ฐาน (m)</label><input type="number" min="0" step="0.01" value="'+s.w+'" placeholder="4.0" oninput="calcSegChange('+id+',\'w\',this.value)" class="finp"></div>'
+    +'<div><label class="fl">Height / สูง (m)</label><input type="number" min="0" step="0.01" value="'+s.h+'" placeholder="2.0" oninput="calcSegChange('+id+',\'h\',this.value)" class="finp"></div>';
+  if(t === 'trapez') return ''
+    +'<div><label class="fl">Top / บน (m)</label><input type="number" min="0" step="0.01" value="'+s.a+'" placeholder="2.0" oninput="calcSegChange('+id+',\'a\',this.value)" class="finp"></div>'
+    +'<div><label class="fl">Bottom / ล่าง (m)</label><input type="number" min="0" step="0.01" value="'+s.b+'" placeholder="4.0" oninput="calcSegChange('+id+',\'b\',this.value)" class="finp"></div>'
+    +'<div style="grid-column:1/-1"><label class="fl">Height / สูง (m)</label><input type="number" min="0" step="0.01" value="'+s.h+'" placeholder="2.0" oninput="calcSegChange('+id+',\'h\',this.value)" class="finp"></div>';
+  if(t === 'halfcircle' || t === 'circle') return ''
+    +'<div style="grid-column:1/-1"><label class="fl">Radius / รัศมี (m)</label><input type="number" min="0" step="0.01" value="'+s.r+'" placeholder="1.0" oninput="calcSegChange('+id+',\'r\',this.value)" class="finp"></div>';
+  return '';
 }
 
 function calcRenderSegs() {
@@ -4514,18 +4565,23 @@ function calcRenderSegs() {
     var isSub = s.subtract;
     var borderCol = isSub ? 'var(--red)' : 'var(--blue)';
     var bgCol = isSub ? 'var(--red-l)' : 'var(--bg2)';
+    var shapeOpts = CALC_SHAPES.map(function(sh){
+      return '<option value="'+sh.v+'"'+(s.type===sh.v?' selected':'')+'>'+sh.label+'</option>';
+    }).join('');
     return '<div style="background:'+bgCol+';border:1.5px solid '+borderCol+';border-radius:var(--rs);padding:10px 12px;margin-bottom:8px">'
+      // Header
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-      +'<span style="font-size:12px;font-weight:700;color:'+borderCol+'">'+(isSub?'➖ Subtract / ลบออก':'➕ Segment '+(i+1)+' / ส่วนที่ '+(i+1))+'</span>'
+      +'<span style="font-size:12px;font-weight:700;color:'+borderCol+'">'+(isSub?'➖ Abzug / หักออก':'➕ Segment '+(i+1)+' / ส่วนที่ '+(i+1))+'</span>'
       +'<div style="display:flex;gap:6px;align-items:center">'
-      +'<button type="button" onclick="calcToggleSub('+s.id+')" style="font-size:11px;padding:3px 8px;border-radius:var(--rs);cursor:pointer;border:1px solid '+borderCol+';background:transparent;color:'+borderCol+'">'+(isSub?'➕ Add':'➖ Subtract')+'</button>'
+      +'<button type="button" onclick="calcToggleSub('+s.id+')" style="font-size:11px;padding:3px 8px;border-radius:var(--rs);cursor:pointer;border:1px solid '+borderCol+';background:transparent;color:'+borderCol+'">'+(isSub?'➕':'➖')+'</button>'
       +(calcSegs.length>1?'<button type="button" onclick="calcRemoveSeg('+s.id+')" style="font-size:11px;padding:3px 8px;border-radius:var(--rs);cursor:pointer;border:1px solid var(--red);background:transparent;color:var(--red)"><i class="ti ti-x"></i></button>':'')
       +'</div></div>'
+      // Shape type selector
+      +'<div style="margin-bottom:8px"><label class="fl">Shape / รูปทรง</label>'
+      +'<select onchange="calcSegType('+s.id+',this.value)" class="finp">'+shapeOpts+'</select></div>'
+      // Dynamic inputs
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
-      +'<div><label class="fl">Width / กว้าง (m)</label>'
-      +'<input type="number" min="0" step="0.01" value="'+s.w+'" placeholder="e.g. 3.5" oninput="calcSegChange('+s.id+',\'w\',this.value)" class="finp"></div>'
-      +'<div><label class="fl">Height / สูง (m)</label>'
-      +'<input type="number" min="0" step="0.01" value="'+s.h+'" placeholder="e.g. 2.8" oninput="calcSegChange('+s.id+',\'h\',this.value)" class="finp"></div>'
+      +calcInputsForShape(s)
       +'</div></div>';
   }).join('');
 }
@@ -4535,112 +4591,108 @@ function calcRun() {
   var pl = parseFloat(document.getElementById('calc-pl').value) || 290;
   var orient = document.getElementById('calc-orient').value;
   var waste = parseFloat(document.getElementById('calc-waste').value) || 10;
+  var panelArea = (pw/100) * (pl/100);
 
-  // Panel area in m²
-  var panelW_m = pw / 100;
-  var panelL_m = pl / 100;
-  var panelArea = panelW_m * panelL_m;
-
-  // Calculate net area from segments
   var netArea = 0;
   calcSegs.forEach(function(s) {
-    var w = parseFloat(s.w) || 0;
-    var h = parseFloat(s.h) || 0;
-    var area = w * h;
-    netArea += s.subtract ? -area : area;
+    var a = calcShapeArea(s);
+    netArea += s.subtract ? -a : a;
   });
   if(netArea < 0) netArea = 0;
+  var grossArea = netArea * (1 + waste/100);
+  var panelsNet = orient !== 'm2' && panelArea > 0 ? Math.ceil(netArea/panelArea) : 0;
+  var panelsGross = orient !== 'm2' && panelArea > 0 ? Math.ceil(grossArea/panelArea) : 0;
 
-  var grossArea = netArea * (1 + waste / 100);
-
-  // Panel count
-  var panelsNet = 0, panelsGross = 0;
-  if(orient !== 'm2' && panelArea > 0) {
-    panelsNet = Math.ceil(netArea / panelArea);
-    panelsGross = Math.ceil(grossArea / panelArea);
-  }
-
-  // Render results
   var resEl = document.getElementById('calc-results');
   if(resEl) {
     var noCalc = orient === 'm2';
     resEl.innerHTML = '<div class="stit" style="margin-bottom:12px">📊 Results / ผลลัพธ์</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
-      // Net area
       +'<div style="background:var(--bg2);border-radius:var(--rs);padding:12px;text-align:center">'
       +'<div style="font-size:11px;color:var(--text2);margin-bottom:4px">Net Area / พื้นที่สุทธิ</div>'
       +'<div style="font-size:24px;font-weight:800;color:var(--blue)">'+netArea.toFixed(2)+'</div>'
       +'<div style="font-size:11px;color:var(--text2)">m²</div></div>'
-      // Gross area
       +'<div style="background:var(--bg2);border-radius:var(--rs);padding:12px;text-align:center">'
       +'<div style="font-size:11px;color:var(--text2);margin-bottom:4px">Gross +'+waste+'% / รวมค่าสูญเสีย</div>'
       +'<div style="font-size:24px;font-weight:800;color:var(--orange)">'+grossArea.toFixed(2)+'</div>'
       +'<div style="font-size:11px;color:var(--text2)">m²</div></div>'
       +'</div>'
-      // Panel counts
       +(noCalc ? '' :
         '<div style="background:var(--green-bg);border:2px solid var(--green);border-radius:var(--rs);padding:14px;text-align:center;margin-bottom:10px">'
         +'<div style="font-size:12px;color:var(--green);font-weight:600;margin-bottom:4px">Panels needed / จำนวนแผ่นที่ต้องใช้</div>'
         +'<div style="font-size:40px;font-weight:900;color:var(--green);line-height:1">'+panelsGross+'</div>'
-        +'<div style="font-size:11px;color:var(--text2);margin-top:4px">panels / แผ่น &nbsp;(incl. '+waste+'% waste)</div>'
+        +'<div style="font-size:11px;color:var(--text2);margin-top:4px">panels / แผ่น (incl. '+waste+'% waste)</div>'
         +'</div>'
         +'<div style="font-size:12px;color:var(--text2);text-align:center;margin-bottom:10px">'
-        +'Without waste: <b style="color:var(--text)">'+panelsNet+' panels</b> &nbsp;·&nbsp; '
-        +'Panel: <b style="color:var(--text)">'+pw+'×'+pl+' cm</b> &nbsp;·&nbsp; '
-        +(orient==='v'?'↕ Vertical':'↔ Horizontal')
+        +'Without waste: <b style="color:var(--text)">'+panelsNet+' panels</b> · Panel: <b style="color:var(--text)">'+pw+'×'+pl+' cm</b> · '+(orient==='v'?'↕ Vertical':'↔ Horizontal')
         +'</div>'
       )
-      // Info note
       +'<div style="font-size:11px;color:var(--text2);background:var(--bg2);border-radius:var(--rs);padding:8px 10px">'
-      +'💡 Tongue &amp; groove on long sides — install panels with groove facing down / ร่องลิ้นด้านยาว ติดตั้งด้านร่องลงล่าง'
-      +'</div>';
+      +'💡 Tongue &amp; groove on long sides — groove facing down / ร่องลิ้นด้านยาว ติดตั้งด้านร่องลงล่าง</div>';
   }
-
-  // Render visualization
-  calcViz(netArea);
+  calcViz();
 }
 
-function calcViz(totalArea) {
+function calcViz() {
   var el = document.getElementById('calc-viz');
   if(!el) return;
-  var segsWithArea = calcSegs.map(function(s) {
-    return {w: parseFloat(s.w)||0, h: parseFloat(s.h)||0, subtract: s.subtract};
-  }).filter(function(s){ return s.w > 0 && s.h > 0; });
-  if(segsWithArea.length === 0) { el.innerHTML = ''; return; }
+  var valid = calcSegs.filter(function(s){ return calcShapeW(s)>0 && calcShapeH(s)>0; });
+  if(!valid.length){ el.innerHTML=''; return; }
 
-  var canvasW = 340, canvasH = 120;
-  var padding = 8;
-  var usableW = canvasW - padding * 2;
-  var maxW = Math.max.apply(null, segsWithArea.map(function(s){return s.w;}));
-  var maxH = Math.max.apply(null, segsWithArea.map(function(s){return s.h;}));
-  var totalW = segsWithArea.reduce(function(a,s){return a+s.w;},0);
-  var scaleX = usableW / totalW;
-  var scaleY = (canvasH - padding * 2 - 20) / maxH;
-  var scale = Math.min(scaleX, scaleY);
+  var canvasW=360, canvasH=160, pad=12, labelH=20;
+  var drawH = canvasH - pad*2 - labelH;
+  var maxH = Math.max.apply(null, valid.map(calcShapeH));
+  var totalW = valid.reduce(function(a,s){return a+calcShapeW(s);},0);
+  var gap = 6;
+  var totalGaps = gap*(valid.length-1);
+  var scaleX = (canvasW - pad*2 - totalGaps) / (totalW||1);
+  var scaleY = drawH / (maxH||1);
+  var scale = Math.min(scaleX, scaleY, 40); // cap so tiny shapes stay visible
 
-  var rects = [];
-  var cx = padding;
-  segsWithArea.forEach(function(s) {
-    var rw = s.w * scale;
-    var rh = s.h * scale;
-    rects.push({x: cx, y: canvasH - padding - 20 - rh, w: rw, h: rh, sub: s.subtract, sw: s.w, sh: s.h});
-    cx += rw + 4;
-  });
+  var svg = '<svg viewBox="0 0 '+canvasW+' '+canvasH+'" style="width:100%;display:block;border-radius:var(--rs);background:var(--bg2)">';
+  // baseline
+  var baseY = pad + drawH;
+  svg += '<line x1="'+pad+'" y1="'+baseY+'" x2="'+(canvasW-pad)+'" y2="'+baseY+'" stroke="var(--border)" stroke-width="1"/>';
 
-  var svg = '<svg viewBox="0 0 '+canvasW+' '+canvasH+'" style="width:100%;max-width:'+canvasW+'px;display:block">';
-  rects.forEach(function(r) {
-    var fill = r.sub ? '#fee2e2' : '#dbeafe';
-    var stroke = r.sub ? '#ef4444' : '#3b82f6';
-    var textCol = r.sub ? '#dc2626' : '#1d4ed8';
-    svg += '<rect x="'+r.x+'" y="'+r.y+'" width="'+r.w+'" height="'+r.h+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="1.5" rx="3"/>';
-    // Dimensions label
-    if(r.w > 30) {
-      svg += '<text x="'+(r.x+r.w/2)+'" y="'+(r.y+r.h/2)+'" text-anchor="middle" dominant-baseline="middle" font-size="9" fill="'+textCol+'" font-weight="600">'
-        +(r.sub?'−':'')+r.sw+'×'+r.sh+'m</text>';
+  var cx = pad;
+  valid.forEach(function(s) {
+    var t = s.type||'rect';
+    var sw = calcShapeW(s)*scale;
+    var sh = calcShapeH(s)*scale;
+    var fill = s.subtract ? '#fee2e2' : '#dbeafe';
+    var stroke = s.subtract ? '#ef4444' : '#3b82f6';
+    var textCol = s.subtract ? '#dc2626' : '#1d4ed8';
+    var x = cx, y = baseY - sh;
+
+    if(t==='rect') {
+      svg += '<rect x="'+x+'" y="'+y+'" width="'+sw+'" height="'+sh+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="1.5" rx="2"/>';
+    } else if(t==='triangle') {
+      var pts = (x+sw/2)+','+(y)+' '+x+','+(baseY)+' '+(x+sw)+','+(baseY);
+      svg += '<polygon points="'+pts+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="1.5"/>';
+    } else if(t==='trapez') {
+      var sa = (parseFloat(s.a)||0)*scale;
+      var sb = (parseFloat(s.b)||0)*scale;
+      var offsetA = (sb-sa)/2;
+      var pts2 = (x+offsetA)+','+y+' '+(x+offsetA+sa)+','+y+' '+(x+sb)+','+baseY+' '+x+','+baseY;
+      svg += '<polygon points="'+pts2+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="1.5"/>';
+    } else if(t==='halfcircle') {
+      var r = sw/2;
+      svg += '<path d="M '+x+' '+baseY+' A '+r+' '+r+' 0 0 1 '+(x+sw)+' '+baseY+' Z" fill="'+fill+'" stroke="'+stroke+'" stroke-width="1.5"/>';
+    } else if(t==='circle') {
+      var cr = sw/2;
+      var cy2 = baseY - cr;
+      svg += '<circle cx="'+(x+cr)+'" cy="'+cy2+'" r="'+cr+'" fill="'+fill+'" stroke="'+stroke+'" stroke-width="1.5"/>';
     }
-    // Width arrow below
-    svg += '<line x1="'+r.x+'" y1="'+(canvasH-padding-12)+'" x2="'+(r.x+r.w)+'" y2="'+(canvasH-padding-12)+'" stroke="'+stroke+'" stroke-width="1"/>';
-    svg += '<text x="'+(r.x+r.w/2)+'" y="'+(canvasH-padding-2)+'" text-anchor="middle" font-size="8" fill="'+textCol+'">'+r.sw+'m</text>';
+
+    // label
+    var labelX = x + sw/2;
+    var area = calcShapeArea(s);
+    if(sw > 24) {
+      svg += '<text x="'+labelX+'" y="'+(baseY+labelH-4)+'" text-anchor="middle" font-size="8" fill="'+textCol+'" font-weight="600">'
+        +(s.subtract?'−':'')+area.toFixed(2)+'m²</text>';
+    }
+
+    cx += sw + gap;
   });
   svg += '</svg>';
   el.innerHTML = svg;
