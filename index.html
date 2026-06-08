@@ -5010,17 +5010,33 @@ function calcSegCount(s, coverW, coverH, isM2) {
     return {exact: n, withReuse: Math.ceil(area / panelArea)};
   }
 
-  // Rect: straightforward grid
+  // Rect: reuse-aware calculation
+  // For a rectangle ALL columns have the same height, so offcut pieces are all the same size
+  // → can be stacked from a single extra panel instead of needing one per column.
   if(t === 'rect') {
     var W = parseFloat(s.w)||0, H = parseFloat(s.h)||0;
     if(W<=0||H<=0) return {exact:0, withReuse:0};
     var cols = Math.ceil(W / coverW);
-    var rows = Math.ceil(H / coverH);
-    var exact = cols * rows;
-    // Reuse: if height fits in 1 panel (most common), cols = exact. If >1 panel tall,
-    // offcuts from one column can't be reused for same-height adjacent column → same as exact.
-    // Only reuse saves panels when you have MULTIPLE rectangles of different heights.
-    return {exact: exact, withReuse: exact};
+
+    var fullPerCol = Math.floor(H / coverH);   // full panels each column definitely needs
+    var rem = H - fullPerCol * coverH;          // leftover height needed per column (m)
+    var withReuse, noReuse;
+
+    if(rem < 0.001) {
+      // Height is an exact multiple of panel length → no offcut waste at all
+      withReuse = cols * fullPerCol;
+      noReuse   = withReuse;
+    } else {
+      // Each column needs (fullPerCol full panels) + (one cut piece of 'rem' meters)
+      // How many 'rem' pieces fit in one panel?
+      var piecesPerPanel = Math.floor(coverH / rem);
+      if(piecesPerPanel < 1) piecesPerPanel = 1;
+      var extraPanels = Math.ceil(cols / piecesPerPanel);  // panels to supply all short pieces
+      withReuse = cols * fullPerCol + extraPanels;
+      // No-reuse worst case: every column gets its own cut panel for the remainder
+      noReuse = cols * (fullPerCol + 1);
+    }
+    return {exact: noReuse, withReuse: withReuse};
   }
 
   // Triangles: strip-based — each strip gets a cut panel, offcuts from tall strips reuse for short
@@ -5110,12 +5126,12 @@ function calcRun() {
   totalExact = Math.max(0, totalExact);
   totalReuse = Math.max(0, totalReuse);
 
-  // Recommended = strip-based (exact) + waste buffer
-  var recommended = Math.ceil(totalExact * (1 + waste/100));
-  // Min = with-reuse (best case, no extra buffer)
+  // Recommended = with-reuse + waste buffer (realistic order quantity)
+  var recommended = Math.ceil(totalReuse * (1 + waste/100));
+  // Min = with-reuse, no buffer (perfect execution)
   var panelMin = totalReuse;
-  // Max = exact no-reuse with waste
-  var panelMax = recommended;
+  // Max = no reuse at all (every cut gets its own panel)
+  var panelMax = totalExact;
 
   var resEl = document.getElementById('calc-results');
   if(resEl) {
@@ -5140,8 +5156,8 @@ function calcRun() {
       +'<div style="font-size:11px;color:var(--text2);margin-top:4px">แผ่น / Panels &nbsp;·&nbsp; inkl. '+waste+'% Puffer / รวม '+waste+'% สำรอง</div>'
       +'</div>'
 
-      // Min / Max comparison
-      +(panelMin < recommended
+      // Min / Max comparison — show when no-reuse differs from with-reuse
+      +(panelMax > panelMin
         ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">'
           +'<div style="background:var(--bg2);border-radius:var(--rs);padding:10px;text-align:center">'
           +'<div style="font-size:10px;color:var(--text2);margin-bottom:2px">♻️ Min — offcuts reused</div>'
