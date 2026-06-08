@@ -4992,112 +4992,172 @@ function calcRenderSegs() {
   }).join('');
 }
 
+// Strip-based panel count for one segment
+// Returns {exact: N, withReuse: N}
+// exact    = no reuse: every strip gets fresh panel(s) — realistic worst case
+// withReuse = best case: all offcuts from tall strips reused for short strips (area ÷ panelArea)
+function calcSegCount(s, coverW, coverH, isM2) {
+  var panelArea = coverW * coverH;
+  if(panelArea <= 0) return {exact:0, withReuse:0};
+  var t = s.type || 'rect';
+  var area = calcShapeArea(s);
+
+  // Area-only shapes (circle, half-circle, heron triangle, trapezoid) or m² mode
+  if(isM2 || t==='circle' || t==='halfcircle' || t==='tri-heron' || t==='trapez') {
+    // Trapezoid and others: use area + generous waste factor (cutting complex = more waste)
+    var extra = (t==='trapez'||t==='circle'||t==='halfcircle') ? 1.15 : 1.0;
+    var n = Math.ceil(area * extra / panelArea);
+    return {exact: n, withReuse: Math.ceil(area / panelArea)};
+  }
+
+  // Rect: straightforward grid
+  if(t === 'rect') {
+    var W = parseFloat(s.w)||0, H = parseFloat(s.h)||0;
+    if(W<=0||H<=0) return {exact:0, withReuse:0};
+    var cols = Math.ceil(W / coverW);
+    var rows = Math.ceil(H / coverH);
+    var exact = cols * rows;
+    // Reuse: if height fits in 1 panel (most common), cols = exact. If >1 panel tall,
+    // offcuts from one column can't be reused for same-height adjacent column → same as exact.
+    // Only reuse saves panels when you have MULTIPLE rectangles of different heights.
+    return {exact: exact, withReuse: exact};
+  }
+
+  // Triangles: strip-based — each strip gets a cut panel, offcuts from tall strips reuse for short
+  var W2 = parseFloat(s.w)||0, H2 = parseFloat(s.h)||0;
+  if(W2<=0||H2<=0) return {exact:0, withReuse:0};
+
+  var nStrips = Math.ceil(W2 / coverW);
+  var stripHeights = [];
+
+  for(var i = 0; i < nStrips; i++) {
+    var xLeft  = i * coverW;
+    var xRight = Math.min((i+1) * coverW, W2);
+    var h = 0;
+
+    if(t === 'tri-right') {
+      // Right triangle: right angle at bottom, one leg = W (base), one leg = H (tall side)
+      // Tall side is on the LEFT (x=0): h(x) = H*(1 - x/W), decreasing right
+      // Use LEFT edge of strip = tallest point in that strip (conservative for cutting)
+      h = H2 * (1 - xLeft / W2);
+    }
+    else if(t === 'tri-iso') {
+      // Isosceles: peak at center W/2, 0 at both edges
+      // h(x) = H*(1 - 2*|x - W/2| / W)
+      // Use MAX height in strip: if strip spans center → H, else whichever edge is taller
+      var hL = Math.max(0, H2 * (1 - 2*Math.abs(xLeft  - W2/2) / W2));
+      var hR = Math.max(0, H2 * (1 - 2*Math.abs(xRight - W2/2) / W2));
+      var containsPeak = (xLeft <= W2/2 && xRight >= W2/2);
+      h = containsPeak ? H2 : Math.max(hL, hR);
+    }
+
+    if(h > 0.001) stripHeights.push(h);
+  }
+
+  // No-reuse: each strip needs ceil(h / coverH) panels
+  var exact2 = stripHeights.reduce(function(sum, h) { return sum + Math.ceil(h / coverH); }, 0);
+
+  // With reuse: pair tallest strip with shortest (offcut from tall fills short strip)
+  // Sort heights: tallest first, shortest last
+  var sorted = stripHeights.slice().sort(function(a,b){return b-a;});
+  var used   = new Array(sorted.length).fill(false);
+  var panels  = 0;
+  for(var k = 0; k < sorted.length; k++) {
+    if(used[k]) continue;
+    // This strip needs a panel cut to sorted[k]
+    var remaining = coverH - sorted[k]; // leftover after cutting
+    panels++;
+    used[k] = true;
+    // Try to reuse the offcut for the shortest unmatched strip
+    for(var m = sorted.length-1; m > k; m--) {
+      if(!used[m] && sorted[m] <= remaining + 0.001) {
+        used[m] = true;
+        remaining -= sorted[m];
+        // Try to fit even more in the remaining offcut
+      }
+    }
+  }
+
+  return {exact: exact2, withReuse: panels};
+}
+
 function calcRun() {
   var pw = parseFloat(document.getElementById('calc-pw').value) || 40;
   var pl = parseFloat(document.getElementById('calc-pl').value) || 290;
   var orient = document.getElementById('calc-orient').value;
   var waste = parseFloat(document.getElementById('calc-waste').value) || 10;
   var panelArea = (pw/100) * (pl/100);
-
-  var netArea = 0;
-  calcSegs.forEach(function(s) {
-    var a = calcShapeArea(s);
-    netArea += s.subtract ? -a : a;
-  });
-  if(netArea < 0) netArea = 0;
-  var grossArea = netArea * (1 + waste/100);
   var isM2 = orient === 'm2';
   var coverW = orient==='h' ? pl/100 : pw/100;
   var coverH = orient==='h' ? pw/100 : pl/100;
 
-  // METHOD A: No reuse — grid per segment (worst case / กรณีเลวร้าย)
-  function calcSegPanelsGrid(s) {
-    var t = s.type || 'rect';
-    if(panelArea <= 0) return 0;
-    if(t === 'rect' && !isM2) {
-      var sw = parseFloat(s.w)||0, sh = parseFloat(s.h)||0;
-      if(sw<=0||sh<=0) return 0;
-      return Math.ceil(sw/coverW) * Math.ceil(sh/coverH);
-    }
-    return Math.ceil(calcShapeArea(s) / panelArea);
-  }
-
-  // METHOD B: With reuse — total linear length / panel length (optimistic / กรณีดีที่สุด)
-  function calcSegPanelsReuse(s) {
-    var t = s.type || 'rect';
-    if(panelArea <= 0) return 0;
-    if(t === 'rect' && !isM2) {
-      var sw = parseFloat(s.w)||0, sh = parseFloat(s.h)||0;
-      if(sw<=0||sh<=0) return 0;
-      var cols = Math.ceil(sw/coverW);
-      var totalLen = cols * sh; // total linear meters of panel needed
-      return Math.ceil(totalLen / (coverH));
-    }
-    return Math.ceil(calcShapeArea(s) / panelArea);
-  }
-
-  var panelsNoReuse=0, panelsReuse=0, panelsNoReuseW=0, panelsReuseW=0;
-  calcSegs.forEach(function(s){
-    var sign = s.subtract ? -1 : 1;
-    panelsNoReuse  += sign * calcSegPanelsGrid(s);
-    panelsReuse    += sign * calcSegPanelsReuse(s);
-    // with waste: for area shapes apply waste factor; for rect grid already counts exact
-    var t = s.type||'rect';
-    if(t==='rect' && !isM2) {
-      // grid: waste doesn't change panel count (cutting is exact), but add safety
-      panelsNoReuseW += sign * calcSegPanelsGrid(s);
-      var sw=parseFloat(s.w)||0, sh=parseFloat(s.h)||0;
-      var cols=Math.ceil(sw/coverW), totalLen=cols*sh*(1+waste/100);
-      panelsReuseW += sign * Math.ceil(totalLen/coverH);
-    } else {
-      var areaW = calcShapeArea(s) * (1+waste/100);
-      panelsNoReuseW += sign * Math.ceil(areaW/panelArea);
-      panelsReuseW   += sign * Math.ceil(areaW/panelArea);
-    }
+  // Net area
+  var netArea = 0;
+  calcSegs.forEach(function(s) {
+    netArea += s.subtract ? -calcShapeArea(s) : calcShapeArea(s);
   });
-  panelsNoReuse  = Math.max(0, panelsNoReuse);
-  panelsReuse    = Math.max(0, panelsReuse);
-  panelsNoReuseW = Math.max(0, panelsNoReuseW);
-  panelsReuseW   = Math.max(0, panelsReuseW);
+  if(netArea < 0) netArea = 0;
+  var grossArea = netArea * (1 + waste/100);
 
-  // Use reuse-based as "recommended" main number
-  var panelsNet   = panelsReuse;
-  var panelsGross = panelsReuseW;
+  // Count panels across all segments
+  var totalExact = 0, totalReuse = 0;
+  calcSegs.forEach(function(s) {
+    var sign = s.subtract ? -1 : 1;
+    var r = calcSegCount(s, coverW, coverH, isM2);
+    totalExact += sign * r.exact;
+    totalReuse += sign * r.withReuse;
+  });
+  totalExact = Math.max(0, totalExact);
+  totalReuse = Math.max(0, totalReuse);
+
+  // Recommended = strip-based (exact) + waste buffer
+  var recommended = Math.ceil(totalExact * (1 + waste/100));
+  // Min = with-reuse (best case, no extra buffer)
+  var panelMin = totalReuse;
+  // Max = exact no-reuse with waste
+  var panelMax = recommended;
 
   var resEl = document.getElementById('calc-results');
   if(resEl) {
+    var orientLabel = isM2 ? '' : (orient==='v' ? '↕ สเนตรก / Senkrecht' : '↔ นอน / Waagerecht');
     resEl.innerHTML = '<div class="stit" style="margin-bottom:12px">📊 Results / ผลลัพธ์</div>'
-      // Area boxes
-      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
-      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:12px;text-align:center">'
-      +'<div style="font-size:11px;color:var(--text2);margin-bottom:4px">Net Area / พื้นที่สุทธิ</div>'
-      +'<div style="font-size:24px;font-weight:800;color:var(--blue)">'+netArea.toFixed(2)+'</div>'
-      +'<div style="font-size:11px;color:var(--text2)">m²</div></div>'
-      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:12px;text-align:center">'
-      +'<div style="font-size:11px;color:var(--text2);margin-bottom:4px">Gross +'+waste+'% / รวมค่าสูญเสีย</div>'
-      +'<div style="font-size:24px;font-weight:800;color:var(--orange)">'+grossArea.toFixed(2)+'</div>'
-      +'<div style="font-size:11px;color:var(--text2)">m²</div></div>'
-      +'</div>'
-      // Main panel count (with reuse)
-      +'<div style="background:var(--green-bg);border:2px solid var(--green);border-radius:var(--rs);padding:14px;text-align:center;margin-bottom:8px">'
-      +'<div style="font-size:12px;color:var(--green);font-weight:600;margin-bottom:4px">Panels needed / จำนวนแผ่นที่ต้องใช้</div>'
-      +'<div style="font-size:40px;font-weight:900;color:var(--green);line-height:1">'+panelsReuseW+'</div>'
-      +'<div style="font-size:11px;color:var(--text2);margin-top:4px">panels / แผ่น (incl. '+waste+'% waste) · with offcut reuse / ใช้ชิ้นที่เหลือ</div>'
-      +'</div>'
-      // No-reuse comparison
+
+      // Area row
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">'
       +'<div style="background:var(--bg2);border-radius:var(--rs);padding:10px;text-align:center">'
-      +'<div style="font-size:10px;color:var(--text2);margin-bottom:3px">✂️ With reuse, no waste</div>'
-      +'<div style="font-size:20px;font-weight:800;color:var(--green)">'+panelsReuse+'</div>'
-      +'<div style="font-size:10px;color:var(--text2)">panels (min)</div></div>'
-      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:10px;text-align:center">'
-      +'<div style="font-size:10px;color:var(--text2);margin-bottom:3px">⚠️ No reuse +'+waste+'%</div>'
-      +'<div style="font-size:20px;font-weight:800;color:var(--orange)">'+panelsNoReuseW+'</div>'
-      +'<div style="font-size:10px;color:var(--text2)">panels (max)</div></div>'
+      +'<div style="font-size:10px;color:var(--text2);margin-bottom:2px">Net Area / พื้นที่สุทธิ</div>'
+      +'<div style="font-size:22px;font-weight:800;color:var(--blue)">'+netArea.toFixed(2)+'<span style="font-size:12px;font-weight:400"> m²</span></div>'
       +'</div>'
-      +'<div style="font-size:12px;color:var(--text2);text-align:center;margin-bottom:10px">'
-      +'Panel: <b style="color:var(--text)">'+pw+'×'+pl+' cm</b>'
-      +(isM2 ? '' : ' &nbsp;·&nbsp; '+(orient==='v'?'↕ Senkrecht':'↔ Waagerecht'))
+      +'<div style="background:var(--bg2);border-radius:var(--rs);padding:10px;text-align:center">'
+      +'<div style="font-size:10px;color:var(--text2);margin-bottom:2px">Gross +'+waste+'% / รวมค่าสูญเสีย</div>'
+      +'<div style="font-size:22px;font-weight:800;color:var(--orange)">'+grossArea.toFixed(2)+'<span style="font-size:12px;font-weight:400"> m²</span></div>'
+      +'</div></div>'
+
+      // MAIN recommended panel count
+      +'<div style="background:var(--green-bg);border:2px solid var(--green);border-radius:var(--rs);padding:16px;text-align:center;margin-bottom:8px">'
+      +'<div style="font-size:11px;color:var(--green);font-weight:700;margin-bottom:2px;text-transform:uppercase">📦 Empfohlen / Recommended</div>'
+      +'<div style="font-size:48px;font-weight:900;color:var(--green);line-height:1">'+recommended+'</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:4px">แผ่น / Panels &nbsp;·&nbsp; inkl. '+waste+'% Puffer / รวม '+waste+'% สำรอง</div>'
+      +'</div>'
+
+      // Min / Max comparison
+      +(panelMin < recommended
+        ? '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">'
+          +'<div style="background:var(--bg2);border-radius:var(--rs);padding:10px;text-align:center">'
+          +'<div style="font-size:10px;color:var(--text2);margin-bottom:2px">♻️ Min — offcuts reused</div>'
+          +'<div style="font-size:22px;font-weight:800;color:var(--blue)">'+panelMin+'</div>'
+          +'<div style="font-size:10px;color:var(--text2)">แผ่น / panels (best case)</div></div>'
+          +'<div style="background:var(--bg2);border-radius:var(--rs);padding:10px;text-align:center">'
+          +'<div style="font-size:10px;color:var(--text2);margin-bottom:2px">✂️ Max — no reuse +'+waste+'%</div>'
+          +'<div style="font-size:22px;font-weight:800;color:var(--orange)">'+panelMax+'</div>'
+          +'<div style="font-size:10px;color:var(--text2)">แผ่น / panels (worst case)</div></div>'
+          +'</div>'
+        : '')
+
+      // Panel info footer
+      +'<div style="font-size:12px;color:var(--text2);text-align:center;padding:8px;background:var(--bg2);border-radius:var(--rs);margin-bottom:6px">'
+      +'Panel: <b style="color:var(--text)">'+pw+' × '+pl+' cm</b>'
+      +(orientLabel ? ' &nbsp;·&nbsp; <b style="color:var(--text)">'+orientLabel+'</b>' : '')
       +'</div>'
       +'<div style="font-size:11px;color:var(--text2);background:var(--bg2);border-radius:var(--rs);padding:8px 10px">'
       +'💡 Tongue &amp; groove on long sides — groove facing down / ร่องลิ้นด้านยาว ติดตั้งด้านร่องลงล่าง</div>';
