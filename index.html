@@ -518,6 +518,15 @@ textarea{resize:none}
         auditLog = raw ? Object.values(raw).reverse() : [];
         try{if(document.getElementById('mgv-audit')&&document.getElementById('mgv-audit').classList.contains('active'))_auditRenderNow();}catch(e){}
       });
+      db.ref('claims').orderByChild('createdAt').on('value', function(snap) {
+        var raw = snap.val();
+        claims = raw ? Object.values(raw).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);}) : [];
+        try{if(document.getElementById('ofv-claims')&&document.getElementById('ofv-claims').classList.contains('active'))claimsRender();}catch(e){}
+        // Update badge
+        var open = claims.filter(function(c){return c.status==='open';}).length;
+        var badge = document.getElementById('oft-claims-cnt');
+        if(badge){badge.textContent=open;badge.style.display=open>0?'':'none';}
+      });
       db.ref('shippers').on('value', function(snap) {
         if(snap.val()) shippers = snap.val();
         try{if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active'))mgRenderShippers();}catch(e){}
@@ -838,6 +847,7 @@ textarea{resize:none}
       <button type="button" class="fbtn" onclick="auditFilt('status',this)">Status</button>
       <button type="button" class="fbtn" onclick="auditFilt('payment',this)">Payment</button>
       <button type="button" class="fbtn" onclick="auditFilt('delete',this)">Deleted</button>
+      <button type="button" class="fbtn" onclick="auditFilt('claim',this)">Claims</button>
     </div>
     <div id="audit-list"></div>
   </div></div>
@@ -888,7 +898,7 @@ textarea{resize:none}
 <!-- OFFICE -->
 <div class="screen" id="s-office"><div class="pb">
   <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div style="flex:1"><div class="h-title">Office / Sales</div><div class="h-sub" id="of-logged-in-name">KP Wallpanel</div></div><button type="button" onclick="ofLogout()" style="background:none;border:0.5px solid var(--border);border-radius:var(--rs);padding:6px 10px;font-size:12px;font-weight:500;cursor:pointer;color:var(--text2);display:flex;align-items:center;gap:4px;flex-shrink:0"><i class="ti ti-logout" style="font-size:14px"></i> Logout</button></div>
-  <div class="tabs" style="grid-template-columns:repeat(7,1fr)">
+  <div class="tabs" style="grid-template-columns:repeat(8,1fr)">
     <button type="button" class="tab active" onclick="oft('home')" id="oft-home"><i class="ti ti-home" style="font-size:14px"></i></button>
     <button type="button" class="tab" onclick="oft('new')" id="oft-new">New</button>
     <button type="button" class="tab" onclick="oft('orders')" id="oft-orders">Orders <span class="tc tcw" id="of-cnt">0</span></button>
@@ -896,6 +906,7 @@ textarea{resize:none}
     <button type="button" class="tab" onclick="oft('pay')" id="oft-pay" style="display:none">Pay <span class="tc" id="oft-pay-cnt" style="background:#fee2e2;color:#991b1b;display:none"></span></button>
     <button type="button" class="tab" onclick="oft('sales')" id="oft-sales">Sales</button>
     <button type="button" class="tab" onclick="oft('inc')" id="oft-inc">Incoming</button>
+    <button type="button" class="tab" onclick="oft('claims')" id="oft-claims">Claims <span class="tc" id="oft-claims-cnt" style="background:#fee2e2;color:#991b1b;display:none"></span></button>
   </div>
   <!-- DASHBOARD -->
   <div class="view active" id="ofv-home"><div class="sec">
@@ -1204,6 +1215,50 @@ textarea{resize:none}
     <div id="of-inc-pending"></div>
     <div id="of-inc-history"></div>
   </div></div>
+
+  <!-- CLAIMS VIEW -->
+  <div class="view" id="ofv-claims"><div class="sec">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div class="stit" style="margin-bottom:0">⚠️ Claims / การเคลม</div>
+      <button type="button" onclick="openNewClaim()" style="padding:7px 14px;border-radius:var(--rs);background:rgba(239,68,68,0.1);border:1.5px solid #ef4444;color:#ef4444;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> New Claim</button>
+    </div>
+    <div style="background:#fef3c7;border-radius:var(--rs);padding:8px 12px;margin-bottom:12px;font-size:12px;color:#92400e;display:flex;align-items:center;gap:6px">
+      <i class="ti ti-info-circle" style="font-size:14px;flex-shrink:0"></i>
+      Claimed panels are deducted from stock but NOT counted in sales totals / แผ่นที่เคลมหักจากสต็อกแต่ไม่นับในยอดขาย
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px" id="claims-filter-bar">
+      <button type="button" class="fbtn active" onclick="claimsFilt('all',this)">All</button>
+      <button type="button" class="fbtn" onclick="claimsFilt('open',this)" style="color:#dc2626;border-color:#fca5a5">🔴 Open</button>
+      <button type="button" class="fbtn" onclick="claimsFilt('replaced',this)" style="color:#16a34a;border-color:#86efac">✅ Replaced</button>
+    </div>
+    <div id="claims-list"></div>
+  </div></div>
+
+  <!-- NEW CLAIM MODAL -->
+  <div class="modal" id="m-claim" style="display:none">
+    <div class="modal-box">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div style="font-size:16px;font-weight:700">⚠️ New Claim / เคลมใหม่</div>
+        <button type="button" onclick="closeNewClaim()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button>
+      </div>
+      <label class="fl">Order ID / เลขออเดอร์</label>
+      <input type="text" id="cl-orderid" placeholder="e.g. BKK-703" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:10px">
+      <label class="fl">Date / วันที่</label>
+      <input type="date" lang="en-GB" id="cl-date" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:10px">
+      <label class="fl">Reason / สาเหตุ</label>
+      <input type="text" id="cl-reason" placeholder="e.g. Broken during transport" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <label class="fl" style="margin-bottom:0">Panels / แผ่น</label>
+        <button type="button" onclick="claimAddLine()" style="font-size:12px;padding:4px 10px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg2);cursor:pointer;color:var(--text2)"><i class="ti ti-plus"></i> Add</button>
+      </div>
+      <div id="cl-lines"></div>
+      <div style="background:var(--bg2);border-radius:var(--rs);padding:10px;margin-bottom:14px;font-size:13px">
+        Total: <strong id="cl-total">0</strong> pcs — will be deducted from stock
+      </div>
+      <button type="button" onclick="saveClaim()" class="btn" style="margin-top:0;background:#ef4444;border-color:#ef4444;color:#fff">Save Claim / บันทึกการเคลม</button>
+    </div>
+  </div>
+
   <div class="view" id="ofv-pay"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <div class="stit" style="margin-bottom:0">Payment Tracking / ติดตามการชำระ</div>
@@ -1641,6 +1696,7 @@ function syncOrders() { if(window.fbDB) { const obj = {}; orders.forEach((o,i) =
 function syncWOrders() { if(window.fbDB) { const obj = {}; wOrders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('wOrders').set(obj); } }
 function syncTours() { if(window.fbDB) { const obj = {}; activeTours.forEach((t,i) => obj[t.id] = t); window.fbDB.ref('activeTours').set(obj); } }
 function syncRevOrders() { if(window.fbDB) { const obj = {}; revOrders.forEach((r,i) => obj[r.rid] = r); window.fbDB.ref('revOrders').set(obj); } }
+function syncClaims() { if(window.fbDB) { const obj = {}; claims.forEach(function(c){ obj[c.cid] = c; }); window.fbDB.ref('claims').set(obj); } }
 function syncLog() { if(window.fbDB) { const obj = {}; stockLog.forEach((l,i) => obj['l'+i+'_'+Date.now()] = l); window.fbDB.ref('stockLog').set(obj); } }
 
 const LOW=500;
@@ -1753,7 +1809,7 @@ function updateDarkBtn(){
   setTimeout(updateDarkBtn, 50);
 })();
 
-let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[];
+let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[],claims=[];
 var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
 var containerLog=[];
 var auditLog=[];
@@ -1964,7 +2020,7 @@ function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id)
 function delRev(rid){if(!confirm('Remove from revenue?'))return;revOrders=revOrders.filter(x=>x.rid!==rid);mgRevenue();syncRevOrders();}
 
 // OFFICE
-function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();}
+function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();}
 
 function ofRenderStock(){
   const rl = items => items.length === 0
@@ -6174,6 +6230,138 @@ function auditClearAll() {
   });
 }
 
+// ── CLAIMS ──────────────────────────────────────────────────────────────────
+var _claimsFilt = 'all';
+
+function claimsFilt(type, btn) {
+  _claimsFilt = type;
+  document.querySelectorAll('#claims-filter-bar .fbtn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  claimsRender();
+}
+
+function claimsRender() {
+  var list = document.getElementById('claims-list');
+  if(!list) return;
+  var filtered = claims.filter(function(c) {
+    if(_claimsFilt === 'all') return true;
+    return c.status === _claimsFilt;
+  });
+  if(filtered.length === 0) {
+    list.innerHTML = '<div class="empty" style="padding:20px;font-size:13px">No claims yet / ยังไม่มีการเคลม</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(function(c) {
+    var totalPcs = (c.items||[]).reduce(function(a,i){return a+i.qty;},0);
+    var itemStr = (c.items||[]).map(function(i){return i.code+' ×'+i.qty;}).join(' · ');
+    var isOpen = c.status === 'open';
+    return '<div style="background:var(--bg);border:1.5px solid '+(isOpen?'#fca5a5':'var(--border)')+';border-left:4px solid '+(isOpen?'#ef4444':'#16a34a')+';border-radius:var(--r);padding:12px 14px;margin-bottom:8px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'
+      +'<div>'
+      +'<span style="font-size:15px;font-weight:700">'+(c.orderId||'—')+'</span>'
+      +' <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:'+(isOpen?'#fee2e2':'#dcfce7')+';color:'+(isOpen?'#991b1b':'#166534')+'">'+(isOpen?'Open':'Replaced')+'</span>'
+      +'</div>'
+      +'<span style="font-size:11px;color:var(--text2)">'+(c.date||'')+'</span>'
+      +'</div>'
+      +'<div style="font-size:12px;color:var(--text2);margin-bottom:4px">📦 '+itemStr+' <strong style="color:var(--text)">('+totalPcs+' pcs)</strong></div>'
+      +(c.reason?'<div style="font-size:12px;color:var(--text2);margin-bottom:6px">📝 '+c.reason+'</div>':'')
+      +'<div style="font-size:11px;color:var(--text2);margin-bottom:8px">By: '+(c.by||'—')+'</div>'
+      +'<div style="display:flex;gap:6px">'
+      +(isOpen?'<button type="button" onclick="claimMarkReplaced(\''+c.cid+'\')" style="flex:1;padding:7px;border-radius:var(--rs);background:#dcfce7;border:1px solid #86efac;color:#166534;font-size:12px;font-weight:600;cursor:pointer">✅ Mark Replaced</button>':'')
+      +'<button type="button" onclick="claimDelete(\''+c.cid+'\')" style="padding:7px 12px;border-radius:var(--rs);background:var(--bg2);border:1px solid var(--border);color:var(--text2);font-size:12px;cursor:pointer"><i class="ti ti-trash"></i></button>'
+      +'</div>'
+      +'</div>';
+  }).join('');
+}
+
+function openNewClaim() {
+  document.getElementById('cl-orderid').value = '';
+  document.getElementById('cl-date').valueAsDate = new Date();
+  document.getElementById('cl-reason').value = '';
+  document.getElementById('cl-lines').innerHTML = '';
+  document.getElementById('cl-total').textContent = '0';
+  claimAddLine();
+  document.getElementById('m-claim').style.display = 'flex';
+}
+
+function closeNewClaim() {
+  document.getElementById('m-claim').style.display = 'none';
+}
+
+function claimAddLine() {
+  var container = document.getElementById('cl-lines');
+  var row = document.createElement('div');
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 80px 36px;gap:6px;margin-bottom:6px';
+  row.innerHTML = '<input type="text" placeholder="Code e.g. KP009" oninput="this.value=this.value.toUpperCase();claimCalcTotal()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
+    +'<input type="number" min="1" placeholder="Qty" oninput="claimCalcTotal()" style="padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);text-align:center">'
+    +'<button type="button" onclick="this.parentElement.remove();claimCalcTotal()" style="padding:0;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);cursor:pointer;color:var(--text2)"><i class="ti ti-x" style="font-size:14px"></i></button>';
+  container.appendChild(row);
+}
+
+function claimCalcTotal() {
+  var total = 0;
+  document.querySelectorAll('#cl-lines > div').forEach(function(row) {
+    var inputs = row.querySelectorAll('input');
+    var qty = parseInt(inputs[1].value) || 0;
+    if(inputs[0].value.trim() && qty > 0) total += qty;
+  });
+  document.getElementById('cl-total').textContent = total;
+}
+
+function saveClaim() {
+  var orderId = document.getElementById('cl-orderid').value.trim();
+  var date = document.getElementById('cl-date').value;
+  var reason = document.getElementById('cl-reason').value.trim();
+  if(!orderId) { alert('Enter an order ID'); return; }
+
+  // Collect items
+  var items = [];
+  document.querySelectorAll('#cl-lines > div').forEach(function(row) {
+    var inputs = row.querySelectorAll('input');
+    var code = inputs[0].value.trim().toUpperCase();
+    var qty = parseInt(inputs[1].value) || 0;
+    if(code && qty > 0) items.push({code: code, qty: qty});
+  });
+  if(items.length === 0) { alert('Add at least one panel item'); return; }
+
+  // Deduct from stock
+  items.forEach(function(item) {
+    var s = stockItems.find(function(x){ return x.code === item.code; });
+    if(s) {
+      s.qty = Math.max(0, s.qty - item.qty);
+      addLog(item.code + ' -' + item.qty + ' pcs (claim ' + orderId + ')', '-');
+    }
+  });
+  syncStockItems();
+  mgRender();
+
+  // Save claim to Firebase
+  var byName = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name || 'Office';
+  var cid = 'cl' + Date.now();
+  var entry = { cid: cid, orderId: orderId, date: date, reason: reason, items: items, by: byName, status: 'open', createdAt: Date.now() };
+  if(window.fbDB) {
+    window.fbDB.ref('claims/' + cid).set(entry);
+  }
+  auditAdd({type: 'claim', orderId: orderId, by: byName});
+
+  closeNewClaim();
+}
+
+function claimMarkReplaced(cid) {
+  var c = claims.find(function(x){return x.cid===cid;});
+  if(!c) return;
+  c.status = 'replaced';
+  if(window.fbDB) window.fbDB.ref('claims/'+cid+'/status').set('replaced');
+  claimsRender();
+}
+
+function claimDelete(cid) {
+  if(!confirm('Delete this claim record? Stock will NOT be re-added.')) return;
+  claims = claims.filter(function(c){return c.cid!==cid;});
+  if(window.fbDB) window.fbDB.ref('claims/'+cid).remove();
+  claimsRender();
+}
+
 function _auditRenderNow() {
   var list = document.getElementById('audit-list');
   if(!list) return;
@@ -6182,15 +6370,16 @@ function _auditRenderNow() {
     if(_auditFilt === 'status') return e.type === 'status' || e.type === 'create';
     if(_auditFilt === 'payment') return e.type === 'payment';
     if(_auditFilt === 'delete') return e.type === 'delete';
+    if(_auditFilt === 'claim') return e.type === 'claim';
     return true;
   });
   if(filtered.length === 0) {
     list.innerHTML = '<div class="empty" style="padding:20px;font-size:13px">No entries yet</div>';
     return;
   }
-  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>'};
-  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', payment:'var(--green-l)', delete:'var(--red-l)'};
-  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', payment:'var(--green-t)', delete:'var(--red-t)'};
+  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>'};
+  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2'};
+  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b'};
   list.innerHTML = filtered.map(function(e) {
     var icon = typeIcon[e.type] || '<i class="ti ti-info-circle"></i>';
     var bg = typeBg[e.type] || 'var(--bg2)';
@@ -6200,6 +6389,7 @@ function _auditRenderNow() {
     else if(e.type === 'status') detail = (e.from||'?') + ' → ' + (e.to||'?');
     else if(e.type === 'payment') detail = 'Paid: ' + (e.method||'');
     else if(e.type === 'delete') detail = 'Order deleted';
+    else if(e.type === 'claim') detail = '⚠️ Claim filed';
     return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)">'
       + '<div style="width:32px;height:32px;border-radius:50%;background:'+bg+';display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px">'+icon+'</div>'
       + '<div style="flex:1;min-width:0">'
