@@ -4626,13 +4626,42 @@ function calcRun() {
   });
   if(netArea < 0) netArea = 0;
   var grossArea = netArea * (1 + waste/100);
-  var panelsNet = orient !== 'm2' && panelArea > 0 ? Math.ceil(netArea/panelArea) : 0;
-  var panelsGross = orient !== 'm2' && panelArea > 0 ? Math.ceil(grossArea/panelArea) : 0;
+  // Smart panel count: grid-based for rectangles, area-based for complex shapes
+  var isM2 = orient === 'm2';
+  var coverW = orient==='h' ? pl/100 : pw/100; // panel coverage in width direction
+  var coverH = orient==='h' ? pw/100 : pl/100; // panel coverage in height direction
+
+  function calcSegPanels(s, useWaste) {
+    var t = s.type || 'rect';
+    var area = calcShapeArea(s);
+    if(useWaste) area *= (1 + waste/100);
+    if(panelArea <= 0) return 0;
+    if(t === 'rect' && !isM2) {
+      // Proper grid calculation for rectangles
+      var sw = parseFloat(s.w)||0, sh = parseFloat(s.h)||0;
+      if(sw <= 0 || sh <= 0) return 0;
+      var cols = Math.ceil(sw / coverW);
+      var rows = Math.ceil(sh / coverH);
+      return cols * rows;
+    }
+    // Area-based for all other shapes
+    return Math.ceil(area / panelArea);
+  }
+
+  var panelsNet = 0, panelsGross = 0;
+  calcSegs.forEach(function(s) {
+    var n = calcSegPanels(s, false);
+    var g = calcSegPanels(s, true);
+    if(s.subtract) { panelsNet -= n; panelsGross -= g; }
+    else           { panelsNet += n; panelsGross += g; }
+  });
+  panelsNet   = Math.max(0, panelsNet);
+  panelsGross = Math.max(0, panelsGross);
 
   var resEl = document.getElementById('calc-results');
   if(resEl) {
-    var noCalc = orient === 'm2';
     resEl.innerHTML = '<div class="stit" style="margin-bottom:12px">📊 Results / ผลลัพธ์</div>'
+      // Area boxes
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
       +'<div style="background:var(--bg2);border-radius:var(--rs);padding:12px;text-align:center">'
       +'<div style="font-size:11px;color:var(--text2);margin-bottom:4px">Net Area / พื้นที่สุทธิ</div>'
@@ -4643,16 +4672,17 @@ function calcRun() {
       +'<div style="font-size:24px;font-weight:800;color:var(--orange)">'+grossArea.toFixed(2)+'</div>'
       +'<div style="font-size:11px;color:var(--text2)">m²</div></div>'
       +'</div>'
-      +(noCalc ? '' :
-        '<div style="background:var(--green-bg);border:2px solid var(--green);border-radius:var(--rs);padding:14px;text-align:center;margin-bottom:10px">'
-        +'<div style="font-size:12px;color:var(--green);font-weight:600;margin-bottom:4px">Panels needed / จำนวนแผ่นที่ต้องใช้</div>'
-        +'<div style="font-size:40px;font-weight:900;color:var(--green);line-height:1">'+panelsGross+'</div>'
-        +'<div style="font-size:11px;color:var(--text2);margin-top:4px">panels / แผ่น (incl. '+waste+'% waste)</div>'
-        +'</div>'
-        +'<div style="font-size:12px;color:var(--text2);text-align:center;margin-bottom:10px">'
-        +'Without waste: <b style="color:var(--text)">'+panelsNet+' panels</b> · Panel: <b style="color:var(--text)">'+pw+'×'+pl+' cm</b> · '+(orient==='v'?'↕ Vertical':'↔ Horizontal')
-        +'</div>'
-      )
+      // Panel count — always shown
+      +'<div style="background:var(--green-bg);border:2px solid var(--green);border-radius:var(--rs);padding:14px;text-align:center;margin-bottom:10px">'
+      +'<div style="font-size:12px;color:var(--green);font-weight:600;margin-bottom:4px">Panels needed / จำนวนแผ่นที่ต้องใช้</div>'
+      +'<div style="font-size:40px;font-weight:900;color:var(--green);line-height:1">'+panelsGross+'</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:4px">panels / แผ่น (incl. '+waste+'% waste)</div>'
+      +'</div>'
+      +'<div style="font-size:12px;color:var(--text2);text-align:center;margin-bottom:10px">'
+      +'Without waste: <b style="color:var(--text)">'+panelsNet+' panels</b>'
+      +' &nbsp;·&nbsp; Panel: <b style="color:var(--text)">'+pw+'×'+pl+' cm</b>'
+      +(isM2 ? '' : ' &nbsp;·&nbsp; '+(orient==='v'?'↕ Vertical':'↔ Horizontal'))
+      +'</div>'
       +'<div style="font-size:11px;color:var(--text2);background:var(--bg2);border-radius:var(--rs);padding:8px 10px">'
       +'💡 Tongue &amp; groove on long sides — groove facing down / ร่องลิ้นด้านยาว ติดตั้งด้านร่องลงล่าง</div>';
   }
