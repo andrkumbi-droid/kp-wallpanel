@@ -4992,110 +4992,243 @@ function calcRenderSegs() {
   }).join('');
 }
 
-// Strip-based panel count for one segment
-// Returns {exact: N, withReuse: N}
-// exact    = no reuse: every strip gets fresh panel(s) — realistic worst case
-// withReuse = best case: all offcuts from tall strips reused for short strips (area ÷ panelArea)
+// ─── STRIP-BASED PANEL COUNTING ENGINE ──────────────────────────────────────
+//
+// Concept: divide the shape into strips of width = pw (narrow panel dimension).
+// Each strip needs a piece of length = shape height (or width) at that position.
+// We then apply FFD bin packing to find how many panels (bins of size pl) are needed.
+//
+// Orientations:
+//   Vertical   (senkrecht):  coverW=pw, coverH=pl  → vertical strips, length = wall height at x
+//   Horizontal (waagerecht): coverW=pl, coverH=pw  → horizontal strips, length = wall width at y
+//
+// isHorizontal: coverH < coverW  (pw < pl always, so if coverH=pw < coverW=pl → horizontal)
+//
+// Strip height selection: always use the MAXIMUM height in the strip (conservative).
+// This ensures the cut piece is large enough to cover the actual wall shape.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Returns array of strip lengths for one shape segment.
+// stripW = pw (narrow dim), isH = horizontal orientation
+function calcStripLengths(s, stripW, isH) {
+  var t = s.type || 'rect';
+  var W = parseFloat(s.w)||0;
+  var H = parseFloat(s.h)||0;
+  var R = parseFloat(s.r)||0;
+  var lengths = [];
+
+  if(t === 'rect') {
+    // All strips have the same length
+    var range = isH ? H : W;           // dimension we divide into strips
+    var len   = isH ? W : H;           // length needed per strip
+    if(range<=0||len<=0) return [];
+    var n = Math.ceil(range / stripW);
+    for(var i=0; i<n; i++) lengths.push(len);
+    return lengths;
+  }
+
+  if(t === 'tri-right') {
+    // Right angle at bottom. Tall side at one end, tapers linearly to 0.
+    // Vertical:   strips go L→R, h(x)=H*(1−x/W).  Use LEFT edge (tallest in strip).
+    // Horizontal: strips go B→T, w(y)=W*(1−y/H).  Use BOTTOM edge (widest in strip).
+    // Both use same formula after axis-swap.
+    var range2 = isH ? H : W;
+    var maxLen = isH ? W : H;
+    if(range2<=0||maxLen<=0) return [];
+    var n2 = Math.ceil(range2 / stripW);
+    for(var i=0; i<n2; i++) {
+      var lo = i * stripW;              // start of strip (lowest/leftmost)
+      var l = maxLen * (1 - lo / range2); // use start edge = tallest/widest
+      if(l > 0.001) lengths.push(l);
+    }
+    return lengths;
+  }
+
+  if(t === 'tri-iso') {
+    // Isosceles triangle: peak at center of base, symmetric.
+    // Vertical:   h(x) = H*(1−2|x−W/2|/W), peak at x=W/2
+    // Horizontal: w(y) = W*(1−y/H), base at y=0, peak at y=H
+    //             (cross-section shrinks linearly from base to apex = same as right-triangle formula)
+    if(!isH) {
+      if(W<=0||H<=0) return [];
+      var n3 = Math.ceil(W / stripW);
+      for(var i=0; i<n3; i++) {
+        var xL = i * stripW;
+        var xR = Math.min((i+1) * stripW, W);
+        // Peak at W/2 — if strip spans it, max height = H; else use taller edge
+        var hL = Math.max(0, H*(1 - 2*Math.abs(xL - W/2)/W));
+        var hRr = Math.max(0, H*(1 - 2*Math.abs(xR - W/2)/W));
+        var hh = (xL <= W/2 && xR >= W/2) ? H : Math.max(hL, hRr);
+        if(hh > 0.001) lengths.push(hh);
+      }
+    } else {
+      // Horizontal: width at height y = W*(1−y/H), use bottom of strip (widest)
+      if(W<=0||H<=0) return [];
+      var n4 = Math.ceil(H / stripW);
+      for(var i=0; i<n4; i++) {
+        var yBot = i * stripW;
+        var ww = W * (1 - yBot / H);
+        if(ww > 0.001) lengths.push(ww);
+      }
+    }
+    return lengths;
+  }
+
+  if(t === 'trapez') {
+    // Symmetric trapezoid: bottom width b, top width a, perpendicular height H.
+    // The wider side is ALWAYS treated as the bottom (floor).
+    var a = parseFloat(s.a)||0;
+    var b = parseFloat(s.b)||0;
+    var hT = parseFloat(s.h)||0;
+    if(hT<=0||(a<=0&&b<=0)) return [];
+    var botW = Math.max(a,b);  // wider side = bottom
+    var topW = Math.min(a,b);  // narrower side = top
+    var overhang = (botW - topW) / 2; // each side's slope width
+
+    if(!isH) {
+      // Vertical strips across the total bottom width
+      var n5 = Math.ceil(botW / stripW);
+      for(var i=0; i<n5; i++) {
+        var xL5 = i * stripW;
+        var xR5 = Math.min((i+1) * stripW, botW);
+        var hh5;
+        if(overhang < 0.001) {
+          hh5 = hT; // degenerate: parallel sides equal = rectangle
+        } else if(xR5 <= overhang) {
+          // Left slope: height increases from 0→hT as x goes 0→overhang.
+          // Use RIGHT edge of strip = tallest point.
+          hh5 = hT * xR5 / overhang;
+        } else if(xL5 >= overhang + topW) {
+          // Right slope: height decreases from hT→0 as x goes (overhang+topW)→botW.
+          // Use LEFT edge of strip = tallest point.
+          hh5 = hT * (botW - xL5) / overhang;
+        } else {
+          hh5 = hT; // middle full-height section
+        }
+        if(hh5 > 0.001) lengths.push(hh5);
+      }
+    } else {
+      // Horizontal strips: width decreases from botW (y=0) to topW (y=hT).
+      // Width at bottom of strip = widest = conservative.
+      var n6 = Math.ceil(hT / stripW);
+      for(var i=0; i<n6; i++) {
+        var yBot6 = i * stripW; // bottom of strip = widest
+        var ww6 = botW - (botW - topW) * (yBot6 / hT);
+        if(ww6 > 0.001) lengths.push(ww6);
+      }
+    }
+    return lengths;
+  }
+
+  if(t === 'halfcircle') {
+    // Semi-circle: flat base at bottom, radius R, center at (R, 0).
+    // Vertical strip at x: h(x) = sqrt(R²−(x−R)²), use MIDPOINT of strip.
+    // Horizontal strip at y: w(y) = 2*sqrt(R²−y²), use BOTTOM of strip (y=bottom edge).
+    if(R<=0) return [];
+    if(!isH) {
+      var n7 = Math.ceil(2*R / stripW);
+      for(var i=0; i<n7; i++) {
+        var xM = Math.min((i+0.5)*stripW, 2*R-0.001);
+        var hh7 = Math.sqrt(Math.max(0, R*R - Math.pow(xM-R, 2)));
+        if(hh7 > 0.001) lengths.push(hh7);
+      }
+    } else {
+      var n8 = Math.ceil(R / stripW); // height of semicircle = R
+      for(var i=0; i<n8; i++) {
+        var yBot8 = i * stripW; // bottom of strip = closest to diameter = widest
+        var ww8 = 2 * Math.sqrt(Math.max(0, R*R - yBot8*yBot8));
+        if(ww8 > 0.001) lengths.push(ww8);
+      }
+    }
+    return lengths;
+  }
+
+  if(t === 'circle') {
+    // Full circle: center at (R, R), radius R.
+    // Vertical strip at x: h(x) = 2*sqrt(R²−(x−R)²), use midpoint of strip.
+    // Circle is symmetric — same result for both orientations.
+    if(R<=0) return [];
+    var n9 = Math.ceil(2*R / stripW);
+    for(var i=0; i<n9; i++) {
+      var mid9 = Math.min((i+0.5)*stripW, 2*R-0.001);
+      var offset9 = Math.abs(mid9 - R);
+      var ll9 = 2 * Math.sqrt(Math.max(0, R*R - offset9*offset9));
+      if(ll9 > 0.001) lengths.push(ll9);
+    }
+    return lengths;
+  }
+
+  // tri-heron: only 3 sides known, no orientation → use area method (return null)
+  return null;
+}
+
+// First Fit Decreasing (FFD) bin packing.
+// items: array of piece lengths. binSize: panel length.
+// Returns number of panels needed.
+function ffpBinPack(items, binSize) {
+  if(!items || !items.length) return 0;
+  // Sort descending
+  var sorted = items.slice().sort(function(a,b){ return b-a; });
+  var bins = []; // each entry = remaining capacity of that panel
+  for(var i=0; i<sorted.length; i++) {
+    var piece = sorted[i];
+    if(piece < 0.001) continue;
+    var placed = false;
+    for(var j=0; j<bins.length; j++) {
+      if(bins[j] >= piece - 0.001) {
+        bins[j] -= piece;
+        placed = true;
+        break;
+      }
+    }
+    if(!placed) bins.push(binSize - piece); // open new panel
+  }
+  return bins.length;
+}
+
+// Main counting function.
+// Returns {exact: noReuseCount, withReuse: ffdCount}
 function calcSegCount(s, coverW, coverH, isM2) {
   var panelArea = coverW * coverH;
   if(panelArea <= 0) return {exact:0, withReuse:0};
+
+  if(isM2) {
+    var n = Math.ceil(calcShapeArea(s) / panelArea);
+    return {exact:n, withReuse:n};
+  }
+
   var t = s.type || 'rect';
-  var area = calcShapeArea(s);
+  // pw = narrow dimension, pl = long dimension (always)
+  var pw = Math.min(coverW, coverH);
+  var pl = Math.max(coverW, coverH);
+  var isH = (coverH < coverW); // horizontal if coverH=pw is the smaller
 
-  // Area-only shapes (circle, half-circle, heron triangle, trapezoid) or m² mode
-  if(isM2 || t==='circle' || t==='halfcircle' || t==='tri-heron' || t==='trapez') {
-    // Trapezoid and others: use area + generous waste factor (cutting complex = more waste)
-    var extra = (t==='trapez'||t==='circle'||t==='halfcircle') ? 1.15 : 1.0;
-    var n = Math.ceil(area * extra / panelArea);
-    return {exact: n, withReuse: Math.ceil(area / panelArea)};
+  var lengths = calcStripLengths(s, pw, isH);
+
+  if(!lengths) {
+    // Fallback: area ÷ panelArea, with +20% waste for shapes we can't strip-calculate
+    var area = calcShapeArea(s);
+    return {exact: Math.ceil(area*1.2/panelArea), withReuse: Math.ceil(area/panelArea)};
   }
+  if(!lengths.length) return {exact:0, withReuse:0};
 
-  // Rect: reuse-aware calculation
-  // For a rectangle ALL columns have the same height, so offcut pieces are all the same size
-  // → can be stacked from a single extra panel instead of needing one per column.
-  if(t === 'rect') {
-    var W = parseFloat(s.w)||0, H = parseFloat(s.h)||0;
-    if(W<=0||H<=0) return {exact:0, withReuse:0};
-    var cols = Math.ceil(W / coverW);
-
-    var fullPerCol = Math.floor(H / coverH);   // full panels each column definitely needs
-    var rem = H - fullPerCol * coverH;          // leftover height needed per column (m)
-    var withReuse, noReuse;
-
-    if(rem < 0.001) {
-      // Height is an exact multiple of panel length → no offcut waste at all
-      withReuse = cols * fullPerCol;
-      noReuse   = withReuse;
-    } else {
-      // Each column needs (fullPerCol full panels) + (one cut piece of 'rem' meters)
-      // How many 'rem' pieces fit in one panel?
-      var piecesPerPanel = Math.floor(coverH / rem);
-      if(piecesPerPanel < 1) piecesPerPanel = 1;
-      var extraPanels = Math.ceil(cols / piecesPerPanel);  // panels to supply all short pieces
-      withReuse = cols * fullPerCol + extraPanels;
-      // No-reuse worst case: every column gets its own cut panel for the remainder
-      noReuse = cols * (fullPerCol + 1);
+  // Split any strip whose length > pl into multiple pieces (multi-panel tall strips)
+  var allPieces = [];
+  var noReuseCount = 0;
+  lengths.forEach(function(l) {
+    noReuseCount += Math.ceil(l / pl); // each strip uses ceil(l/pl) fresh panels
+    var rem = l;
+    while(rem > 0.001) {
+      allPieces.push(Math.min(rem, pl));
+      rem -= pl;
     }
-    return {exact: noReuse, withReuse: withReuse};
-  }
+  });
 
-  // Triangles: strip-based — each strip gets a cut panel, offcuts from tall strips reuse for short
-  var W2 = parseFloat(s.w)||0, H2 = parseFloat(s.h)||0;
-  if(W2<=0||H2<=0) return {exact:0, withReuse:0};
+  var withReuseCount = ffpBinPack(allPieces, pl);
 
-  var nStrips = Math.ceil(W2 / coverW);
-  var stripHeights = [];
-
-  for(var i = 0; i < nStrips; i++) {
-    var xLeft  = i * coverW;
-    var xRight = Math.min((i+1) * coverW, W2);
-    var h = 0;
-
-    if(t === 'tri-right') {
-      // Right triangle: right angle at bottom, one leg = W (base), one leg = H (tall side)
-      // Tall side is on the LEFT (x=0): h(x) = H*(1 - x/W), decreasing right
-      // Use LEFT edge of strip = tallest point in that strip (conservative for cutting)
-      h = H2 * (1 - xLeft / W2);
-    }
-    else if(t === 'tri-iso') {
-      // Isosceles: peak at center W/2, 0 at both edges
-      // h(x) = H*(1 - 2*|x - W/2| / W)
-      // Use MAX height in strip: if strip spans center → H, else whichever edge is taller
-      var hL = Math.max(0, H2 * (1 - 2*Math.abs(xLeft  - W2/2) / W2));
-      var hR = Math.max(0, H2 * (1 - 2*Math.abs(xRight - W2/2) / W2));
-      var containsPeak = (xLeft <= W2/2 && xRight >= W2/2);
-      h = containsPeak ? H2 : Math.max(hL, hR);
-    }
-
-    if(h > 0.001) stripHeights.push(h);
-  }
-
-  // No-reuse: each strip needs ceil(h / coverH) panels
-  var exact2 = stripHeights.reduce(function(sum, h) { return sum + Math.ceil(h / coverH); }, 0);
-
-  // With reuse: pair tallest strip with shortest (offcut from tall fills short strip)
-  // Sort heights: tallest first, shortest last
-  var sorted = stripHeights.slice().sort(function(a,b){return b-a;});
-  var used   = new Array(sorted.length).fill(false);
-  var panels  = 0;
-  for(var k = 0; k < sorted.length; k++) {
-    if(used[k]) continue;
-    // This strip needs a panel cut to sorted[k]
-    var remaining = coverH - sorted[k]; // leftover after cutting
-    panels++;
-    used[k] = true;
-    // Try to reuse the offcut for the shortest unmatched strip
-    for(var m = sorted.length-1; m > k; m--) {
-      if(!used[m] && sorted[m] <= remaining + 0.001) {
-        used[m] = true;
-        remaining -= sorted[m];
-        // Try to fit even more in the remaining offcut
-      }
-    }
-  }
-
-  return {exact: exact2, withReuse: panels};
+  return {exact: noReuseCount, withReuse: withReuseCount};
 }
+// ─────────────────────────────────────────────────────────────────────────────
 
 function calcRun() {
   var pw = parseFloat(document.getElementById('calc-pw').value) || 40;
