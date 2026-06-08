@@ -578,6 +578,7 @@ textarea{resize:none}
       </div>
       <div class="sec" id="qt-result-wrap">
         <div class="stit" style="margin-bottom:8px">📋 Quote / ใบเสนอราคา</div>
+        <div id="qt-result-imgs" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"></div>
         <div id="qt-result" style="background:var(--bg2);border-radius:var(--rs);padding:14px;font-size:13px;white-space:pre-wrap;font-family:monospace;line-height:1.7"></div>
         <button type="button" onclick="qtCopy()" id="qt-copy-btn" class="btn btng" style="margin-top:10px"><i class="ti ti-copy"></i> Copy / คัดลอก</button>
       </div>
@@ -4584,8 +4585,28 @@ function qtRemoveItem(id) {
 
 function qtItemChange(id, field, val) {
   var item = qtItems.find(function(x){ return x.id===id; });
-  if(item) item[field] = field==='qty' ? parseInt(val)||0 : parseFloat(val)||0;
-  qtRender();
+  if(item) {
+    item[field] = field==='qty' ? parseInt(val)||0 : parseFloat(val)||0;
+    // Update only the discount hint label without rebuilding the whole list
+    var p = QT_PRODUCTS.find(function(x){ return x.code===item.code; });
+    if(p) {
+      var hint = document.getElementById('qt-hint-'+id);
+      var priceInp = document.getElementById('qt-price-'+id);
+      if(hint) {
+        if(item.customPrice < p.price) {
+          hint.textContent = '💚 Discount: -'+(p.price-item.customPrice)+'฿/pcs vs standard';
+          hint.style.display = '';
+        } else {
+          hint.style.display = 'none';
+        }
+      }
+      if(priceInp) {
+        priceInp.style.color = item.customPrice < p.price ? 'var(--green)' : '';
+        priceInp.style.fontWeight = item.customPrice < p.price ? '700' : '';
+      }
+    }
+  }
+  qtRenderResult();
 }
 
 function qtRenderItems() {
@@ -4594,32 +4615,38 @@ function qtRenderItems() {
   el.innerHTML = qtItems.map(function(item) {
     var p = QT_PRODUCTS.find(function(x){ return x.code===item.code; });
     if(!p) return '';
+    var hasDiscount = item.customPrice < p.price;
     return '<div style="display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:8px;background:var(--bg)">'
       +'<img src="'+IMG_BASE+p.code+'.jpg" style="width:52px;height:52px;object-fit:cover;border-radius:6px;flex-shrink:0" onerror="this.style.display=\'none\'">'
       +'<div style="flex:1;min-width:0">'
       +'<div style="font-size:13px;font-weight:700">'+p.code+' <span style="font-weight:400;color:var(--text2)">'+p.name+'</span></div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">'
       +'<div><label class="fl" style="margin-bottom:2px">Qty / จำนวน</label>'
-      +'<input type="number" min="1" value="'+item.qty+'" oninput="qtItemChange('+item.id+',\'qty\',this.value)" class="finp" style="padding:5px 8px"></div>'
-      +'<div><label class="fl" style="margin-bottom:2px">Price / ราคา (฿)</label>'
-      +'<input type="number" min="0" value="'+item.customPrice+'" oninput="qtItemChange('+item.id+',\'customPrice\',this.value)" class="finp" style="padding:5px 8px;'+(item.customPrice<p.price?'color:var(--green);font-weight:700':'')+'"></div>'
+      +'<input type="number" min="1" id="qt-qty-'+item.id+'" value="'+item.qty+'" oninput="qtItemChange('+item.id+',\'qty\',this.value)" class="finp" style="padding:5px 8px"></div>'
+      +'<div><label class="fl" style="margin-bottom:2px">Price / ราคา (฿) <span style="color:var(--text2);font-weight:400">(ปกติ '+p.price+'฿)</span></label>'
+      +'<input type="number" min="0" id="qt-price-'+item.id+'" value="'+item.customPrice+'" oninput="qtItemChange('+item.id+',\'customPrice\',this.value)" class="finp" style="padding:5px 8px;'+(hasDiscount?'color:var(--green);font-weight:700':'')+'"></div>'
       +'</div>'
-      +(item.customPrice < p.price ? '<div style="font-size:10px;color:var(--green);margin-top:3px">💚 Discount: -'+(p.price-item.customPrice)+'฿/pcs vs standard</div>' : '')
+      +'<div id="qt-hint-'+item.id+'" style="font-size:10px;color:var(--green);margin-top:3px'+(hasDiscount?'':';display:none')+'">'+(hasDiscount?'💚 Discount: -'+(p.price-item.customPrice)+'฿/pcs vs standard':'')+'</div>'
       +'</div>'
       +'<button type="button" onclick="qtRemoveItem('+item.id+')" style="background:none;border:none;color:var(--red);font-size:18px;cursor:pointer;padding:4px;flex-shrink:0"><i class="ti ti-x"></i></button>'
       +'</div>';
   }).join('');
 }
 
-function qtRender() {
-  qtRenderItems();
+function qtRenderResult() {
   var totalQty = qtItems.reduce(function(a,i){ return a+i.qty; }, 0);
   var shipping = totalQty >= 25 ? 0 : 400;
   var shEl = document.getElementById('qt-shipping');
   if(shEl) shEl.value = shipping;
-  var discount = parseFloat(document.getElementById('qt-discount').value)||0;
 
-  if(!qtItems.length) return;
+  var resEl = document.getElementById('qt-result');
+  var imgEl = document.getElementById('qt-result-imgs');
+
+  if(!qtItems.length) {
+    if(resEl) resEl.textContent = '';
+    if(imgEl) imgEl.innerHTML = '';
+    return;
+  }
 
   var lines = [];
   var subtotal = 0;
@@ -4630,14 +4657,15 @@ function qtRender() {
     var p = QT_PRODUCTS.find(function(x){ return x.code===item.code; });
     if(!p) return;
     var lineTotal = item.qty * item.customPrice;
-    var stdTotal  = item.qty * p.price;
     var discAmt   = item.qty * (p.price - item.customPrice);
     subtotal += lineTotal;
-    totalDiscount += discAmt;
+    if(discAmt > 0) totalDiscount += discAmt;
     totalClips += item.qty * 10;
     lines.push('📦 '+item.code+' ('+p.name+')');
-    lines.push('   '+item.qty+' แผ่น × '+item.customPrice+'฿ = '+lineTotal.toLocaleString()+'฿'
-      +(item.customPrice < p.price ? ' (ปกติ '+p.price+'฿)' : ''));
+    var priceLine = '   '+item.qty+' แผ่น × '+item.customPrice+'฿ = '+lineTotal.toLocaleString()+'฿';
+    if(item.customPrice !== p.price) priceLine += ' (ราคาปกติ '+p.price+'฿/แผ่น)';
+    else priceLine += ' ('+p.price+'฿/แผ่น)';
+    lines.push(priceLine);
   });
 
   var grandTotal = subtotal + shipping;
@@ -4655,8 +4683,25 @@ function qtRender() {
   if(totalDiscount > 0) result += '✅ ประหยัดไป: '+totalDiscount.toLocaleString()+'฿\n';
   result += '━━━━━━━━━━━━━━━━━━━━━━';
 
-  var resEl = document.getElementById('qt-result');
   if(resEl) resEl.textContent = result;
+
+  // Product images strip above the quote text
+  if(imgEl) {
+    imgEl.innerHTML = qtItems.map(function(item) {
+      var p = QT_PRODUCTS.find(function(x){ return x.code===item.code; });
+      if(!p) return '';
+      return '<div style="text-align:center">'
+        +'<img src="'+IMG_BASE+p.code+'.jpg" style="width:60px;height:60px;object-fit:cover;border-radius:8px;display:block;border:1px solid var(--border)" onerror="this.style.display=\'none\'">'
+        +'<div style="font-size:10px;color:var(--text2);margin-top:3px;font-weight:700">'+p.code+'</div>'
+        +'<div style="font-size:10px;color:var(--text2)">×'+item.qty+'</div>'
+        +'</div>';
+    }).join('');
+  }
+}
+
+function qtRender() {
+  qtRenderItems();
+  qtRenderResult();
 }
 
 function qtCopy() {
