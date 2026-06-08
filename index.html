@@ -4769,42 +4769,62 @@ function qtCopyImg() {
   var imgs = document.querySelectorAll('#qt-result-imgs img');
   if(!imgs.length) return;
   var btn = document.getElementById('qt-copy-img-btn');
-  var size = 120, gap = 12, pad = 16;
+
+  // High-DPI: render at 3× for crisp output (e.g. 600px per image instead of 200px)
+  var dpr  = 3;
+  var size = 200, gap = 16, pad = 20, labelH = 36;
+  var logW = pad*2 + imgs.length * size + (imgs.length-1) * gap;
+  var logH = pad*2 + size + labelH;
+
   var canvas = document.createElement('canvas');
-  canvas.width  = pad*2 + imgs.length * size + (imgs.length-1) * gap;
-  canvas.height = pad*2 + size + 28; // extra for code label
+  canvas.width  = logW * dpr;
+  canvas.height = logH * dpr;
   var ctx = canvas.getContext('2d');
-  // background
+  ctx.scale(dpr, dpr); // all drawing coordinates stay logical
+
+  // White background
   ctx.fillStyle = '#ffffff';
-  ctx.roundRect ? ctx.roundRect(0,0,canvas.width,canvas.height,12) : ctx.rect(0,0,canvas.width,canvas.height);
-  ctx.fill();
+  if(ctx.roundRect) { ctx.beginPath(); ctx.roundRect(0,0,logW,logH,14); ctx.fill(); }
+  else { ctx.fillRect(0,0,logW,logH); }
 
   var loaded = 0;
   var total = imgs.length;
-  // collect codes for labels
+
+  // Collect product codes from the image strip divs
   var codes = [];
-  document.querySelectorAll('#qt-result-imgs div').forEach(function(d){
-    var codeEl = d.querySelector('div');
-    if(codeEl) codes.push(codeEl.textContent);
+  document.querySelectorAll('#qt-result-imgs > div').forEach(function(d){
+    var spans = d.querySelectorAll('div');
+    // first div = code (e.g. "KP009"), second = qty (e.g. "×10")
+    codes.push((spans[0]||{}).textContent||'');
   });
 
   imgs.forEach(function(imgEl, i) {
     var image = new Image();
     image.crossOrigin = 'anonymous';
     image.onload = function() {
-      var x = pad + i*(size+gap);
-      // rounded clip
+      var x = pad + i * (size + gap);
+      var y = pad;
+
+      // Rounded image clip
       ctx.save();
       ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(x, pad, size, size, 8) : ctx.rect(x, pad, size, size);
+      if(ctx.roundRect) ctx.roundRect(x, y, size, size, 10);
+      else ctx.rect(x, y, size, size);
       ctx.clip();
-      ctx.drawImage(image, x, pad, size, size);
+      ctx.drawImage(image, x, y, size, size);
       ctx.restore();
-      // code label
-      ctx.fillStyle = '#555';
-      ctx.font = 'bold 13px sans-serif';
+
+      // Thin border around image
+      ctx.strokeStyle = '#e5e7eb';
+      ctx.lineWidth = 1.5;
+      if(ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, size, size, 10); ctx.stroke(); }
+      else { ctx.strokeRect(x, y, size, size); }
+
+      // Code label
+      ctx.fillStyle = '#374151';
+      ctx.font = 'bold 15px -apple-system, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(codes[i]||'', x + size/2, pad + size + 18);
+      ctx.fillText(codes[i]||'', x + size/2, y + size + 22);
 
       loaded++;
       if(loaded === total) {
@@ -4813,13 +4833,12 @@ function qtCopyImg() {
             if(btn){ btn.innerHTML='<i class="ti ti-check"></i> Copied!'; btn.style.background='var(--green)'; btn.style.borderColor='var(--green)'; btn.style.color='#fff'; }
             setTimeout(function(){ if(btn){ btn.innerHTML='<i class="ti ti-photo"></i> Copy Image'; btn.style.background=''; btn.style.borderColor=''; btn.style.color=''; } }, 2000);
           }).catch(function(){
-            // fallback: open in new tab so user can save manually
-            var url = canvas.toDataURL();
+            var url = canvas.toDataURL('image/png');
             var win = window.open();
-            win.document.write('<img src="'+url+'" style="max-width:100%"><br><p>Long-press / right-click to copy image</p>');
+            if(win) win.document.write('<img src="'+url+'" style="max-width:100%"><p>Right-click → Copy image</p>');
             if(btn){ btn.innerHTML='<i class="ti ti-photo"></i> Copy Image'; }
           });
-        }, 'image/png');
+        }, 'image/png', 1.0); // quality=1.0 = lossless PNG
       }
     };
     image.onerror = function(){
