@@ -4996,26 +4996,49 @@ function qtLcornerName(code) {
 function qtShareProductImg(code, btn) {
   var url = IMG_BASE + code + '.jpg';
   if(btn) { btn.innerHTML='⏳'; btn.disabled=true; }
-  fetch(url).then(function(r){ return r.blob(); }).then(function(blob) {
-    // Convert to PNG for clipboard compatibility
-    var img = new Image();
-    img.onload = function() {
-      var canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
-      canvas.getContext('2d').drawImage(img,0,0);
-      canvas.toBlob(function(pngBlob) {
+
+  // Step 1: draw to canvas → PNG blob
+  var imgEl = new Image();
+  imgEl.crossOrigin = 'anonymous';
+  imgEl.onload = function() {
+    var canvas = document.createElement('canvas');
+    canvas.width = imgEl.naturalWidth; canvas.height = imgEl.naturalHeight;
+    canvas.getContext('2d').drawImage(imgEl, 0, 0);
+    canvas.toBlob(function(pngBlob) {
+      if(btn) { btn.innerHTML='<i class="ti ti-copy"></i>'; btn.disabled=false; }
+      // Step 2: try clipboard API (desktop Chrome/Edge)
+      if(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
         navigator.clipboard.write([new ClipboardItem({'image/png': pngBlob})])
           .then(function() {
-            if(btn){ btn.innerHTML='✅'; setTimeout(function(){ btn.innerHTML='<i class="ti ti-copy"></i>'; btn.disabled=false; },1500); }
+            if(btn){ btn.innerHTML='✅'; setTimeout(function(){ btn.innerHTML='<i class="ti ti-copy"></i>'; },1500); }
           })
-          .catch(function() {
-            if(btn){ btn.innerHTML='❌'; btn.disabled=false; }
-            alert('Clipboard nicht unterstützt auf diesem Gerät');
-          });
-      },'image/png');
-    };
-    img.src = URL.createObjectURL(blob);
-  });
+          .catch(function() { qtShowImgPopup(pngBlob, code); });
+      } else {
+        // Mobile / iOS: show overlay, long-press to copy
+        qtShowImgPopup(pngBlob, code);
+      }
+    }, 'image/png');
+  };
+  imgEl.onerror = function() {
+    if(btn) { btn.innerHTML='<i class="ti ti-copy"></i>'; btn.disabled=false; }
+    qtShowImgPopup(null, code);
+  };
+  imgEl.src = url;
+}
+
+function qtShowImgPopup(pngBlob, code) {
+  var existing = document.getElementById('qt-img-popup');
+  if(existing) existing.remove();
+  var src = pngBlob ? URL.createObjectURL(pngBlob) : IMG_BASE + code + '.jpg';
+  var ov = document.createElement('div');
+  ov.id = 'qt-img-popup';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.88);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px';
+  ov.innerHTML =
+    '<img src="'+src+'" style="max-width:92%;max-height:75vh;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5)">'
+    +'<div style="color:#fff;font-size:13px;margin-top:14px;text-align:center;opacity:0.8">📱 Bild lang drücken → Kopieren / Speichern</div>'
+    +'<button onclick="document.getElementById(\'qt-img-popup\').remove()" style="margin-top:12px;padding:10px 28px;background:rgba(255,255,255,0.15);color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">✕ Schließen</button>';
+  ov.onclick = function(e){ if(e.target===ov) ov.remove(); };
+  document.body.appendChild(ov);
 }
 
 function qtCopyImg() {
