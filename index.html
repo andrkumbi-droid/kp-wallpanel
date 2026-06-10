@@ -632,10 +632,10 @@ textarea{resize:none}
         <div id="qt-result-imgs" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"></div>
         <div id="qt-result" style="background:var(--bg2);border-radius:var(--rs);padding:14px;font-size:13px;white-space:pre-wrap;font-family:monospace;line-height:1.7"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
-          <button type="button" onclick="qtCopyImg()" id="qt-copy-img-btn" class="btn" style="background:var(--blue-bg);border:1.5px solid var(--blue);color:var(--blue)"><i class="ti ti-photo"></i> Copy Image</button>
+          <button type="button" onclick="qtCopyImg()" id="qt-copy-img-btn" class="btn" style="background:var(--blue-bg);border:1.5px solid var(--blue);color:var(--blue)"><i class="ti ti-photo"></i> Share Image</button>
           <button type="button" onclick="qtCopy()" id="qt-copy-btn" class="btn btng"><i class="ti ti-copy"></i> Copy Text</button>
         </div>
-        <div style="font-size:10px;color:var(--text2);text-align:center;margin-top:6px">① Copy Image → paste in Messenger &nbsp;②&nbsp; Copy Text → paste below image</div>
+        <div style="font-size:10px;color:var(--text2);text-align:center;margin-top:6px">① Share Image → hold → save → send in Messenger &nbsp;②&nbsp; Copy Text → paste in chat</div>
       </div>
     </div>
   </div>
@@ -4914,91 +4914,182 @@ function qtCopy() {
 }
 
 function qtCopyImg() {
-  var imgs = document.querySelectorAll('#qt-result-imgs img');
-  if(!imgs.length) return;
-  var btn = document.getElementById('qt-copy-img-btn');
+  if(!qtItems.length) return;
 
-  // High-DPI: render at 3× for crisp output (e.g. 600px per image instead of 200px)
-  var dpr  = 3;
-  var size = 200, gap = 16, pad = 20, labelH = 36;
-  var logW = pad*2 + imgs.length * size + (imgs.length-1) * gap;
-  var logH = pad*2 + size + labelH;
+  // Collect data
+  var activeItems = qtItems.map(function(item) {
+    var p = QT_PRODUCTS.find(function(x){ return x.code===item.code; });
+    return { code: item.code, qty: item.qty, price: item.customPrice, name: p ? p.name : '', src: IMG_BASE + item.code + '.jpg' };
+  });
 
+  var imgSize = 160, gap = 12, pad = 24;
+  var cardW = 540;
+  var imgRowH = imgSize + 44; // image + label
+  var lineH = 34;
+  var headerH = 72;
+  var footerH = 80;
+
+  // Parse totals from rendered result
+  var resultText = (document.getElementById('qt-result')||{}).innerText || '';
+  var totalMatch = resultText.match(/ยอดรวม[:\s]*([\d,]+)/);
+  var totalLine = totalMatch ? 'ยอดรวม: ' + totalMatch[1] + '฿' : '';
+
+  // Build lines
+  var lines = [];
+  var grandTotal = 0;
+  activeItems.forEach(function(it) {
+    var sub = it.qty * it.price;
+    grandTotal += sub;
+    lines.push({ code: it.code, name: it.name, qty: it.qty, price: it.price, sub: sub });
+  });
+
+  var shipping = parseInt((document.getElementById('qt-shipping')||{}).value||0);
+  var discount = parseInt((document.getElementById('qt-discount')||{}).value||0);
+  var totalAmt = grandTotal - discount + shipping;
+
+  var dpr = 2;
+  var logH = headerH + imgRowH + gap + lines.length * lineH + 20 + footerH;
   var canvas = document.createElement('canvas');
-  canvas.width  = logW * dpr;
+  canvas.width = cardW * dpr;
   canvas.height = logH * dpr;
   var ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr); // all drawing coordinates stay logical
+  ctx.scale(dpr, dpr);
 
-  // White background
+  // Background
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, cardW, logH);
+
+  // Header
+  ctx.fillStyle = '#1a73e8';
+  ctx.fillRect(0, 0, cardW, headerH);
   ctx.fillStyle = '#ffffff';
-  if(ctx.roundRect) { ctx.beginPath(); ctx.roundRect(0,0,logW,logH,14); ctx.fill(); }
-  else { ctx.fillRect(0,0,logW,logH); }
+  ctx.font = 'bold 22px -apple-system,Arial,sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('🏠 KP Wallpanel', pad, 34);
+  ctx.font = '14px -apple-system,Arial,sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillText('ใบเสนอราคา / Quotation', pad, 56);
 
-  var loaded = 0;
-  var total = imgs.length;
+  // Draw product images
+  var loadedCount = 0;
+  var totalImgs = activeItems.length;
+  var totalRowW = totalImgs * imgSize + (totalImgs-1) * gap;
+  var startX = (cardW - totalRowW) / 2;
 
-  // Collect product codes from the image strip divs
-  var codes = [];
-  document.querySelectorAll('#qt-result-imgs > div').forEach(function(d){
-    var spans = d.querySelectorAll('div');
-    // first div = code (e.g. "KP009"), second = qty (e.g. "×10")
-    codes.push((spans[0]||{}).textContent||'');
-  });
+  function drawTextAndShow() {
+    var iy = headerH + 12;
+    // Image labels
+    activeItems.forEach(function(it, i) {
+      var ix = startX + i * (imgSize + gap);
+      // Code
+      ctx.fillStyle = '#111827';
+      ctx.font = 'bold 13px -apple-system,Arial,sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(it.code, ix + imgSize/2, iy + imgSize + 16);
+      // Qty
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '12px -apple-system,Arial,sans-serif';
+      ctx.fillText('×'+it.qty, ix + imgSize/2, iy + imgSize + 32);
+    });
 
-  imgs.forEach(function(imgEl, i) {
-    var image = new Image();
-    image.crossOrigin = 'anonymous';
-    image.onload = function() {
-      var x = pad + i * (size + gap);
-      var y = pad;
+    // Divider
+    var lineY = headerH + imgRowH + gap;
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad, lineY); ctx.lineTo(cardW-pad, lineY); ctx.stroke();
 
-      // Rounded image clip
+    // Line items
+    var ly = lineY + 24;
+    lines.forEach(function(l) {
+      ctx.fillStyle = '#111827';
+      ctx.font = 'bold 13px -apple-system,Arial,sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(l.code, pad, ly);
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '12px -apple-system,Arial,sans-serif';
+      ctx.fillText('×'+l.qty+' · '+l.price+'฿', pad+80, ly);
+      ctx.fillStyle = '#111827';
+      ctx.font = 'bold 13px -apple-system,Arial,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(l.sub.toLocaleString()+'฿', cardW-pad, ly);
+      ly += lineH;
+    });
+
+    // Footer
+    var fy = ly + 16;
+    ctx.fillStyle = '#e5e7eb';
+    ctx.fillRect(pad, fy, cardW-pad*2, 1);
+    fy += 18;
+    if(shipping > 0) {
+      ctx.fillStyle = '#6b7280'; ctx.font = '13px -apple-system,Arial,sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('ค่าส่ง', pad, fy);
+      ctx.textAlign = 'right';
+      ctx.fillText(shipping.toLocaleString()+'฿', cardW-pad, fy);
+      fy += lineH;
+    }
+    if(discount > 0) {
+      ctx.fillStyle = '#16a34a'; ctx.font = '13px -apple-system,Arial,sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('ส่วนลด', pad, fy);
+      ctx.textAlign = 'right';
+      ctx.fillText('-'+discount.toLocaleString()+'฿', cardW-pad, fy);
+      fy += lineH;
+    }
+    // Total
+    ctx.fillStyle = '#1a73e8';
+    ctx.font = 'bold 20px -apple-system,Arial,sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('ยอดรวม', pad, fy+4);
+    ctx.textAlign = 'right';
+    ctx.fillText(totalAmt.toLocaleString()+'฿', cardW-pad, fy+4);
+
+    // Show in overlay
+    var dataUrl = canvas.toDataURL('image/png');
+    qtShowImgOverlay(dataUrl);
+  }
+
+  if(totalImgs === 0) { drawTextAndShow(); return; }
+
+  activeItems.forEach(function(it, i) {
+    var ix = startX + i * (imgSize + gap);
+    var iy = headerH + 12;
+    var img = new Image();
+    img.onload = function() {
       ctx.save();
       ctx.beginPath();
-      if(ctx.roundRect) ctx.roundRect(x, y, size, size, 10);
-      else ctx.rect(x, y, size, size);
+      if(ctx.roundRect) ctx.roundRect(ix, iy, imgSize, imgSize, 10); else ctx.rect(ix, iy, imgSize, imgSize);
       ctx.clip();
-      ctx.drawImage(image, x, y, size, size);
+      ctx.drawImage(img, ix, iy, imgSize, imgSize);
       ctx.restore();
-
-      // Thin border around image
-      ctx.strokeStyle = '#e5e7eb';
-      ctx.lineWidth = 1.5;
-      if(ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, size, size, 10); ctx.stroke(); }
-      else { ctx.strokeRect(x, y, size, size); }
-
-      // Code label
-      ctx.fillStyle = '#374151';
-      ctx.font = 'bold 15px -apple-system, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(codes[i]||'', x + size/2, y + size + 22);
-
-      loaded++;
-      if(loaded === total) {
-        canvas.toBlob(function(blob) {
-          navigator.clipboard.write([new ClipboardItem({'image/png': blob})]).then(function(){
-            if(btn){ btn.innerHTML='<i class="ti ti-check"></i> Copied!'; btn.style.background='var(--green)'; btn.style.borderColor='var(--green)'; btn.style.color='#fff'; }
-            setTimeout(function(){ if(btn){ btn.innerHTML='<i class="ti ti-photo"></i> Copy Image'; btn.style.background=''; btn.style.borderColor=''; btn.style.color=''; } }, 2000);
-          }).catch(function(){
-            var url = canvas.toDataURL('image/png');
-            var win = window.open();
-            if(win) win.document.write('<img src="'+url+'" style="max-width:100%"><p>Right-click → Copy image</p>');
-            if(btn){ btn.innerHTML='<i class="ti ti-photo"></i> Copy Image'; }
-          });
-        }, 'image/png', 1.0); // quality=1.0 = lossless PNG
-      }
+      ctx.strokeStyle='#e5e7eb'; ctx.lineWidth=1;
+      if(ctx.roundRect){ctx.beginPath();ctx.roundRect(ix,iy,imgSize,imgSize,10);ctx.stroke();}
+      else ctx.strokeRect(ix,iy,imgSize,imgSize);
+      loadedCount++;
+      if(loadedCount===totalImgs) drawTextAndShow();
     };
-    image.onerror = function(){
-      loaded++;
-      if(loaded===total && loaded>0) {
-        canvas.toBlob(function(blob){
-          navigator.clipboard.write([new ClipboardItem({'image/png':blob})]).catch(function(){});
-        },'image/png');
-      }
+    img.onerror = function() {
+      // grey placeholder
+      ctx.fillStyle='#f3f4f6'; ctx.fillRect(ix,iy,imgSize,imgSize);
+      loadedCount++;
+      if(loadedCount===totalImgs) drawTextAndShow();
     };
-    image.src = imgEl.src;
+    img.src = it.src;
   });
+}
+
+function qtShowImgOverlay(dataUrl) {
+  var existing = document.getElementById('qt-img-overlay');
+  if(existing) existing.remove();
+  var overlay = document.createElement('div');
+  overlay.id = 'qt-img-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px';
+  overlay.innerHTML = '<div style="font-size:13px;color:#fff;margin-bottom:12px;text-align:center">📱 Hold image → Save → Share in Messenger<br><span style="font-size:11px;opacity:0.7">กดค้างที่รูป → บันทึก → ส่งใน Messenger</span></div>'
+    +'<img src="'+dataUrl+'" style="max-width:100%;max-height:70vh;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5)">'
+    +'<div style="display:flex;gap:10px;margin-top:16px">'
+    +'<a href="'+dataUrl+'" download="kp-quotation.png" style="padding:10px 20px;background:#1a73e8;color:#fff;border-radius:8px;font-size:13px;font-weight:700;text-decoration:none">⬇ Download</a>'
+    +'<button onclick="document.getElementById(\'qt-img-overlay\').remove()" style="padding:10px 20px;background:rgba(255,255,255,0.15);color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer">✕ Close</button>'
+    +'</div>';
+  overlay.onclick = function(e){ if(e.target===overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
 }
 // ─── END QUOTATION GENERATOR ────────────────────────────────────────
 
