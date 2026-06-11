@@ -4774,12 +4774,17 @@ function qtFilterCat(cat) {
   bar.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px">'
     + profiles.map(function(k) {
         var p = QT_PROFILES[k];
-        return '<button type="button" id="qtpf-'+k+'" onclick="qtFilterProfile(\''+k+'\')" '
-          +'style="padding:6px 10px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;cursor:pointer;color:var(--text2);line-height:1.3;text-align:left">'
+        return '<div style="position:relative;display:inline-block">'
+          +'<button type="button" id="qtpf-'+k+'" onclick="qtFilterProfile(\''+k+'\')" '
+          +'style="padding:6px 36px 6px 10px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;cursor:pointer;color:var(--text2);line-height:1.3;text-align:left">'
           +'<div style="font-weight:700">'+p.label+'</div>'
           +'<div style="font-size:10px;opacity:0.8">'+p.en+'</div>'
           +'<div style="font-size:10px;opacity:0.5">'+p.sub+'</div>'
-          +'</button>';
+          +'</button>'
+          +'<button type="button" id="qtpf-copy-'+k+'" onclick="event.stopPropagation();qtCopyProfileImages(\''+k+'\',this)" title="Copy all images" '
+          +'style="position:absolute;right:4px;top:50%;transform:translateY(-50%);width:26px;height:26px;border-radius:6px;border:1px solid var(--border);background:var(--bg);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:var(--text2);padding:0">'
+          +'<i class="ti ti-copy"></i></button>'
+          +'</div>';
       }).join('')
     + '</div>';
 }
@@ -4798,6 +4803,79 @@ function qtFilterProfile(profile) {
     btn.style.color = active ? 'var(--blue)' : 'var(--text2)';
   });
   qtShowProducts(list, mat);
+}
+
+function qtCopyProfileImages(profile, btn) {
+  var products = QT_PRODUCTS.filter(function(p){ return p.profile === profile; });
+  if(!products.length) return;
+  if(btn) { btn.innerHTML='⏳'; btn.disabled=true; }
+  var IMG_SIZE = 400; // each product image square size on collage
+  var GAP = 8;
+  var COLS = Math.min(products.length, 4);
+  var ROWS = Math.ceil(products.length / COLS);
+  var canvas = document.createElement('canvas');
+  canvas.width  = COLS * IMG_SIZE + (COLS - 1) * GAP;
+  canvas.height = ROWS * IMG_SIZE + (ROWS - 1) * GAP;
+  var ctx = canvas.getContext('2d');
+  // Fill background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  var loaded = 0;
+  products.forEach(function(p, i) {
+    var img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = function() {
+      var col = i % COLS;
+      var row = Math.floor(i / COLS);
+      var x = col * (IMG_SIZE + GAP);
+      var y = row * (IMG_SIZE + GAP);
+      // Draw image cropped/fitted square
+      var sw = img.naturalWidth, sh = img.naturalHeight;
+      var side = Math.min(sw, sh);
+      var sx = (sw - side) / 2, sy = (sh - side) / 2;
+      ctx.drawImage(img, sx, sy, side, side, x, y, IMG_SIZE, IMG_SIZE);
+      // Code label
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(x, y + IMG_SIZE - 26, IMG_SIZE, 26);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(p.code, x + IMG_SIZE / 2, y + IMG_SIZE - 8);
+      loaded++;
+      if(loaded === products.length) {
+        canvas.toBlob(function(pngBlob) {
+          if(btn) { btn.innerHTML='<i class="ti ti-copy"></i>'; btn.disabled=false; }
+          if(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+            navigator.clipboard.write([new ClipboardItem({'image/png': pngBlob})])
+              .then(function() {
+                if(btn){ btn.innerHTML='✅'; setTimeout(function(){ btn.innerHTML='<i class="ti ti-copy"></i>'; }, 2000); }
+              })
+              .catch(function() { qtShowImgPopup(pngBlob, profile+'-collage'); });
+          } else {
+            qtShowImgPopup(pngBlob, profile+'-collage');
+          }
+        }, 'image/png');
+      }
+    };
+    img.onerror = function() {
+      loaded++;
+      if(loaded === products.length) {
+        canvas.toBlob(function(pngBlob) {
+          if(btn) { btn.innerHTML='<i class="ti ti-copy"></i>'; btn.disabled=false; }
+          if(navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+            navigator.clipboard.write([new ClipboardItem({'image/png': pngBlob})])
+              .then(function() {
+                if(btn){ btn.innerHTML='✅'; setTimeout(function(){ btn.innerHTML='<i class="ti ti-copy"></i>'; }, 2000); }
+              })
+              .catch(function() { qtShowImgPopup(pngBlob, profile+'-collage'); });
+          } else {
+            qtShowImgPopup(pngBlob, profile+'-collage');
+          }
+        }, 'image/png');
+      }
+    };
+    img.src = IMG_BASE + p.code + '.jpg';
+  });
 }
 
 function qtSearch() {
