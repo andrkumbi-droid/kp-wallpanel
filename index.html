@@ -4371,7 +4371,7 @@ function mirrorToAppOrder(g){
 // Deduct an order's real products (panels, corners, trims) from stock,
 // matching by code. Clamped at 0 like the in-app order creation does.
 function deductOrderStock(o){
-  if(!o || !o.lineItems || typeof stockItems==='undefined') return;
+  if(!o || !o.lineItems || o._stockDeducted || typeof stockItems==='undefined') return;
   var PRODUCT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
   o.lineItems.forEach(function(li){
     if(!PRODUCT[li.type]) return;
@@ -4381,6 +4381,22 @@ function deductOrderStock(o){
     var st=stockItems.find(function(x){ return (x.code||'').toUpperCase()===code; });
     if(st){ st.qty=Math.max(0,(parseInt(st.qty)||0)-qty); }
   });
+  o._stockDeducted = true; // mark so it's never deducted twice
+}
+
+// One-time retroactive deduction for already-imported orders that were never
+// deducted. Idempotent (flag persists in Firebase), so safe to call repeatedly.
+function deductImportedStockOnce(){
+  if(typeof stockItems==='undefined' || !stockItems || !stockItems.length) return; // wait until stock is loaded
+  var changed=false;
+  orders.forEach(function(o){
+    if(o._importedFromMirror && !o._stockDeducted){ deductOrderStock(o); changed=true; }
+  });
+  if(changed){
+    try{syncOrders();}catch(e){} try{syncStockItems();}catch(e){}
+    try{if(typeof ofRenderStock==='function')ofRenderStock();}catch(e){} try{if(typeof mgStock==='function')mgStock();}catch(e){}
+    console.log('Retroactive stock deduction applied to imported orders');
+  }
 }
 
 // Main entry. dryRun defaults TRUE. Reads mirror tabs via the web app,
@@ -4425,7 +4441,9 @@ function importFromMirror(opts){
 var _mirrorOrdersLoaded = false;
 var _mirrorAutoStarted  = false;
 function sheetsAutoSync(){
-  if(!SHEETS_WEBAPP_URL || !_mirrorOrdersLoaded) return;
+  if(!_mirrorOrdersLoaded) return;
+  try{ deductImportedStockOnce(); }catch(e){} // catch up any imported orders not yet deducted
+  if(!SHEETS_WEBAPP_URL) return;
   importFromMirror({dryRun:false, silent:true});
 }
 // Call once the first orders snapshot is in; starts the start-up sync
