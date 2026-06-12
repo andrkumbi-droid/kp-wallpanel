@@ -827,6 +827,14 @@ textarea{resize:none}
 
   </div></div>
   <div class="view" id="mgv-revenue"><div class="sec">
+    <div style="border:1.5px solid var(--border);border-radius:var(--rs);padding:12px;margin-bottom:14px;background:var(--bg2)">
+      <div class="stit" style="margin-bottom:6px"><i class="ti ti-table-export"></i> Google Sheets Sync</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">One-time import of all orders since 1/6/2026 to the connected Sheet. Run the dry-run first to preview — it writes nothing.</div>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btnsm" style="flex:1;justify-content:center" onclick="syncToSheets({dryRun:true})"><i class="ti ti-eye"></i> Dry-run preview</button>
+        <button type="button" class="btnsm btnsmp" style="flex:1;justify-content:center" onclick="if(confirm('Write all orders since 1/6/2026 to Google Sheets now? Duplicates are skipped automatically.'))syncToSheets({dryRun:false})"><i class="ti ti-cloud-upload"></i> Run import</button>
+      </div>
+    </div>
     <div class="stit">Revenue / รายได้</div>
     <div class="msel" id="mg-msel"></div>
     <div class="revtot"><div style="font-size:12px;color:var(--text2);margin-bottom:4px">Total delivered / ยอดรวม</div><div class="revamt" id="mg-rev-amt">0 ฿</div><div style="font-size:12px;color:var(--text2);margin-top:4px" id="mg-rev-cnt">0 orders</div></div>
@@ -3573,7 +3581,7 @@ function openEM(idOrBtn){
   var id = typeof idOrBtn === 'string' ? idOrBtn : idOrBtn.getAttribute('data-id');
   const o=orders.find(x=>x.id===id);if(!o)return;editId=id;document.getElementById('em-id').textContent=id;document.getElementById('em-cust').value=o.customer;document.getElementById('em-phone').value=o.phone;document.getElementById('em-addr').value=o.address;document.getElementById('em-loc').value=o.location||'';document.getElementById('em-date').value=o.date||new Date().toISOString().split('T')[0];document.getElementById('em-status').value=o.status;document.getElementById('em-notes').value=o.notes||'';document.getElementById('edit-modal').classList.add('open');}
 function closeEM(){document.getElementById('edit-modal').classList.remove('open');editId=null;}
-function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o.status;o.customer=document.getElementById('em-cust').value;o.phone=document.getElementById('em-phone').value;o.address=document.getElementById('em-addr').value;o.location=document.getElementById('em-loc').value;o.notes=document.getElementById('em-notes').value;o.status=document.getElementById('em-status').value;var newDate=document.getElementById('em-date').value;if(newDate)o.date=newDate;const editorMember=staffList.find(x=>x.id===currentStaffId);if(editorMember)o.editedBy=editorMember.name;if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9.]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
+function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o.status;o.customer=document.getElementById('em-cust').value;o.phone=document.getElementById('em-phone').value;o.address=document.getElementById('em-addr').value;o.location=document.getElementById('em-loc').value;o.notes=document.getElementById('em-notes').value;o.status=document.getElementById('em-status').value;var newDate=document.getElementById('em-date').value;if(newDate)o.date=newDate;const editorMember=staffList.find(x=>x.id===currentStaffId);if(editorMember)o.editedBy=editorMember.name;if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9.]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
 
 // WAREHOUSE
 
@@ -3991,6 +3999,123 @@ function clearDeliveryPhoto(){
   document.getElementById('delivery-photo-upload').style.display = 'block';
   document.getElementById('delivery-photo-input').value = '';
 }
+// ════════════════════════════════════════════════════════════
+//  GOOGLE SHEETS SYNC  (via Apps Script Web App — no secret key)
+// ════════════════════════════════════════════════════════════
+// Paste your deployed Apps Script /exec URL here:
+var SHEETS_WEBAPP_URL = '';
+// Must match TOKEN in apps-script/Code.gs:
+var SHEETS_TOKEN = 'CHANGE_ME_SHARED_TOKEN';
+var SHEETS_CUTOFF = '2026-06-01'; // backfill: orders on/after this date
+
+// Order id prefix → which "-app" tab to write to
+function sheetsRouteTab(id){
+  id = String(id||'').trim();
+  if(id.charAt(0)==='#') return 'BKK-app';
+  if(id.indexOf('1-')===0) return 'North-app';
+  if(id.indexOf('2-')===0) return 'NE-app';
+  if(id.indexOf('3-')===0) return 'East-app';
+  if(id.indexOf('4-')===0) return 'South-app';
+  if(id.indexOf('5-')===0) return 'BKK-app'; // Instore → Bangkok for now
+  return '';
+}
+function sheetsFmtDate(d){ // 'YYYY-MM-DD' → 'D/M/YYYY'
+  if(!d) return '';
+  var p = String(d).split('-');
+  if(p.length!==3) return d;
+  return parseInt(p[2],10)+'/'+parseInt(p[1],10)+'/'+p[0];
+}
+function sheetsNum(v){ return parseFloat(String(v==null?'':v).replace(/[^0-9.\-]/g,''))||0; }
+
+// Build one sheet item {tab, orderNumber, rows[][]} from an order.
+// Columns A–V (22). Empty cols (A,L,M,N,Q,S,T,U) left blank for
+// manual fill, per spec. Main row carries order-level fields;
+// extra product lines become sub-rows (D–G only).
+function sheetsBuildItem(o){
+  var tab = sheetsRouteTab(o.id);
+  if(!tab) return null;
+  var li = o.lineItems || [];
+  var PRODUCT = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1,clips:1};
+  var products = li.filter(function(x){ return PRODUCT[x.type]; });
+  if(!products.length) products = [{code:(o.panels||'—'),qty:'',unitPrice:'',amount:''}];
+
+  var discount = Math.abs(li.filter(function(x){return x.type==='discount';})
+                            .reduce(function(s,x){return s+sheetsNum(x.amount);},0));
+  var shipping = li.filter(function(x){return x.type==='delivery';})
+                   .reduce(function(s,x){return s+sheetsNum(x.amount);},0);
+  var productSubtotal = products.reduce(function(s,x){return s+sheetsNum(x.amount);},0);
+  var grandTotal = sheetsNum(o.total) || (productSubtotal - discount + shipping);
+  var dateStr  = sheetsFmtDate(o.date);
+  var custAddr = [o.customer||'', o.address||''].filter(Boolean).join(' / ');
+
+  var rows = products.map(function(p, idx){
+    var r = []; for(var i=0;i<22;i++) r.push('');
+    r[3] = p.code||'';                                  // D code
+    r[4] = p.qty===''?'':sheetsNum(p.qty);              // E qty
+    r[5] = p.unitPrice===''?'':sheetsNum(p.unitPrice);  // F price/panel
+    r[6] = p.amount===''?'':sheetsNum(p.amount);        // G subtotal
+    if(idx===0){
+      r[1]  = o.id;             // B order number
+      r[2]  = dateStr;          // C date
+      r[7]  = sheetsNum(o.clips); // H clip/lock
+      r[8]  = shipping;         // I shipping
+      r[9]  = discount;         // J discount
+      r[10] = productSubtotal;  // K total
+      r[14] = grandTotal;       // O grand total
+      r[15] = dateStr;          // P delivery date
+      r[17] = custAddr;         // R customer + address
+      r[21] = o.notes||'';      // V notes
+    }
+    return r;
+  });
+  return { tab:tab, orderNumber:o.id, rows:rows };
+}
+
+// POST to the web app. text/plain dodges the CORS preflight that
+// would otherwise block a JSON content-type request.
+function sheetsPost(items, dryRun){
+  if(!SHEETS_WEBAPP_URL) return Promise.reject(new Error('SHEETS_WEBAPP_URL not set'));
+  return fetch(SHEETS_WEBAPP_URL, {
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify({ token:SHEETS_TOKEN, dryRun:!!dryRun, items:items })
+  }).then(function(r){ return r.json(); });
+}
+
+// Non-blocking single-order sync, fired when an order is delivered.
+function sheetsSyncOrder(o){
+  try{
+    if(!SHEETS_WEBAPP_URL || !o) return;
+    var item = sheetsBuildItem(o);
+    if(!item) return;
+    sheetsPost([item], false)
+      .then(function(res){ console.log('Sheets sync:', res); })
+      .catch(function(err){ console.error('Sheets sync failed (non-blocking):', err); });
+  }catch(err){ console.error('Sheets sync failed (non-blocking):', err); }
+}
+
+// One-time retroactive import. dryRun defaults to TRUE for safety.
+// Includes every order on/after the cutoff except cancelled ones.
+function syncToSheets(opts){
+  opts = opts || {};
+  var dryRun = opts.dryRun !== false;
+  var list = orders.filter(function(o){
+    return (o.date||'') >= SHEETS_CUTOFF && o.status !== 'cancelled';
+  });
+  var items = list.map(sheetsBuildItem).filter(Boolean);
+  if(!SHEETS_WEBAPP_URL){ alert('Set SHEETS_WEBAPP_URL first (paste your Apps Script /exec URL in index.html).'); return; }
+  console.log('syncToSheets: '+list.length+' orders, dryRun='+dryRun);
+  return sheetsPost(items, dryRun).then(function(res){
+    console.log('Backfill result:', res);
+    alert('Sheets sync '+(dryRun?'(DRY RUN — nothing written)':'(LIVE)')+
+      '\n\nTotal: '+res.total+
+      '\nWritten: '+res.written+
+      '\nSkipped (duplicates): '+res.skipped_duplicates+
+      '\nFailed: '+res.failed);
+    return res;
+  }).catch(function(err){ console.error(err); alert('Sheets sync error: '+err.message); });
+}
+
 function confirmDelivery(){
   if(!_deliveryId) return;
   var id = _deliveryId;
@@ -4016,6 +4141,7 @@ function drDoDeliver(id, photoUrl){
   if(tour)tour.status[id]='delivered';
   drTour();drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;
   ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();try{payUpdateBadge();}catch(e){}
+  try{ if(ord) sheetsSyncOrder(ord); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
 }
 function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';revOrders=revOrders.filter(x=>x.id!==id);const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
 function drCancel(id){
