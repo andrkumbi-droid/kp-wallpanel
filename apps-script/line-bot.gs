@@ -117,13 +117,17 @@ function fmtStock(lang){
   return out;
 }
 
-// ── 4) Incoming — codes only, warehouse-arrival estimate ───
-function fmtIncoming(lang){
+// ── 4) Incoming — panels only on the button; full list for AI ──
+function fmtIncoming(lang){ return buildIncoming(lang, true, false); }       // button: panels only, no qty
+function fmtIncomingFull(lang){ return buildIncoming(lang, false, true); }   // Claude: all items + qty
+function buildIncoming(lang, panelsOnly, withQty){
   var cs = getContainers().filter(function(c){ return !c.arrivedWh; });
   if(!cs.length) return de(lang) ? '🚢 Keine Lieferungen unterwegs.' : '🚢 ไม่มีของเข้า';
   cs.sort(function(a,b){ return ((b.arrivedTh?2:b.loading?1:0)) - ((a.arrivedTh?2:a.loading?1:0)); });
   var lines = cs.slice(0,15).map(function(c){
-    var codes = (c.items||[]).map(function(i){ return i.code; }).filter(Boolean).join(', ') || '—';
+    var its = (c.items||[]);
+    if(panelsOnly) its = its.filter(function(i){ return isPanelCode(i.code); });
+    var codes = its.map(function(i){ return withQty ? (i.code+'×'+i.qty) : i.code; }).filter(Boolean).join(', ') || '—';
     var line2;
     if(c.arrivedTh){
       var est = addDays(c.arrivedTh, 4); // +3–5 days customs -> warehouse
@@ -162,7 +166,7 @@ function askClaude(question, role, lang){
     if(can(role,'unpaid'))   parts.push(fmtUnpaid(lang));
     if(can(role,'orders'))   parts.push(fmtOrders(lang));
     if(can(role,'stock'))    parts.push(fmtStock(lang));
-    if(can(role,'incoming')) parts.push(fmtIncoming(lang));
+    if(can(role,'incoming')) parts.push(fmtIncomingFull(lang));
     var langName = de(lang) ? 'German' : 'Thai';
     var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
       method:'post', contentType:'application/json',
