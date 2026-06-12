@@ -830,9 +830,15 @@ textarea{resize:none}
     <div style="border:1.5px solid var(--border);border-radius:var(--rs);padding:12px;margin-bottom:14px;background:var(--bg2)">
       <div class="stit" style="margin-bottom:6px"><i class="ti ti-table-export"></i> Google Sheets Sync</div>
       <div style="font-size:11px;color:var(--text2);margin-bottom:10px">One-time import of all orders since 1/6/2026 to the connected Sheet. Run the dry-run first to preview — it writes nothing.</div>
-      <div style="display:flex;gap:8px">
+      <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:4px">App → Sheets (new deliveries)</div>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
         <button type="button" class="btnsm" style="flex:1;justify-content:center" onclick="syncToSheets({dryRun:true})"><i class="ti ti-eye"></i> Dry-run preview</button>
         <button type="button" class="btnsm btnsmp" style="flex:1;justify-content:center" onclick="if(confirm('Write all orders since 1/6/2026 to Google Sheets now? Duplicates are skipped automatically.'))syncToSheets({dryRun:false})"><i class="ti ti-cloud-upload"></i> Run import</button>
+      </div>
+      <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:4px">Sheets (mirror) → App (one-time backfill)</div>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="btnsm" style="flex:1;justify-content:center" onclick="importFromMirror({dryRun:true})"><i class="ti ti-eye"></i> Dry-run preview</button>
+        <button type="button" class="btnsm btnsmp" style="flex:1;justify-content:center" onclick="if(confirm('Import all mirror orders since 1/6/2026 into the app as delivered? Orders already in the app are skipped.'))importFromMirror({dryRun:false})"><i class="ti ti-download"></i> Import to app</button>
       </div>
     </div>
     <div class="stit">Revenue / รายได้</div>
@@ -4086,6 +4092,7 @@ function sheetsPost(items, dryRun){
 function sheetsSyncOrder(o){
   try{
     if(!SHEETS_WEBAPP_URL || !o) return;
+    if(o._importedFromMirror) return; // came from the mirror — never write back
     var item = sheetsBuildItem(o);
     if(!item) return;
     sheetsPost([item], false)
@@ -4156,6 +4163,152 @@ function syncToSheets(opts){
       '\nFailed: '+res.failed);
     return res;
   }).catch(function(err){ console.error(err); alert('Sheets sync error: '+err.message); });
+}
+
+// ════════════════════════════════════════════════════════════
+//  MIRROR → APP IMPORT  (one-time, reads the master mirror tabs)
+// ════════════════════════════════════════════════════════════
+var MIRROR_TABS = ['BKK-mirror','North-mirror','NE-mirror','East-mirror','South-mirror'];
+
+function _mpad(n){ return (n<10?'0':'')+n; }
+function mirrorParseDate(c){ // → 'YYYY-MM-DD'
+  if(c==null || c==='') return '';
+  var s = String(c);
+  if(s.indexOf('T')>0){ var d=new Date(s); if(!isNaN(d)) return d.getFullYear()+'-'+_mpad(d.getMonth()+1)+'-'+_mpad(d.getDate()); }
+  var m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); // DD/MM/YYYY
+  if(m) return m[3]+'-'+_mpad(parseInt(m[2],10))+'-'+_mpad(parseInt(m[1],10));
+  return s;
+}
+function mirrorIsOrderNo(b){ b=String(b||'').trim(); return /^#\s*\d+/.test(b) || /^\d-\d+/.test(b); }
+function mirrorNum(v){ return parseFloat(String(v==null?'':v).replace(/[^0-9.\-]/g,''))||0; }
+function mirrorZone(id){
+  if(id.charAt(0)==='#') return 'Bangkok';
+  if(id.indexOf('1-')===0) return 'Northern';
+  if(id.indexOf('2-')===0) return 'Northeastern';
+  if(id.indexOf('3-')===0) return 'Eastern';
+  if(id.indexOf('4-')===0) return 'Southern';
+  if(id.indexOf('5-')===0) return 'Bangkok';
+  return '';
+}
+function mirrorClassify(code){
+  code = String(code||'').toUpperCase().trim();
+  if(/^L-?P/.test(code)) return 'lcorner';
+  if(/^L/.test(code))    return 'lcorner';
+  if(/^T/.test(code))    return 'tedge';
+  if(/^U/.test(code))    return 'uedge';
+  return 'panel'; // KP*, K-PVC*, etc.
+}
+// Group raw rows into orders: a row with a real order-no in col B starts a
+// new order; following rows with a product code but empty B are its sub-rows.
+function mirrorGroup(rows){
+  var out=[], cur=null;
+  rows.forEach(function(row){
+    var B=String(row[1]==null?'':row[1]).trim();
+    var D=String(row[3]==null?'':row[3]).trim();
+    if(mirrorIsOrderNo(B)){ if(cur) out.push(cur); cur={raw:row, products: D?[row]:[]}; }
+    else if(cur && D){ cur.products.push(row); }
+  });
+  if(cur) out.push(cur);
+  return out;
+}
+// Convert one grouped order into an app order object (status: delivered).
+function mirrorToAppOrder(g){
+  var m=g.raw;
+  var id=String(m[1]).trim().replace(/\s+/g,'');
+  var date=mirrorParseDate(m[2]);
+  var clips=mirrorNum(m[7]), shipping=mirrorNum(m[8]), discount=mirrorNum(m[9]);
+  var total=mirrorNum(m[10]), paidOrigin=mirrorNum(m[11]), codOutstanding=mirrorNum(m[14]);
+  var contact=String(m[16]||'').trim(), custAddr=String(m[17]||'').trim();
+  var paid = !(codOutstanding>0); // col O has a number → still unpaid
+
+  var lineItems=[], panels=[], lcorners=[], totalQty=0;
+  g.products.forEach(function(r){
+    var code=String(r[3]||'').toUpperCase().trim(); if(!code) return;
+    var qty=mirrorNum(r[4]), price=mirrorNum(r[5]), amt=mirrorNum(r[6])||qty*price;
+    var type=mirrorClassify(code);
+    lineItems.push({type:type, code:code, qty:qty, unitPrice:price, amount:amt});
+    if(type==='panel'){ panels.push(code+' × '+qty); totalQty+=qty; }
+    else lcorners.push(code+' × '+qty);
+  });
+  if(shipping>0) lineItems.push({type:'delivery',code:'Delivery / ค่าจัดส่ง',qty:1,unitPrice:shipping,amount:shipping});
+  if(discount>0) lineItems.push({type:'discount',code:'Discount / ส่วนลด',qty:1,unitPrice:-discount,amount:-discount});
+
+  var o={
+    id:id, date:date, zone:mirrorZone(id),
+    customer: custAddr||'—', phone:'—', address: custAddr||'—', location:'',
+    contact: contact,
+    panels: panels.length?panels.join(' · '):'—',
+    lcorner: lcorners.length?lcorners.join(' · '):'—',
+    clips:clips, boxes:Math.max(1,Math.ceil(totalQty/10)),
+    total:total, status:'delivered', notes:'',
+    createdBy:'Mirror import', editedBy:'',
+    lineItems:lineItems,
+    statusLog:[{status:'delivered',time:'00:00',by:'Mirror import'}],
+    _importedFromMirror:true
+  };
+  if(paid){ o.payMethod = paidOrigin>0?'online':'cash'; o.paidBy='Mirror import'; o.payDate=date; }
+  else    { o.codOutstanding = codOutstanding; }
+  return o;
+}
+
+// Main entry. dryRun defaults TRUE. Reads mirror tabs via the web app,
+// builds delivered orders ≥ cutoff, dedups against existing app orders.
+function importFromMirror(opts){
+  opts=opts||{};
+  var dryRun = opts.dryRun !== false;
+  if(!SHEETS_WEBAPP_URL){ alert('Set SHEETS_WEBAPP_URL first.'); return; }
+  return fetch(SHEETS_WEBAPP_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({token:SHEETS_TOKEN, action:'readMirror'})})
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      if(!res || !res.ok){ alert('Read failed: '+((res&&res.error)||'unknown — did Gogi redeploy the script?')); return; }
+      var all=[];
+      MIRROR_TABS.forEach(function(name){
+        mirrorGroup(res.tabs[name]||[]).forEach(function(g){ all.push(mirrorToAppOrder(g)); });
+      });
+      var cand = all.filter(function(o){ return o.date && o.date >= SHEETS_CUTOFF; });
+      var existing={}; orders.forEach(function(o){ existing[o.id]=true; });
+      var toAdd = cand.filter(function(o){ return !existing[o.id]; });
+      var dups = cand.length - toAdd.length;
+      if(dryRun){ mirrorImportPreview(toAdd, cand.length, dups); return; }
+      toAdd.forEach(function(o){ orders.unshift(o); });
+      syncOrders(); try{ofRenderOrders();}catch(e){} try{mgRender();}catch(e){} try{payUpdateBadge();}catch(e){}
+      alert('Mirror import done.\n\nImported: '+toAdd.length+
+            '\nSkipped (already in app): '+dups+
+            '\nCandidates ≥ '+SHEETS_CUTOFF+': '+cand.length);
+    })
+    .catch(function(err){ console.error(err); alert('Import error: '+err.message); });
+}
+
+function mirrorImportPreview(list, totalCand, dups){
+  var paidN=list.filter(function(o){return !!o.payMethod;}).length;
+  var html='<div style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.remove()">'
+    +'<div style="background:var(--bg);border-radius:12px;max-width:900px;width:100%;max-height:88vh;overflow:auto;padding:18px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+    +'<div style="font-weight:800;font-size:15px">Mirror import — dry-run · nothing written</div>'
+    +'<button onclick="this.closest(\'[style*=fixed]\').remove()" style="border:none;background:var(--bg2);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:16px">✕</button></div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Would import <b>'+list.length+'</b> orders ('+paidN+' paid · '+(list.length-paidN)+' unpaid) · '+dups+' already in app skipped · '+totalCand+' candidates ≥ '+SHEETS_CUTOFF+'</div>';
+  if(!list.length){ html+='<div style="color:var(--text2);font-size:13px;padding:20px;text-align:center">Nothing new to import.</div>'; }
+  else{
+    html+='<table style="border-collapse:collapse;font-size:12px;width:100%"><tr>'
+      +['Order','Date','Zone','Paid?','Products','Total','Customer'].map(function(h){return '<th style="border:1px solid var(--border);padding:4px 8px;background:var(--bg2);text-align:left">'+h+'</th>';}).join('')+'</tr>';
+    list.forEach(function(o){
+      var prod=o.lineItems.filter(function(x){return ['panel','lcorner','tedge','uedge'].indexOf(x.type)>=0;})
+                          .map(function(x){return x.code+'×'+x.qty;}).join(', ');
+      html+='<tr>'
+        +'<td style="border:1px solid var(--border);padding:4px 8px;font-weight:600">'+o.id+'</td>'
+        +'<td style="border:1px solid var(--border);padding:4px 8px">'+o.date+'</td>'
+        +'<td style="border:1px solid var(--border);padding:4px 8px">'+o.zone+'</td>'
+        +'<td style="border:1px solid var(--border);padding:4px 8px">'+(o.payMethod?'✅ '+o.payMethod:'❌ unpaid '+(o.codOutstanding||''))+'</td>'
+        +'<td style="border:1px solid var(--border);padding:4px 8px">'+prod+'</td>'
+        +'<td style="border:1px solid var(--border);padding:4px 8px;text-align:right">'+Number(o.total).toLocaleString()+'</td>'
+        +'<td style="border:1px solid var(--border);padding:4px 8px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(o.customer||'')+'</td>'
+        +'</tr>';
+    });
+    html+='</table>';
+  }
+  html+='</div></div>';
+  var wrap=document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap.firstChild);
 }
 
 function confirmDelivery(){

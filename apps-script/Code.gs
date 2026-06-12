@@ -24,6 +24,9 @@ var TOKEN = 'kp-7h3x9q2';
 // The ONLY tabs this script will ever write to.
 var ALLOWED_TABS = ['BKK-app', 'North-app', 'NE-app', 'East-app', 'South-app'];
 
+// Read-only source tabs (master mirror) for the one-time import.
+var MIRROR_TABS = ['BKK-mirror', 'North-mirror', 'NE-mirror', 'East-mirror', 'South-mirror'];
+
 function doGet() {
   return _json({ ok: true, service: 'KP Wallpanel Sheets Sync' });
 }
@@ -32,6 +35,9 @@ function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
     if (body.token !== TOKEN) return _json({ error: 'unauthorized' });
+
+    // Read action: return raw A–V values of the mirror tabs (one-time import)
+    if (body.action === 'readMirror') return _readMirror();
 
     var dryRun = !!body.dryRun;
     var items = body.items || [];
@@ -84,6 +90,20 @@ function doPost(e) {
   } catch (err) {
     return _json({ error: String(err) });
   }
+}
+
+/** Read raw A–V values from every mirror tab (read-only). */
+function _readMirror() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var out = {};
+  MIRROR_TABS.forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) { out[name] = []; return; }
+    var last = sh.getLastRow();
+    if (last < 1) { out[name] = []; return; }
+    out[name] = sh.getRange(1, 1, last, 22).getValues(); // columns A–V
+  });
+  return _json({ ok: true, tabs: out });
 }
 
 /** Read all order numbers currently in column B of a tab. */
