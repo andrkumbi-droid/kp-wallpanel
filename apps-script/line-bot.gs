@@ -21,8 +21,30 @@ var FIREBASE_URL = 'https://kp-wallpanel-default-rtdb.asia-southeast1.firebaseda
 var FIREBASE_SECRET = '';   // only if your DB read rules require auth (leave '' if reads are open)
 var ANTHROPIC_API_KEY = ''; // only for free-form AI questions (leave '' to disable AI, buttons still work)
 var MODEL = 'claude-3-5-haiku-latest'; // cheap + fast; upgrade if you like
-var ALLOWED_LINE_IDS = []; // boss's LINE userId(s). EMPTY = everyone allowed. Fill to restrict!
 var TZ = 'Asia/Bangkok';
+
+// ── ACCESS CONTROL ─────────────────────────────────────────
+// START SIMPLE: leave USERS empty -> EVERYONE who messages the bot
+// sees EVERYTHING. (Good for the initial rollout / testing.)
+//
+// LATER, to add staff and restrict them, fill USERS with LINE userIds:
+//   var USERS = { 'Uboss...':'admin', 'Uandre...':'admin', 'Ustaff1...':'staff' };
+// Anyone NOT listed is then denied. 'staff' permissions are set below.
+var USERS = {};
+
+// What each role may see. To restrict employees later, just flip the
+// 'staff' flags to false — no other code changes needed.
+var ROLE_PERMS = {
+  admin: { revenue:true, unpaid:true, stock:true, orders:true },
+  staff: { revenue:true, unpaid:true, stock:true, orders:true }  // start: all; tighten later
+};
+
+function userRole(userId){
+  if(!Object.keys(USERS).length) return 'admin'; // open mode during setup
+  return USERS[userId] || null;                   // null = not on the list = denied
+}
+function can(role, area){ var p = ROLE_PERMS[role]; return !!(p && p[area]); }
+function denied(){ return 'ขออภัย คุณไม่มีสิทธิ์ดูข้อมูลนี้ / Dafür hast du keine Berechtigung.'; }
 
 // ── Webhook entry ──────────────────────────────────────────
 function doPost(e){
@@ -37,22 +59,23 @@ function doGet(){ return ContentService.createTextOutput('KP Wallpanel LINE bot 
 function handleEvent(ev){
   if(ev.type !== 'message' || !ev.message || ev.message.type !== 'text') return;
   var userId = ev.source && ev.source.userId;
-  if(ALLOWED_LINE_IDS.length && ALLOWED_LINE_IDS.indexOf(userId) < 0){
+  var role = userRole(userId);
+  if(!role){
     return reply(ev.replyToken, [textMsg('ขออภัย คุณไม่มีสิทธิ์เข้าถึงข้อมูลนี้ / Kein Zugriff.')]);
   }
-  var answer = route((ev.message.text || '').trim());
-  reply(ev.replyToken, [withMenu(textMsg(answer))]);
+  var answer = route((ev.message.text || '').trim(), role);
+  reply(ev.replyToken, [withMenu(textMsg(answer), role)]);
 }
 
-// ── Routing: keyword → canned answer, else Claude ──────────
-function route(text){
+// ── Routing: keyword → canned answer (role-checked), else Claude ──
+function route(text, role){
   var t = text.toLowerCase();
-  if(/umsatz|revenue|ยอดขาย|รายได้|sales/.test(t))         return fmtRevenue();
-  if(/unpaid|offen|zahlung|ค้างชำระ|cod|ยังไม่/.test(t))     return fmtUnpaid();
-  if(/lager|stock|สต็อก|คลัง|bestand/.test(t))              return fmtStock();
-  if(/order|bestell|ออเดอร์|ออเด/.test(t))                 return fmtOrders();
+  if(/umsatz|revenue|ยอดขาย|รายได้|sales/.test(t))         return can(role,'revenue') ? fmtRevenue() : denied();
+  if(/unpaid|offen|zahlung|ค้างชำระ|cod|ยังไม่/.test(t))     return can(role,'unpaid')  ? fmtUnpaid()  : denied();
+  if(/lager|stock|สต็อก|คลัง|bestand/.test(t))              return can(role,'stock')   ? fmtStock()   : denied();
+  if(/order|bestell|ออเดอร์|ออเด/.test(t))                 return can(role,'orders')  ? fmtOrders()  : denied();
   if(/hilfe|help|menu|เมนู|\?/.test(t))                     return fmtHelp();
-  if(ANTHROPIC_API_KEY) return askClaude(text);
+  if(ANTHROPIC_API_KEY) return askClaude(text, role);
   return 'เลือกเมนูด้านล่าง 👇 / Bitte unten ein Thema wählen.';
 }
 
@@ -135,9 +158,16 @@ function fmtHelp(){
 }
 
 // ── Free-form questions via Claude (optional) ──────────────
-function askClaude(question){
+function askClaude(question, role){
   try{
-    var ctx = fmtRevenue() + '\n\n' + fmtUnpaid() + '\n\n' + fmtOrders() + '\n\n' + fmtStock();
+    // Only feed Claude the data the user's role is allowed to see,
+    // so a restricted staff member can't extract it via free-form text.
+    var parts = [];
+    if(can(role,'revenue')) parts.push(fmtRevenue());
+    if(can(role,'unpaid'))  parts.push(fmtUnpaid());
+    if(can(role,'orders'))  parts.push(fmtOrders());
+    if(can(role,'stock'))   parts.push(fmtStock());
+    var ctx = parts.join('\n\n');
     var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
       method:'post', contentType:'application/json',
       headers:{ 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version':'2023-06-01' },
@@ -158,13 +188,13 @@ function askClaude(question){
 
 // ── LINE messaging helpers ─────────────────────────────────
 function textMsg(t){ return { type:'text', text:t }; }
-function withMenu(msg){
-  msg.quickReply = { items: [
-    qr('💰 Umsatz','Umsatz'),
-    qr('⏳ Offen','Offene Zahlungen'),
-    qr('📦 Lager','Lager'),
-    qr('📊 Orders','Orders')
-  ]};
+function withMenu(msg, role){
+  var items = [];
+  if(can(role,'revenue')) items.push(qr('💰 Umsatz','Umsatz'));
+  if(can(role,'unpaid'))  items.push(qr('⏳ Offen','Offene Zahlungen'));
+  if(can(role,'stock'))   items.push(qr('📦 Lager','Lager'));
+  if(can(role,'orders'))  items.push(qr('📊 Orders','Orders'));
+  if(items.length) msg.quickReply = { items: items };
   return msg;
 }
 function qr(label, text){ return { type:'action', action:{ type:'message', label:label, text:text } }; }
