@@ -45,6 +45,13 @@ function userInfo(userId){
 }
 function can(role, area){ var p = ROLE_PERMS[role]; return !!(p && p[area]); }
 function de(lang){ return lang === 'de'; }
+// Guess language from the message (used in open mode before users are configured):
+// Thai characters -> Thai, otherwise Latin letters -> German.
+function detectLang(t){
+  if(/[฀-๿]/.test(t)) return 'th';
+  if(/[a-zA-Z]/.test(t)) return 'de';
+  return DEFAULT_LANG;
+}
 function denied(lang){ return de(lang) ? 'Dafür hast du keine Berechtigung.' : 'คุณไม่มีสิทธิ์ดูข้อมูลนี้'; }
 
 // ── Webhook entry ──────────────────────────────────────────
@@ -65,8 +72,10 @@ function handleEvent(ev){
   if(!info){
     return reply(ev.replyToken, [textMsg('ไม่มีสิทธิ์เข้าถึง / Kein Zugriff.\nSchreibe "meine id".')]);
   }
-  var answer = route(text0, info.role, info.lang);
-  reply(ev.replyToken, [withMenu(textMsg(answer), info.role, info.lang)]);
+  // Configured users use their fixed language; in open mode, detect from the message.
+  var lang = Object.keys(USERS).length ? info.lang : detectLang(text0);
+  var answer = route(text0, info.role, lang);
+  reply(ev.replyToken, [withMenu(textMsg(answer), info.role, lang)]);
 }
 
 function route(text, role, lang){
