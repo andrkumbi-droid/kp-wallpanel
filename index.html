@@ -470,6 +470,7 @@ textarea{resize:none}
         try{payUpdateBadge();}catch(e){}
         try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
         try{if(document.getElementById('ofv-sales')&&document.getElementById('ofv-sales').classList.contains('active'))ofDailyRender();}catch(e){}
+        try{sheetsAutoSyncInit();}catch(e){} // start mirror auto-sync once orders are loaded
       });
       db.ref('wOrders').on('value', function(snap) {
         wOrders = snap.val() ? Object.values(snap.val()) : [];
@@ -835,10 +836,10 @@ textarea{resize:none}
         <button type="button" class="btnsm" style="flex:1;justify-content:center" onclick="syncToSheets({dryRun:true})"><i class="ti ti-eye"></i> Dry-run preview</button>
         <button type="button" class="btnsm btnsmp" style="flex:1;justify-content:center" onclick="if(confirm('Write all orders since 1/6/2026 to Google Sheets now? Duplicates are skipped automatically.'))syncToSheets({dryRun:false})"><i class="ti ti-cloud-upload"></i> Run import</button>
       </div>
-      <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:4px">Sheets (mirror) → App (one-time backfill)</div>
+      <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:4px">Sheets (mirror) → App <span style="color:var(--green);font-weight:600">· auto-sync on (start + every 5 min)</span></div>
       <div style="display:flex;gap:8px">
         <button type="button" class="btnsm" style="flex:1;justify-content:center" onclick="importFromMirror({dryRun:true})"><i class="ti ti-eye"></i> Dry-run preview</button>
-        <button type="button" class="btnsm btnsmp" style="flex:1;justify-content:center" onclick="if(confirm('Import all mirror orders since 1/6/2026 into the app as delivered? Orders already in the app are skipped.'))importFromMirror({dryRun:false})"><i class="ti ti-download"></i> Import to app</button>
+        <button type="button" class="btnsm btnsmp" style="flex:1;justify-content:center" onclick="if(confirm('Pull new mirror orders since 1/6/2026 into the app now? Orders already in the app are skipped.'))importFromMirror({dryRun:false})"><i class="ti ti-refresh"></i> Sync now</button>
       </div>
     </div>
     <div class="stit">Revenue / รายได้</div>
@@ -4256,12 +4257,13 @@ function mirrorToAppOrder(g){
 function importFromMirror(opts){
   opts=opts||{};
   var dryRun = opts.dryRun !== false;
-  if(!SHEETS_WEBAPP_URL){ alert('Set SHEETS_WEBAPP_URL first.'); return; }
+  var silent = !!opts.silent; // auto-runs: no alerts / no preview popup
+  if(!SHEETS_WEBAPP_URL){ if(!silent) alert('Set SHEETS_WEBAPP_URL first.'); return; }
   return fetch(SHEETS_WEBAPP_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
       body:JSON.stringify({token:SHEETS_TOKEN, action:'readMirror'})})
     .then(function(r){ return r.json(); })
     .then(function(res){
-      if(!res || !res.ok){ alert('Read failed: '+((res&&res.error)||'unknown — did Gogi redeploy the script?')); return; }
+      if(!res || !res.ok){ if(!silent) alert('Read failed: '+((res&&res.error)||'unknown — did Gogi redeploy the script?')); return; }
       var all=[];
       MIRROR_TABS.forEach(function(name){
         mirrorGroup(res.tabs[name]||[]).forEach(function(g){ all.push(mirrorToAppOrder(g)); });
@@ -4270,14 +4272,39 @@ function importFromMirror(opts){
       var existing={}; orders.forEach(function(o){ existing[o.id]=true; });
       var toAdd = cand.filter(function(o){ return !existing[o.id]; });
       var dups = cand.length - toAdd.length;
-      if(dryRun){ mirrorImportPreview(toAdd, cand.length, dups); return; }
-      toAdd.forEach(function(o){ orders.unshift(o); });
-      syncOrders(); try{ofRenderOrders();}catch(e){} try{mgRender();}catch(e){} try{payUpdateBadge();}catch(e){}
-      alert('Mirror import done.\n\nImported: '+toAdd.length+
-            '\nSkipped (already in app): '+dups+
-            '\nCandidates ≥ '+SHEETS_CUTOFF+': '+cand.length);
+      if(dryRun){ if(!silent) mirrorImportPreview(toAdd, cand.length, dups); return toAdd; }
+      if(toAdd.length){
+        toAdd.forEach(function(o){ orders.unshift(o); });
+        syncOrders(); try{ofRenderOrders();}catch(e){} try{mgRender();}catch(e){} try{payUpdateBadge();}catch(e){} try{if(typeof payRender==='function')payRender();}catch(e){}
+      }
+      if(silent){
+        if(toAdd.length) console.log('Mirror auto-sync: +'+toAdd.length+' new order(s)');
+      } else {
+        alert('Mirror import done.\n\nImported: '+toAdd.length+
+              '\nSkipped (already in app): '+dups+
+              '\nCandidates ≥ '+SHEETS_CUTOFF+': '+cand.length);
+      }
+      return toAdd;
     })
-    .catch(function(err){ console.error(err); alert('Import error: '+err.message); });
+    .catch(function(err){ console.error('Mirror import error:', err); if(!silent) alert('Import error: '+err.message); });
+}
+
+// Auto-sync plumbing: runs the import silently, but only AFTER the
+// Firebase orders have loaded (otherwise it could overwrite live data).
+var _mirrorOrdersLoaded = false;
+var _mirrorAutoStarted  = false;
+function sheetsAutoSync(){
+  if(!SHEETS_WEBAPP_URL || !_mirrorOrdersLoaded) return;
+  importFromMirror({dryRun:false, silent:true});
+}
+// Call once the first orders snapshot is in; starts the start-up sync
+// and the periodic poll (every 5 minutes).
+function sheetsAutoSyncInit(){
+  _mirrorOrdersLoaded = true;
+  if(_mirrorAutoStarted) return;
+  _mirrorAutoStarted = true;
+  setTimeout(sheetsAutoSync, 1500);            // shortly after load
+  setInterval(sheetsAutoSync, 5*60*1000);      // and every 5 minutes
 }
 
 function mirrorImportPreview(list, totalCand, dups){
