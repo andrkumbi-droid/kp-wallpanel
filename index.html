@@ -4368,6 +4368,21 @@ function mirrorToAppOrder(g){
   return o;
 }
 
+// Deduct an order's real products (panels, corners, trims) from stock,
+// matching by code. Clamped at 0 like the in-app order creation does.
+function deductOrderStock(o){
+  if(!o || !o.lineItems || typeof stockItems==='undefined') return;
+  var PRODUCT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  o.lineItems.forEach(function(li){
+    if(!PRODUCT[li.type]) return;
+    var code=(li.code||'').toUpperCase().trim();
+    var qty=parseInt(li.qty)||0;
+    if(!code||!qty) return;
+    var st=stockItems.find(function(x){ return (x.code||'').toUpperCase()===code; });
+    if(st){ st.qty=Math.max(0,(parseInt(st.qty)||0)-qty); }
+  });
+}
+
 // Main entry. dryRun defaults TRUE. Reads mirror tabs via the web app,
 // builds delivered orders ≥ cutoff, dedups against existing app orders.
 function importFromMirror(opts){
@@ -4390,8 +4405,8 @@ function importFromMirror(opts){
       var dups = cand.length - toAdd.length;
       if(dryRun){ if(!silent) mirrorImportPreview(toAdd, cand.length, dups); return toAdd; }
       if(toAdd.length){
-        toAdd.forEach(function(o){ orders.unshift(o); });
-        syncOrders(); try{ofRenderOrders();}catch(e){} try{mgRender();}catch(e){} try{payUpdateBadge();}catch(e){} try{if(typeof payRender==='function')payRender();}catch(e){}
+        toAdd.forEach(function(o){ orders.unshift(o); deductOrderStock(o); });
+        syncOrders(); try{syncStockItems();}catch(e){} try{ofRenderOrders();}catch(e){} try{mgRender();}catch(e){} try{payUpdateBadge();}catch(e){} try{if(typeof payRender==='function')payRender();}catch(e){} try{if(typeof ofRenderStock==='function')ofRenderStock();}catch(e){}
       }
       if(silent){
         if(toAdd.length) console.log('Mirror auto-sync: +'+toAdd.length+' new order(s)');
