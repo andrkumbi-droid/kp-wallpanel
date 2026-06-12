@@ -4402,8 +4402,36 @@ function deductImportedStockOnce(){
   }
 }
 
+// Reverse a stock deduction (add the products back).
+function addOrderStock(o){
+  if(!o || !o.lineItems || typeof stockItems==='undefined') return;
+  var PRODUCT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  o.lineItems.forEach(function(li){
+    if(!PRODUCT[li.type]) return;
+    var code=(li.code||'').toUpperCase().trim(); var qty=parseInt(li.qty)||0;
+    if(!code||!qty) return;
+    var st=stockItems.find(function(x){ return (x.code||'').toUpperCase()===code; });
+    if(st){ st.qty=(parseInt(st.qty)||0)+qty; }
+  });
+}
+// Signature of an order's product/financial data — to detect sheet changes.
+function mirrorOrderSig(o){
+  return (o.panels||'')+'|'+(o.lcorner||'')+'|'+(o.total||'')+'|'+(o.clips||'');
+}
+// Update an existing imported order in place from a fresh sheet version.
+// Refreshes products/totals/customer; preserves app-side state (payment,
+// shipper, status, notes). Re-syncs stock by the difference.
+function mirrorApplyUpdate(ex, n){
+  if(ex._stockDeducted){ addOrderStock(ex); ex._stockDeducted=false; } // give old qty back
+  ex.panels=n.panels; ex.lcorner=n.lcorner; ex.lineItems=n.lineItems;
+  ex.clips=n.clips; ex.total=n.total; ex.boxes=n.boxes;
+  ex.customer=n.customer; ex.address=n.address; ex.zone=n.zone; ex.contact=n.contact; ex.date=n.date;
+  // preserved: payMethod, paidBy, payDate, shipper, status, notes, id
+  deductOrderStock(ex); // deduct the new qty
+}
+
 // Main entry. dryRun defaults TRUE. Reads mirror tabs via the web app,
-// builds delivered orders ≥ cutoff, dedups against existing app orders.
+// builds delivered orders ≥ cutoff, adds new ones and updates changed ones.
 function importFromMirror(opts){
   opts=opts||{};
   var dryRun = opts.dryRun !== false;
@@ -4419,19 +4447,26 @@ function importFromMirror(opts){
         mirrorGroup(res.tabs[name]||[]).forEach(function(g){ all.push(mirrorToAppOrder(g)); });
       });
       var cand = all.filter(function(o){ return o.date && o.date >= SHEETS_CUTOFF; });
-      var existing={}; orders.forEach(function(o){ existing[o.id]=true; });
-      var toAdd = cand.filter(function(o){ return !existing[o.id]; });
-      var dups = cand.length - toAdd.length;
-      if(dryRun){ if(!silent) mirrorImportPreview(toAdd, cand.length, dups); return toAdd; }
-      if(toAdd.length){
+      var existing={}; orders.forEach(function(o){ existing[o.id]=o; });
+      var toAdd=[], toUpdate=[];
+      cand.forEach(function(n){
+        var ex=existing[n.id];
+        if(!ex){ toAdd.push(n); }
+        else if(ex._importedFromMirror && mirrorOrderSig(ex)!==mirrorOrderSig(n)){ toUpdate.push({ex:ex,n:n}); }
+      });
+      var unchanged = cand.length - toAdd.length - toUpdate.length;
+      if(dryRun){ if(!silent) mirrorImportPreview(toAdd, cand.length, unchanged, toUpdate.length); return toAdd; }
+      if(toAdd.length || toUpdate.length){
         toAdd.forEach(function(o){ orders.unshift(o); deductOrderStock(o); });
+        toUpdate.forEach(function(u){ mirrorApplyUpdate(u.ex, u.n); });
         syncOrders(); try{syncStockItems();}catch(e){} try{ofRenderOrders();}catch(e){} try{mgRender();}catch(e){} try{payUpdateBadge();}catch(e){} try{if(typeof payRender==='function')payRender();}catch(e){} try{if(typeof ofRenderStock==='function')ofRenderStock();}catch(e){}
       }
       if(silent){
-        if(toAdd.length) console.log('Mirror auto-sync: +'+toAdd.length+' new order(s)');
+        if(toAdd.length||toUpdate.length) console.log('Mirror auto-sync: +'+toAdd.length+' new, '+toUpdate.length+' updated');
       } else {
         alert('Mirror import done.\n\nImported: '+toAdd.length+
-              '\nSkipped (already in app): '+dups+
+              '\nUpdated (sheet changed): '+toUpdate.length+
+              '\nUnchanged (skipped): '+unchanged+
               '\nCandidates ≥ '+SHEETS_CUTOFF+': '+cand.length);
       }
       return toAdd;
@@ -4459,14 +4494,15 @@ function sheetsAutoSyncInit(){
   setInterval(sheetsAutoSync, 5*60*1000);      // and every 5 minutes
 }
 
-function mirrorImportPreview(list, totalCand, dups){
+function mirrorImportPreview(list, totalCand, dups, updateN){
+  updateN = updateN||0;
   var paidN=list.filter(function(o){return !!o.payMethod;}).length;
   var html='<div style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.remove()">'
     +'<div style="background:var(--bg);border-radius:12px;max-width:900px;width:100%;max-height:88vh;overflow:auto;padding:18px">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
     +'<div style="font-weight:800;font-size:15px">Mirror import — dry-run · nothing written</div>'
     +'<button onclick="this.closest(\'[style*=fixed]\').remove()" style="border:none;background:var(--bg2);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:16px">✕</button></div>'
-    +'<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Would import <b>'+list.length+'</b> orders ('+paidN+' paid · '+(list.length-paidN)+' unpaid) · '+dups+' already in app skipped · '+totalCand+' candidates ≥ '+SHEETS_CUTOFF+'</div>';
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Would import <b>'+list.length+'</b> new ('+paidN+' paid · '+(list.length-paidN)+' unpaid) · <b>'+updateN+'</b> updated · '+dups+' unchanged · '+totalCand+' candidates ≥ '+SHEETS_CUTOFF+'</div>';
   if(!list.length){ html+='<div style="color:var(--text2);font-size:13px;padding:20px;text-align:center">Nothing new to import.</div>'; }
   else{
     html+='<table style="border-collapse:collapse;font-size:12px;width:100%"><tr>'
