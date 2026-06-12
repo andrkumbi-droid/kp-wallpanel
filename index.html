@@ -4094,6 +4094,42 @@ function sheetsSyncOrder(o){
   }catch(err){ console.error('Sheets sync failed (non-blocking):', err); }
 }
 
+// Column A–V headers (for the local preview)
+var SHEETS_COLS = ['A Status','B Order#','C Date','D Code','E Qty','F Price','G Subtotal',
+  'H Clip/Lock','I Shipping','J Discount','K Total','L Pay-ต้นทาง','M Pay-รับยอด','N COD Date',
+  'O GrandTotal','P Delivery','Q Channel','R Customer+Address','S Ship/bill','T Pack','U Courier','V Notes'];
+
+// Local, browser-only preview — shows what WOULD be written to the
+// sheet without any Google setup. Opens a readable table overlay.
+function sheetsLocalPreview(items){
+  var html = '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.remove()">'
+    +'<div style="background:var(--bg);border-radius:12px;max-width:960px;width:100%;max-height:88vh;overflow:auto;padding:18px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+    +'<div style="font-weight:800;font-size:15px">Dry-run preview — '+items.length+' order(s) · nothing written</div>'
+    +'<button onclick="this.closest(\'[style*=fixed]\').remove()" style="border:none;background:var(--bg2);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:16px">✕</button></div>';
+  if(!items.length){
+    html += '<div style="color:var(--text2);font-size:13px;padding:20px;text-align:center">No orders on/after '+SHEETS_CUTOFF+' to sync.</div>';
+  }
+  items.forEach(function(it){
+    html += '<div style="margin-bottom:14px;border:1px solid var(--border);border-radius:8px;overflow:hidden">'
+      +'<div style="background:var(--blue-bg);color:var(--blue);font-weight:700;font-size:12px;padding:6px 10px">'
+      + it.orderNumber + '  →  ' + it.tab + '  ('+it.rows.length+' row'+(it.rows.length>1?'s':'')+')</div>'
+      +'<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:11px;white-space:nowrap">'
+      +'<tr>'+SHEETS_COLS.map(function(c){return '<th style="border:1px solid var(--border);padding:3px 6px;background:var(--bg2);font-weight:600;text-align:left">'+c+'</th>';}).join('')+'</tr>';
+    it.rows.forEach(function(row){
+      html += '<tr>'+row.map(function(cell){
+        var v = (cell===''||cell==null)?'<span style="color:var(--text3)">·</span>':String(cell);
+        return '<td style="border:1px solid var(--border);padding:3px 6px">'+v+'</td>';
+      }).join('')+'</tr>';
+    });
+    html += '</table></div></div>';
+  });
+  html += '</div></div>';
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  document.body.appendChild(wrap.firstChild);
+}
+
 // One-time retroactive import. dryRun defaults to TRUE for safety.
 // Includes every order on/after the cutoff except cancelled ones.
 function syncToSheets(opts){
@@ -4103,7 +4139,13 @@ function syncToSheets(opts){
     return (o.date||'') >= SHEETS_CUTOFF && o.status !== 'cancelled';
   });
   var items = list.map(sheetsBuildItem).filter(Boolean);
-  if(!SHEETS_WEBAPP_URL){ alert('Set SHEETS_WEBAPP_URL first (paste your Apps Script /exec URL in index.html).'); return; }
+  // No web app configured yet → show the local table preview instead.
+  if(!SHEETS_WEBAPP_URL){
+    if(!dryRun){ alert('Set SHEETS_WEBAPP_URL first (paste your Apps Script /exec URL in index.html) before a live import.'); return; }
+    console.log('Local preview: '+items.length+' orders');
+    sheetsLocalPreview(items);
+    return;
+  }
   console.log('syncToSheets: '+list.length+' orders, dryRun='+dryRun);
   return sheetsPost(items, dryRun).then(function(res){
     console.log('Backfill result:', res);
