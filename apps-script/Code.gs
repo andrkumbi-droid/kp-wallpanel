@@ -19,7 +19,7 @@ var SHEET_ID = '1VIEisPGwwVcarKJrqgZqSqFaUfyoX92BqO9P743_Y30';
 // Must match SHEETS_TOKEN in index.html. Change both to the same
 // random string. This is light protection against random POSTs —
 // worst case someone could append junk rows to the -app tabs.
-var TOKEN = 'CHANGE_ME_SHARED_TOKEN';
+var TOKEN = 'kp-7h3x9q2';
 
 // The ONLY tabs this script will ever write to.
 var ALLOWED_TABS = ['BKK-app', 'North-app', 'NE-app', 'East-app', 'South-app'];
