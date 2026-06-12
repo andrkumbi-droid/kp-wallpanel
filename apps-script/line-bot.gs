@@ -1,71 +1,55 @@
 /**
  * KP Wallpanel — LINE Bot (Apps Script Web App)
  * ------------------------------------------------------------
- * Lets a non-technical boss query the app's business data from
- * LINE: revenue, open payments, stock, order overview — via
- * tap-buttons (free) AND free-form questions (Claude, optional).
+ * Lets the boss / staff query the app's business data from LINE:
+ * revenue, open payments, stock, orders — via tap-buttons AND
+ * free-form questions (Claude). Replies per-user in ONE language
+ * (Thai for staff, German for Andre).
  *
- * Architecture:  LINE  ->  this web app (doPost webhook)
- *                      ->  Firebase RTDB (read app data)
- *                      ->  Claude API (for free-form questions)
- *                      ->  reply back to LINE
- *
- * Deploy as a SEPARATE Apps Script project (not the sheet sync one).
- * Deploy -> Web app -> Execute as: Me -> Anyone -> copy /exec URL,
- * paste it as the Webhook URL in the LINE Developers console.
+ * LINE -> doPost webhook -> Firebase RTDB -> (Claude) -> reply.
  */
 
-// ── CONFIG (fill these in) ─────────────────────────────────
-var LINE_TOKEN   = 'PUT_LINE_CHANNEL_ACCESS_TOKEN';   // LINE → Messaging API → Channel access token
+// ── CONFIG ─────────────────────────────────────────────────
+var LINE_TOKEN   = 'PUT_LINE_CHANNEL_ACCESS_TOKEN';
 var FIREBASE_URL = 'https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app';
-var FIREBASE_SECRET = '';   // only if your DB read rules require auth (leave '' if reads are open)
-var ANTHROPIC_API_KEY = ''; // only for free-form AI questions (leave '' to disable AI, buttons still work)
-var MODEL = 'claude-3-5-haiku-latest'; // cheap + fast; upgrade if you like
+var FIREBASE_SECRET = '';
+var ANTHROPIC_API_KEY = '';
+var MODEL = 'claude-3-5-haiku-latest';
 var TZ = 'Asia/Bangkok';
+var DEFAULT_LANG = 'th'; // language for unknown users / open mode (most users are Thai)
 
-// ── ACCESS CONTROL ─────────────────────────────────────────
-// START SIMPLE: leave USERS empty -> EVERYONE who messages the bot
-// sees EVERYTHING. (Good for the initial rollout / testing.)
-//
-// LATER, to add staff and restrict them, fill USERS with LINE userIds:
-//   var USERS = { 'Uboss...':'admin', 'Uandre...':'admin', 'Ustaff1...':'staff' };
-// Anyone NOT listed is then denied. 'staff' permissions are set below.
-//
-// >>> READY TEMPLATE for Pim, Bobby, Andre, Noy (all admin = see everything).
-//     Each person sends the bot the message "meine id" (or "whoami") once,
-//     gets their U... id back, then paste it here and re-deploy:
-//
+// ── ACCESS CONTROL + LANGUAGE ──────────────────────────────
+// Open mode: leave USERS empty -> everyone sees everything (in DEFAULT_LANG).
+// To restrict + set languages, list each LINE userId with role and lang:
 //   var USERS = {
-//     'U_PIM_ID':   'admin',  // Pim
-//     'U_BOBBY_ID': 'admin',  // Bobby
-//     'U_ANDRE_ID': 'admin',  // Andre
-//     'U_NOY_ID':   'admin',  // Noy
+//     'U_ANDRE': { role:'admin', lang:'de' },   // Andre  -> German
+//     'U_PIM'  : { role:'admin', lang:'th' },    // Pim    -> Thai
+//     'U_BOBBY': { role:'admin', lang:'th' },    // Bobby  -> Thai
+//     'U_NOY'  : { role:'admin', lang:'th' },    // Noy    -> Thai
 //   };
-//
-// Until the real ids are filled in, leave USERS empty so the bot stays
-// usable (open mode = everyone who messages it sees everything).
+// (lang: 'th' = Thai, 'de' = German. role: 'admin' = all, 'staff' = limited.)
+// Each person sends the bot "meine id" once to get their U... id.
 var USERS = {};
 
-// What each role may see. To restrict employees later, just flip the
-// 'staff' flags to false — no other code changes needed.
 var ROLE_PERMS = {
   admin: { revenue:true, unpaid:true, stock:true, orders:true },
-  staff: { revenue:true, unpaid:true, stock:true, orders:true }  // start: all; tighten later
+  staff: { revenue:true, unpaid:true, stock:true, orders:true }  // tighten later
 };
 
-function userRole(userId){
-  if(!Object.keys(USERS).length) return 'admin'; // open mode during setup
-  return USERS[userId] || null;                   // null = not on the list = denied
+function userInfo(userId){
+  if(!Object.keys(USERS).length) return { role:'admin', lang:DEFAULT_LANG }; // open mode
+  var u = USERS[userId];
+  if(!u) return null;
+  if(typeof u === 'string') return { role:u, lang:DEFAULT_LANG };
+  return { role:u.role || 'admin', lang:u.lang || DEFAULT_LANG };
 }
 function can(role, area){ var p = ROLE_PERMS[role]; return !!(p && p[area]); }
-function denied(){ return 'ขออภัย คุณไม่มีสิทธิ์ดูข้อมูลนี้ / Dafür hast du keine Berechtigung.'; }
+function de(lang){ return lang === 'de'; }
+function denied(lang){ return de(lang) ? 'Dafür hast du keine Berechtigung.' : 'คุณไม่มีสิทธิ์ดูข้อมูลนี้'; }
 
 // ── Webhook entry ──────────────────────────────────────────
 function doPost(e){
-  try{
-    var body = JSON.parse(e.postData.contents);
-    (body.events || []).forEach(handleEvent);
-  }catch(err){ /* swallow so LINE doesn't retry-storm */ }
+  try{ var body = JSON.parse(e.postData.contents); (body.events || []).forEach(handleEvent); }catch(err){}
   return ContentService.createTextOutput('OK');
 }
 function doGet(){ return ContentService.createTextOutput('KP Wallpanel LINE bot OK'); }
@@ -74,28 +58,26 @@ function handleEvent(ev){
   if(ev.type !== 'message' || !ev.message || ev.message.type !== 'text') return;
   var userId = ev.source && ev.source.userId;
   var text0 = (ev.message.text || '').trim();
-  // "whoami" works for ANYONE (so you can collect each person's LINE id to add them)
   if(/whoami|meine id|my ?id|ไอดี|user ?id/i.test(text0)){
-    return reply(ev.replyToken, [textMsg('Deine LINE userId / ไอดีของคุณ:\n' + (userId || '(unbekannt)') + '\n\nGib diese ID an Andre weiter, um freigeschaltet zu werden.')]);
+    return reply(ev.replyToken, [textMsg('LINE userId / ไอดี:\n' + (userId || '(?)'))]);
   }
-  var role = userRole(userId);
-  if(!role){
-    return reply(ev.replyToken, [textMsg('ขออภัย คุณไม่มีสิทธิ์เข้าถึงข้อมูลนี้ / Kein Zugriff.\n\nSchreibe "meine id" um deine LINE-ID zu sehen.')]);
+  var info = userInfo(userId);
+  if(!info){
+    return reply(ev.replyToken, [textMsg('ไม่มีสิทธิ์เข้าถึง / Kein Zugriff.\nSchreibe "meine id".')]);
   }
-  var answer = route((ev.message.text || '').trim(), role);
-  reply(ev.replyToken, [withMenu(textMsg(answer), role)]);
+  var answer = route(text0, info.role, info.lang);
+  reply(ev.replyToken, [withMenu(textMsg(answer), info.role, info.lang)]);
 }
 
-// ── Routing: keyword → canned answer (role-checked), else Claude ──
-function route(text, role){
+function route(text, role, lang){
   var t = text.toLowerCase();
-  if(/umsatz|revenue|ยอดขาย|รายได้|sales/.test(t))         return can(role,'revenue') ? fmtRevenue() : denied();
-  if(/unpaid|offen|zahlung|ค้างชำระ|cod|ยังไม่/.test(t))     return can(role,'unpaid')  ? fmtUnpaid()  : denied();
-  if(/lager|stock|สต็อก|คลัง|bestand/.test(t))              return can(role,'stock')   ? fmtStock()   : denied();
-  if(/order|bestell|ออเดอร์|ออเด/.test(t))                 return can(role,'orders')  ? fmtOrders()  : denied();
-  if(/hilfe|help|menu|เมนู|\?/.test(t))                     return fmtHelp();
-  if(ANTHROPIC_API_KEY) return askClaude(text, role);
-  return 'เลือกเมนูด้านล่าง 👇 / Bitte unten ein Thema wählen.';
+  if(/umsatz|revenue|ยอดขาย|รายได้|sales/.test(t))     return can(role,'revenue') ? fmtRevenue(lang) : denied(lang);
+  if(/unpaid|offen|zahlung|ค้างชำระ|cod|ยังไม่/.test(t)) return can(role,'unpaid')  ? fmtUnpaid(lang)  : denied(lang);
+  if(/lager|stock|สต็อก|คลัง|bestand/.test(t))          return can(role,'stock')   ? fmtStock(lang)   : denied(lang);
+  if(/order|bestell|ออเดอร์|ออเด/.test(t))             return can(role,'orders')  ? fmtOrders(lang)  : denied(lang);
+  if(/hilfe|help|menu|เมนู|\?/.test(t))                 return fmtHelp(lang);
+  if(ANTHROPIC_API_KEY) return askClaude(text, role, lang);
+  return de(lang) ? 'Bitte unten ein Thema wählen 👇' : 'เลือกเมนูด้านล่าง 👇';
 }
 
 // ── Firebase reads ─────────────────────────────────────────
@@ -106,113 +88,112 @@ function fbGet(path){
 }
 function getOrders(){ var o = fbGet('orders'); return o ? Object.keys(o).map(function(k){return o[k];}) : []; }
 function getStock(){ var s = fbGet('stockItems'); return s ? (Array.isArray(s) ? s.filter(Boolean) : Object.keys(s).map(function(k){return s[k];})) : []; }
-
 function amt(o){ return parseFloat(String(o && o.total!=null ? o.total : '0').replace(/[^0-9.]/g,'')) || 0; }
 function f(n){ return Math.round(n).toLocaleString('en-US'); }
 function dToday(){ return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd'); }
 function dMonth(){ return Utilities.formatDate(new Date(), TZ, 'yyyy-MM'); }
 function dYear(){  return Utilities.formatDate(new Date(), TZ, 'yyyy'); }
 
-// ── Data formatters ────────────────────────────────────────
-function fmtRevenue(){
+// ── Data formatters (per language) ─────────────────────────
+function fmtRevenue(lang){
   var os = getOrders();
   var paid = os.filter(function(o){ return o.status==='delivered' && o.payMethod; });
   var del  = os.filter(function(o){ return o.status==='delivered'; });
   var t=dToday(), mk=dMonth(), yk=dYear();
   function sum(arr, pred){ return arr.filter(pred).reduce(function(a,o){ return a+amt(o); },0); }
-  var pT=sum(paid,function(o){return (o.payDate||o.date||'')===t;}),  aT=sum(del,function(o){return (o.date||'')===t;});
+  var pT=sum(paid,function(o){return (o.payDate||o.date||'')===t;}), aT=sum(del,function(o){return (o.date||'')===t;});
   var pM=sum(paid,function(o){return (o.payDate||o.date||'').indexOf(mk)===0;}), aM=sum(del,function(o){return (o.date||'').indexOf(mk)===0;});
   var pY=sum(paid,function(o){return (o.payDate||o.date||'').indexOf(yk)===0;}), aY=sum(del,function(o){return (o.date||'').indexOf(yk)===0;});
-  return '💰 ยอดขาย / Umsatz\n\n'
-    + 'วันนี้ / Heute\n  จ่ายแล้ว ' + f(pT) + ' ฿  (รวม ' + f(aT) + ')\n\n'
-    + 'เดือนนี้ / Monat\n  จ่ายแล้ว ' + f(pM) + ' ฿  (รวม ' + f(aM) + ')\n\n'
-    + 'ปีนี้ / Jahr\n  จ่ายแล้ว ' + f(pY) + ' ฿  (รวม ' + f(aY) + ')\n\n'
-    + '(จ่ายแล้ว = bezahlt · รวม = inkl. unbezahlt)';
+  if(de(lang)){
+    return '💰 Umsatz\n\nHeute\n  Bezahlt '+f(pT)+' ฿  (gesamt '+f(aT)+')\n\n'
+         + 'Monat\n  Bezahlt '+f(pM)+' ฿  (gesamt '+f(aM)+')\n\n'
+         + 'Jahr\n  Bezahlt '+f(pY)+' ฿  (gesamt '+f(aY)+')';
+  }
+  return '💰 ยอดขาย\n\nวันนี้\n  จ่ายแล้ว '+f(pT)+' ฿  (รวม '+f(aT)+')\n\n'
+       + 'เดือนนี้\n  จ่ายแล้ว '+f(pM)+' ฿  (รวม '+f(aM)+')\n\n'
+       + 'ปีนี้\n  จ่ายแล้ว '+f(pY)+' ฿  (รวม '+f(aY)+')';
 }
 
-function fmtUnpaid(){
+function fmtUnpaid(lang){
   var os = getOrders();
   var unpaid = os.filter(function(o){ return o.status==='delivered' && !o.payMethod; });
   var total = unpaid.reduce(function(a,o){ return a+amt(o); }, 0);
   unpaid.sort(function(a,b){ return amt(b)-amt(a); });
-  var lines = unpaid.slice(0,15).map(function(o){
-    return '• ' + o.id + ' — ' + f(amt(o)) + ' ฿  ' + String(o.customer||'').slice(0,18);
-  });
-  return '⏳ ค้างชำระ / Offene Zahlungen\n\n'
-    + unpaid.length + ' orders · ' + f(total) + ' ฿ รวม\n\n'
-    + lines.join('\n') + (unpaid.length>15 ? ('\n… +'+(unpaid.length-15)+' more') : '');
+  var lines = unpaid.slice(0,15).map(function(o){ return '• '+o.id+' — '+f(amt(o))+' ฿  '+String(o.customer||'').slice(0,18); });
+  var head = de(lang) ? ('⏳ Offene Zahlungen\n\n'+unpaid.length+' Bestellungen · '+f(total)+' ฿\n\n')
+                      : ('⏳ ค้างชำระ\n\n'+unpaid.length+' orders · '+f(total)+' ฿\n\n');
+  return head + lines.join('\n') + (unpaid.length>15 ? ('\n… +'+(unpaid.length-15)) : '');
 }
 
-function fmtStock(){
+function fmtStock(lang){
   var s = getStock();
-  if(!s.length) return '📦 ไม่มีข้อมูลสต็อก / Kein Lagerbestand.';
+  if(!s.length) return de(lang) ? '📦 Kein Lagerbestand.' : '📦 ไม่มีข้อมูลสต็อก';
   s.sort(function(a,b){ return (parseInt(a.qty)||0)-(parseInt(b.qty)||0); });
   var low = s.filter(function(x){ return (parseInt(x.qty)||0) <= 50; });
-  var lines = s.slice(0,25).map(function(x){
-    var q = parseInt(x.qty)||0;
-    return '• ' + x.code + ': ' + q + (q<=50 ? ' ⚠️' : '');
-  });
-  return '📦 สต็อก / Lager\n\n'
-    + (low.length ? ('⚠️ ' + low.length + ' รายการใกล้หมด / niedrig\n\n') : '')
-    + lines.join('\n') + (s.length>25 ? '\n…' : '');
+  var lines = s.slice(0,25).map(function(x){ var q=parseInt(x.qty)||0; return '• '+x.code+': '+q+(q<=50?' ⚠️':''); });
+  var head = de(lang) ? ('📦 Lager\n\n'+(low.length?('⚠️ '+low.length+' niedrig\n\n'):''))
+                      : ('📦 สต็อก\n\n'+(low.length?('⚠️ '+low.length+' ใกล้หมด\n\n'):''));
+  return head + lines.join('\n') + (s.length>25 ? '\n…' : '');
 }
 
-function fmtOrders(){
-  var os = getOrders();
-  var t = dToday();
+function fmtOrders(lang){
+  var os = getOrders(); var t = dToday();
   function c(pred){ return os.filter(pred).length; }
   var todayDel = c(function(o){ return o.status==='delivered' && (o.date||'')===t; });
-  return '📊 ออเดอร์ / Bestellungen\n\n'
-    + 'วันนี้ส่งแล้ว / Heute geliefert: ' + todayDel + '\n\n'
-    + 'New: '       + c(function(o){return o.status==='new';}) + '\n'
-    + 'Packing: '   + c(function(o){return o.status==='packing';}) + '\n'
-    + 'Ready: '     + c(function(o){return o.status==='ready';}) + '\n'
-    + 'Loaded: '    + c(function(o){return o.status==='loaded';}) + '\n'
-    + 'Delivered: ' + c(function(o){return o.status==='delivered';});
+  if(de(lang)){
+    return '📊 Bestellungen\n\nHeute geliefert: '+todayDel+'\n\n'
+         + 'Neu: '+c(function(o){return o.status==='new';})+'\nPacken: '+c(function(o){return o.status==='packing';})
+         + '\nBereit: '+c(function(o){return o.status==='ready';})+'\nGeladen: '+c(function(o){return o.status==='loaded';})
+         + '\nGeliefert: '+c(function(o){return o.status==='delivered';});
+  }
+  return '📊 ออเดอร์\n\nวันนี้ส่งแล้ว: '+todayDel+'\n\n'
+       + 'New: '+c(function(o){return o.status==='new';})+'\nPacking: '+c(function(o){return o.status==='packing';})
+       + '\nReady: '+c(function(o){return o.status==='ready';})+'\nLoaded: '+c(function(o){return o.status==='loaded';})
+       + '\nDelivered: '+c(function(o){return o.status==='delivered';});
 }
 
-function fmtHelp(){
-  return 'สวัสดีค่ะ 👋 / Hallo!\n\nกดปุ่มด้านล่าง หรือพิมพ์คำถามได้เลย\nTippe einen Knopf unten oder stelle eine Frage:\n\n'
-    + '💰 Umsatz · ⏳ Offen · 📦 Lager · 📊 Orders';
+function fmtHelp(lang){
+  return de(lang) ? 'Hallo! 👋\nTippe einen Knopf oder stelle eine Frage.'
+                  : 'สวัสดีค่ะ 👋\nกดปุ่มด้านล่าง หรือพิมพ์คำถามได้เลย';
 }
 
-// ── Free-form questions via Claude (optional) ──────────────
-function askClaude(question, role){
+// ── Free-form questions via Claude ─────────────────────────
+function askClaude(question, role, lang){
   try{
-    // Only feed Claude the data the user's role is allowed to see,
-    // so a restricted staff member can't extract it via free-form text.
     var parts = [];
-    if(can(role,'revenue')) parts.push(fmtRevenue());
-    if(can(role,'unpaid'))  parts.push(fmtUnpaid());
-    if(can(role,'orders'))  parts.push(fmtOrders());
-    if(can(role,'stock'))   parts.push(fmtStock());
-    var ctx = parts.join('\n\n');
+    if(can(role,'revenue')) parts.push(fmtRevenue(lang));
+    if(can(role,'unpaid'))  parts.push(fmtUnpaid(lang));
+    if(can(role,'orders'))  parts.push(fmtOrders(lang));
+    if(can(role,'stock'))   parts.push(fmtStock(lang));
+    var langName = de(lang) ? 'German' : 'Thai';
     var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
       method:'post', contentType:'application/json',
-      headers:{ 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version':'2023-06-01' },
-      muteHttpExceptions:true,
+      headers:{ 'x-api-key':ANTHROPIC_API_KEY, 'anthropic-version':'2023-06-01' }, muteHttpExceptions:true,
       payload: JSON.stringify({
-        model: MODEL,
-        max_tokens: 500,
-        system: 'You are a concise assistant for a wall-panel business (KP Wallpanel). '
-              + 'Answer in the user\'s language (Thai or German). Use ONLY the data block provided; '
-              + 'if the answer is not in the data, say you do not have that info. Money is Thai Baht (฿).',
-        messages: [{ role:'user', content: 'DATA:\n' + ctx + '\n\nQUESTION: ' + question }]
+        model: MODEL, max_tokens: 500,
+        system: 'You are a concise assistant for KP Wallpanel (a wall-panel business). '
+              + 'Answer ONLY in ' + langName + '. Use ONLY the data block provided; if the answer is '
+              + 'not in the data, say you do not have that info. Money is Thai Baht (฿).',
+        messages: [{ role:'user', content: 'DATA:\n' + parts.join('\n\n') + '\n\nQUESTION: ' + question }]
       })
     });
     var j = JSON.parse(res.getContentText());
-    return (j.content && j.content[0] && j.content[0].text) || 'ขออภัย ตอบไม่ได้ตอนนี้ / Konnte nicht antworten.';
-  }catch(err){ return 'ขออภัย เกิดข้อผิดพลาด / Fehler beim Antworten.'; }
+    return (j.content && j.content[0] && j.content[0].text) || (de(lang)?'Konnte nicht antworten.':'ตอบไม่ได้ตอนนี้');
+  }catch(err){ return de(lang) ? 'Fehler beim Antworten.' : 'เกิดข้อผิดพลาด'; }
 }
 
 // ── LINE messaging helpers ─────────────────────────────────
 function textMsg(t){ return { type:'text', text:t }; }
-function withMenu(msg, role){
+function withMenu(msg, role, lang){
+  var L = de(lang)
+    ? { rev:'💰 Umsatz', unp:'⏳ Offen', stk:'📦 Lager', ord:'📊 Orders' }
+    : { rev:'💰 ยอดขาย', unp:'⏳ ค้างชำระ', stk:'📦 สต็อก', ord:'📊 ออเดอร์' };
   var items = [];
-  if(can(role,'revenue')) items.push(qr('💰 Umsatz','Umsatz'));
-  if(can(role,'unpaid'))  items.push(qr('⏳ Offen','Offene Zahlungen'));
-  if(can(role,'stock'))   items.push(qr('📦 Lager','Lager'));
-  if(can(role,'orders'))  items.push(qr('📊 Orders','Orders'));
+  // action text = a keyword the router recognizes in either language
+  if(can(role,'revenue')) items.push(qr(L.rev, de(lang)?'Umsatz':'ยอดขาย'));
+  if(can(role,'unpaid'))  items.push(qr(L.unp, de(lang)?'Offen':'ค้างชำระ'));
+  if(can(role,'stock'))   items.push(qr(L.stk, de(lang)?'Lager':'สต็อก'));
+  if(can(role,'orders'))  items.push(qr(L.ord, de(lang)?'Orders':'ออเดอร์'));
   if(items.length) msg.quickReply = { items: items };
   return msg;
 }
@@ -220,8 +201,7 @@ function qr(label, text){ return { type:'action', action:{ type:'message', label
 function reply(token, messages){
   UrlFetchApp.fetch('https://api.line.me/v2/bot/message/reply', {
     method:'post', contentType:'application/json',
-    headers:{ Authorization: 'Bearer ' + LINE_TOKEN },
-    muteHttpExceptions:true,
-    payload: JSON.stringify({ replyToken: token, messages: messages })
+    headers:{ Authorization:'Bearer '+LINE_TOKEN }, muteHttpExceptions:true,
+    payload: JSON.stringify({ replyToken:token, messages:messages })
   });
 }
