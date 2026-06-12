@@ -30,6 +30,20 @@ var TZ = 'Asia/Bangkok';
 // LATER, to add staff and restrict them, fill USERS with LINE userIds:
 //   var USERS = { 'Uboss...':'admin', 'Uandre...':'admin', 'Ustaff1...':'staff' };
 // Anyone NOT listed is then denied. 'staff' permissions are set below.
+//
+// >>> READY TEMPLATE for Pim, Bobby, Andre, Noy (all admin = see everything).
+//     Each person sends the bot the message "meine id" (or "whoami") once,
+//     gets their U... id back, then paste it here and re-deploy:
+//
+//   var USERS = {
+//     'U_PIM_ID':   'admin',  // Pim
+//     'U_BOBBY_ID': 'admin',  // Bobby
+//     'U_ANDRE_ID': 'admin',  // Andre
+//     'U_NOY_ID':   'admin',  // Noy
+//   };
+//
+// Until the real ids are filled in, leave USERS empty so the bot stays
+// usable (open mode = everyone who messages it sees everything).
 var USERS = {};
 
 // What each role may see. To restrict employees later, just flip the
@@ -59,9 +73,14 @@ function doGet(){ return ContentService.createTextOutput('KP Wallpanel LINE bot 
 function handleEvent(ev){
   if(ev.type !== 'message' || !ev.message || ev.message.type !== 'text') return;
   var userId = ev.source && ev.source.userId;
+  var text0 = (ev.message.text || '').trim();
+  // "whoami" works for ANYONE (so you can collect each person's LINE id to add them)
+  if(/whoami|meine id|my ?id|ไอดี|user ?id/i.test(text0)){
+    return reply(ev.replyToken, [textMsg('Deine LINE userId / ไอดีของคุณ:\n' + (userId || '(unbekannt)') + '\n\nGib diese ID an Andre weiter, um freigeschaltet zu werden.')]);
+  }
   var role = userRole(userId);
   if(!role){
-    return reply(ev.replyToken, [textMsg('ขออภัย คุณไม่มีสิทธิ์เข้าถึงข้อมูลนี้ / Kein Zugriff.')]);
+    return reply(ev.replyToken, [textMsg('ขออภัย คุณไม่มีสิทธิ์เข้าถึงข้อมูลนี้ / Kein Zugriff.\n\nSchreibe "meine id" um deine LINE-ID zu sehen.')]);
   }
   var answer = route((ev.message.text || '').trim(), role);
   reply(ev.replyToken, [withMenu(textMsg(answer), role)]);
