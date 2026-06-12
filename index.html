@@ -3260,6 +3260,39 @@ function ofToggleAllZones(btn){
   if(btn) btn.innerHTML = anyOpen ? '<i class="ti ti-chevrons-down"></i> Expand all' : '<i class="ti ti-chevrons-up"></i> Collapse all';
 }
 
+function ofOrderCard(o){
+  var logHTML = '';
+  if(o.statusLog && o.statusLog.length>0){
+    logHTML = o.statusLog.map(function(l){return '<span style="background:#f5f5f5;border-radius:4px;padding:1px 5px;font-size:10px">'+l.status+' '+(l.time||'')+(l.by&&l.by!=='—'?' ('+l.by+')':'')+'</span>';}).join(' → ');
+  }
+  var allStatuses = ['new','packing','ready','loaded','delivered','cancelled'];
+  var quickBtns = allStatuses.filter(function(s){return s!==o.status;}).map(function(s){
+    return '<button type="button" onclick="quickStatus(this)" data-id="'+o.id+'" data-status="'+s+'" style="padding:3px 8px;font-size:11px;font-weight:500;border-radius:20px;border:1px solid var(--border);background:var(--bg2);cursor:pointer;color:var(--text2);margin-bottom:2px">'+s+'</button>';
+  }).join(' ');
+  var noteHTML = o.notes?'<div style="font-size:12px;color:#EF9F27;margin-top:4px"><i class="ti ti-note" style="font-size:12px;vertical-align:-1px"></i> '+o.notes+'</div>':'';
+  var createdHTML = o.createdBy?'<div style="font-size:11px;color:var(--text2);margin-top:2px">Created: '+o.createdBy+(o.editedBy?' · Edited: '+o.editedBy:'')+'</div>':'';
+  var s = '';
+  s += '<div class="card '+(o.status==='cancelled'?'card-cancel':'')+'" data-oid="'+o.id+'">';
+  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:15px;font-weight:700">'+o.id+'</span><span class="badge '+BC[o.status]+'">'+SL[o.status]+'</span></div>';
+  s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-user" style="font-size:12px;vertical-align:-1px"></i> '+o.customer+zoneBadge(o.zone)+'</div>';
+  s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-phone" style="font-size:12px;vertical-align:-1px"></i> <a href="tel:'+o.phone+'" style="color:#0070f3">'+o.phone+'</a></div>';
+  s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> '+o.address+'</div>';
+  s += '<div style="font-size:13px;margin-top:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+'</div>';
+  s += noteHTML;
+  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span style="font-size:14px;font-weight:700">'+o.total+'</span><span style="font-size:11px;color:#888">'+fmtD(o.date)+'</span></div>';
+  s += createdHTML;
+  if(logHTML) s += '<div style="font-size:11px;color:#888;margin-top:5px;line-height:1.8"><i class="ti ti-clock" style="font-size:11px;vertical-align:-1px"></i> '+logHTML+'</div>';
+  s += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">'+quickBtns+'</div>';
+  s += '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">';
+  s += '<button type="button" class="btnsm" onclick="openEM(this)" data-id="'+o.id+'"><i class="ti ti-pencil"></i> Edit</button>';
+  s += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
+  if(window.canDeleteOrders) {
+    s += '<button type="button" class="btnsm" style="background:#FEE2E2;color:#DC2626;border-color:#FEE2E2" onclick="deleteOrder(this)" data-id="'+o.id+'"><i class="ti ti-trash"></i></button>';
+  }
+  s += '</div></div>';
+  return s;
+}
+
 function ofRenderOrders(){
   var activeOrders = orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});
   var cntEl = document.getElementById('of-cnt');
@@ -3294,6 +3327,19 @@ function ofRenderOrders(){
   if(_grouped){
     html += '<div style="display:flex;justify-content:flex-end;margin:2px 2px 6px">'
       +'<button type="button" onclick="ofToggleAllZones(this)" class="btnsm" style="font-size:11px"><i class="ti ti-chevrons-up"></i> Collapse all</button></div>';
+    // "All" dropdown — every delivered order by date, newest first (collapsed by default)
+    if(ofZoneCollapsed['__ALL__']===undefined) ofZoneCollapsed['__ALL__']=true;
+    var _allCol = ofZoneCollapsed['__ALL__'];
+    var _allByDate = f.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+    html += '<div class="zone-group" data-zone="__ALL__">'
+      +'<div onclick="ofToggleZone(\'__ALL__\')" style="display:flex;align-items:center;gap:8px;margin:6px 2px 8px;font-size:13px;font-weight:800;color:var(--text);cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none">'
+      +'<i class="ti ti-chevron-down" id="zchev-__ALL__" style="font-size:16px;transition:transform .2s;transform:rotate('+(_allCol?'-90deg':'0')+')"></i>'
+      +'<span>📋 All / ทั้งหมด <span style="font-weight:500;color:var(--text2);font-size:11px">(by date)</span></span>'
+      +'<span style="background:var(--blue-bg);color:var(--blue);border-radius:20px;padding:1px 9px;font-size:11px;font-weight:700">'+f.length+'</span>'
+      +'<span style="flex:1;height:1px;background:var(--border)"></span></div>'
+      +'<div class="zone-body" id="zbody-__ALL__"'+(_allCol?' style="display:none"':'')+'>'
+      + _allByDate.map(ofOrderCard).join('')
+      +'</div></div>';
   }
   f.forEach(function(o){
     if(_grouped){
@@ -3312,35 +3358,7 @@ function ofRenderOrders(){
           +'<div class="zone-body" id="zbody-'+_z+'"'+(_col?' style="display:none"':'')+'>';
       }
     }
-    var logHTML = '';
-    if(o.statusLog && o.statusLog.length>0){
-      logHTML = o.statusLog.map(function(l){return '<span style="background:#f5f5f5;border-radius:4px;padding:1px 5px;font-size:10px">'+l.status+' '+(l.time||'')+(l.by&&l.by!=='—'?' ('+l.by+')':'')+'</span>';}).join(' → ');
-    }
-    var allStatuses = ['new','packing','ready','loaded','delivered','cancelled'];
-    var quickBtns = allStatuses.filter(function(s){return s!==o.status;}).map(function(s){
-      return '<button type="button" onclick="quickStatus(this)" data-id="'+o.id+'" data-status="'+s+'" style="padding:3px 8px;font-size:11px;font-weight:500;border-radius:20px;border:1px solid var(--border);background:var(--bg2);cursor:pointer;color:var(--text2);margin-bottom:2px">'+s+'</button>';
-    }).join(' ');
-    var noteHTML = o.notes?'<div style="font-size:12px;color:#EF9F27;margin-top:4px"><i class="ti ti-note" style="font-size:12px;vertical-align:-1px"></i> '+o.notes+'</div>':'';
-    var createdHTML = o.createdBy?'<div style="font-size:11px;color:var(--text2);margin-top:2px">Created: '+o.createdBy+(o.editedBy?' · Edited: '+o.editedBy:'')+'</div>':'';
-    html += '<div class="card '+(o.status==='cancelled'?'card-cancel':'')+'" data-oid="'+o.id+'">';
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:15px;font-weight:700">'+o.id+'</span><span class="badge '+BC[o.status]+'">'+SL[o.status]+'</span></div>';
-    html += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-user" style="font-size:12px;vertical-align:-1px"></i> '+o.customer+zoneBadge(o.zone)+'</div>';
-    html += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-phone" style="font-size:12px;vertical-align:-1px"></i> <a href="tel:'+o.phone+'" style="color:#0070f3">'+o.phone+'</a></div>';
-    html += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> '+o.address+'</div>';
-    html += '<div style="font-size:13px;margin-top:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+'</div>';
-    html += noteHTML;
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span style="font-size:14px;font-weight:700">'+o.total+'</span><span style="font-size:11px;color:#888">'+fmtD(o.date)+'</span></div>';
-    html += createdHTML;
-    if(logHTML) html += '<div style="font-size:11px;color:#888;margin-top:5px;line-height:1.8"><i class="ti ti-clock" style="font-size:11px;vertical-align:-1px"></i> '+logHTML+'</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">'+quickBtns+'</div>';
-    html += '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">';
-    html += '<button type="button" class="btnsm" onclick="openEM(this)" data-id="'+o.id+'"><i class="ti ti-pencil"></i> Edit</button>';
-    html += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
-
-    if(window.canDeleteOrders) {
-      html += '<button type="button" class="btnsm" style="background:#FEE2E2;color:#DC2626;border-color:#FEE2E2" onclick="deleteOrder(this)" data-id="'+o.id+'"><i class="ti ti-trash"></i></button>';
-    }
-    html += '</div></div>';
+    html += ofOrderCard(o);
   });
   if(_grouped && _lastZone!==null) html += '</div></div>'; // close final body + group
   document.getElementById('of-olist').innerHTML = html;
