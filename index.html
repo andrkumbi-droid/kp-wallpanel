@@ -536,6 +536,10 @@ textarea{resize:none}
         try{if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active'))mgRenderShippers();}catch(e){}
         try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
       });
+      db.ref('soldOut').on('value', function(snap) {
+        soldOut = snap.val() || {};
+        try{ var s=document.getElementById('qt-suggestions'); if(s&&s.innerHTML) qtRefreshSoldOut(); }catch(e){}
+      });
       db.ref('orderCounters').on('value', function(snap) {
         if(snap.val()) Object.assign(orderCounters, snap.val());
         // Ensure counters are never below the defined minimums
@@ -1844,6 +1848,7 @@ function updateDarkBtn(){
 })();
 
 let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[],claims=[];
+var soldOut={};
 var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
 var containerLog=[];
 var auditLog=[];
@@ -5448,15 +5453,42 @@ function qtInit() {
 function qtProductRow(p) {
   var priceStr = p.price > 0 ? p.price+'฿/แผ่น' : '—';
   var sub = p.mat === 'ACC' ? p.name : p.name+' · '+p.mat+(p.w?' '+p.w+'cm':'');
-  return '<div onclick="qtSelectProduct(\''+p.code+'\')" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;cursor:pointer;background:var(--bg)">'
+  var out = soldOut[p.code];
+  return '<div id="qtrow-'+p.code+'" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid '+(out?'#dc2626':'var(--border)')+';border-radius:var(--rs);margin-bottom:6px;background:var(--bg);opacity:'+(out?'0.45':'1')+';position:relative">'
+    +'<div onclick="qtSelectProduct(\''+p.code+'\')" style="display:flex;align-items:center;gap:10px;flex:1;cursor:pointer">'
     +'<img src="'+IMG_BASE+p.code+'.jpg" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0" onerror="this.style.display=\'none\'">'
     +'<div style="flex:1">'
-    +'<div style="font-size:13px;font-weight:700">'+p.code+'</div>'
+    +'<div style="font-size:13px;font-weight:700">'+p.code+(out?' <span style="color:#dc2626;font-size:11px">✕ หมด / Sold out</span>':'')+'</div>'
     +'<div style="font-size:12px;color:var(--text2)">'+sub+'</div>'
     +(p.price>0?'<div style="font-size:13px;font-weight:700;color:var(--blue)">'+priceStr+'</div>':'')
     +'</div>'
     +'<i class="ti ti-plus" style="color:var(--blue);font-size:18px"></i>'
+    +'</div>'
+    +'<button type="button" onclick="event.stopPropagation();qtToggleSoldOut(\''+p.code+'\')" title="Sold out / หมด" '
+    +'style="width:28px;height:28px;border-radius:6px;border:1.5px solid '+(out?'#dc2626':'#d1d5db')+';background:'+(out?'#fee2e2':'var(--bg2)')+';cursor:pointer;font-size:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:'+(out?'#dc2626':'#9ca3af')+';padding:0;margin-left:4px">'
+    +(out?'✕':'☐')
+    +'</button>'
     +'</div>';
+}
+
+function qtToggleSoldOut(code) {
+  if(soldOut[code]) delete soldOut[code]; else soldOut[code]=1;
+  if(window.fbDB) window.fbDB.ref('soldOut').set(Object.keys(soldOut).length ? soldOut : null);
+  var row = document.getElementById('qtrow-'+code);
+  if(row) {
+    var p = QT_PRODUCTS.find(function(x){return x.code===code;});
+    if(p) row.outerHTML = qtProductRow(p);
+  }
+}
+
+function qtRefreshSoldOut() {
+  var s = document.getElementById('qt-suggestions');
+  if(!s) return;
+  s.querySelectorAll('[id^="qtrow-"]').forEach(function(row) {
+    var code = row.id.replace('qtrow-','');
+    var p = QT_PRODUCTS && QT_PRODUCTS.find(function(x){return x.code===code;});
+    if(p) row.outerHTML = qtProductRow(p);
+  });
 }
 
 function qtShowProducts(list, activeCat) {
@@ -5550,7 +5582,7 @@ function qtFilterProfile(profile) {
 }
 
 function qtCopyProfileImages(profile, btn) {
-  var products = QT_PRODUCTS.filter(function(p){ return p.profile === profile; });
+  var products = QT_PRODUCTS.filter(function(p){ return p.profile === profile && !soldOut[p.code]; });
   if(!products.length) return;
   if(btn) { btn.innerHTML='⏳'; btn.disabled=true; }
   var IMG_SIZE = 500; // each product image square size on collage
