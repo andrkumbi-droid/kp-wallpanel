@@ -532,6 +532,7 @@ textarea{resize:none}
       });
       db.ref('shippers').on('value', function(snap) {
         if(snap.val()) shippers = snap.val();
+        try{ ensureShippers(); }catch(e){} // keep Lalamove/KEX/นิ่ม/รับกลับเอง in the list
         try{if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active'))mgRenderShippers();}catch(e){}
         try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
       });
@@ -4359,20 +4360,36 @@ function mirrorGroup(rows){
   if(cur) out.push(cur);
   return out;
 }
-// Match the free-text shipper column (U) to a known shipper in the app's
-// list — tolerant of typos / extra words (e.g. "พี่แอม - ธวัชชัย" → "ธวัชชัย TCH").
-// Returns '' if no known shipper is recognised (raw text is kept separately).
+// Carriers that appear in the sheet but weren't in the app's shipper list.
+var EXTRA_SHIPPERS = ['Lalamove','KEX','นิ่ม','รับกลับเอง'];
+function ensureShippers(){
+  var changed=false;
+  EXTRA_SHIPPERS.forEach(function(s){ if(shippers.indexOf(s)<0){ shippers.push(s); changed=true; } });
+  if(changed && window.fbDB){ try{ window.fbDB.ref('shippers').set(shippers); }catch(e){} }
+}
+
+// Rule-based shipper matcher built from the REAL column-U data (handles the
+// Thai spelling variants and mixed-case). Order matters: pickup/self first,
+// then named carriers, then the 2-letter latin codes last.
+var SHIPPER_RULES = [
+  { re:/รับกลับ|ลูกค้ารับ/,  s:'รับกลับเอง' },     // customer self-pickup
+  { re:/ส่งเอง/,             s:'ส่งเอง' },          // we deliver ourselves
+  { re:/lalamove/i,         s:'Lalamove' },
+  { re:/kex/i,              s:'KEX' },
+  { re:/ธวัชชัย/,            s:'ธวัชชัย TCH' },
+  { re:/คู่บุ[ญณ]/,          s:'คู่บุญ KBD' },        // คู่บุญ + typo คู่บุณ
+  { re:/นิ่ม/,               s:'นิ่ม' },
+  { re:/มีชัย/,              s:'มีชัย' },
+  { re:/เอสพี|สุภาภัณฑ์/,    s:'เอสพี สุภาภัณฑ์' },
+  { re:/บี\.?เอส/,           s:'บี.เอส.' },
+  { re:/หล่มสัก/,            s:'สหะหล่มสัก' },
+  { re:/\bCT\b/i,           s:'CT' },
+  { re:/\bPT\b/i,           s:'PT' }
+];
+// Return the canonical shipper for a column-U value (or '' if unrecognised).
 function matchShipper(u){
   if(!u) return '';
-  var t = String(u);
-  var tU = t.toUpperCase();
-  for(var i=0;i<shippers.length;i++){
-    var s = shippers[i];
-    var thai = s.replace(/[A-Za-z0-9.\- ]+/g,'').trim();       // Thai part, e.g. ธวัชชัย
-    var code = (s.match(/[A-Za-z]{2,}/g)||[]).join('');          // latin code, e.g. TCH
-    if(thai && thai.length>=2 && t.indexOf(thai)>=0) return s;
-    if(code && code.length>=2 && tU.indexOf(code.toUpperCase())>=0) return s;
-  }
+  for(var i=0;i<SHIPPER_RULES.length;i++){ if(SHIPPER_RULES[i].re.test(u)) return SHIPPER_RULES[i].s; }
   return '';
 }
 
@@ -4384,7 +4401,7 @@ function mirrorToAppOrder(g){
   var clips=mirrorNum(m[7]), shipping=mirrorNum(m[8]), discount=mirrorNum(m[9]);
   var total=mirrorNum(m[10]), paidOrigin=mirrorNum(m[11]), codOutstanding=mirrorNum(m[14]);
   var contact=String(m[16]||'').trim(), custAddr=String(m[17]||'').trim();
-  var shipperRaw=String(m[20]||'').trim(); // col U: shipper / driver / who brought it
+  var shipperRaw=String(m[20]||'').trim().replace(/\s*\d{1,2}[\/.\-]\d{1,2}([\/.\-]\d{1,5})?\s*$/,'').trim(); // col U, trailing date stripped
   var paid = !(codOutstanding>0); // col O has a number → still unpaid
 
   var lineItems=[], panels=[], lcorners=[], totalQty=0;
