@@ -48,6 +48,8 @@ function doPost(e) {
     if (body.target === 'master') return _writeMaster(body.items || [], !!body.dryRun);
     // App edit → Master: replace an existing order's rows in place
     if (body.target === 'masterUpdate') return _updateMaster(body.items || [], !!body.dryRun);
+    // App delete → Master: clear the order's row back to empty (pre-numbered) state
+    if (body.target === 'masterClear') return _clearMaster(body.items || [], !!body.dryRun);
 
     var dryRun = !!body.dryRun;
     var items = body.items || [];
@@ -266,6 +268,41 @@ function _updateMaster(items, dryRun) {
       _writeRows(sheet, main, it.rows);
       res.written++;
       res.details.push({ order: on, status: 'updated', mode: 'row ' + main + ' (' + oldSub + '→' + newSub + ' subs)', tab: sheet.getName() });
+    } catch (err) {
+      res.failed++;
+      res.details.push({ order: it.orderNumber, status: 'failed', reason: String(err) });
+    }
+  });
+  return _json(res);
+}
+
+/** App delete → Master: clear an order's row back to empty pre-numbered state.
+ *  Deletes its sub-rows, clears data cells (C–N, P, Q, S–Z), keeps A (status),
+ *  B (number) and the O (COD) formula. Order number stays as an empty slot. */
+function _clearMaster(items, dryRun) {
+  var ss = SpreadsheetApp.openById(MASTER_ID);
+  var res = { total: items.length, cleared: 0, not_found: 0, failed: 0, details: [] };
+  // columns to wipe (1-based): C D E F G H I J K L M N · P Q · S T U V W X Y Z
+  var CLEAR = [3,4,5,6,7,8,9,10,11,12,13,14,16,17,19,20,21,22,23,24,25,26];
+  items.forEach(function (it) {
+    try {
+      var sheet = _masterTab(ss, it.zone);
+      if (!sheet) { res.failed++; res.details.push({ order: it.orderNumber, status: 'failed', reason: 'tab not found for zone: ' + it.zone }); return; }
+      var last = sheet.getLastRow(), on = String(it.orderNumber).trim();
+      var bvals = sheet.getRange(1, 2, last, 1).getValues();
+      var dvals = sheet.getRange(1, 4, last, 1).getValues();
+      var main = -1;
+      for (var r = 0; r < bvals.length; r++) { if (String(bvals[r][0]).trim() === on) { main = r + 1; break; } }
+      if (main < 0) { res.not_found++; res.details.push({ order: on, status: 'not_found' }); return; }
+      var oldSub = 0, idx = main;
+      while (idx < bvals.length && String(bvals[idx][0]).trim() === '' && String(dvals[idx][0]).trim() !== '') { oldSub++; idx++; }
+      if (dryRun) { res.cleared++; res.details.push({ order: on, status: 'would_clear', row: main, subs: oldSub }); return; }
+      // clear the K formula first so deleting sub-rows can't leave a #REF
+      sheet.getRange(main, 11).setValue('');
+      if (oldSub > 0) sheet.deleteRows(main + 1, oldSub);
+      CLEAR.forEach(function (c) { sheet.getRange(main, c).setValue(''); });
+      res.cleared++;
+      res.details.push({ order: on, status: 'cleared', row: main, removedSubs: oldSub, tab: sheet.getName() });
     } catch (err) {
       res.failed++;
       res.details.push({ order: it.orderNumber, status: 'failed', reason: String(err) });

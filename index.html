@@ -550,6 +550,7 @@ textarea{resize:none}
         try{if(document.getElementById('mgv-attend')&&document.getElementById('mgv-attend').classList.contains('active'))attRender();}catch(e){}
         try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))ofAttRender();}catch(e){}
       });
+      db.ref('recentlyDeleted').on('value', function(snap) { recentlyDeleted = snap.val() || {}; });
       db.ref('soldOut').on('value', function(snap) {
         soldOut = snap.val() || {};
         try{ var s=document.getElementById('qt-suggestions'); if(s&&s.innerHTML) qtRefreshSoldOut(); }catch(e){}
@@ -1865,6 +1866,7 @@ function updateDarkBtn(){
 
 let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[],claims=[];
 var soldOut={};
+var recentlyDeleted={}; // orderId(sanitized) -> ts; blocks mirror re-adding a just-deleted order
 var lateLog=[];
 var attStaff=[]; // separate employee list for attendance
 var customerMeta={}; // phoneKey -> {name,address,loc,note,blocked,blockReason} — manual overrides + blocklist
@@ -4401,6 +4403,20 @@ function sheetsSyncToMaster(o){
       .catch(function(err){ console.error('Master sync failed (non-blocking):', err); });
   }catch(err){ console.error('Master sync failed (non-blocking):', err); }
 }
+// Fire-and-forget: clear an order's row in the master (delete → empty pre-numbered row).
+function sheetsClearMaster(o){
+  try{
+    if(!SHEETS_WEBAPP_URL || !o || !o.id) return;
+    var zone = sheetsRouteMasterZone(o.id);
+    if(!zone) return;
+    fetch(SHEETS_WEBAPP_URL, {
+      method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ token:SHEETS_TOKEN, target:'masterClear', items:[{ zone:zone, orderNumber:o.id }] })
+    }).then(function(r){return r.json();})
+      .then(function(res){ console.log('Master clear:', res); })
+      .catch(function(err){ console.error('Master clear failed (non-blocking):', err); });
+  }catch(err){ console.error('Master clear failed (non-blocking):', err); }
+}
 // Fire-and-forget: push an EDITED order's new content into its master row.
 // Works for app-created and mirror-imported orders (edit in app → master).
 function sheetsUpdateMaster(o){
@@ -4765,7 +4781,13 @@ function importFromMirror(opts){
       var toAdd=[], toUpdate=[];
       cand.forEach(function(n){
         var ex=existing[n.id];
-        if(!ex){ toAdd.push(n); }
+        if(!ex){
+          // Skip re-adding an order deleted in the last 5 min (master clear may
+          // not have reached the mirror yet via IMPORTRANGE).
+          var dk=String(n.id).replace(/[^a-zA-Z0-9]/g,'_');
+          if(recentlyDeleted[dk] && (Date.now()-recentlyDeleted[dk] < 300000)) return;
+          toAdd.push(n);
+        }
         else if(mirrorOrderSig(ex)!==mirrorOrderSig(n)){
           // Adopt master/sheet changes — for imported AND app-created orders.
           // Guard: don't revert a local edit made in the last 3 min (the master
@@ -4987,6 +5009,7 @@ function ofLoginRender() {
 function deleteOrder(btn) {
   var id = btn.getAttribute('data-id');
   if(!confirm('Delete order ' + id + '?\nThis CANNOT be undone! / ลบออเดอร์?')) return;
+  var _delOrd = orders.find(function(o){ return o.id===id; }); // capture for master clear
   // Remove from orders array
   orders = orders.filter(function(o) { return o.id !== id; });
   // Remove from wOrders
@@ -5007,6 +5030,10 @@ function deleteOrder(btn) {
   mgRender();
   addLog('Order '+id+' deleted', '-');
   try{var byN2=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';auditAdd({type:'delete',orderId:id,by:byN2});}catch(e){}
+  try{ sheetsClearMaster(_delOrd||{id:id}); }catch(e){ console.error('Master clear failed (non-blocking):', e); }
+  // Tombstone: stop the mirror auto-sync from re-adding this order before the
+  // master clear has propagated through IMPORTRANGE (expires after a few min).
+  try{ var dk=id.replace(/[^a-zA-Z0-9]/g,'_'); recentlyDeleted[dk]=Date.now(); if(window.fbDB) window.fbDB.ref('recentlyDeleted/'+dk).set(Date.now()); }catch(e){}
 }
 
 
