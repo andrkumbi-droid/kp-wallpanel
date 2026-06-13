@@ -4359,6 +4359,23 @@ function mirrorGroup(rows){
   if(cur) out.push(cur);
   return out;
 }
+// Match the free-text shipper column (U) to a known shipper in the app's
+// list — tolerant of typos / extra words (e.g. "พี่แอม - ธวัชชัย" → "ธวัชชัย TCH").
+// Returns '' if no known shipper is recognised (raw text is kept separately).
+function matchShipper(u){
+  if(!u) return '';
+  var t = String(u);
+  var tU = t.toUpperCase();
+  for(var i=0;i<shippers.length;i++){
+    var s = shippers[i];
+    var thai = s.replace(/[A-Za-z0-9.\- ]+/g,'').trim();       // Thai part, e.g. ธวัชชัย
+    var code = (s.match(/[A-Za-z]{2,}/g)||[]).join('');          // latin code, e.g. TCH
+    if(thai && thai.length>=2 && t.indexOf(thai)>=0) return s;
+    if(code && code.length>=2 && tU.indexOf(code.toUpperCase())>=0) return s;
+  }
+  return '';
+}
+
 // Convert one grouped order into an app order object (status: delivered).
 function mirrorToAppOrder(g){
   var m=g.raw;
@@ -4367,6 +4384,7 @@ function mirrorToAppOrder(g){
   var clips=mirrorNum(m[7]), shipping=mirrorNum(m[8]), discount=mirrorNum(m[9]);
   var total=mirrorNum(m[10]), paidOrigin=mirrorNum(m[11]), codOutstanding=mirrorNum(m[14]);
   var contact=String(m[16]||'').trim(), custAddr=String(m[17]||'').trim();
+  var shipperRaw=String(m[20]||'').trim(); // col U: shipper / driver / who brought it
   var paid = !(codOutstanding>0); // col O has a number → still unpaid
 
   var lineItems=[], panels=[], lcorners=[], totalQty=0;
@@ -4386,6 +4404,7 @@ function mirrorToAppOrder(g){
     id:id, date:date, zone:mirrorZone(id),
     customer: custAddr||'—', phone:'—', address: custAddr||'—', location:'',
     contact: contact,
+    shipper: matchShipper(shipperRaw), shipperRaw: shipperRaw,
     panels: panels.length?panels.join(' · '):'—',
     lcorner: lcorners.length?lcorners.join(' · '):'—',
     clips:clips, boxes:Math.max(1,Math.ceil(totalQty/10)),
@@ -4445,7 +4464,7 @@ function addOrderStock(o){
 }
 // Signature of an order's product/financial data — to detect sheet changes.
 function mirrorOrderSig(o){
-  return (o.panels||'')+'|'+(o.lcorner||'')+'|'+(o.total||'')+'|'+(o.clips||'');
+  return (o.panels||'')+'|'+(o.lcorner||'')+'|'+(o.total||'')+'|'+(o.clips||'')+'|'+(o.shipperRaw||'');
 }
 // Update an existing imported order in place from a fresh sheet version.
 // Refreshes products/totals/customer; preserves app-side state (payment,
@@ -4455,7 +4474,8 @@ function mirrorApplyUpdate(ex, n){
   ex.panels=n.panels; ex.lcorner=n.lcorner; ex.lineItems=n.lineItems;
   ex.clips=n.clips; ex.total=n.total; ex.boxes=n.boxes;
   ex.customer=n.customer; ex.address=n.address; ex.zone=n.zone; ex.contact=n.contact; ex.date=n.date;
-  // preserved: payMethod, paidBy, payDate, shipper, status, notes, id
+  ex.shipperRaw=n.shipperRaw; if(n.shipper) ex.shipper=n.shipper; // sheet drives shipper when it has one
+  // preserved: payMethod, paidBy, payDate, status, notes, id
   deductOrderStock(ex); // deduct the new qty
 }
 
@@ -5142,6 +5162,7 @@ function payOrderCard(o) {
       +shippers.map(function(s){return '<option value="'+s+'"'+(o.shipper===s?' selected':'')+'>'+s+'</option>';}).join('')
       +'</select>'
       +'</div>'
+      +(o.shipperRaw?'<div style="font-size:11px;color:#6b7280;margin:-4px 0 8px;padding-left:2px">📋 '+o.shipperRaw+'</div>':'')
       +'<div style="font-size:12px;background:rgba(0,0,0,0.04);border-radius:var(--rs);padding:7px 10px;margin-bottom:10px;color:#333">'+panels+(o.total?' - '+o.total:'')+'</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
       +'<button type="button" onclick="paySetMethod(\''+oid+'\',\'cash\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+cborder+';background:'+cbg+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+ccol+'">'
