@@ -16,6 +16,11 @@
 
 var SHEET_ID = '1VIEisPGwwVcarKJrqgZqSqFaUfyoX92BqO9P743_Y30';
 
+// App → Master sheet (writes new app orders into the master's Thai tabs).
+// ⚠️ TESTING: this is the COPY of the master. Change to the real master ID
+// only after verifying everything works on the copy.
+var MASTER_ID = '1XXmHZt9RVgrgBEmWVpPBid9_C8kx5DsYnhzmUzBnZQE';
+
 // Must match SHEETS_TOKEN in index.html. Change both to the same
 // random string. This is light protection against random POSTs —
 // worst case someone could append junk rows to the -app tabs.
@@ -38,6 +43,9 @@ function doPost(e) {
 
     // Read action: return raw A–V values of the mirror tabs (one-time import)
     if (body.action === 'readMirror') return _readMirror();
+
+    // App → Master: append new app orders into the master's Thai tabs
+    if (body.target === 'master') return _writeMaster(body.items || [], !!body.dryRun);
 
     var dryRun = !!body.dryRun;
     var items = body.items || [];
@@ -107,6 +115,63 @@ function _readMirror() {
     out[name] = sh.getRange(1, 1, last, cols).getValues(); // columns A–AD
   });
   return _json({ ok: true, tabs: out });
+}
+
+/** Resolve the master Thai tab for a zone key (keyword match → robust to spacing). */
+function _masterTab(ss, zone) {
+  var sheets = ss.getSheets();
+  function find(re) {
+    for (var i = 0; i < sheets.length; i++) {
+      if (re.test(sheets[i].getName())) return sheets[i];
+    }
+    return null;
+  }
+  if (zone === 'bkk')   return find(/กรุงเทพ|หน้าร้าน/);
+  if (zone === 'north') return find(/^1-|เหนือ/);
+  if (zone === 'ne')    return find(/^2-|อีสาน/);
+  if (zone === 'east')  return find(/^3-|ตะวันออก/);
+  if (zone === 'south') return find(/^4-|ใต้/);
+  return null;
+}
+
+/** App → Master: append new orders to the master's Thai tabs.
+ *  Append-only + dedupe on order number (col B) → never touches existing rows. */
+function _writeMaster(items, dryRun) {
+  var ss = SpreadsheetApp.openById(MASTER_ID);
+  var res = { total: items.length, written: 0, skipped_duplicates: 0, failed: 0, details: [] };
+  var cache = {}; // tabName -> existing order numbers
+
+  items.forEach(function (it) {
+    try {
+      var sheet = _masterTab(ss, it.zone);
+      if (!sheet) {
+        res.failed++;
+        res.details.push({ order: it.orderNumber, status: 'failed', reason: 'master tab not found for zone: ' + it.zone });
+        return;
+      }
+      var key = sheet.getName();
+      if (!cache[key]) cache[key] = _orderNumbers(sheet);
+
+      if (cache[key].indexOf(String(it.orderNumber).trim()) !== -1) {
+        res.skipped_duplicates++;
+        res.details.push({ order: it.orderNumber, status: 'skipped', reason: 'duplicate', tab: key });
+        return;
+      }
+      if (dryRun) {
+        res.written++;
+        res.details.push({ order: it.orderNumber, status: 'would_write', rows: it.rows.length, tab: key });
+        return;
+      }
+      sheet.getRange(sheet.getLastRow() + 1, 1, it.rows.length, it.rows[0].length).setValues(it.rows);
+      cache[key].push(String(it.orderNumber).trim());
+      res.written++;
+      res.details.push({ order: it.orderNumber, status: 'written', rows: it.rows.length, tab: key });
+    } catch (err) {
+      res.failed++;
+      res.details.push({ order: it.orderNumber, status: 'failed', reason: String(err) });
+    }
+  });
+  return _json(res);
 }
 
 /** Read all order numbers currently in column B of a tab. */

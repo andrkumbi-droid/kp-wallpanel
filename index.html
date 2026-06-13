@@ -3253,6 +3253,7 @@ function ofCreate(){
   var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order'});}catch(e){}
   ['of-no','of-cust','of-phone','of-loc'].forEach(x=>document.getElementById(x).value='');document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';;document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='none';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').valueAsDate=new Date();
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
+  try{ sheetsSyncToMaster(o); }catch(e){ console.error('Master sync failed (non-blocking):', e); }
   try{var cByN=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';auditAdd({type:'create',orderId:no,by:cByN});}catch(e){}
   // Auto open receipt
   setTimeout(() => { openReceiptForOrder(no); }, 400);
@@ -4264,6 +4265,70 @@ function sheetsSyncOrder(o){
       .then(function(res){ console.log('Sheets sync:', res); })
       .catch(function(err){ console.error('Sheets sync failed (non-blocking):', err); });
   }catch(err){ console.error('Sheets sync failed (non-blocking):', err); }
+}
+
+// ── APP → MASTER SHEET (write new orders into the master's Thai tabs) ──
+// Routes by order-id prefix to a zone key; Code.gs resolves the actual
+// Thai tab by keyword (robust against exact spacing/naming).
+function sheetsRouteMasterZone(id){
+  id = String(id||'').trim();
+  if(id.charAt(0)==='#') return 'bkk';
+  if(id.indexOf('1-')===0) return 'north';
+  if(id.indexOf('2-')===0) return 'ne';
+  if(id.indexOf('3-')===0) return 'east';
+  if(id.indexOf('4-')===0) return 'south';
+  if(id.indexOf('5-')===0) return 'bkk';
+  return '';
+}
+// Build a master-format item: 26 cols (A–Z) matching the split layout.
+// B id, C date, D–G product, H clips, I shipping, J discount, K total,
+// S name, T phone, U address, V maps, Y shipper, Z notes.
+function sheetsBuildMasterItem(o){
+  var zone = sheetsRouteMasterZone(o.id);
+  if(!zone) return null;
+  var li = o.lineItems || [];
+  var PRODUCT = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1,clips:1};
+  var products = li.filter(function(x){ return PRODUCT[x.type]; });
+  if(!products.length) products = [{code:(o.panels||'—'),qty:'',unitPrice:'',amount:''}];
+  var discount = Math.abs(li.filter(function(x){return x.type==='discount';})
+                            .reduce(function(s,x){return s+sheetsNum(x.amount);},0));
+  var shipping = li.filter(function(x){return x.type==='delivery';})
+                   .reduce(function(s,x){return s+sheetsNum(x.amount);},0);
+  var grandTotal = sheetsNum(o.total);
+  var dateStr = sheetsFmtDate(o.date);
+  var rows = products.map(function(p, idx){
+    var r = []; for(var i=0;i<26;i++) r.push('');
+    r[3]=p.code||''; r[4]=p.qty===''?'':sheetsNum(p.qty);
+    r[5]=p.unitPrice===''?'':sheetsNum(p.unitPrice); r[6]=p.amount===''?'':sheetsNum(p.amount);
+    if(idx===0){
+      r[1]=o.id; r[2]=dateStr;
+      r[7]=sheetsNum(o.clips); r[8]=shipping; r[9]=discount; r[10]=grandTotal;
+      r[18]=(o.customer&&o.customer!=='—')?o.customer:'';  // S name
+      r[19]=(o.phone&&o.phone!=='—')?o.phone:'';            // T phone
+      r[20]=(o.address&&o.address!=='—')?o.address:'';      // U address
+      r[21]=o.location||'';                                 // V maps
+      r[24]=o.shipper||'';                                  // Y shipper
+      r[25]=o.notes||'';                                    // Z notes
+    }
+    return r;
+  });
+  return { zone:zone, orderNumber:o.id, rows:rows };
+}
+// Fire-and-forget: write a newly created app order into the master sheet.
+// Append-only + server-side dedup on order number → safe to call repeatedly.
+function sheetsSyncToMaster(o){
+  try{
+    if(!SHEETS_WEBAPP_URL || !o) return;
+    if(o._importedFromMirror) return; // came from the sheet — never write back
+    var item = sheetsBuildMasterItem(o);
+    if(!item) return;
+    fetch(SHEETS_WEBAPP_URL, {
+      method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ token:SHEETS_TOKEN, target:'master', items:[item] })
+    }).then(function(r){return r.json();})
+      .then(function(res){ console.log('Master sync:', res); })
+      .catch(function(err){ console.error('Master sync failed (non-blocking):', err); });
+  }catch(err){ console.error('Master sync failed (non-blocking):', err); }
 }
 
 // Column A–V headers (for the local preview)
