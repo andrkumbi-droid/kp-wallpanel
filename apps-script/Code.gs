@@ -46,6 +46,8 @@ function doPost(e) {
 
     // App → Master: append new app orders into the master's Thai tabs
     if (body.target === 'master') return _writeMaster(body.items || [], !!body.dryRun);
+    // App edit → Master: replace an existing order's rows in place
+    if (body.target === 'masterUpdate') return _updateMaster(body.items || [], !!body.dryRun);
 
     var dryRun = !!body.dryRun;
     var items = body.items || [];
@@ -188,26 +190,29 @@ function _writeMaster(items, dryRun) {
   return _json(res);
 }
 
-/** Fill a pre-numbered master row with order data. Inserts sub-rows for extra
- *  products. G/K written as formulas; A/L/M/N/O left untouched. */
+/** Fill a pre-numbered master row, inserting sub-rows for extra products. */
 function _fillMasterRow(sheet, rowIdx, rows) {
   var extra = rows.length - 1;
   if (extra > 0) sheet.insertRowsAfter(rowIdx, extra);
-  // product columns D–G on every row
+  _writeRows(sheet, rowIdx, rows);
+}
+
+/** Write order rows starting at rowIdx (no row insertion — caller sizes it).
+ *  G/K written as formulas; A/L/M/N/O (status, payment, COD) left untouched. */
+function _writeRows(sheet, rowIdx, rows) {
+  var extra = rows.length - 1;
   for (var k = 0; k < rows.length; k++) {
     var r = rowIdx + k, rd = rows[k];
-    if (rd[3] !== '' && rd[3] != null) sheet.getRange(r, 4).setValue(rd[3]); // D code
-    if (rd[4] !== '' && rd[4] != null) sheet.getRange(r, 5).setValue(rd[4]); // E qty
-    if (rd[5] !== '' && rd[5] != null) sheet.getRange(r, 6).setValue(rd[5]); // F price
-    sheet.getRange(r, 7).setFormula('=E' + r + '*F' + r);                    // G amount
+    sheet.getRange(r, 4).setValue(rd[3] != null ? rd[3] : ''); // D code
+    sheet.getRange(r, 5).setValue(rd[4] != null ? rd[4] : ''); // E qty
+    sheet.getRange(r, 6).setValue(rd[5] != null ? rd[5] : ''); // F price
+    sheet.getRange(r, 7).setFormula('=E' + r + '*F' + r);      // G amount
   }
-  // order-level fields on the main row
   var m = rows[0];
   if (m[2])  sheet.getRange(rowIdx, 3).setValue(m[2]);   // C date
   if (m[7] !== '' && m[7] != null) sheet.getRange(rowIdx, 8).setValue(m[7]); // H clips
-  if (m[8])  sheet.getRange(rowIdx, 9).setValue(m[8]);   // I shipping
-  if (m[9])  sheet.getRange(rowIdx, 10).setValue(m[9]);  // J discount
-  // K total = G(main)+I-J + each sub-row's G  (matches the sheet's style)
+  sheet.getRange(rowIdx, 9).setValue(m[8] || '');        // I shipping
+  sheet.getRange(rowIdx, 10).setValue(m[9] || '');       // J discount
   var kf = '=G' + rowIdx + '+I' + rowIdx + '-J' + rowIdx;
   for (var s = 1; s <= extra; s++) kf += '+G' + (rowIdx + s);
   sheet.getRange(rowIdx, 11).setFormula(kf);             // K total
@@ -217,6 +222,52 @@ function _fillMasterRow(sheet, rowIdx, rows) {
   if (m[21]) sheet.getRange(rowIdx, 22).setValue(m[21]); // V maps
   if (m[24]) sheet.getRange(rowIdx, 25).setValue(m[24]); // Y shipper
   if (m[25]) sheet.getRange(rowIdx, 26).setValue(m[25]); // Z notes
+}
+
+/** App edit → Master: replace an existing order's rows in place.
+ *  Finds the order's main row + its sub-rows, resizes to the new product
+ *  count (insert/delete sub-rows), then rewrites. Never touches A/L/M/N/O. */
+function _updateMaster(items, dryRun) {
+  var ss = SpreadsheetApp.openById(MASTER_ID);
+  var res = { total: items.length, written: 0, not_found: 0, failed: 0, details: [] };
+
+  items.forEach(function (it) {
+    try {
+      var sheet = _masterTab(ss, it.zone);
+      if (!sheet) { res.failed++; res.details.push({ order: it.orderNumber, status: 'failed', reason: 'tab not found for zone: ' + it.zone }); return; }
+      var last = sheet.getLastRow();
+      var on = String(it.orderNumber).trim();
+      var bvals = sheet.getRange(1, 2, last, 1).getValues(); // B
+      var dvals = sheet.getRange(1, 4, last, 1).getValues(); // D
+      var main = -1;
+      for (var r = 0; r < bvals.length; r++) {
+        if (String(bvals[r][0]).trim() === on) { main = r + 1; break; }
+      }
+      if (main < 0) {
+        // not in master yet → fall back to a normal write (fill/append)
+        var single = _writeMaster([it], dryRun);
+        res.written++; res.details.push({ order: on, status: 'written', mode: 'fallback-write' });
+        return;
+      }
+      // count existing sub-rows (rows after main with empty B and a product in D)
+      var oldSub = 0, idx = main; // idx = 0-based index of row main+1
+      while (idx < bvals.length && String(bvals[idx][0]).trim() === '' && String(dvals[idx][0]).trim() !== '') { oldSub++; idx++; }
+      var newSub = it.rows.length - 1;
+      if (dryRun) {
+        res.written++; res.details.push({ order: on, status: 'would_update', tab: sheet.getName(), oldSub: oldSub, newSub: newSub });
+        return;
+      }
+      if (newSub > oldSub) sheet.insertRowsAfter(main, newSub - oldSub);
+      else if (newSub < oldSub) sheet.deleteRows(main + 1, oldSub - newSub);
+      _writeRows(sheet, main, it.rows);
+      res.written++;
+      res.details.push({ order: on, status: 'updated', mode: 'row ' + main + ' (' + oldSub + '→' + newSub + ' subs)', tab: sheet.getName() });
+    } catch (err) {
+      res.failed++;
+      res.details.push({ order: it.orderNumber, status: 'failed', reason: String(err) });
+    }
+  });
+  return _json(res);
 }
 
 /** Read all order numbers currently in column B of a tab. */
