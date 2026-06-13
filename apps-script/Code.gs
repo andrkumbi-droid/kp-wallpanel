@@ -92,7 +92,9 @@ function doPost(e) {
   }
 }
 
-/** Read raw A–V values from every mirror tab (read-only). */
+/** Read raw A–AD values from every mirror tab (read-only).
+ *  Was 22 (A–V); widened to 30 to cover the new split columns
+ *  (ชื่อ/เบอร์โทร/ที่อยู่/Maps-Link) and the shifted ขนส่ง / หมายเหตุ. */
 function _readMirror() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var out = {};
@@ -101,7 +103,8 @@ function _readMirror() {
     if (!sh) { out[name] = []; return; }
     var last = sh.getLastRow();
     if (last < 1) { out[name] = []; return; }
-    out[name] = sh.getRange(1, 1, last, 22).getValues(); // columns A–V
+    var cols = Math.min(30, sh.getLastColumn());
+    out[name] = sh.getRange(1, 1, last, cols).getValues(); // columns A–AD
   });
   return _json({ ok: true, tabs: out });
 }
