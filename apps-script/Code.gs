@@ -222,6 +222,8 @@ function _writeRows(sheet, rowIdx, rows) {
   if (m[19]) sheet.getRange(rowIdx, 20).setValue(m[19]); // T phone
   if (m[20]) sheet.getRange(rowIdx, 21).setValue(m[20]); // U address
   if (m[21]) sheet.getRange(rowIdx, 22).setValue(m[21]); // V maps
+  if (m[22] !== '' && m[22] != null) sheet.getRange(rowIdx, 23).setValue(m[22]); // W shipping bill
+  if (m[23]) sheet.getRange(rowIdx, 24).setValue(m[23]); // X pack status
   if (m[24]) sheet.getRange(rowIdx, 25).setValue(m[24]); // Y shipper
   if (m[25]) sheet.getRange(rowIdx, 26).setValue(m[25]); // Z notes
 }
