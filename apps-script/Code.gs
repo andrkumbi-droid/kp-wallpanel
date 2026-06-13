@@ -134,12 +134,15 @@ function _masterTab(ss, zone) {
   return null;
 }
 
-/** App → Master: append new orders to the master's Thai tabs.
- *  Append-only + dedupe on order number (col B) → never touches existing rows. */
+/** App → Master: fill the matching pre-numbered row (or append as fallback).
+ *  - Finds the row whose col B == order number (pre-allocated empty row).
+ *  - If that row already has a product (col D filled) → skip (duplicate).
+ *  - Otherwise fills it, inserting sub-rows for extra products.
+ *  - Writes G/K as FORMULAS (matching the sheet) and never touches
+ *    A/L/M/N/O (status, payment, COD) so existing formulas stay intact. */
 function _writeMaster(items, dryRun) {
   var ss = SpreadsheetApp.openById(MASTER_ID);
   var res = { total: items.length, written: 0, skipped_duplicates: 0, failed: 0, details: [] };
-  var cache = {}; // tabName -> existing order numbers
 
   items.forEach(function (it) {
     try {
@@ -149,29 +152,71 @@ function _writeMaster(items, dryRun) {
         res.details.push({ order: it.orderNumber, status: 'failed', reason: 'master tab not found for zone: ' + it.zone });
         return;
       }
-      var key = sheet.getName();
-      if (!cache[key]) cache[key] = _orderNumbers(sheet);
-
-      if (cache[key].indexOf(String(it.orderNumber).trim()) !== -1) {
+      var last = sheet.getLastRow();
+      var on = String(it.orderNumber).trim();
+      var bvals = sheet.getRange(1, 2, last, 1).getValues(); // col B (order no)
+      var dvals = sheet.getRange(1, 4, last, 1).getValues(); // col D (product code)
+      var target = -1;
+      for (var r = 0; r < bvals.length; r++) {
+        if (String(bvals[r][0]).trim() === on) { target = r + 1; break; }
+      }
+      // matching row exists AND already has a product → real duplicate
+      if (target > 0 && String(dvals[target - 1][0]).trim() !== '') {
         res.skipped_duplicates++;
-        res.details.push({ order: it.orderNumber, status: 'skipped', reason: 'duplicate', tab: key });
+        res.details.push({ order: on, status: 'skipped', reason: 'already filled', tab: sheet.getName() });
         return;
       }
       if (dryRun) {
         res.written++;
-        res.details.push({ order: it.orderNumber, status: 'would_write', rows: it.rows.length, tab: key });
+        res.details.push({ order: on, status: 'would_write', mode: (target > 0 ? 'fill row ' + target : 'append'), tab: sheet.getName() });
         return;
       }
-      sheet.getRange(sheet.getLastRow() + 1, 1, it.rows.length, it.rows[0].length).setValues(it.rows);
-      cache[key].push(String(it.orderNumber).trim());
-      res.written++;
-      res.details.push({ order: it.orderNumber, status: 'written', rows: it.rows.length, tab: key });
+      if (target > 0) {
+        _fillMasterRow(sheet, target, it.rows);
+        res.written++;
+        res.details.push({ order: on, status: 'written', mode: 'filled row ' + target, tab: sheet.getName() });
+      } else {
+        sheet.getRange(last + 1, 1, it.rows.length, it.rows[0].length).setValues(it.rows);
+        res.written++;
+        res.details.push({ order: on, status: 'written', mode: 'appended', tab: sheet.getName() });
+      }
     } catch (err) {
       res.failed++;
       res.details.push({ order: it.orderNumber, status: 'failed', reason: String(err) });
     }
   });
   return _json(res);
+}
+
+/** Fill a pre-numbered master row with order data. Inserts sub-rows for extra
+ *  products. G/K written as formulas; A/L/M/N/O left untouched. */
+function _fillMasterRow(sheet, rowIdx, rows) {
+  var extra = rows.length - 1;
+  if (extra > 0) sheet.insertRowsAfter(rowIdx, extra);
+  // product columns D–G on every row
+  for (var k = 0; k < rows.length; k++) {
+    var r = rowIdx + k, rd = rows[k];
+    if (rd[3] !== '' && rd[3] != null) sheet.getRange(r, 4).setValue(rd[3]); // D code
+    if (rd[4] !== '' && rd[4] != null) sheet.getRange(r, 5).setValue(rd[4]); // E qty
+    if (rd[5] !== '' && rd[5] != null) sheet.getRange(r, 6).setValue(rd[5]); // F price
+    sheet.getRange(r, 7).setFormula('=E' + r + '*F' + r);                    // G amount
+  }
+  // order-level fields on the main row
+  var m = rows[0];
+  if (m[2])  sheet.getRange(rowIdx, 3).setValue(m[2]);   // C date
+  if (m[7] !== '' && m[7] != null) sheet.getRange(rowIdx, 8).setValue(m[7]); // H clips
+  if (m[8])  sheet.getRange(rowIdx, 9).setValue(m[8]);   // I shipping
+  if (m[9])  sheet.getRange(rowIdx, 10).setValue(m[9]);  // J discount
+  // K total = G(main)+I-J + each sub-row's G  (matches the sheet's style)
+  var kf = '=G' + rowIdx + '+I' + rowIdx + '-J' + rowIdx;
+  for (var s = 1; s <= extra; s++) kf += '+G' + (rowIdx + s);
+  sheet.getRange(rowIdx, 11).setFormula(kf);             // K total
+  if (m[18]) sheet.getRange(rowIdx, 19).setValue(m[18]); // S name
+  if (m[19]) sheet.getRange(rowIdx, 20).setValue(m[19]); // T phone
+  if (m[20]) sheet.getRange(rowIdx, 21).setValue(m[20]); // U address
+  if (m[21]) sheet.getRange(rowIdx, 22).setValue(m[21]); // V maps
+  if (m[24]) sheet.getRange(rowIdx, 25).setValue(m[24]); // Y shipper
+  if (m[25]) sheet.getRange(rowIdx, 26).setValue(m[25]); // Z notes
 }
 
 /** Read all order numbers currently in column B of a tab. */
