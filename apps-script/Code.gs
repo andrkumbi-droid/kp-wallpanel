@@ -282,7 +282,7 @@ function _clearMaster(items, dryRun) {
   var ss = SpreadsheetApp.openById(MASTER_ID);
   var res = { total: items.length, cleared: 0, not_found: 0, failed: 0, details: [] };
   // columns to wipe (1-based): C D E F G H I J K L M N · P Q · S T U V W X Y Z
-  var CLEAR = [3,4,5,6,7,8,9,10,11,12,13,14,16,17,19,20,21,22,23,24,25,26];
+  var CLEAR = [3,4,5,6,8,9,10,12,13,14,16,17,19,20,21,22,23,24,25,26]; // fallback wipe (skip G,K,O)
   items.forEach(function (it) {
     try {
       var sheet = _masterTab(ss, it.zone);
@@ -295,13 +295,27 @@ function _clearMaster(items, dryRun) {
       if (main < 0) { res.not_found++; res.details.push({ order: on, status: 'not_found' }); return; }
       var oldSub = 0, idx = main;
       while (idx < bvals.length && String(bvals[idx][0]).trim() === '' && String(dvals[idx][0]).trim() !== '') { oldSub++; idx++; }
-      if (dryRun) { res.cleared++; res.details.push({ order: on, status: 'would_clear', row: main, subs: oldSub }); return; }
+      // find a template: another pre-numbered EMPTY row (B has a number, D empty)
+      var tmpl = -1;
+      for (var r2 = 0; r2 < bvals.length; r2++) {
+        var rowN = r2 + 1;
+        if (rowN === main || (rowN > main && rowN <= main + oldSub)) continue;
+        if (String(bvals[r2][0]).trim() !== '' && String(dvals[r2][0]).trim() === '') { tmpl = rowN; break; }
+      }
+      if (dryRun) { res.cleared++; res.details.push({ order: on, status: 'would_clear', row: main, subs: oldSub, template: tmpl }); return; }
       // clear the K formula first so deleting sub-rows can't leave a #REF
       sheet.getRange(main, 11).setValue('');
-      if (oldSub > 0) sheet.deleteRows(main + 1, oldSub);
-      CLEAR.forEach(function (c) { sheet.getRange(main, c).setValue(''); });
+      if (oldSub > 0) { sheet.deleteRows(main + 1, oldSub); if (tmpl > main) tmpl -= oldSub; }
+      if (tmpl > 0) {
+        // copy the empty-row template C–Z onto this row; relative formulas auto-adjust
+        sheet.getRange(tmpl, 3, 1, 24).copyTo(sheet.getRange(main, 3, 1, 24));
+      } else {
+        CLEAR.forEach(function (c) { sheet.getRange(main, c).setValue(''); });
+        sheet.getRange(main, 7).setFormula('=E' + main + '*F' + main);
+        sheet.getRange(main, 11).setFormula('=G' + main + '+I' + main + '-J' + main);
+      }
       res.cleared++;
-      res.details.push({ order: on, status: 'cleared', row: main, removedSubs: oldSub, tab: sheet.getName() });
+      res.details.push({ order: on, status: 'cleared', row: main, removedSubs: oldSub, template: tmpl, tab: sheet.getName() });
     } catch (err) {
       res.failed++;
       res.details.push({ order: it.orderNumber, status: 'failed', reason: String(err) });
