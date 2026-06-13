@@ -4431,17 +4431,60 @@ function mirrorClassify(code){
   if(/^U/.test(code))    return 'uedge';
   return 'panel'; // KP*, K-PVC*, etc.
 }
+// Column-name → index map: built once per sheet from the header row.
+// Fallback indices are the current fixed positions so nothing breaks if
+// the header row is missing or a keyword isn't found.
+var MIRROR_COL_DEFS = [
+  // Matched against actual Row 2 Thai headers from the master sheet
+  { key:'orderNo',    re:/เลขออเดอร์|เลขที่|order\s*no/i,             fb:1  },
+  { key:'date',       re:/วันที่ออเดอร์|วันที่|date/i,                 fb:2  },
+  { key:'code',       re:/รหัสสินค้า|^รหัส|^code$/i,                  fb:3  },
+  { key:'qty',        re:/^จำนวน$|^qty$|quantity/i,                   fb:4  },
+  { key:'unitPrice',  re:/ราคา.แผ่น|unit.*price/i,                    fb:5  },
+  { key:'amount',     re:/^ยอดรวม$|^amount$/i,                        fb:6  },
+  { key:'clips',      re:/clip\s*lock/i,                              fb:7  },
+  { key:'shipping',   re:/ค่าขนส่ง|shipping/i,                        fb:8  },
+  { key:'discount',   re:/ส่วนลด|discount/i,                          fb:9  },
+  // total uses ^ and $ so "รวมยอด COD..." (col O) doesn't steal the match
+  { key:'total',      re:/^รวมยอด$|^total$/i,                         fb:10 },
+  { key:'payment',    re:/วิธีการชำระ|payment/i,                       fb:11 },
+  { key:'codAmt',     re:/รวมยอด.*cod|cod.*เก็บ|outstanding/i,        fb:14 },
+  { key:'contact',    re:/ช่องทางติดต่อ|contact/i,                     fb:16 },
+  { key:'custAddr',   re:/ชื่อ-ที่อยู่|ชื่อ.*ที่อยู่|customer.*addr/i, fb:17 },
+  // new split columns — only matched if sheet is restructured
+  { key:'phone',      re:/^เบอร์โทร$|^เบอร์$|^โทร$|^phone$|^tel$/i,  fb:-1 },
+  { key:'custName',   re:/^ชื่อลูกค้า$|^ชื่อผู้รับ$|^customer\s*name$/i, fb:-1 },
+  { key:'mapsLink',   re:/^maps$|^แผนที่$|^ลิงก์แผนที่$/i,            fb:-1 },
+  { key:'shipper',    re:/^ขนส่ง$|^shipper$|^carrier$/i,              fb:20 },
+  { key:'packStatus', re:/สถานะแพ็ค|pack.*status/i,                   fb:19 },
+  { key:'notes',      re:/^หมายเหตุ$|^note$/i,                        fb:22 },
+];
+function buildColMap(headerRow){
+  var map={};
+  MIRROR_COL_DEFS.forEach(function(def){
+    for(var i=0;i<headerRow.length;i++){
+      if(def.re.test(String(headerRow[i]||'').trim())){ map[def.key]=i; return; }
+    }
+    if(def.fb>=0) map[def.key]=def.fb; // hardcoded fallback
+  });
+  return map;
+}
+function cm(map,key,row){ var i=map&&map[key]!=null?map[key]:-1; return i>=0?row[i]:undefined; }
+
 // Group raw rows into orders: a row with a real order-no in col B starts a
 // new order; following rows with a product code but empty B are its sub-rows.
+// Also captures the first non-order row as the header to build a column map.
 function mirrorGroup(rows){
-  var out=[], cur=null;
+  var out=[], cur=null, headerRow=null;
   rows.forEach(function(row){
     var B=String(row[1]==null?'':row[1]).trim();
     var D=String(row[3]==null?'':row[3]).trim();
     if(mirrorIsOrderNo(B)){ if(cur) out.push(cur); cur={raw:row, products: D?[row]:[]}; }
     else if(cur && D){ cur.products.push(row); }
+    else if(!cur && !headerRow && B){ headerRow=row; }
   });
   if(cur) out.push(cur);
+  if(headerRow){ var colMap=buildColMap(headerRow); out.forEach(function(g){g.colMap=colMap;}); }
   return out;
 }
 // Carriers that appear in the sheet but weren't in the app's shipper list.
@@ -4497,13 +4540,16 @@ function matchDriver(u){
 
 // Convert one grouped order into an app order object (status: delivered).
 function mirrorToAppOrder(g){
-  var m=g.raw;
+  var m=g.raw, C=g.colMap||{};
   var id=String(m[1]).trim().replace(/\s+/g,'');
   var date=mirrorParseDate(m[2]);
-  var clips=mirrorNum(m[7]), shipping=mirrorNum(m[8]), discount=mirrorNum(m[9]);
-  var total=mirrorNum(m[10]), paidOrigin=mirrorNum(m[11]), codOutstanding=mirrorNum(m[14]);
-  var contact=String(m[16]||'').trim(), custAddr=String(m[17]||'').trim();
-  var shipperRaw=String(m[20]||'').trim().replace(/\s*\d{1,2}[\/.\-]\d{1,2}([\/.\-]\d{1,5})?\s*$/,'').trim(); // col U, trailing date stripped
+  var clips=mirrorNum(cm(C,'clips',m)), shipping=mirrorNum(cm(C,'shipping',m)), discount=mirrorNum(cm(C,'discount',m));
+  var total=mirrorNum(cm(C,'total',m)), paidOrigin=mirrorNum(cm(C,'payment',m)), codOutstanding=mirrorNum(cm(C,'codAmt',m));
+  var contact=String(cm(C,'contact',m)||'').trim();
+  // custAddr: prefer dedicated phone/address columns if sheet was split, else fall back to combined column
+  var custAddr=String(cm(C,'custAddr',m)||'').trim();
+  var phone=String(cm(C,'phone',m)||'').trim();
+  var shipperRaw=String(cm(C,'shipper',m)||'').trim().replace(/\s*\d{1,2}[\/.\-]\d{1,2}([\/.\-]\d{1,5})?\s*$/,'').trim();
   var paid = !(codOutstanding>0); // col O has a number → still unpaid
 
   var lineItems=[], panels=[], lcorners=[], totalQty=0;
@@ -4521,7 +4567,7 @@ function mirrorToAppOrder(g){
 
   var o={
     id:id, date:date, zone:mirrorZone(id),
-    customer: custAddr||'—', phone:'—', address: custAddr||'—', location:'',
+    customer: custAddr||'—', phone: phone||'—', address: custAddr||'—', location:'',
     contact: contact,
     shipper: matchShipper(shipperRaw), shipperRaw: shipperRaw, driver: matchDriver(shipperRaw),
     panels: panels.length?panels.join(' · '):'—',
