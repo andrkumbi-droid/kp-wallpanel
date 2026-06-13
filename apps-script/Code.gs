@@ -19,7 +19,7 @@ var SHEET_ID = '1VIEisPGwwVcarKJrqgZqSqFaUfyoX92BqO9P743_Y30';
 // App → Master sheet (writes new app orders into the master's Thai tabs).
 // ⚠️ TESTING: this is the COPY of the master. Change to the real master ID
 // only after verifying everything works on the copy.
-var MASTER_ID = '1XXmHZt9RVgrgBEmWVpPBid9_C8kx5DsYnhzmUzBnZQE';
+var MASTER_ID = '1pRbhYoS0yyZKZ4mo4BeZTPsgaUpJuqaIsm3tm5oiMMw';
 
 // Must match SHEETS_TOKEN in index.html. Change both to the same
 // random string. This is light protection against random POSTs —
