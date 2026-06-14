@@ -12,14 +12,17 @@ var ANTHROPIC_API_KEY = '';
 var MODEL = 'claude-3-5-haiku-latest';
 var TZ = 'Asia/Bangkok';
 var DEFAULT_LANG = 'th';
+// Public site base (GitHub Pages) — product images live here, used for LINE image replies.
+var SITE_BASE = 'https://andrkumbi-droid.github.io/kp-wallpanel/';
+var IMG_BASE  = SITE_BASE + 'img/products/';
 
 // ── ACCESS CONTROL + LANGUAGE ──────────────────────────────
 // Open mode: USERS empty -> everyone sees everything (lang auto-detected).
 //   var USERS = { 'U_ANDRE':{role:'admin',lang:'de'}, 'U_PIM':{role:'admin',lang:'th'}, ... };
 var USERS = {};
 var ROLE_PERMS = {
-  admin: { revenue:true, panels:true, stock:true, incoming:true, unpaid:true, orders:true },
-  staff: { revenue:true, panels:true, stock:true, incoming:true, unpaid:true, orders:true }
+  admin: { revenue:true, panels:true, stock:true, incoming:true, unpaid:true, orders:true, claims:true, attendance:true, customers:true, images:true },
+  staff: { revenue:true, panels:true, stock:true, incoming:true, unpaid:true, orders:true, claims:true, attendance:true, customers:true, images:true }
 };
 function userInfo(userId){
   if(!Object.keys(USERS).length) return { role:'admin', lang:DEFAULT_LANG };
@@ -45,15 +48,29 @@ function handleEvent(ev){
   var info = userInfo(userId);
   if(!info){ return reply(ev.replyToken, [textMsg('ไม่มีสิทธิ์เข้าถึง / Kein Zugriff.\nSchreibe "meine id".')]); }
   var lang = Object.keys(USERS).length ? info.lang : detectLang(text0);
+  // Product code(s) → send product image(s).
+  var codes = detectProductCodes(text0);
+  if(codes.length && can(info.role,'images')){
+    var imgs = codes.slice(0,4).map(function(c){ return imageMsg(IMG_BASE+c+'.jpg'); });
+    imgs.unshift(textMsg((de(lang)?'Bild: ':'รูป: ')+codes.slice(0,4).join(', ')));
+    return reply(ev.replyToken, imgs);
+  }
   reply(ev.replyToken, [withMenu(textMsg(route(text0, info.role, lang)), info.role, lang)]);
 }
 function route(text, role, lang){
   var t = text.toLowerCase();
-  if(/umsatz|revenue|ยอดขาย|รายได้|sales/.test(t))             return can(role,'revenue')  ? fmtRevenue(lang)  : denied(lang);
+  if(/umsatz|revenue|ยอดขาย|รายได้|sales/.test(t)){
+    if(!can(role,'revenue')) return denied(lang);
+    var day = parseDay(text);                       // "Umsatz 12/6" → that day
+    return day ? fmtRevenueDay(day, lang) : fmtRevenue(lang);
+  }
   if(/panele|panel|verkauft|sold|แผ่นที่ขาย|แผ่นขาย/.test(t))    return can(role,'panels')   ? fmtPanels(lang)   : denied(lang);
   if(/stock|lager|สต็อก|คลัง|bestand/.test(t))                  return can(role,'stock')    ? fmtStock(lang)    : denied(lang);
   if(/incoming|eingang|lieferung|container|ของเข้า|ตู้/.test(t)) return can(role,'incoming') ? fmtIncoming(lang) : denied(lang);
   if(/unpaid|offen|zahlung|ค้างชำระ|cod|ยังไม่/.test(t))         return can(role,'unpaid')   ? fmtUnpaid(lang)   : denied(lang);
+  if(/claim|เคลม|reklamation|ตำหนิ/.test(t))                    return can(role,'claims')   ? fmtClaims(lang)   : denied(lang);
+  if(/attendance|สาย|มาสาย|anwesen|versp/.test(t))              return can(role,'attendance')? fmtAttendance(lang): denied(lang);
+  if(/customer|kunde|ลูกค้า|kunden/.test(t))                    return can(role,'customers')? fmtCustomers(lang): denied(lang);
   if(/order|bestell|ออเดอร์|ออเด/.test(t))                     return can(role,'orders')   ? fmtOrders(lang)   : denied(lang);
   if(/hilfe|help|menu|เมนู|\?/.test(t))                         return fmtHelp(lang);
   if(ANTHROPIC_API_KEY) return askClaude(text, role, lang);
@@ -76,18 +93,31 @@ function addDays(iso, n){ if(!iso) return ''; var d=new Date(iso+'T00:00:00'); i
 function isPanelCode(code){ var c=String(code||'').toUpperCase(); return /^KP/.test(c) || /^K-?PVC/.test(c); }
 function codeNum(c){ var m=String(c||'').match(/(\d+)/); return m ? parseInt(m[1],10) : 99999; }
 
+// An order counts toward revenue if it exists (not cancelled) — matches the app.
+function active(o){ return o && o.status!=='cancelled'; }
+
 // ── 1) Revenue — button shows TOTAL only ───────────────────
 function fmtRevenue(lang){
-  var del = getOrders().filter(function(o){ return o.status==='delivered'; });
+  var del = getOrders().filter(active);
   var t=dToday(), mk=dMonth(), yk=dYear();
   function sum(pred){ return del.filter(pred).reduce(function(a,o){ return a+amt(o); },0); }
   var aT=sum(function(o){return (o.date||'')===t;}), aM=sum(function(o){return (o.date||'').indexOf(mk)===0;}), aY=sum(function(o){return (o.date||'').indexOf(yk)===0;});
   if(de(lang)) return '💰 Umsatz (gesamt)\n\nHeute: '+f(aT)+' ฿\nMonat: '+f(aM)+' ฿\nJahr: '+f(aY)+' ฿';
   return '💰 ยอดขาย (รวม)\n\nวันนี้: '+f(aT)+' ฿\nเดือนนี้: '+f(aM)+' ฿\nปีนี้: '+f(aY)+' ฿';
 }
+// Revenue for a specific day (yyyy-mm-dd). Counts non-cancelled; shows paid share.
+function fmtRevenueDay(iso, lang){
+  var os=getOrders().filter(active);
+  var day=os.filter(function(o){ return (o.date||'')===iso; });
+  var total=day.reduce(function(a,o){return a+amt(o);},0);
+  var paid=day.filter(function(o){return o.payMethod;}).reduce(function(a,o){return a+amt(o);},0);
+  var d=dmy(iso);
+  if(de(lang)) return '💰 Umsatz '+d+'\n\nGesamt: '+f(total)+' ฿\nDavon bezahlt: '+f(paid)+' ฿\nBestellungen: '+day.length;
+  return '💰 ยอดขาย '+d+'\n\nรวม: '+f(total)+' ฿\nจ่ายแล้ว: '+f(paid)+' ฿\nออเดอร์: '+day.length;
+}
 // detailed (paid + total) — only for Claude context, when asked
 function fmtRevenueFull(lang){
-  var os=getOrders(); var paid=os.filter(function(o){return o.status==='delivered'&&o.payMethod;}); var del=os.filter(function(o){return o.status==='delivered';});
+  var os=getOrders(); var paid=os.filter(function(o){return active(o)&&o.payMethod;}); var del=os.filter(active);
   var t=dToday(),mk=dMonth(),yk=dYear(); function sum(a,p){return a.filter(p).reduce(function(x,o){return x+amt(o);},0);}
   var pT=sum(paid,function(o){return (o.payDate||o.date||'')===t;}),aT=sum(del,function(o){return (o.date||'')===t;});
   var pM=sum(paid,function(o){return (o.payDate||o.date||'').indexOf(mk)===0;}),aM=sum(del,function(o){return (o.date||'').indexOf(mk)===0;});
@@ -98,7 +128,7 @@ function fmtRevenueFull(lang){
 // ── 2) Sold panels (day / month / year) ────────────────────
 function countPanels(arr){ var n=0; arr.forEach(function(o){ if(o.panels&&o.panels!=='—') o.panels.split('·').forEach(function(p){ var m=p.trim().match(/^([A-Z0-9\-]+)\s*[×x]\s*(\d+)/i); if(m&&!/^CL/i.test(m[1])) n+=parseInt(m[2])||0; }); }); return n; }
 function fmtPanels(lang){
-  var del=getOrders().filter(function(o){return o.status==='delivered';}); var t=dToday(),mk=dMonth(),yk=dYear();
+  var del=getOrders().filter(active); var t=dToday(),mk=dMonth(),yk=dYear();
   var pt=countPanels(del.filter(function(o){return (o.date||'')===t;})); var pm=countPanels(del.filter(function(o){return (o.date||'').indexOf(mk)===0;})); var py=countPanels(del.filter(function(o){return (o.date||'').indexOf(yk)===0;}));
   if(de(lang)) return '🧱 Verkaufte Panele\n\nHeute: '+f(pt)+'\nMonat: '+f(pm)+'\nJahr: '+f(py);
   return '🧱 แผ่นที่ขาย\n\nวันนี้: '+f(pt)+'\nเดือนนี้: '+f(pm)+'\nปีนี้: '+f(py);
@@ -155,7 +185,55 @@ function fmtOrders(lang){
   if(de(lang)) return '📊 Bestellungen\n\nHeute geliefert: '+td+'\n\nNeu: '+c(function(o){return o.status==='new';})+'\nPacken: '+c(function(o){return o.status==='packing';})+'\nBereit: '+c(function(o){return o.status==='ready';})+'\nGeladen: '+c(function(o){return o.status==='loaded';})+'\nGeliefert: '+c(function(o){return o.status==='delivered';});
   return '📊 ออเดอร์\n\nวันนี้ส่งแล้ว: '+td+'\n\nNew: '+c(function(o){return o.status==='new';})+'\nPacking: '+c(function(o){return o.status==='packing';})+'\nReady: '+c(function(o){return o.status==='ready';})+'\nLoaded: '+c(function(o){return o.status==='loaded';})+'\nDelivered: '+c(function(o){return o.status==='delivered';});
 }
-function fmtHelp(lang){ return de(lang)?'Hallo! 👋\nTippe einen Knopf oder stelle eine Frage.':'สวัสดีค่ะ 👋\nกดปุ่มด้านล่าง หรือพิมพ์คำถามได้เลย'; }
+function fmtHelp(lang){ return de(lang)?'Hallo! 👋\nTippe einen Knopf, eine Frage, ein Datum (z.B. "Umsatz 12/6") oder einen Produktcode (z.B. KP009) für ein Bild.':'สวัสดีค่ะ 👋\nกดปุ่ม ถามคำถาม ใส่วันที่ (เช่น "ยอดขาย 12/6") หรือพิมพ์รหัสสินค้า (เช่น KP009) เพื่อดูรูป'; }
+
+// ── Claims / Attendance / Customers (Office data) ──────────
+function fmtClaims(lang){
+  var cs=asArr(fbGet('claims')); var open=cs.filter(function(c){return c.status==='open';});
+  open.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
+  var lines=open.slice(0,15).map(function(c){ return '• '+(c.orderId||'?')+' — '+String(c.reason||'').slice(0,30)+(c.items?(' ('+(Array.isArray(c.items)?c.items.join(','):c.items)+')'):''); });
+  if(de(lang)) return '🛠️ Offene Claims: '+open.length+' / gesamt '+cs.length+(lines.length?('\n\n'+lines.join('\n')):'');
+  return '🛠️ เคลมที่เปิด: '+open.length+' / ทั้งหมด '+cs.length+(lines.length?('\n\n'+lines.join('\n')):'');
+}
+function fmtAttendance(lang){
+  var lg=asArr(fbGet('lateLog')); var mk=dMonth();
+  var month=lg.filter(function(e){return String(e.date||'').indexOf(mk)===0;});
+  var byStaff={}; month.forEach(function(e){ var n=e.staffName||e.staffId||'?'; byStaff[n]=(byStaff[n]||0)+(parseInt(e.minutes)||0); });
+  var names=Object.keys(byStaff).sort(function(a,b){return byStaff[b]-byStaff[a];});
+  var lines=names.map(function(n){ return '• '+n+': '+byStaff[n]+(de(lang)?' Min':' นาที'); });
+  if(de(lang)) return '⏰ Verspätungen ('+mk+')\n'+month.length+' Einträge'+(lines.length?('\n\n'+lines.join('\n')):'\n\nKeine');
+  return '⏰ มาสาย ('+mk+')\n'+month.length+' ครั้ง'+(lines.length?('\n\n'+lines.join('\n')):'\n\nไม่มี');
+}
+function fmtCustomers(lang){
+  var os=getOrders(); var byPhone={};
+  os.forEach(function(o){ var p=String(o.phone||'').replace(/[^0-9]/g,''); if(p.length>=8){ if(!byPhone[p]) byPhone[p]={name:o.customer,n:0,amt:0}; byPhone[p].n++; byPhone[p].amt+=amt(o); } });
+  var keys=Object.keys(byPhone); keys.sort(function(a,b){return byPhone[b].amt-byPhone[a].amt;});
+  var lines=keys.slice(0,10).map(function(k){ var c=byPhone[k]; return '• '+String(c.name||'—').slice(0,18)+' — '+c.n+(de(lang)?' Best.':' ออเดอร์')+' · '+f(c.amt)+' ฿'; });
+  if(de(lang)) return '👤 Kunden: '+keys.length+'\n\nTop:\n'+lines.join('\n');
+  return '👤 ลูกค้า: '+keys.length+'\n\nสูงสุด:\n'+lines.join('\n');
+}
+
+// ── Parsers / helpers for date queries + product images ────
+var TH_MONTHS = {'ม.ค.':1,'มกราคม':1,'ก.พ.':2,'กุมภาพันธ์':2,'มี.ค.':3,'มีนาคม':3,'เม.ย.':4,'เมษายน':4,'พ.ค.':5,'พฤษภาคม':5,'มิ.ย.':6,'มิถุนายน':6,'ก.ค.':7,'กรกฎาคม':7,'ส.ค.':8,'สิงหาคม':8,'ก.ย.':9,'กันยายน':9,'ต.ค.':10,'ตุลาคม':10,'พ.ย.':11,'พฤศจิกายน':11,'ธ.ค.':12,'ธันวาคม':12};
+// Parse a date out of free text → 'yyyy-mm-dd' (assumes current year if omitted). Returns '' if none.
+function parseDay(text){
+  var s=String(text||''); var now=new Date(); var y=parseInt(Utilities.formatDate(now,TZ,'yyyy'),10);
+  // 12/6/2026 or 12.6.26 or 12-6
+  var m=s.match(/(\d{1,2})[\/\.\-](\d{1,2})(?:[\/\.\-](\d{2,4}))?/);
+  if(m){ var d=parseInt(m[1],10),mo=parseInt(m[2],10),yy=m[3]?parseInt(m[3],10):y; if(yy<100)yy+=2000; if(d>=1&&d<=31&&mo>=1&&mo<=12) return yy+'-'+_z(mo)+'-'+_z(d); }
+  // Thai "12 มิ.ย." → current year (Gregorian, matching stored dates)
+  var tm=s.match(/(\d{1,2})\s*([ก-๙\.]+)/);
+  if(tm){ var mm=TH_MONTHS[tm[2]]; if(mm){ var dd=parseInt(tm[1],10); if(dd>=1&&dd<=31) return y+'-'+_z(mm)+'-'+_z(dd); } }
+  return '';
+}
+function _z(n){ return (n<10?'0':'')+n; }
+// Detect product code tokens (KP009, K-PVC-08). Corners/trims have no images.
+function detectProductCodes(text){
+  var out=[]; var re=/\b(KP\s?\d{2,3}|K-?PVC-?\d{1,3})\b/ig; var m;
+  while((m=re.exec(text))){ out.push(m[1].toUpperCase().replace(/\s+/g,'')); }
+  return out;
+}
+function imageMsg(url){ return { type:'image', originalContentUrl:url, previewImageUrl:url }; }
 
 // ── Free-form via Claude (gets the FULL data incl. paid) ───
 function askClaude(question, role, lang){
@@ -167,6 +245,9 @@ function askClaude(question, role, lang){
     if(can(role,'orders'))   parts.push(fmtOrders(lang));
     if(can(role,'stock'))    parts.push(fmtStock(lang));
     if(can(role,'incoming')) parts.push(fmtIncomingFull(lang));
+    if(can(role,'claims'))     parts.push(fmtClaims(lang));
+    if(can(role,'attendance')) parts.push(fmtAttendance(lang));
+    if(can(role,'customers'))  parts.push(fmtCustomers(lang));
     var langName = de(lang) ? 'German' : 'Thai';
     var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
       method:'post', contentType:'application/json',
