@@ -570,6 +570,12 @@ textarea{resize:none}
       db.ref('receiptNum').on('value', function(snap) {
         if(snap.val() && snap.val().num) currentReceiptNum = snap.val().num;
       });
+      // Lightweight photo index (counts/metadata only, NOT the image data) so the
+      // Pictures tab can list orders without downloading every photo on startup.
+      db.ref('photoIndex').on('value', function(snap) {
+        window.photoIndex = snap.val() || {warehouse:{}, delivery:{}};
+        try{ if(document.getElementById('ofv-pics')&&document.getElementById('ofv-pics').classList.contains('active')) picsRender(); }catch(e){}
+      });
     }
 
     // Defer until app JS is loaded
@@ -1031,6 +1037,7 @@ textarea{resize:none}
     <button type="button" class="tab" onclick="oft('new')" id="oft-new">New</button>
     <button type="button" class="tab" onclick="oft('orders')" id="oft-orders">Orders <span class="tc tcw" id="of-cnt">0</span></button>
     <button type="button" class="tab" onclick="oft('tour')" id="oft-tour">Tour</button>
+    <button type="button" class="tab" onclick="oft('pics')" id="oft-pics">Pictures</button>
     <button type="button" class="tab" onclick="oft('pay')" id="oft-pay" style="display:none">Pay <span class="tc" id="oft-pay-cnt" style="background:#fee2e2;color:#991b1b;display:none"></span></button>
     <button type="button" class="tab" onclick="oft('sales')" id="oft-sales">Sales</button>
     <button type="button" class="tab" onclick="oft('inc')" id="oft-inc">Incoming</button>
@@ -1429,7 +1436,27 @@ textarea{resize:none}
     <div id="of-att-list"></div>
   </div></div>
 
+  <!-- PICTURES VIEW -->
+  <div class="view" id="ofv-pics"><div class="sec">
+    <div class="stit">📷 Pictures / รูปภาพ</div>
+    <div style="display:flex;gap:6px;margin-bottom:12px">
+      <button type="button" id="pics-tab-warehouse" class="btn" onclick="picsSubTab('warehouse')" style="flex:1;background:var(--blue);color:#fff;border:none"><i class="ti ti-package"></i> Warehouse</button>
+      <button type="button" id="pics-tab-delivery" class="btn" onclick="picsSubTab('delivery')" style="flex:1;background:var(--bg);color:var(--text);border:1.5px solid var(--border)"><i class="ti ti-truck"></i> Delivery</button>
+    </div>
+    <div style="position:relative;margin-bottom:12px">
+      <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text2);font-size:14px;pointer-events:none"></i>
+      <input id="pics-search" type="text" placeholder="Search order / ค้นหาออเดอร์" oninput="picsRender()" style="width:100%;box-sizing:border-box;padding:8px 10px 8px 32px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px">
+    </div>
+    <div id="pics-list"></div>
+  </div></div>
+
 </div></div>
+
+<!-- PHOTO LIGHTBOX -->
+<div id="photo-lightbox" onclick="closePhotoLightbox()" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,0.92);align-items:center;justify-content:center;padding:16px">
+  <img id="photo-lightbox-img" src="" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain">
+  <button type="button" onclick="closePhotoLightbox()" style="position:absolute;top:16px;right:16px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,0.2);color:#fff;font-size:20px;cursor:pointer">✕</button>
+</div>
 
 <!-- WAREHOUSE -->
 <div class="screen" id="s-warehouse"><div class="pb">
@@ -2100,7 +2127,7 @@ function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id)
 function delRev(rid){if(!confirm('Remove from revenue?'))return;revOrders=revOrders.filter(x=>x.rid!==rid);mgRevenue();syncRevOrders();}
 
 // OFFICE
-function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();if(t==='attend')ofAttRender();if(t==='cust')custRender();if(t==='block')blockRender();}
+function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='pics')picsRender();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();if(t==='attend')ofAttRender();if(t==='cust')custRender();if(t==='block')blockRender();}
 
 function ofRenderStock(){
   const rl = items => items.length === 0
@@ -4256,6 +4283,126 @@ function clearDeliveryPhoto(){
   document.getElementById('delivery-photo-upload').style.display = 'block';
   document.getElementById('delivery-photo-input').value = '';
 }
+
+// ════════════════════════════════════════════════════════════
+//  ORDER PHOTOS  (warehouse pack + delivery) — stored in a separate
+//  Firebase node so they never load with the orders list. A lightweight
+//  photoIndex (counts only) drives the Pictures tab; the actual base64
+//  images are fetched on demand when an order is opened.
+// ════════════════════════════════════════════════════════════
+function safeOrderId(id){ return String(id||'').replace(/[^a-zA-Z0-9]/g,'_'); }
+function getPhotoIndex(){ return window.photoIndex || {warehouse:{}, delivery:{}}; }
+
+// Resize + compress an image File to a JPEG data-URL (~max 1280px, q0.6).
+function compressPhotoFile(file, cb){
+  var reader = new FileReader();
+  reader.onload = function(e){
+    var img = new Image();
+    img.onload = function(){
+      var max = 1280, w = img.width, h = img.height;
+      if(w > h && w > max){ h = Math.round(h*max/w); w = max; }
+      else if(h >= w && h > max){ w = Math.round(w*max/h); h = max; }
+      var canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      cb(canvas.toDataURL('image/jpeg', 0.6));
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// Save one photo for an order. type = 'warehouse' | 'delivery'.
+function addOrderPhoto(orderId, type, dataUrl, by, done){
+  if(!window.fbDB || !orderId || !dataUrl){ if(done) done(false); return; }
+  var sid = safeOrderId(orderId);
+  var ord = (typeof orders!=='undefined' ? orders.find(function(x){return x.id===orderId;}) : null) || {};
+  var ref = window.fbDB.ref('orderPhotos/'+type+'/'+sid).push();
+  ref.set({ data:dataUrl, ts:Date.now(), by:by||'' }, function(err){
+    if(err){ if(done) done(false); return; }
+    // bump the lightweight index
+    var idxRef = window.fbDB.ref('photoIndex/'+type+'/'+sid);
+    idxRef.transaction(function(cur){
+      cur = cur || {id:orderId, n:0};
+      cur.id = orderId; cur.n = (parseInt(cur.n)||0) + 1; cur.ts = Date.now();
+      cur.zone = ord.zone||cur.zone||''; cur.customer = ord.customer||cur.customer||'';
+      return cur;
+    }, function(){ if(done) done(true); });
+  });
+}
+
+// Count how many photos an order already has (from the index).
+function orderPhotoCount(orderId, type){
+  var idx = getPhotoIndex()[type]||{};
+  var e = idx[safeOrderId(orderId)];
+  return e ? (parseInt(e.n)||0) : 0;
+}
+
+// ── PICTURES TAB (office) ──
+var picsTab = 'warehouse';
+function picsSubTab(t){
+  picsTab = t;
+  var wb=document.getElementById('pics-tab-warehouse'), db2=document.getElementById('pics-tab-delivery');
+  [['warehouse',wb],['delivery',db2]].forEach(function(p){
+    if(!p[1]) return;
+    if(p[0]===t){ p[1].style.background='var(--blue)'; p[1].style.color='#fff'; p[1].style.border='none'; }
+    else { p[1].style.background='var(--bg)'; p[1].style.color='var(--text)'; p[1].style.border='1.5px solid var(--border)'; }
+  });
+  picsRender();
+}
+function picsRender(){
+  var list = document.getElementById('pics-list');
+  if(!list) return;
+  var idx = getPhotoIndex()[picsTab] || {};
+  var q = ((document.getElementById('pics-search')||{}).value||'').trim().toLowerCase();
+  var rows = Object.keys(idx).map(function(sid){ var e=idx[sid]||{}; e._sid=sid; return e; })
+    .filter(function(e){ return (parseInt(e.n)||0) > 0; })
+    .filter(function(e){ if(!q) return true; return (String(e.id||'').toLowerCase().indexOf(q)>=0)||(String(e.customer||'').toLowerCase().indexOf(q)>=0); })
+    .sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+  if(!rows.length){ list.innerHTML='<div class="empty" style="padding:1.5rem"><i class="ti ti-photo-off" style="font-size:36px;display:block;margin-bottom:8px"></i>No photos yet / ยังไม่มีรูป</div>'; return; }
+  list.innerHTML = rows.map(function(e){
+    var when = e.ts ? new Date(e.ts).toLocaleDateString('th-TH',{day:'numeric',month:'short'}) : '';
+    return '<div class="card" style="padding:0;margin-bottom:8px;overflow:hidden">'+
+      '<div onclick="picsToggleOrder(\''+e._sid+'\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px;cursor:pointer">'+
+        '<div style="flex:1;min-width:0">'+
+          '<div style="font-size:14px;font-weight:700">'+(e.id||e._sid)+'</div>'+
+          '<div style="font-size:12px;color:var(--text2)">'+(e.customer||'—')+(e.zone?' · '+e.zone:'')+(when?' · '+when:'')+'</div>'+
+        '</div>'+
+        '<span style="font-size:12px;font-weight:700;color:var(--blue);background:var(--bg2);border-radius:12px;padding:2px 10px;white-space:nowrap">📷 '+(parseInt(e.n)||0)+'</span>'+
+        '<i class="ti ti-chevron-down" id="pics-chev-'+e._sid+'" style="font-size:18px;color:var(--text2);flex-shrink:0"></i>'+
+      '</div>'+
+      '<div id="pics-det-'+e._sid+'" style="display:none;padding:0 12px 12px"><div style="font-size:12px;color:var(--text2);padding:8px 0">Loading… / กำลังโหลด</div></div>'+
+    '</div>';
+  }).join('');
+}
+function picsToggleOrder(sid){
+  var det = document.getElementById('pics-det-'+sid);
+  var chev = document.getElementById('pics-chev-'+sid);
+  if(!det) return;
+  if(det.style.display==='block'){ det.style.display='none'; if(chev) chev.style.transform=''; return; }
+  det.style.display='block'; if(chev) chev.style.transform='rotate(180deg)';
+  // Lazy-load the actual photos for this order from the heavy node.
+  if(!window.fbDB){ det.innerHTML='<div style="font-size:12px;color:var(--text2);padding:8px 0">Offline</div>'; return; }
+  window.fbDB.ref('orderPhotos/'+picsTab+'/'+sid).once('value', function(snap){
+    var data = snap.val()||{};
+    var keys = Object.keys(data).sort(function(a,b){ return (data[a].ts||0)-(data[b].ts||0); });
+    if(!keys.length){ det.innerHTML='<div style="font-size:12px;color:var(--text2);padding:8px 0">No photos</div>'; return; }
+    det.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding-top:4px">'+
+      keys.map(function(k){
+        var p=data[k]||{};
+        return '<img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid var(--border)">';
+      }).join('')+
+    '</div>';
+  });
+}
+function openPhotoLightbox(src){
+  var lb=document.getElementById('photo-lightbox'), img=document.getElementById('photo-lightbox-img');
+  if(lb&&img){ img.src=src; lb.style.display='flex'; }
+}
+function closePhotoLightbox(){
+  var lb=document.getElementById('photo-lightbox');
+  if(lb){ lb.style.display='none'; document.getElementById('photo-lightbox-img').src=''; }
+}
 // ════════════════════════════════════════════════════════════
 //  GOOGLE SHEETS SYNC  (via Apps Script Web App — no secret key)
 // ════════════════════════════════════════════════════════════
@@ -4922,8 +5069,11 @@ function mirrorImportPreview(list, totalCand, dups, updateN){
 function confirmDelivery(){
   if(!_deliveryId) return;
   var id = _deliveryId;
+  var photo = _deliveryPhoto; // capture before close nulls it
+  var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
   closeDeliveryModal();
-  drDoDeliver(id, _deliveryPhoto);
+  if(photo) addOrderPhoto(id, 'delivery', photo, drName);
+  drDoDeliver(id, photo);
 }
 
 function drDeliver(id){
@@ -4936,7 +5086,8 @@ function drDoDeliver(id, photoUrl){
   if(ord){
     addStatusLog(ord,'delivered','Driver');
     ord.status='delivered';
-    if(photoUrl) ord.deliveryPhoto=photoUrl;
+    // photo is stored in the separate orderPhotos node (see confirmDelivery),
+    // not on the order object, to keep the orders payload small.
     const amt=parseFloat((ord.total+'').replace(/[^0-9.]/g,''))||0;
     if(amt>0){revOrders.push({rid:'r'+Date.now(),id:ord.id,cust:ord.customer,amt,date:new Date().toISOString().split('T')[0],zone:ord.zone,month:mkey(new Date().toISOString())});addLog('Order '+id+' delivered: '+amt.toLocaleString()+' ฿','+');}
   }
@@ -5118,6 +5269,7 @@ function whRenderPacking() {
     var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
     var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
     var totalClips = (o.lineItems||[]).filter(function(i){return i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips';}).reduce(function(a,i){return a+(parseInt(i.qty)||0);},0);
+    var pcnt = orderPhotoCount(o.id,'warehouse');
     return '<div class="card" style="margin-bottom:12px">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
       '<span style="font-size:20px;font-weight:800">'+o.id+'</span>'+
@@ -5132,6 +5284,11 @@ function whRenderPacking() {
       '<input type="number" id="ctn-'+o.id+'" value="'+(o.ctn||'')+'" min="1" placeholder="กี่ลัง?" style="flex:1;padding:8px 10px;border:1.5px solid var(--border);border-radius:var(--rs);font-size:16px;font-weight:700;text-align:center;background:var(--bg);color:var(--text)">'+
       '<span style="font-size:12px;color:var(--text2);white-space:nowrap">cartons / ลัง</span>'+
       '</div>'+
+      '<div style="margin-top:8px">'+
+      '<input type="file" accept="image/*" capture="environment" multiple id="whphoto-'+o.id+'" style="display:none" onchange="whCapturePackPhoto(this,\''+o.id+'\')">'+
+      '<button type="button" class="btn" style="width:100%;background:'+(pcnt>0?'#dcfce7':'#fef3c7')+';color:'+(pcnt>0?'#166534':'#92400e')+';border:none" onclick="document.getElementById(\'whphoto-'+o.id+'\').click()"><i class="ti ti-camera"></i> '+(pcnt>0?('📷 '+pcnt+' Foto'+(pcnt!==1?'s':'')+' · เพิ่มอีก'):'ถ่ายรูปสินค้า / Foto aufnehmen')+'</button>'+
+      '<div id="whphoto-prog-'+o.id+'" style="display:none;font-size:12px;color:var(--text2);text-align:center;margin-top:4px">Uploading… / กำลังอัปโหลด</div>'+
+      '</div>'+
       '<button type="button" class="btn btng" style="margin-top:8px" onclick="whDonePacking(this)" data-id="'+o.id+'"><i class="ti ti-checks"></i> Done packing / แพ็คเสร็จแล้ว</button>'+
       '<button type="button" class="btnsm" style="margin-top:6px;width:100%;background:#fff3cd;color:#856404;border-color:#ffc107" onclick="whBackToNew(this)" data-id="'+o.id+'"><i class="ti ti-arrow-back-up"></i> ↩ ย้ายกลับ To Pack</button>'+
       '</div>';
@@ -5139,6 +5296,28 @@ function whRenderPacking() {
 }
 
 
+
+// Warehouse: capture one or more pack photos for an order.
+function whCapturePackPhoto(input, id){
+  if(!input.files || !input.files.length) return;
+  var files = Array.prototype.slice.call(input.files);
+  var prog = document.getElementById('whphoto-prog-'+id);
+  if(prog) prog.style.display = 'block';
+  var staff = (typeof currentStaffName!=='undefined' && currentStaffName) ? currentStaffName : 'Warehouse';
+  var pending = files.length;
+  files.forEach(function(f){
+    compressPhotoFile(f, function(dataUrl){
+      addOrderPhoto(id, 'warehouse', dataUrl, staff, function(){
+        pending--;
+        if(pending<=0){
+          input.value = '';
+          if(prog) prog.style.display = 'none';
+          try{ whRenderPacking(); }catch(e){}
+        }
+      });
+    });
+  });
+}
 
 function whBackToPacking(btn) {
   var id = btn.getAttribute('data-id');
@@ -5169,6 +5348,11 @@ function whDonePacking(btn) {
   var id = btn.getAttribute('data-id');
   var ord = orders.find(function(x){return x.id===id;});
   if(!ord) return;
+  // Require at least one pack photo before finishing.
+  if(orderPhotoCount(id,'warehouse') < 1){
+    alert('Bitte mindestens 1 Foto vom fertig gepackten Paket aufnehmen.\nกรุณาถ่ายรูปสินค้าที่แพ็คเสร็จอย่างน้อย 1 รูป');
+    return;
+  }
   // Save CTN value
   var ctnInput = document.getElementById('ctn-'+id);
   var ctnVal = ctnInput ? (parseInt(ctnInput.value)||0) : 0;
