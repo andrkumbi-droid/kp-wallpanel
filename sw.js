@@ -1,4 +1,4 @@
-const CACHE = 'kp-v1';
+const CACHE = 'kp-v2';
 const SHELL = [
   '/kp-wallpanel/',
   '/kp-wallpanel/index.html'
@@ -34,17 +34,18 @@ self.addEventListener('fetch', function(e) {
     return;
   }
 
-  // App shell — cache first, network fallback
+  // App shell — NETWORK FIRST so the latest deployed code always loads when
+  // online; fall back to cache only when offline. (Previously cache-first,
+  // which served stale code for one reload after every deploy.)
   e.respondWith(
-    caches.match(e.request).then(function(cached) {
-      var network = fetch(e.request).then(function(res) {
-        if(res && res.status === 200) {
-          var clone = res.clone();
-          caches.open(CACHE).then(function(c){ c.put(e.request, clone); });
-        }
-        return res;
-      }).catch(function(){ return cached; });
-      return cached || network;
+    fetch(e.request).then(function(res) {
+      if(res && res.status === 200) {
+        var clone = res.clone();
+        caches.open(CACHE).then(function(c){ c.put(e.request, clone); });
+      }
+      return res;
+    }).catch(function() {
+      return caches.match(e.request);
     })
   );
 });
