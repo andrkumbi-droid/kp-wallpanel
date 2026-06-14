@@ -4786,6 +4786,10 @@ function importFromMirror(opts){
           var hasProd=(o.lineItems||[]).some(function(li){ return _PRODT[li.type]; });
           var used = hasProd || (o.date && String(o.date).length>0);
           if(!used) return;
+          // Skip recently-deleted orders (tombstone) so mirror propagation lag
+          // doesn't keep the counter artificially high after a deletion.
+          var _dk=(o.id||'').replace(/[^a-zA-Z0-9]/g,'_');
+          if(recentlyDeleted[_dk] && (Date.now()-recentlyDeleted[_dk])<300000) return;
           var p=orderIdParts(o.id); if(p && p.num>(_maxZ[p.key]||0)) _maxZ[p.key]=p.num;
         });
         var _ctrChg=false;
@@ -5252,13 +5256,26 @@ function orderIdParts(id){
   return null;
 }
 function syncCountersWithOrders() {
-  // Only RAISE the counter to the highest loaded order number (correct prefix
-  // parse). The authoritative reset happens in importFromMirror from the full
-  // master (incl. pre-cutoff), so we must never lower it here.
-  var changed = false;
+  // Set each counter to the highest REAL order in Firebase (correct prefix
+  // parse), floored by ORDER_COUNTER_MIN so pre-cutoff history is never
+  // undercut. This SELF-HEALS an inflated counter (e.g. when the master's
+  // pre-numbered empty rows were ever miscounted) without depending on the
+  // mirror sync running. Firebase `orders` holds every real order, so its
+  // per-zone max is authoritative; empty pre-numbered master rows are never
+  // imported here, so they can't inflate it.
+  var maxZ = {};
   orders.forEach(function(o) {
+    // Skip recently-deleted orders so a freed top number gets reused, not skipped.
+    var dk = (o.id||'').replace(/[^a-zA-Z0-9]/g,'_');
+    if(recentlyDeleted[dk] && (Date.now()-recentlyDeleted[dk])<300000) return;
     var p = orderIdParts(o.id); if(!p) return;
-    if(p.num > (parseInt(orderCounters[p.key])||0)) { orderCounters[p.key] = p.num; changed = true; }
+    if(p.num > (maxZ[p.key]||0)) maxZ[p.key] = p.num;
+  });
+  var changed = false;
+  Object.keys(orderCounters).forEach(function(k) {
+    var minC = (typeof ORDER_COUNTER_MIN!=='undefined' && ORDER_COUNTER_MIN[k]) || 0;
+    var correct = Math.max(maxZ[k]||0, minC);
+    if((parseInt(orderCounters[k])||0) !== correct) { orderCounters[k] = correct; changed = true; }
   });
   if(changed && window.fbDB) window.fbDB.ref('orderCounters').set(orderCounters);
 }
