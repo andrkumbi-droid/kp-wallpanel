@@ -866,7 +866,7 @@ textarea{resize:none}
     </div>
     <div class="stit">Revenue / รายได้</div>
     <div class="msel" id="mg-msel"></div>
-    <div class="revtot"><div style="font-size:12px;color:var(--text2);margin-bottom:4px">Total delivered / ยอดรวม</div><div class="revamt" id="mg-rev-amt">0 ฿</div><div style="font-size:12px;color:var(--text2);margin-top:4px" id="mg-rev-cnt">0 orders</div></div>
+    <div class="revtot"><div style="font-size:12px;color:var(--text2);margin-bottom:4px">Total / ยอดรวม</div><div class="revamt" id="mg-rev-amt">0 ฿</div><div style="font-size:12px;color:var(--text2);margin-top:4px" id="mg-rev-cnt">0 orders</div></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div onclick="mgRevToggle()" style="display:flex;align-items:center;gap:6px;cursor:pointer">
         <div class="stit" style="margin-bottom:0">Delivered orders</div>
@@ -2055,19 +2055,21 @@ function mgRevenue(){
   const now=new Date(),ms=new Set();revOrders.forEach(o=>{if(o.month)ms.add(o.month);});for(let i=0;i<6;i++){const d=new Date(now.getFullYear(),now.getMonth()-i,1);ms.add(d.getFullYear()+'-'+(d.getMonth()+1).toString().padStart(2,'0'));}
   const months=[...ms].sort().reverse();if(!selMonth||!months.includes(selMonth))selMonth=months[0]||'';
   document.getElementById('mg-msel').innerHTML=months.map(m=>{const[y,mo]=m.split('-');return`<button type="button" class="mbtn ${m===selMonth?'active':''}" onclick="selM('${m}')">${MN[parseInt(mo)-1]} ${y}</button>`;}).join('');
-  // Use orders directly — only paid (payMethod set) delivered orders
+  // Use orders directly — ALL non-cancelled orders for the month (paid + unpaid),
+  // like the Sales view. Headline = total; paid share shown separately.
   function mgGetAmt(o){ return parseFloat((o.total||'0').toString().replace(/[^0-9.]/g,''))||0; }
   const f=orders.filter(function(o){
-    if(o.status!=='delivered'||!o.payMethod) return false;
+    if(o.status==='cancelled') return false;
     var pd=o.payDate||o.date||'';var mk=pd?(new Date(pd+'T00:00:00').getFullYear()+'-'+(new Date(pd+'T00:00:00').getMonth()+1).toString().padStart(2,'0')):'';
     return mk===selMonth;
   }),tot=f.reduce(function(a,o){return a+mgGetAmt(o);},0);
+  const fPaid=f.filter(function(o){return !!o.payMethod;}),paidTot=fPaid.reduce(function(a,o){return a+mgGetAmt(o);},0);
   document.getElementById('mg-rev-amt').textContent=tot.toLocaleString()+' ฿';
-  document.getElementById('mg-rev-cnt').textContent=f.length+' order'+(f.length!==1?'s':'')+' delivered';
-  document.getElementById('mg-rev-list').innerHTML=f.length===0?'<div class="empty" style="padding:1rem;font-size:13px">No paid orders this month</div>':f.map(o=>`<div class="rrow"><div><div style="font-size:13px;font-weight:600">${o.id}</div><div style="font-size:11px;color:var(--text2)">${o.customer||'—'} &middot; ${o.zone} &middot; ${fmtD(o.date)}</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:600;color:var(--green)">${mgGetAmt(o).toLocaleString()} ฿</div></div></div>`).join('');
+  document.getElementById('mg-rev-cnt').textContent=f.length+' order'+(f.length!==1?'s':'')+' · '+paidTot.toLocaleString()+' ฿ paid';
+  document.getElementById('mg-rev-list').innerHTML=f.length===0?'<div class="empty" style="padding:1rem;font-size:13px">No orders this month</div>':f.map(o=>`<div class="rrow"><div><div style="font-size:13px;font-weight:600">${o.id}${o.payMethod?'':' <span style="font-size:10px;font-weight:600;color:#dc2626;background:#fee2e2;border-radius:10px;padding:1px 6px">unpaid</span>'}</div><div style="font-size:11px;color:var(--text2)">${o.customer||'—'} &middot; ${o.zone} &middot; ${fmtD(o.date)}</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:600;color:${o.payMethod?'var(--green)':'#dc2626'}">${mgGetAmt(o).toLocaleString()} ฿</div></div></div>`).join('');
   var rlc=document.getElementById('mg-rev-listcnt'); if(rlc) rlc.textContent='('+f.length+')';
   document.getElementById('ov-orders').textContent=orders.length;
-  document.getElementById('ov-sub').textContent=orders.filter(o=>o.status==='delivered').length+' delivered';
+  document.getElementById('ov-sub').textContent=orders.filter(o=>o.status!=='cancelled').length+' active';
   document.getElementById('ov-low').textContent=stockItems.filter(s=>s.qty<(['lcorner','utrim','ttrim','pvc'].includes(s.type)?50:LOW)).length;
   document.getElementById('ov-inc').textContent=containerLog.filter(function(c){return !c.arrivedWh;}).length;
   document.getElementById('ov-dmg').textContent=stockItems.reduce((a,s)=>a+s.damaged,0);
