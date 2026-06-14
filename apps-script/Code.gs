@@ -157,16 +157,15 @@ function _writeMaster(items, dryRun) {
       }
       var last = sheet.getLastRow();
       var on = String(it.orderNumber).trim();
-      var bvals = sheet.getRange(1, 2, last, 1).getValues(); // col B (order no)
-      var dvals = sheet.getRange(1, 4, last, 1).getValues(); // col D (product code)
+      var rng = sheet.getRange(1, 2, last, 3).getValues(); // cols B,C,D (no, date, code)
       var target = -1;
-      for (var r = 0; r < bvals.length; r++) {
-        if (String(bvals[r][0]).trim() === on) { target = r + 1; break; }
+      for (var r = 0; r < rng.length; r++) {
+        if (String(rng[r][0]).trim() === on) { target = r + 1; break; }
       }
-      // matching row exists AND already has a product → real duplicate
-      if (target > 0 && String(dvals[target - 1][0]).trim() !== '') {
+      // matching row already has a product (D) OR a date (C) → occupied, never overwrite
+      if (target > 0 && (String(rng[target - 1][2]).trim() !== '' || String(rng[target - 1][1]).trim() !== '')) {
         res.skipped_duplicates++;
-        res.details.push({ order: on, status: 'skipped', reason: 'already filled', tab: sheet.getName() });
+        res.details.push({ order: on, status: 'skipped', reason: 'row occupied', tab: sheet.getName() });
         return;
       }
       if (dryRun) {
