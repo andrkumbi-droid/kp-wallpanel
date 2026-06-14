@@ -3227,7 +3227,7 @@ function ofCreate(){
   if(window.fbDB && zKey2) {
     window.fbDB.ref('orderCounters/'+zKey2).transaction(function(current) {
       var cur = parseInt(current) || orderCounters[zKey2];
-      var orderNum = parseInt(no.replace(/[^0-9]/g,''));
+      var _p = orderIdParts(no); var orderNum = _p ? _p.num : (parseInt(no.replace(/[^0-9]/g,''))||0);
       // Only update if this order number is >= current counter
       return orderNum >= cur ? orderNum : cur;
     });
@@ -5034,18 +5034,9 @@ function deleteOrder(btn) {
   // Tombstone: stop the mirror auto-sync from re-adding this order before the
   // master clear has propagated through IMPORTRANGE (expires after a few min).
   try{ var dk=id.replace(/[^a-zA-Z0-9]/g,'_'); recentlyDeleted[dk]=Date.now(); if(window.fbDB) window.fbDB.ref('recentlyDeleted/'+dk).set(Date.now()); }catch(e){}
-  // Recompute the zone counter to the highest remaining order number, so a freed
-  // (latest) number is reused next time instead of skipped.
-  try{
-    var zk=((_delOrd&&_delOrd.zone)||'').toLowerCase();
-    if(zk && orderCounters[zk]!=null){
-      var maxN=0;
-      orders.forEach(function(o){ if(((o.zone||'').toLowerCase())===zk){ var nn=parseInt(String(o.id).replace(/[^0-9]/g,''))||0; if(nn>maxN) maxN=nn; } });
-      var minC=(typeof ORDER_COUNTER_MIN!=='undefined'&&ORDER_COUNTER_MIN[zk])||0;
-      var newC=Math.max(maxN,minC);
-      if(newC < (parseInt(orderCounters[zk])||0)){ orderCounters[zk]=newC; if(window.fbDB) window.fbDB.ref('orderCounters/'+zk).set(newC); }
-    }
-  }catch(e){}
+  // Recompute counters from the remaining orders (correctly parses the zone
+  // prefix). A freed latest number gets reused instead of skipped.
+  try{ syncCountersWithOrders(); }catch(e){}
 }
 
 
@@ -5228,35 +5219,33 @@ function selectZone(zone) {
 }
 
 
+// Extract the numeric part of an order id, correctly handling the zone prefix
+// ("4-540" → 540, "#800" → 800). Returns {key, num} or null.
+function orderIdParts(id){
+  id = String(id||'');
+  if(id.startsWith('#'))  return {key:'bangkok',     num:parseInt(id.slice(1))||0};
+  if(id.startsWith('1-')) return {key:'northern',    num:parseInt(id.slice(2))||0};
+  if(id.startsWith('2-')) return {key:'northeastern',num:parseInt(id.slice(2))||0};
+  if(id.startsWith('3-')) return {key:'eastern',     num:parseInt(id.slice(2))||0};
+  if(id.startsWith('4-')) return {key:'southern',    num:parseInt(id.slice(2))||0};
+  if(id.startsWith('5-')) return {key:'instore',     num:parseInt(id.slice(2))||0};
+  return null;
+}
 function syncCountersWithOrders() {
-  var changed = false;
+  // Highest real order number per zone (order numbers grow over time, so the
+  // newest loaded orders carry the true max — safe to reset the counter to it).
+  var maxByZone = {};
   orders.forEach(function(o) {
-    if(!o.id) return;
-    var id = o.id.toString();
-    var key = '', num = 0;
-    if(id.startsWith('#')) { key='bangkok'; num=parseInt(id.slice(1))||0; }
-    else if(id.startsWith('1-')) { key='northern'; num=parseInt(id.slice(2))||0; }
-    else if(id.startsWith('2-')) { key='northeastern'; num=parseInt(id.slice(2))||0; }
-    else if(id.startsWith('3-')) { key='eastern'; num=parseInt(id.slice(2))||0; }
-    else if(id.startsWith('4-')) { key='southern'; num=parseInt(id.slice(2))||0; }
-    else if(id.startsWith('5-')) { key='instore'; num=parseInt(id.slice(2))||0; }
-    if(key && num > parseInt(orderCounters[key]||0)) {
-      orderCounters[key] = num;
-      changed = true;
-    }
+    var p = orderIdParts(o.id); if(!p) return;
+    if(p.num > (maxByZone[p.key]||0)) maxByZone[p.key] = p.num;
   });
-  // Also fix any corrupted values (numbers > 9999 are likely concatenated)
+  var changed = false;
   Object.keys(orderCounters).forEach(function(k) {
-    var val = parseInt(orderCounters[k])||0;
-    // If value looks like string concatenation (e.g. 1209 when should be 209)
-    // we can detect this if it's > 3 digits more than expected
-    orderCounters[k] = val;
-    changed = true;
+    var minC = (typeof ORDER_COUNTER_MIN!=='undefined' && ORDER_COUNTER_MIN[k]) || 0;
+    var correct = Math.max(maxByZone[k]||0, minC);
+    if((parseInt(orderCounters[k])||0) !== correct) { orderCounters[k] = correct; changed = true; }
   });
-  // Write correct values back to Firebase to fix corruption
-  if(changed && window.fbDB) {
-    window.fbDB.ref('orderCounters').set(orderCounters);
-  }
+  if(changed && window.fbDB) window.fbDB.ref('orderCounters').set(orderCounters);
 }
 
 function generateOrderNo() {
