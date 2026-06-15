@@ -7854,7 +7854,17 @@ function ofAttRender(){
   var mk=ofAttMonth;
   var typeOpts = ['late','ot','trip','commission','carton','km','ferry','advance','hours']
     .map(function(t){ return '<option value="'+t+'">'+ATT_TYPE_LABEL[t]+'</option>'; }).join('');
-  listEl.innerHTML = attStaff.map(function(s){
+  // Group employees by category, in a fixed order (extras appended).
+  var cats=['Office','Driver','Warehouse','Other'];
+  var byCat={}; attStaff.forEach(function(s){ var cat=s.category||'Other'; (byCat[cat]=byCat[cat]||[]).push(s); });
+  var order=cats.concat(Object.keys(byCat).filter(function(c){return cats.indexOf(c)<0;}));
+  listEl.innerHTML = order.filter(function(cat){return byCat[cat]&&byCat[cat].length;}).map(function(cat){
+    var groupNet=byCat[cat].reduce(function(a,s){return a+attCalc(s,mk).net;},0);
+    return '<div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 6px"><span style="font-size:12px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.04em">'+cat+' ('+byCat[cat].length+')</span><span style="font-size:12px;font-weight:700;color:var(--text2)">'+attBaht(groupNet)+' ฿</span></div>'
+      + byCat[cat].map(function(s){ return attStaffCard(s, mk, typeOpts); }).join('');
+  }).join('');
+}
+function attStaffCard(s, mk, typeOpts){
     var c=attCalc(s, mk); var key=s.id;
     var tripRate=(s.tripRate!=null?s.tripRate:100);
     return '<div class="card" style="padding:0;margin-bottom:8px;overflow:hidden">'
@@ -7892,6 +7902,7 @@ function ofAttRender(){
         // 4) settings (collapsible)
         + '<div onclick="ofAttToggle(\'set-'+key+'\')" style="cursor:pointer;font-size:12px;font-weight:700;color:var(--blue);padding:8px 0 6px"><i class="ti ti-settings"></i> Settings / ตั้งค่า <i class="ti ti-chevron-down" id="oatt-chev-set-'+key+'" style="font-size:14px"></i></div>'
         + '<div id="oatt-det-set-'+key+'" style="display:none;background:var(--bg2);border-radius:var(--rs);padding:10px;margin-bottom:8px;font-size:12px">'
+          + '<div style="margin-bottom:6px"><label style="color:var(--text2)">Category / หมวด</label><select id="oatt-cat-'+key+'" style="width:100%;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:2px">'+['Office','Driver','Warehouse','Other'].map(function(cc){return '<option value="'+cc+'"'+((s.category||'Other')===cc?' selected':'')+'>'+cc+'</option>';}).join('')+'</select></div>'
           + '<div style="margin-bottom:6px"><label style="color:var(--text2)">Pay type / ประเภท</label><select id="oatt-paytype-'+key+'" style="width:100%;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:2px"><option value="monthly"'+(s.payType!=='hourly'?' selected':'')+'>Monthly fixed / รายเดือน</option><option value="hourly"'+(s.payType==='hourly'?' selected':'')+'>Hourly / รายชั่วโมง</option></select></div>'
           + attField('Monthly salary ฿','oatt-salary-'+key, s.monthlySalary||'')
           + attField('Hourly rate ฿/h','oatt-hourly-'+key, s.hourlyRate||'')
@@ -7907,7 +7918,6 @@ function ofAttRender(){
         + '<button type="button" onclick="attRemoveStaff(\''+key+'\')" style="width:100%;margin-top:4px;padding:8px;border-radius:6px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;font-weight:700;cursor:pointer"><i class="ti ti-trash"></i> Remove employee / ลบพนักงาน (PIN)</button>'
       + '</div>'
       + '</div>';
-  }).join('');
 }
 // Render one type group: header (label + subtotal) and its entries with delete.
 function attGrp(entries, type, key, color, subtotalText){
@@ -7940,7 +7950,7 @@ function ofAttAddStaff(){
   var inp=document.getElementById('oatt-newname'); var name=(inp&&inp.value||'').trim();
   if(!name) return;
   if(attStaff.find(function(s){return s.name.toLowerCase()===name.toLowerCase();})){ alert('Already exists / มีอยู่แล้ว'); return; }
-  var s={id:'ats-'+Date.now(), name:name, payType:'monthly', monthlySalary:0, hourlyRate:0, lateRate:0, otRate:0, tripRate:100, commRate:0, cartonRate:0, kmRate:0};
+  var s={id:'ats-'+Date.now(), name:name, category:'Office', payType:'monthly', monthlySalary:0, hourlyRate:0, lateRate:0, otRate:0, tripRate:100, commRate:0, cartonRate:0, kmRate:0};
   attStaff.push(s);
   if(window.fbDB) window.fbDB.ref('attStaff/'+s.id).set(s);
   if(inp) inp.value='';
@@ -7949,6 +7959,8 @@ function ofAttAddStaff(){
 function ofAttSaveStaff(id){
   var s=attStaff.find(function(x){return x.id===id;}); if(!s) return;
   function num(eid){ var el=document.getElementById(eid); return el?(parseFloat(el.value)||0):0; }
+  var ct=document.getElementById('oatt-cat-'+id);
+  if(ct) s.category=ct.value;
   var pt=document.getElementById('oatt-paytype-'+id);
   s.payType = pt?pt.value:'monthly';
   s.monthlySalary=num('oatt-salary-'+id);
