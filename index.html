@@ -4477,6 +4477,18 @@ function picsRender(){
     '</div>';
   }).join('');
 }
+// Build the "accepted by / packed by + time" info block for an order in Pictures.
+function picsOrderInfo(sid){
+  var o=(typeof orders!=='undefined'?orders.find(function(x){return safeOrderId(x.id)===sid;}):null);
+  if(!o) return '';
+  function fmtTs(ts){ return ts?new Date(ts).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):''; }
+  var rows=[];
+  if(o.acceptedBy) rows.push('<div>📥 Accepted / รับออเดอร์: <b>'+o.acceptedBy+'</b>'+(o.acceptedAt?' · '+fmtTs(o.acceptedAt):'')+'</div>');
+  if(o.packers && o.packers.length) rows.push('<div>👷 Packed by / ผู้แพ็ค: <b>'+o.packers.join(', ')+'</b>'+(o.packedAt?' · '+fmtTs(o.packedAt):'')+'</div>');
+  else if(o.packedBy) rows.push('<div>👷 Packed by / ผู้แพ็ค: <b>'+o.packedBy+'</b>'+(o.packedAt?' · '+fmtTs(o.packedAt):'')+'</div>');
+  if(!rows.length) return '';
+  return '<div style="font-size:12px;color:var(--text2);background:var(--bg2);border-radius:var(--rs);padding:8px 10px;margin:4px 0 8px;line-height:1.7">'+rows.join('')+'</div>';
+}
 function picsToggleOrder(sid){
   var det = document.getElementById('pics-det-'+sid);
   var chev = document.getElementById('pics-chev-'+sid);
@@ -4489,7 +4501,7 @@ function picsToggleOrder(sid){
     var data = snap.val()||{};
     var keys = Object.keys(data).sort(function(a,b){ return (data[a].ts||0)-(data[b].ts||0); });
     if(!keys.length){ det.innerHTML='<div style="font-size:12px;color:var(--text2);padding:8px 0">No photos</div>'; return; }
-    det.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding-top:4px">'+
+    det.innerHTML = picsOrderInfo(sid) + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding-top:4px">'+
       keys.map(function(k){
         var p=data[k]||{};
         var when = p.ts ? new Date(p.ts).toLocaleString('th-TH',{day:'numeric',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
@@ -5472,6 +5484,11 @@ function whRenderPacking() {
       '<input type="number" id="ctn-'+o.id+'" value="'+(o.ctn||'')+'" min="1" placeholder="กี่ลัง?" style="flex:1;padding:8px 10px;border:1.5px solid var(--border);border-radius:var(--rs);font-size:16px;font-weight:700;text-align:center;background:var(--bg);color:var(--text)">'+
       '<span style="font-size:12px;color:var(--text2);white-space:nowrap">cartons / ลัง</span>'+
       '</div>'+
+      // Packers — multi-select who was involved in packing
+      (function(){ if(whPackerSel[o.id]===undefined) whPackerSel[o.id]=(o.packers||[]).slice();
+        return '<div style="margin-top:10px"><div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:5px">👷 Packed by / ผู้แพ็ค</div><div style="display:flex;flex-wrap:wrap;gap:6px">'+
+          PACKERS.map(function(nm){ var sel=whPackerSel[o.id].indexOf(nm)>=0; return '<button type="button" data-name="'+nm+'" onclick="whTogglePacker(\''+o.id+'\',this)" style="padding:7px 12px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid '+(sel?'#16a34a':'var(--border)')+';background:'+(sel?'#dcfce7':'var(--bg)')+';color:'+(sel?'#166534':'var(--text)')+'">'+(sel?'✓ ':'')+nm+'</button>'; }).join('')+
+        '</div></div>'; })()+
       '<div style="margin-top:8px">'+
       '<input type="file" accept="image/*" capture="environment" multiple id="whphoto-'+o.id+'" style="display:none" onchange="whCapturePackPhoto(this,\''+o.id+'\')">'+
       '<button type="button" class="btn" style="width:100%;background:'+(pcnt>0?'#dcfce7':'#fef3c7')+';color:'+(pcnt>0?'#166534':'#92400e')+';border:none" onclick="document.getElementById(\'whphoto-'+o.id+'\').click()"><i class="ti ti-camera"></i> '+(pcnt>0?('📷 '+pcnt+' photo'+(pcnt!==1?'s':'')+' · add more / เพิ่มอีก'):'Take photo / ถ่ายรูปสินค้า')+'</button>'+
@@ -5486,6 +5503,18 @@ function whRenderPacking() {
 
 
 // Warehouse: capture one or more pack photos for an order.
+// Packer names (who physically packs the order) — multi-select per order.
+var PACKERS = ['ဝေးအောင် (Way Aung)','ခွန်သာဖစ် (Rack Khan / Pit)','ခွန်အောင်လေ (Aung Lay)','ခွန်စံမွန် (Mon)','Lift'];
+var whPackerSel = {}; // orderId -> [names] selected during packing
+function whTogglePacker(id, btn){
+  var nm = btn.getAttribute('data-name');
+  if(!whPackerSel[id]) whPackerSel[id]=[];
+  var arr = whPackerSel[id];
+  var i = arr.indexOf(nm);
+  if(i>=0){ arr.splice(i,1); btn.style.border='1.5px solid var(--border)'; btn.style.background='var(--bg)'; btn.style.color='var(--text)'; btn.textContent=nm; }
+  else { arr.push(nm); btn.style.border='1.5px solid #16a34a'; btn.style.background='#dcfce7'; btn.style.color='#166534'; btn.textContent='✓ '+nm; }
+}
+
 function whCapturePackPhoto(input, id){
   if(!input.files || !input.files.length) return;
   var files = Array.prototype.slice.call(input.files);
@@ -5541,6 +5570,11 @@ function whDonePacking(btn) {
     alert('Please take at least 1 photo of the packed order.\nกรุณาถ่ายรูปสินค้าที่แพ็คเสร็จอย่างน้อย 1 รูป');
     return;
   }
+  // Save packers (who packed it) + who/when finished.
+  ord.packers = (whPackerSel[id]||[]).slice();
+  ord.packedBy = (typeof currentStaffName!=='undefined' && currentStaffName) ? currentStaffName : 'Warehouse';
+  ord.packedAt = Date.now();
+  delete whPackerSel[id];
   // Save CTN value
   var ctnInput = document.getElementById('ctn-'+id);
   var ctnVal = ctnInput ? (parseInt(ctnInput.value)||0) : 0;
@@ -5582,8 +5616,10 @@ function whAcceptBtnSafe(btn) {
     },600);
     return;
   }
+  var _by = (typeof currentStaffName!=='undefined' && currentStaffName) ? currentStaffName : 'Warehouse';
   ord.status = 'packing';
-  addStatusLog(ord, 'packing', 'Warehouse');
+  ord.acceptedBy = _by; ord.acceptedAt = Date.now();
+  addStatusLog(ord, 'packing', _by);
   addLog('Order '+id+' accepted', '+');
   whRender();
   ofRenderOrders();
