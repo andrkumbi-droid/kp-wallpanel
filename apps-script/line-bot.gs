@@ -35,8 +35,42 @@ function de(lang){ return lang === 'de'; }
 function detectLang(t){ if(/[฀-๿]/.test(t)) return 'th'; if(/[a-zA-Z]/.test(t)) return 'de'; return DEFAULT_LANG; }
 function denied(lang){ return de(lang) ? 'Dafür hast du keine Berechtigung.' : 'คุณไม่มีสิทธิ์ดูข้อมูลนี้'; }
 
+// Token gating the customer-parse endpoint (app + sheet send this).
+var PARSE_TOKEN = 'kp-parse-9q2x';
+
 // ── Webhook entry ──────────────────────────────────────────
-function doPost(e){ try{ var b=JSON.parse(e.postData.contents); (b.events||[]).forEach(handleEvent); }catch(err){} return ContentService.createTextOutput('OK'); }
+function doPost(e){
+  try{
+    var b=JSON.parse(e.postData.contents);
+    // Customer-blob AI parser (called by the app quick-paste and the sheet onEdit).
+    if(b && b.action==='parseCustomer'){
+      if(b.token!==PARSE_TOKEN) return _parseOut({error:'unauthorized'});
+      return _parseOut(aiParseCustomer(b.text||''));
+    }
+    (b.events||[]).forEach(handleEvent);
+  }catch(err){}
+  return ContentService.createTextOutput('OK');
+}
+function _parseOut(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+// Use Claude to split a Thai customer blob into name/phone/maps/address.
+function aiParseCustomer(text){
+  if(!ANTHROPIC_API_KEY) return {error:'no_key'};
+  if(!String(text||'').trim()) return {name:'',phone:'',maps:'',address:''};
+  try{
+    var res=UrlFetchApp.fetch('https://api.anthropic.com/v1/messages',{
+      method:'post', contentType:'application/json',
+      headers:{ 'x-api-key':ANTHROPIC_API_KEY, 'anthropic-version':'2023-06-01' }, muteHttpExceptions:true,
+      payload: JSON.stringify({ model: MODEL, max_tokens: 300,
+        system: 'You extract Thai customer order info from a pasted blob. Return ONLY valid JSON: {"name":"","phone":"","maps":"","address":""}. name = the person/shop name; it may appear anywhere (front, middle, or end), e.g. "ช่างเปิ๊ล","คุณสมชาย","ร้าน...". phone = digits only. maps = any URL. address = delivery address WITHOUT the name, phone, or URL. If a field is unknown, use "".',
+        messages: [{ role:'user', content: String(text) }] })
+    });
+    var j=JSON.parse(res.getContentText());
+    var t=(j.content && j.content[0] && j.content[0].text) || '';
+    var m=t.match(/\{[\s\S]*\}/); if(!m) return {error:'no_json'};
+    var o=JSON.parse(m[0]);
+    return { name:o.name||'', phone:String(o.phone||'').replace(/[^\d]/g,''), maps:o.maps||'', address:o.address||'' };
+  }catch(err){ return {error:String(err)}; }
+}
 function doGet(){ return ContentService.createTextOutput('KP Wallpanel LINE bot OK'); }
 function handleEvent(ev){
   if(ev.type !== 'message' || !ev.message || ev.message.type !== 'text') return;

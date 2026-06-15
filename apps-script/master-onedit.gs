@@ -17,6 +17,10 @@
  * never touches the combined cell. Uncertain values are left blank.
  */
 
+// AI fallback (optional): LINE-bot /exec URL + token. Leave URL '' to disable.
+var BOT_PARSE_URL = '';
+var BOT_PARSE_TOKEN = 'kp-parse-9q2x'; // must match PARSE_TOKEN in line-bot.gs
+
 var SRC_RE  = /ชื่อ.*ที่อยู่/;                 // combined "ชื่อ-ที่อยู่ลูกค้า"
 var TARGETS = [
   { key: 'name',    re: /name|^\s*ชื่อ/i },     // "ชื่อ (Name)"
@@ -63,6 +67,22 @@ function onEdit(e) {
     if (!cell) return;
 
     var ex = splitCustomer(cell);
+    // AI fallback: only when the heuristic found no name (name can be anywhere).
+    if (!ex.name && BOT_PARSE_URL) {
+      try {
+        var res = UrlFetchApp.fetch(BOT_PARSE_URL, {
+          method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+          payload: JSON.stringify({ action: 'parseCustomer', token: BOT_PARSE_TOKEN, text: cell })
+        });
+        var ai = JSON.parse(res.getContentText() || '{}');
+        if (ai && !ai.error) {
+          if (ai.name) ex.name = ai.name;
+          if (ai.phone && !ex.phone) ex.phone = ai.phone;
+          if (ai.maps && !ex.maps) ex.maps = ai.maps;
+          if (ai.address) ex.address = ai.address;
+        }
+      } catch (e2) { /* keep heuristic result */ }
+    }
     function put(key, val) {
       var col = colMap[key]; if (!col || !val) return;
       var tcell = sh.getRange(row, col);

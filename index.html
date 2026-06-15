@@ -4472,6 +4472,11 @@ var SHEETS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbzHXHst0_FVowtP
 // Must match TOKEN in apps-script/Code.gs:
 var SHEETS_TOKEN = 'kp-7h3x9q2';
 var SHEETS_CUTOFF = '2026-06-01'; // backfill: orders on/after this date
+// LINE-bot web app /exec URL — used only as the AI fallback for quick-paste
+// customer parsing (the Anthropic key stays in the bot project). Leave '' to
+// disable the AI fallback (heuristic still works).
+var BOT_PARSE_URL = '';
+var BOT_PARSE_TOKEN = 'kp-parse-9q2x'; // must match PARSE_TOKEN in line-bot.gs
 
 // Order id prefix → which "-app" tab to write to
 function sheetsRouteTab(id){
@@ -8095,6 +8100,20 @@ function ofQuickParse(){
   if(ex.address) document.getElementById('of-addr').value = ex.address;
   if(ex.maps) document.getElementById('of-loc').value = ex.maps;
   try{ ofLookupCustomer(); }catch(e){}
+  // AI fallback: only if the heuristic found no name (name can be anywhere).
+  if(!ex.name && BOT_PARSE_URL){
+    fetch(BOT_PARSE_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'parseCustomer',token:BOT_PARSE_TOKEN,text:raw})})
+      .then(function(r){return r.json();})
+      .then(function(ai){
+        if(!ai || ai.error) return;
+        var cu=document.getElementById('of-cust'); if(ai.name && !cu.value) cu.value=ai.name;
+        var ph=document.getElementById('of-phone'); if(ai.phone && !ph.value) ph.value=ai.phone;
+        var ad=document.getElementById('of-addr'); if(ai.address && !ad.value) ad.value=ai.address;
+        var lo=document.getElementById('of-loc'); if(ai.maps && !lo.value) lo.value=ai.maps;
+        try{ ofLookupCustomer(); }catch(e){}
+      }).catch(function(){});
+  }
 }
 
 // Called from the New Order phone field — auto-fills empty fields + warns.
