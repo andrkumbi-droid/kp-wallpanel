@@ -4451,17 +4451,49 @@ function drDn(i){const mt=dTour.filter(id=>dAllOrders.find(x=>x.id===id));if(i==
 var _deliveryId = null;
 var _deliveryPhoto = null;
 
+var _deliveryTotal = 0;
 function openDeliveryModal(id){
   _deliveryId = id;
   _deliveryPhoto = null;
   var o = dAllOrders.find(function(x){return x.id===id;}) || orders.find(function(x){return x.id===id;});
+  var full = orders.find(function(x){return x.id===id;}) || o || {};
+  _deliveryTotal = parseFloat(String(full.total||'').replace(/[^0-9.]/g,''))||0;
   document.getElementById('delivery-modal-order').textContent = id;
   document.getElementById('delivery-modal-cust').textContent = o ? (o.customer||'') : '';
   document.getElementById('delivery-photo-preview').style.display = 'none';
   document.getElementById('delivery-photo-upload').style.display = 'block';
   document.getElementById('delivery-photo-input').value = '';
   document.getElementById('delivery-upload-progress').style.display = 'none';
+  // Reset payment section
+  document.getElementById('dl-total').textContent = _deliveryTotal.toLocaleString()+' ฿';
+  document.getElementById('dl-cash-chk').checked = false;
+  document.getElementById('dl-online-chk').checked = false;
+  document.getElementById('dl-cash-amt').value = '';
+  document.getElementById('dl-online-amt').value = '';
+  document.getElementById('dl-pay-msg').textContent = '';
   document.getElementById('delivery-modal').classList.add('open');
+}
+// Checkbox toggle: auto-fill the amount for the single ticked method with the total.
+function dlPayToggle(which){
+  var cashChk=document.getElementById('dl-cash-chk'), onChk=document.getElementById('dl-online-chk');
+  var cashAmt=document.getElementById('dl-cash-amt'), onAmt=document.getElementById('dl-online-amt');
+  if(cashChk.checked && !onChk.checked){ cashAmt.value=_deliveryTotal; onAmt.value=''; }
+  else if(onChk.checked && !cashChk.checked){ onAmt.value=_deliveryTotal; cashAmt.value=''; }
+  else if(cashChk.checked && onChk.checked){ // split: keep what's there, prefill the just-toggled side with remainder
+    var other = which==='cash' ? (parseFloat(onAmt.value)||0) : (parseFloat(cashAmt.value)||0);
+    var rem = Math.max(0,_deliveryTotal-other);
+    if(which==='cash' && !cashAmt.value) cashAmt.value=rem;
+    if(which==='online' && !onAmt.value) onAmt.value=rem;
+  } else { cashAmt.value=''; onAmt.value=''; }
+  dlPayMsg();
+}
+function dlPayManual(){ dlPayMsg(); }
+function dlPaySum(){ return (parseFloat((document.getElementById('dl-cash-amt')||{}).value)||0) + (parseFloat((document.getElementById('dl-online-amt')||{}).value)||0); }
+function dlPayMsg(){
+  var msg=document.getElementById('dl-pay-msg'); if(!msg) return;
+  var sum=dlPaySum();
+  if(sum===_deliveryTotal){ msg.style.color='var(--green)'; msg.textContent='✓ '+sum.toLocaleString()+' / '+_deliveryTotal.toLocaleString()+' ฿'; }
+  else { msg.style.color='#dc2626'; msg.textContent=sum.toLocaleString()+' / '+_deliveryTotal.toLocaleString()+' ฿ — must match total / ต้องเท่ายอดรวม'; }
 }
 function closeDeliveryModal(){
   document.getElementById('delivery-modal').classList.remove('open');
@@ -5355,10 +5387,22 @@ function confirmDelivery(){
     alert('Please take a delivery photo first.\nกรุณาถ่ายรูปการจัดส่งก่อน');
     return;
   }
+  // Require payment to match the total (cash + online = total).
+  var cash = parseFloat((document.getElementById('dl-cash-amt')||{}).value)||0;
+  var online = parseFloat((document.getElementById('dl-online-amt')||{}).value)||0;
+  if((cash+online) !== _deliveryTotal){
+    alert('Payment must match the total / ยอดชำระต้องเท่ายอดรวม ('+_deliveryTotal.toLocaleString()+' ฿)');
+    return;
+  }
+  var payMethod = (cash>0 && online>0) ? 'split' : (online>0 ? 'online' : 'cash');
   var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
+  // Save payment on the order.
+  var ord = orders.find(function(x){return x.id===id;});
+  if(ord){ ord.payMethod=payMethod; ord.paidCash=cash; ord.paidOnline=online; ord.paidBy=drName; ord.payDate=new Date().toISOString().split('T')[0]; }
   closeDeliveryModal();
   addOrderPhoto(id, 'delivery', photo, drName);
   drDoDeliver(id, photo);
+  try{ syncOrders(); }catch(e){}
 }
 
 function drDeliver(id){
@@ -7876,6 +7920,27 @@ function calcViz() {
       </div>
       <input type="file" id="delivery-photo-input" accept="image/*" capture="environment" style="display:none" onchange="handleDeliveryPhoto(this)">
       <div id="delivery-upload-progress" style="display:none;font-size:12px;color:var(--blue);margin-top:6px;text-align:center"><i class="ti ti-loader"></i> Uploading...</div>
+    </div>
+
+    <!-- Payment -->
+    <div style="background:var(--bg2);border-radius:var(--rs);padding:12px;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="font-size:13px;font-weight:700">💰 Payment / การชำระเงิน</span>
+        <span style="font-size:16px;font-weight:800;color:var(--green)" id="dl-total">0 ฿</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;width:110px;cursor:pointer">
+          <input type="checkbox" id="dl-cash-chk" onchange="dlPayToggle('cash')" style="width:18px;height:18px;cursor:pointer"> เงินสด/Cash
+        </label>
+        <input type="number" id="dl-cash-amt" placeholder="0" oninput="dlPayManual()" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:15px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)"> ฿
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;width:110px;cursor:pointer">
+          <input type="checkbox" id="dl-online-chk" onchange="dlPayToggle('online')" style="width:18px;height:18px;cursor:pointer"> โอน/Online
+        </label>
+        <input type="number" id="dl-online-amt" placeholder="0" oninput="dlPayManual()" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:15px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)"> ฿
+      </div>
+      <div id="dl-pay-msg" style="font-size:11px;margin-top:8px;text-align:center"></div>
     </div>
 
     <button type="button" class="btn btng" id="delivery-confirm-btn" onclick="confirmDelivery()" style="margin-top:4px">
