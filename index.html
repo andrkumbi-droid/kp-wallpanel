@@ -1131,6 +1131,11 @@ textarea{resize:none}
       </div>
       <div><label class="fl">Date / วันที่</label><input type="date" lang="en-GB" id="of-date"></div>
     </div>
+    <!-- Quick paste: paste the whole customer blob, auto-split into the fields below -->
+    <div style="background:rgba(37,99,235,0.06);border:1px dashed var(--blue);border-radius:var(--rs);padding:10px;margin-top:8px">
+      <label class="fl" style="margin-top:0">⚡ Quick paste / วางทั้งหมด <span style="font-size:11px;color:var(--text2)">— paste name+phone+address+map, auto-splits</span></label>
+      <textarea id="of-paste" rows="3" placeholder="วางข้อมูลลูกค้าทั้งหมดที่นี่ / Paste everything here…" oninput="ofQuickParse()" style="width:100%;box-sizing:border-box"></textarea>
+    </div>
     <label class="fl">Customer / ลูกค้า</label><input type="text" id="of-cust" placeholder="Name / ชื่อ">
     <label class="fl">Phone / เบอร์โทร</label><input type="tel" id="of-phone" placeholder="08x-xxx-xxxx" oninput="ofLookupCustomer()" onblur="ofLookupCustomer()">
     <div id="of-cust-lookup" style="display:none;margin:6px 0 4px"></div>
@@ -3330,7 +3335,7 @@ function ofCreate(){
   orders.unshift(o);wOrders.unshift({id:no,zone,boxes:o.boxes,panels:panStr,lcorner:lcStr,clips,packed:false,packedAt:null});
   [...pa,...la].forEach(s=>{const m=s.match(/^([A-Z0-9\-]+)\s*[×x]\s*(\d+)/i);if(m){const st=stockItems.find(x=>x.code===m[1]);if(st){st.qty=Math.max(0,st.qty-parseInt(m[2]));addLog(m[1]+' -'+m[2]+' pcs (order '+no+')','-');}}});
   var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order'});}catch(e){}
-  ['of-no','of-cust','of-phone','of-loc','of-contact','of-deliveround'].forEach(x=>document.getElementById(x).value='');document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';;document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='none';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').valueAsDate=new Date();
+  ['of-no','of-cust','of-phone','of-loc','of-contact','of-deliveround','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';;document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='none';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').valueAsDate=new Date();
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
   try{ sheetsSyncToMaster(o); }catch(e){ console.error('Master sync failed (non-blocking):', e); }
   try{var cByN=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';auditAdd({type:'create',orderId:no,by:cByN});}catch(e){}
@@ -8050,6 +8055,38 @@ function getCustomer(phone) {
     orders:  base.orders.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); }),
     lastDate: base.lastDate
   };
+}
+
+// Quick paste: split a pasted customer blob into name / phone / address / map.
+function ofQuickParse(){
+  var raw = (document.getElementById('of-paste')||{}).value || '';
+  if(!raw.trim()) return;
+  var work = raw;
+  // 1) Maps / any URL
+  var maps='';
+  var mm = work.match(/https?:\/\/[^\s]+/i);
+  if(mm){ maps = mm[0].replace(/[)\].,]+$/,''); work = work.replace(mm[0],' '); }
+  // 2) Phone — first Thai-style number (0xxxxxxxxx, allows spaces/dashes)
+  var phone='';
+  var pm = work.match(/0\d[\d\s\-]{7,}\d/);
+  if(pm){ phone = pm[0].replace(/[^\d]/g,''); work = work.replace(pm[0],' '); }
+  work = work.replace(/โทร\.?|tel\.?:?|เบอร์โทร?|phone:?/ig,' ');
+  // 3) Name + address from the remaining lines
+  var lines = work.split(/\n/).map(function(l){return l.trim();}).filter(Boolean);
+  var name='', addr='';
+  if(lines.length){
+    var first=lines[0];
+    var looksAddr = /บ้านเลขที่|เลขที่|ถนน|ซอย|ต\.|อ\.|จ\.|ม\.\d|หมู่|แขวง|เขต|อำเภอ|จังหวัด|\d{5}|\d{3,}/.test(first);
+    if(lines.length>1 && first.length<40 && !looksAddr){ name=first; addr=lines.slice(1).join('\n'); }
+    else { addr=lines.join('\n'); }
+  }
+  addr = addr.replace(/[ \t]{2,}/g,' ').trim();
+  // Fill the fields (quick paste overwrites)
+  if(name) document.getElementById('of-cust').value = name;
+  if(phone) document.getElementById('of-phone').value = phone;
+  if(addr) document.getElementById('of-addr').value = addr;
+  if(maps) document.getElementById('of-loc').value = maps;
+  try{ ofLookupCustomer(); }catch(e){}
 }
 
 // Called from the New Order phone field — auto-fills empty fields + warns.
