@@ -7805,21 +7805,31 @@ function attStaffEntries(staffId, mk){
 }
 function attCalc(s, mk){
   var es=attStaffEntries(s.id, mk);
-  var lateMin=0, otHrs=0, tripCnt=0, adv=0, workHrs=0;
-  es.forEach(function(e){
-    if(e.type==='late') lateMin+=e.qty;
-    else if(e.type==='ot') otHrs+=e.qty;
-    else if(e.type==='trip') tripCnt+=e.qty;
-    else if(e.type==='advance') adv+=e.qty;
-    else if(e.type==='hours') workHrs+=e.qty;
-  });
-  var lateRate=parseFloat(s.lateRate)||0, otRate=parseFloat(s.otRate)||0, tripRate=(s.tripRate!=null?parseFloat(s.tripRate):100)||0;
-  var base = s.payType==='hourly' ? (workHrs*(parseFloat(s.hourlyRate)||0)) : (parseFloat(s.monthlySalary)||0);
-  var otPay=otHrs*otRate, tripPay=tripCnt*tripRate, lateDed=lateMin*lateRate;
-  var net=base+otPay+tripPay-lateDed-adv;
-  return {entries:es, base:base, otHrs:otHrs, otPay:otPay, tripCnt:tripCnt, tripPay:tripPay, lateMin:lateMin, lateDed:lateDed, adv:adv, workHrs:workHrs, net:net};
+  var q={late:0, ot:0, trip:0, advance:0, hours:0, commission:0, carton:0, km:0, ferry:0};
+  es.forEach(function(e){ if(q[e.type]!=null) q[e.type]+=e.qty; });
+  var rate={
+    late:parseFloat(s.lateRate)||0,
+    ot:parseFloat(s.otRate)||0,
+    trip:(s.tripRate!=null?parseFloat(s.tripRate):100)||0,
+    commission:parseFloat(s.commRate)||0,
+    carton:parseFloat(s.cartonRate)||0,
+    km:parseFloat(s.kmRate)||0
+  };
+  var base = s.payType==='hourly' ? (q.hours*(parseFloat(s.hourlyRate)||0)) : (parseFloat(s.monthlySalary)||0);
+  var pay={
+    ot:q.ot*rate.ot, trip:q.trip*rate.trip, commission:q.commission*rate.commission,
+    carton:q.carton*rate.carton, km:q.km*rate.km, ferry:q.ferry, late:q.late*rate.late, advance:q.advance
+  };
+  var net = base + pay.ot + pay.trip + pay.commission + pay.carton + pay.km + pay.ferry - pay.late - pay.advance;
+  return {entries:es, q:q, rate:rate, pay:pay, base:base, net:net};
 }
-var ATT_TYPE_LABEL={late:'⏰ Late / สาย (min)', ot:'➕ OT / โอที (hrs)', trip:'🚗 Trip / เที่ยว', advance:'💵 Advance / เบิกล่วงหน้า (฿)', hours:'🕒 Work hours / ชม.ทำงาน'};
+var ATT_TYPE_LABEL={
+  late:'⏰ Late / สาย (min)', ot:'➕ OT / โอที (hrs)', trip:'🚗 Trip / เที่ยว (จำนวน)',
+  commission:'🧱 Commission / คอม (panels)', carton:'📦 Carton delivery / ส่งกล่อง (กล่อง)',
+  km:'🛣️ Distance / ระยะทาง (km)', ferry:'⛴️ Ferry / ค่าเรือ (฿)',
+  advance:'💵 Advance / เบิกล่วงหน้า (฿)', hours:'🕒 Work hours / ชม.ทำงาน'
+};
+var ATT_TYPE_UNIT={late:'min', ot:'h', trip:'×', commission:'pcs', carton:'ctn', km:'km', ferry:'฿', advance:'฿', hours:'h'};
 
 function ofAttRender(){
   var ctrl=document.getElementById('of-att-controls');
@@ -7842,34 +7852,41 @@ function ofAttRender(){
   }
   if(!attStaff.length){ listEl.innerHTML='<div class="empty">No employees yet — add above / ยังไม่มีพนักงาน</div>'; return; }
   var mk=ofAttMonth;
+  var typeOpts = ['late','ot','trip','commission','carton','km','ferry','advance','hours']
+    .map(function(t){ return '<option value="'+t+'">'+ATT_TYPE_LABEL[t]+'</option>'; }).join('');
   listEl.innerHTML = attStaff.map(function(s){
     var c=attCalc(s, mk); var key=s.id;
     var tripRate=(s.tripRate!=null?s.tripRate:100);
     return '<div class="card" style="padding:0;margin-bottom:8px;overflow:hidden">'
       + '<div onclick="ofAttToggle(\''+key+'\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px;cursor:pointer">'
-        + '<div style="font-size:15px;font-weight:700">'+s.name+'</div>'
-        + '<i class="ti ti-chevron-down" id="oatt-chev-'+key+'" style="font-size:18px;color:var(--text2);transition:transform .2s"></i>'
+        + '<div style="font-size:15px;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+s.name+'</div>'
+        + '<span style="font-size:15px;font-weight:800;color:var(--green);white-space:nowrap">'+attBaht(c.net)+' ฿</span>'
+        + '<i class="ti ti-chevron-down" id="oatt-chev-'+key+'" style="font-size:18px;color:var(--text2);transition:transform .2s;flex-shrink:0"></i>'
       + '</div>'
       + '<div id="oatt-det-'+key+'" style="display:none;padding:10px 12px;border-top:1px solid var(--border)">'
         // 1) ADD ENTRY
         + '<div style="background:var(--bg2);border-radius:var(--rs);padding:10px;margin-bottom:10px">'
           + '<div style="font-size:12px;font-weight:700;margin-bottom:6px">➕ Add entry / เพิ่มรายการ</div>'
-          + '<select id="oatt-etype-'+key+'" style="width:100%;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;margin-bottom:5px"><option value="late">'+ATT_TYPE_LABEL.late+'</option><option value="ot">'+ATT_TYPE_LABEL.ot+'</option><option value="trip">'+ATT_TYPE_LABEL.trip+'</option><option value="advance">'+ATT_TYPE_LABEL.advance+'</option><option value="hours">'+ATT_TYPE_LABEL.hours+'</option></select>'
+          + '<select id="oatt-etype-'+key+'" style="width:100%;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;margin-bottom:5px">'+typeOpts+'</select>'
           + '<div style="display:flex;gap:5px;margin-bottom:5px">'
             + '<input id="oatt-edate-'+key+'" type="date" lang="en-GB" value="'+(mk+'-'+(new Date().getDate()<10?'0':'')+new Date().getDate())+'" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px">'
             + '<input id="oatt-eqty-'+key+'" type="number" step="0.5" placeholder="qty / จำนวน" style="width:90px;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px">'
           + '</div>'
-          + '<input id="oatt-enote-'+key+'" type="text" placeholder="Note / หมายเหตุ" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;margin-bottom:5px">'
+          + '<input id="oatt-enote-'+key+'" type="text" placeholder="Note / หมายเหตุ (e.g. island, route)" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;margin-bottom:5px">'
           + '<button type="button" onclick="ofAttAddEntry(\''+key+'\')" style="width:100%;padding:7px;border-radius:6px;border:none;background:#16a34a;color:#fff;font-weight:700;cursor:pointer">+ Add / เพิ่ม</button>'
         + '</div>'
         // 2) CALCULATION — separated by type
         + '<div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:4px">📊 Calculation / การคำนวณ</div>'
-        + '<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0"><span>'+(s.payType==='hourly'?('Base / ฐาน ('+c.workHrs+'h × '+attBaht(s.hourlyRate||0)+')'):'Base salary / เงินเดือน')+'</span><b>'+attBaht(c.base)+' ฿</b></div>'
-        + (s.payType==='hourly' ? attGrp(c.entries,'hours',key,'h','Work hours / ชม.','#374151','') : '')
-        + attGrp(c.entries,'ot',key,'h','➕ OT / โอที','#16a34a','+'+attBaht(c.otPay)+' ฿')
-        + attGrp(c.entries,'trip',key,'×','🚗 Trips / เที่ยว','#16a34a','+'+attBaht(c.tripPay)+' ฿')
-        + attGrp(c.entries,'late',key,'min','⏰ Late / สาย','#dc2626','−'+attBaht(c.lateDed)+' ฿')
-        + attGrp(c.entries,'advance',key,'฿','💵 Advance / เบิก','#dc2626','−'+attBaht(c.adv)+' ฿')
+        + '<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0"><span>'+(s.payType==='hourly'?('Base / ฐาน ('+c.q.hours+'h × '+attBaht(s.hourlyRate||0)+')'):'Base salary / เงินเดือน')+'</span><b>'+attBaht(c.base)+' ฿</b></div>'
+        + (s.payType==='hourly' ? attGrp(c.entries,'hours',key,'#374151','') : '')
+        + attGrp(c.entries,'ot',key,'#16a34a','+'+attBaht(c.pay.ot)+' ฿')
+        + attGrp(c.entries,'trip',key,'#16a34a','+'+attBaht(c.pay.trip)+' ฿')
+        + attGrp(c.entries,'commission',key,'#16a34a','+'+attBaht(c.pay.commission)+' ฿')
+        + attGrp(c.entries,'carton',key,'#16a34a','+'+attBaht(c.pay.carton)+' ฿')
+        + attGrp(c.entries,'km',key,'#16a34a','+'+attBaht(c.pay.km)+' ฿')
+        + attGrp(c.entries,'ferry',key,'#16a34a','+'+attBaht(c.pay.ferry)+' ฿')
+        + attGrp(c.entries,'late',key,'#dc2626','−'+attBaht(c.pay.late)+' ฿')
+        + attGrp(c.entries,'advance',key,'#dc2626','−'+attBaht(c.pay.advance)+' ฿')
         // 3) TOTAL SALARY
         + '<div style="display:flex;justify-content:space-between;border-top:2px solid var(--border);margin-top:8px;padding-top:8px;font-weight:800;font-size:15px"><span>Total salary / เงินเดือนสุทธิ</span><span style="color:var(--green)">'+attBaht(c.net)+' ฿</span></div>'
         // 4) settings (collapsible)
@@ -7880,19 +7897,24 @@ function ofAttRender(){
           + attField('Hourly rate ฿/h','oatt-hourly-'+key, s.hourlyRate||'')
           + attField('Late rate ฿/min','oatt-laterate-'+key, s.lateRate||'')
           + attField('OT rate ฿/h','oatt-otrate-'+key, s.otRate||'')
-          + attField('Trip rate ฿','oatt-triprate-'+key, tripRate)
+          + attField('Trip rate ฿/trip','oatt-triprate-'+key, tripRate)
+          + attField('Commission ฿/panel','oatt-commrate-'+key, s.commRate||'')
+          + attField('Carton rate ฿/carton','oatt-cartonrate-'+key, s.cartonRate||'')
+          + attField('Km rate ฿/km','oatt-kmrate-'+key, s.kmRate||'')
           + '<button type="button" onclick="ofAttSaveStaff(\''+key+'\')" style="width:100%;margin-top:6px;padding:7px;border-radius:6px;border:none;background:var(--blue);color:#fff;font-weight:700;cursor:pointer">Save / บันทึก</button>'
         + '</div>'
         // 5) remove employee (always visible when expanded)
-        + '<button type="button" onclick="attRemoveStaff(\''+key+'\')" style="width:100%;margin-top:4px;padding:8px;border-radius:6px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;font-weight:700;cursor:pointer"><i class="ti ti-trash"></i> Remove employee / ลบพนักงาน</button>'
+        + '<button type="button" onclick="attRemoveStaff(\''+key+'\')" style="width:100%;margin-top:4px;padding:8px;border-radius:6px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;font-weight:700;cursor:pointer"><i class="ti ti-trash"></i> Remove employee / ลบพนักงาน (PIN)</button>'
       + '</div>'
       + '</div>';
   }).join('');
 }
 // Render one type group: header (label + subtotal) and its entries with delete.
-function attGrp(entries, type, key, unit, label, color, subtotalText){
+function attGrp(entries, type, key, color, subtotalText){
   var list=entries.filter(function(e){return e.type===type;});
   if(!list.length) return '';
+  var unit=ATT_TYPE_UNIT[type]||'';
+  var label=(ATT_TYPE_LABEL[type]||type).replace(/\s*\(.*?\)\s*/g,''); // drop the "(unit)" hint
   return '<div style="margin-top:6px">'
     + '<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700"><span>'+label+'</span>'+(subtotalText?'<span style="color:'+color+'">'+subtotalText+'</span>':'')+'</div>'
     + list.map(function(e){
@@ -7918,7 +7940,7 @@ function ofAttAddStaff(){
   var inp=document.getElementById('oatt-newname'); var name=(inp&&inp.value||'').trim();
   if(!name) return;
   if(attStaff.find(function(s){return s.name.toLowerCase()===name.toLowerCase();})){ alert('Already exists / มีอยู่แล้ว'); return; }
-  var s={id:'ats-'+Date.now(), name:name, payType:'monthly', monthlySalary:0, hourlyRate:0, lateRate:0, otRate:0, tripRate:100};
+  var s={id:'ats-'+Date.now(), name:name, payType:'monthly', monthlySalary:0, hourlyRate:0, lateRate:0, otRate:0, tripRate:100, commRate:0, cartonRate:0, kmRate:0};
   attStaff.push(s);
   if(window.fbDB) window.fbDB.ref('attStaff/'+s.id).set(s);
   if(inp) inp.value='';
@@ -7934,6 +7956,9 @@ function ofAttSaveStaff(id){
   s.lateRate=num('oatt-laterate-'+id);
   s.otRate=num('oatt-otrate-'+id);
   s.tripRate=num('oatt-triprate-'+id);
+  s.commRate=num('oatt-commrate-'+id);
+  s.cartonRate=num('oatt-cartonrate-'+id);
+  s.kmRate=num('oatt-kmrate-'+id);
   if(window.fbDB) window.fbDB.ref('attStaff/'+id).set(s);
   showNotif('Saved / บันทึกแล้ว ✓');
   ofAttRender();
