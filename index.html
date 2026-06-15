@@ -3017,8 +3017,118 @@ function ofEndTourFromDetail() {
 }
 
 
-// ── DELIVERY SHEET ──
+// ── DELIVERY SHEET (driver-friendly order blocks, auto-paginated) ──
 function printDeliverySheet() {
+  if(currentTourDetailIdx === null) return;
+  const t = activeTours[currentTourDetailIdx];
+  if(!t) return;
+
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('th-TH', {day:'numeric', month:'long', year:'numeric'});
+  const driver = t.driverName || '';
+  const esc = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  const PRODT = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+
+  const tourOrders = t.orders.map(function(id){
+    return orders.find(function(x){return x.id===id;}) || {id:id, customer:'—', address:'—', panels:'—', lcorner:'—', clips:0, total:'—', zone:'—', phone:'—'};
+  }).filter(function(o){ return (t.status[o.id]||'loaded') !== 'cancelled'; });
+
+  function moneyOf(o){ return parseFloat(String(o.total||'').replace(/[^0-9.]/g,''))||0; }
+
+  function dsBlock(o){
+    var prods = (o.lineItems||[]).filter(function(li){ return PRODT[li.type] && (parseFloat(li.qty)||0)>0; })
+      .map(function(li){ return '<span class="ds-pi">☐ '+esc(li.code)+' <b>×'+li.qty+'</b></span>'; }).join('');
+    if(!prods){
+      prods = '<span class="ds-pi">☐ '+esc(o.panels||'—')+'</span>'
+        + ((o.lcorner&&o.lcorner!=='—')?'<span class="ds-pi">☐ '+esc(o.lcorner)+'</span>':'');
+    }
+    var clips = parseInt(o.clips)||0;
+    if(clips>0) prods += '<span class="ds-pi">☐ Clips <b>×'+clips.toLocaleString()+'</b></span>';
+    var ctn = (o.ctn&&o.ctn>0) ? '<span class="ds-ctn">📦 '+o.ctn+' CTN</span>' : '';
+    var name = (o.customer&&o.customer!=='—') ? esc(o.customer) : '';
+    var phone = (o.phone&&o.phone!=='—') ? esc(o.phone) : '';
+    var contact = o.contact ? ('💬 '+esc(o.contact)) : '';
+    var addr = (o.address&&o.address!=='—') ? esc(o.address) : '';
+    var line2 = [phone?'📞 '+phone:'', contact].filter(Boolean).join('&nbsp;&nbsp;&nbsp;');
+    return '<div class="ds-order">'
+      + '<div class="ds-r1">'
+        + '<span class="ds-seq"></span>'
+        + '<span class="ds-id">'+esc(o.id)+'</span>'
+        + '<span class="ds-name">'+name+'</span>'
+        + '<span class="ds-total">'+moneyOf(o).toLocaleString()+' ฿</span>'
+        + '<span class="ds-pay">☐ เงินสด/Cash&nbsp;&nbsp;☐ โอน/Online</span>'
+      + '</div>'
+      + (line2?'<div class="ds-line">'+line2+'</div>':'')
+      + (addr?'<div class="ds-line">📍 '+addr+'</div>':'')
+      + '<div class="ds-prod">'+prods+ctn+'</div>'
+      + '<div class="ds-notes">📝 หมายเหตุ / Notes:</div>'
+    + '</div>';
+  }
+
+  var blocksHTML = tourOrders.map(dsBlock).join('');
+  var grandTotal = tourOrders.reduce(function(a,o){ return a+moneyOf(o); }, 0);
+
+  var summaryHTML = '<div class="ds-summary">'
+    + '<div class="ds-sum-row"><span>ออเดอร์ทั้งหมด / Total Orders: <b>'+tourOrders.length+'</b></span>'
+    + '<span>ยอดรวมทั้งหมด / Grand Total: <b>'+grandTotal.toLocaleString()+' ฿</b></span></div>'
+    + '<div class="ds-sign"><div><div class="ds-sign-line"></div>คนขับ / Driver: '+esc(driver)+'</div>'
+    + '<div><div class="ds-sign-line"></div>ผู้ตรวจสอบ / Checker</div></div>'
+    + '</div>';
+
+  var fullHTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Delivery Sheet — '+esc(driver)+'</title>'
+  + '<style>'
+  + '*{box-sizing:border-box;margin:0;padding:0}'
+  + '@page{size:A4 portrait;margin:8mm}'
+  + 'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;background:#fff}'
+  + '.ds-page{page-break-after:always}'
+  + '.ds-page:last-child{page-break-after:avoid}'
+  + '.ds-header{background:#ffeb3b;border:1px solid #999;padding:5px 8px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center}'
+  + '.ds-h-title{font-size:12pt;font-weight:800}.ds-h-sub{font-size:9.5pt;font-weight:600}'
+  + '.ds-order{border:1.5px solid #333;border-radius:4px;padding:5px 7px;margin-bottom:5px;page-break-inside:avoid}'
+  + '.ds-r1{display:flex;align-items:center;gap:8px}'
+  + '.ds-seq{display:inline-block;width:9mm;height:9mm;border:1.5px solid #333;border-radius:3px;flex-shrink:0}'
+  + '.ds-id{font-size:13pt;font-weight:800;white-space:nowrap}'
+  + '.ds-name{font-size:11pt;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+  + '.ds-total{font-size:12pt;font-weight:800;white-space:nowrap}'
+  + '.ds-pay{font-size:9.5pt;white-space:nowrap;border:1px solid #bbb;border-radius:4px;padding:2px 6px}'
+  + '.ds-line{font-size:9.5pt;margin-top:2px}'
+  + '.ds-prod{margin-top:3px;display:flex;flex-wrap:wrap;gap:3px 14px;font-size:10pt}'
+  + '.ds-pi{font-weight:600}.ds-ctn{color:#15803d;font-weight:800}'
+  + '.ds-notes{margin-top:4px;border-top:1px dashed #999;padding-top:2px;font-size:9pt;color:#666;min-height:8mm}'
+  + '.ds-summary{border:2px solid #333;border-radius:4px;padding:10px}'
+  + '.ds-sum-row{display:flex;justify-content:space-between;font-size:12pt;margin-bottom:12mm}'
+  + '.ds-sign{display:flex;justify-content:space-around;text-align:center;font-size:9pt;color:#444}'
+  + '.ds-sign-line{border-bottom:1px solid #333;width:55mm;margin:0 auto 4px;height:10mm}'
+  + '</style></head><body>'
+  + '<div id="ds-flow">'+blocksHTML+'</div>'
+  + '<template id="ds-htpl"><div class="ds-header"><span class="ds-h-title">📋 ใบส่งสินค้า / Delivery Sheet — '+esc(driver)+'</span><span class="ds-h-sub">'+dateStr+' · หน้า {PG} · '+tourOrders.length+' ออเดอร์</span></div></template>'
+  + '<div id="ds-summary">'+summaryHTML+'</div>'
+  + '<scr'+'ipt>(function(){'
+  + 'var flow=document.getElementById("ds-flow");'
+  + 'var blocks=[].slice.call(flow.children);'
+  + 'var htpl=document.getElementById("ds-htpl").innerHTML;'
+  + 'var USABLE=1015, HEAD=52, GAP=5;'
+  + 'var pages=[],cur=[],h=HEAD;'
+  + 'blocks.forEach(function(b){var bh=b.offsetHeight+GAP; if(h+bh>USABLE&&cur.length){pages.push(cur);cur=[];h=HEAD;} cur.push(b); h+=bh;});'
+  + 'if(cur.length)pages.push(cur);'
+  + 'flow.innerHTML="";'
+  + 'pages.forEach(function(pg,i){var pd=document.createElement("div");pd.className="ds-page";pd.innerHTML=htpl.replace("{PG}",(i+1)+"/"+pages.length);pg.forEach(function(b){pd.appendChild(b);});flow.appendChild(pd);});'
+  + 'var sum=document.getElementById("ds-summary");if(sum){sum.classList.add("ds-page");flow.appendChild(sum);}'
+  + 'setTimeout(function(){window.print();},300);'
+  + '})();<\/scr'+'ipt></body></html>';
+
+  var printWin = window.open('', '_blank');
+  if(printWin){
+    printWin.document.open();
+    printWin.document.write(fullHTML);
+    printWin.document.close();
+    printWin.focus();
+  } else {
+    alert('Please allow popups for printing! / กรุณาอนุญาต popup');
+  }
+  return;
+}
+function _printDeliverySheetOLD() {
   if(currentTourDetailIdx === null) return;
   const t = activeTours[currentTourDetailIdx];
   if(!t) return;
