@@ -8058,34 +8058,42 @@ function getCustomer(phone) {
 }
 
 // Quick paste: split a pasted customer blob into name / phone / address / map.
-function ofQuickParse(){
-  var raw = (document.getElementById('of-paste')||{}).value || '';
-  if(!raw.trim()) return;
-  var work = raw;
-  // 1) Maps / any URL
-  var maps='';
-  var mm = work.match(/https?:\/\/[^\s]+/i);
-  if(mm){ maps = mm[0].replace(/[)\].,]+$/,''); work = work.replace(mm[0],' '); }
-  // 2) Phone — first Thai-style number (0xxxxxxxxx, allows spaces/dashes)
-  var phone='';
-  var pm = work.match(/0\d[\d\s\-]{7,}\d/);
-  if(pm){ phone = pm[0].replace(/[^\d]/g,''); work = work.replace(pm[0],' '); }
-  work = work.replace(/โทร\.?|tel\.?:?|เบอร์โทร?|phone:?/ig,' ');
-  // 3) Name + address from the remaining lines
-  var lines = work.split(/\n/).map(function(l){return l.trim();}).filter(Boolean);
+function kpParseCustomer(text){
+  var out={name:'',phone:'',maps:'',address:''};
+  var work=String(text||'');
+  var ADDR_RE=/บ้านเลขที่|เลขที่|ถนน|ซอย|ต\.|อ\.|จ\.|ม\.\d|หมู่|แขวง|เขต|อำเภอ|จังหวัด|ตำบล|\d{5}|\d{3,}/;
+  var mm=work.match(/https?:\/\/[^\s]+/i);
+  if(mm){ out.maps=mm[0].replace(/[)\].,]+$/,''); work=work.replace(mm[0],' '); }
+  var nameGuess='';
+  var pm=work.match(/0\d[\d\s\-]{7,}\d/);
+  if(pm){
+    out.phone=pm[0].replace(/[^\d]/g,'');
+    var after=work.slice(work.indexOf(pm[0])+pm[0].length).split('\n')[0].trim();
+    if(after && after.length<=30 && !ADDR_RE.test(after)) nameGuess=after;
+    work=work.replace(pm[0],' ');
+  }
+  work=work.replace(/โทร\.?|tel\.?:?|เบอร์โทรศัพท์?|เบอร์โทร?|phone:?/ig,' ');
+  var lines=work.split(/\n/).map(function(l){return l.trim();}).filter(Boolean);
   var name='', addr='';
   if(lines.length){
     var first=lines[0];
-    var looksAddr = /บ้านเลขที่|เลขที่|ถนน|ซอย|ต\.|อ\.|จ\.|ม\.\d|หมู่|แขวง|เขต|อำเภอ|จังหวัด|\d{5}|\d{3,}/.test(first);
-    if(lines.length>1 && first.length<40 && !looksAddr){ name=first; addr=lines.slice(1).join('\n'); }
+    if(lines.length>1 && first.length<40 && !ADDR_RE.test(first)){ name=first; addr=lines.slice(1).join('\n'); }
     else { addr=lines.join('\n'); }
   }
-  addr = addr.replace(/[ \t]{2,}/g,' ').trim();
-  // Fill the fields (quick paste overwrites)
-  if(name) document.getElementById('of-cust').value = name;
-  if(phone) document.getElementById('of-phone').value = phone;
-  if(addr) document.getElementById('of-addr').value = addr;
-  if(maps) document.getElementById('of-loc').value = maps;
+  if(!name && nameGuess) name=nameGuess;
+  if(name) addr=addr.split(name).join(' ');
+  out.name=name.trim();
+  out.address=addr.replace(/[ \t]{2,}/g,' ').replace(/^[\s,;]+|[\s,;]+$/g,'').trim();
+  return out;
+}
+function ofQuickParse(){
+  var raw = (document.getElementById('of-paste')||{}).value || '';
+  if(!raw.trim()) return;
+  var ex = kpParseCustomer(raw);
+  if(ex.name) document.getElementById('of-cust').value = ex.name;
+  if(ex.phone) document.getElementById('of-phone').value = ex.phone;
+  if(ex.address) document.getElementById('of-addr').value = ex.address;
+  if(ex.maps) document.getElementById('of-loc').value = ex.maps;
   try{ ofLookupCustomer(); }catch(e){}
 }
 

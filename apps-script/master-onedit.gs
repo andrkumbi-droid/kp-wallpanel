@@ -77,26 +77,41 @@ function onEdit(e) {
 
 // Parse a combined customer blob into {name, phone, maps, address}.
 function splitCustomer(text) {
+  return kpParseCustomer(text);
+}
+// Shared parser (also used by the app's quick-paste).
+function kpParseCustomer(text) {
   var out = { name: '', phone: '', maps: '', address: '' };
   var work = String(text || '');
+  var ADDR_RE = /บ้านเลขที่|เลขที่|ถนน|ซอย|ต\.|อ\.|จ\.|ม\.\d|หมู่|แขวง|เขต|อำเภอ|จังหวัด|ตำบล|\d{5}|\d{3,}/;
 
   // Maps / any URL
   var mm = work.match(/https?:\/\/\S+/i);
   if (mm) { out.maps = mm[0].replace(/[)\].,]+$/, ''); work = work.replace(mm[0], ' '); }
 
-  // Phone — first Thai-style number (0xxxxxxxxx, allows spaces/dashes)
+  // Phone — first Thai-style number; also grab the short text right AFTER it
+  // on the same line as a name candidate (Thai blobs often put the nickname last).
+  var nameGuess = '';
   var pm = work.match(/0\d[\d\s\-]{7,}\d/);
-  if (pm) { out.phone = pm[0].replace(/[^\d]/g, ''); work = work.replace(pm[0], ' '); }
-  work = work.replace(/โทร\.?|tel\.?:?|เบอร์โทร?|phone:?/ig, ' ');
+  if (pm) {
+    out.phone = pm[0].replace(/[^\d]/g, '');
+    var after = work.slice(work.indexOf(pm[0]) + pm[0].length).split('\n')[0].trim();
+    if (after && after.length <= 30 && !ADDR_RE.test(after)) nameGuess = after;
+    work = work.replace(pm[0], ' ');
+  }
+  work = work.replace(/โทร\.?|tel\.?:?|เบอร์โทรศัพท์?|เบอร์โทร?|phone:?/ig, ' ');
 
   // Name + address from remaining lines
   var lines = work.split(/\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+  var name = '', address = '';
   if (lines.length) {
     var first = lines[0];
-    var looksAddr = /บ้านเลขที่|เลขที่|ถนน|ซอย|ต\.|อ\.|จ\.|ม\.\d|หมู่|แขวง|เขต|อำเภอ|จังหวัด|\d{5}|\d{3,}/.test(first);
-    if (lines.length > 1 && first.length < 40 && !looksAddr) { out.name = first; out.address = lines.slice(1).join('\n'); }
-    else { out.address = lines.join('\n'); }
+    if (lines.length > 1 && first.length < 40 && !ADDR_RE.test(first)) { name = first; address = lines.slice(1).join('\n'); }
+    else { address = lines.join('\n'); }
   }
-  out.address = out.address.replace(/[ \t]{2,}/g, ' ').trim();
+  if (!name && nameGuess) name = nameGuess;
+  if (name) address = address.split(name).join(' '); // remove the name token from the address
+  out.name = name.trim();
+  out.address = address.replace(/[ \t]{2,}/g, ' ').replace(/^[\s,;]+|[\s,;]+$/g, '').trim();
   return out;
 }
