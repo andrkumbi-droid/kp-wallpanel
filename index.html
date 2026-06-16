@@ -1482,8 +1482,14 @@ textarea{resize:none}
       <div class="colh"><span>Code</span><span>฿/pc</span><span>Qty</span><span></span></div>
       <div id="po-products"></div>
       <button type="button" class="abtn" onclick="poAddP()"><i class="ti ti-plus"></i> Add product / เพิ่มสินค้า</button>
+      <div class="g2" style="margin-top:10px">
+        <div><label class="fl" style="margin-top:0">Shipping / ค่าส่ง (฿)</label><input type="number" id="po-delivery" min="0" placeholder="0" value="0" oninput="poCalc()"></div>
+        <div><label class="fl" style="margin-top:0">Clip packs ×199฿</label><input type="number" id="po-clippacks" min="0" placeholder="0" value="0" oninput="poCalc()"></div>
+      </div>
+      <div id="po-summary" style="background:var(--bg2);border-radius:var(--rs);padding:10px;margin-top:10px;font-size:13px;line-height:1.8"></div>
       <label class="fl" style="margin-top:10px">Notes / หมายเหตุ</label><textarea id="po-notes" rows="2" placeholder="…"></textarea>
-      <button type="button" class="btn btnp" style="margin-top:12px" onclick="poCreate()"><i class="ti ti-bookmark"></i> Save Pre-Order / บันทึกพรีออเดอร์</button>
+      <button type="button" class="btn btnp" style="margin-top:12px" onclick="poCreate()"><i class="ti ti-bookmark"></i> <span id="po-save-label">Save Pre-Order / บันทึกพรีออเดอร์</span></button>
+      <button type="button" id="po-cancel-edit" onclick="poResetForm()" style="display:none;width:100%;margin-top:6px;padding:7px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text2);font-size:13px;cursor:pointer">Cancel edit / ยกเลิกแก้ไข</button>
       <div id="po-cres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-top:8px;font-size:13px"></div>
     </div>
     <div class="stit" style="font-size:13px">Pre-Orders</div>
@@ -4768,10 +4774,26 @@ function poUpdateBadge(){
   var el=document.getElementById('oft-po-cnt');
   if(el){ el.textContent=ready; el.style.display=ready>0?'':'none'; }
 }
-function poAddP(){
+function poAddP(code,price,qty){
   var d=document.createElement('div'); d.className='pline';
-  d.innerHTML='<input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase()"><input type="number" min="0" placeholder="฿/pc"><input type="number" min="0" placeholder="0"><button type="button" class="xbtn" onclick="this.closest(\'.pline\').remove()"><i class="ti ti-x"></i></button>';
+  d.innerHTML='<input type="text" placeholder="KP009" value="'+(code||'')+'" oninput="this.value=this.value.toUpperCase();poCalc()"><input type="number" min="0" placeholder="฿/pc" value="'+(price!=null&&price!==''?price:'')+'" oninput="poCalc()"><input type="number" min="0" placeholder="0" value="'+(qty!=null&&qty!==''?qty:'')+'" oninput="poCalc()"><button type="button" class="xbtn" onclick="this.closest(\'.pline\').remove();poCalc()"><i class="ti ti-x"></i></button>';
   document.getElementById('po-products').appendChild(d);
+}
+function poCalc(){
+  var items=poReadProducts();
+  var sub=items.reduce(function(a,x){return a+(x.amount||0);},0);
+  var tq=items.filter(function(x){return x.type==='panel';}).reduce(function(a,x){return a+(parseInt(x.qty)||0);},0);
+  var freeClips=tq*10;
+  var packs=parseInt((document.getElementById('po-clippacks')||{}).value)||0;
+  var packCost=packs*199;
+  var delivery=parseInt((document.getElementById('po-delivery')||{}).value)||0;
+  var total=sub+packCost+delivery;
+  var el=document.getElementById('po-summary'); if(!el) return;
+  el.innerHTML='<div style="display:flex;justify-content:space-between"><span>Products / สินค้า</span><b>'+sub.toLocaleString()+' ฿</b></div>'
+    +(packCost?'<div style="display:flex;justify-content:space-between"><span>Clip packs ('+packs+'×199)</span><b>'+packCost.toLocaleString()+' ฿</b></div>':'')
+    +(delivery?'<div style="display:flex;justify-content:space-between"><span>Shipping / ค่าส่ง</span><b>'+delivery.toLocaleString()+' ฿</b></div>':'')
+    +'<div style="display:flex;justify-content:space-between;color:var(--text2)"><span>Free clips / คลิปฟรี (auto)</span><span>'+freeClips.toLocaleString()+' ตัว</span></div>'
+    +'<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;font-weight:800"><span>Total / รวม</span><span style="color:var(--green)">'+total.toLocaleString()+' ฿</span></div>';
 }
 function poReadProducts(){
   var items=[];
@@ -4790,38 +4812,78 @@ function poQuickParse(){
   if(ex.address) document.getElementById('po-addr').value=ex.address;
   if(ex.maps) document.getElementById('po-loc').value=ex.maps;
 }
+var poEditId=null;
+function poResetForm(){
+  poEditId=null;
+  ['po-cust','po-phone','po-loc','po-contact','po-paste','po-notes'].forEach(function(x){var e=document.getElementById(x);if(e)e.value='';});
+  document.getElementById('po-addr').value='';
+  document.getElementById('po-delivery').value='0'; document.getElementById('po-clippacks').value='0';
+  document.getElementById('po-products').innerHTML=''; poAddP();
+  var lbl=document.getElementById('po-save-label'); if(lbl) lbl.textContent='Save Pre-Order / บันทึกพรีออเดอร์';
+  var cx=document.getElementById('po-cancel-edit'); if(cx) cx.style.display='none';
+  poCalc();
+}
+function poEdit(id){
+  var p=preOrders.find(function(x){return x.id===id;}); if(!p||p.status!=='open') return;
+  poEditId=id;
+  document.getElementById('po-zone').value=p.zone||'Bangkok';
+  document.getElementById('po-cust').value=p.customer||'';
+  document.getElementById('po-phone').value=p.phone||'';
+  document.getElementById('po-addr').value=p.address||'';
+  document.getElementById('po-loc').value=p.location||'';
+  document.getElementById('po-contact').value=p.contact||'';
+  document.getElementById('po-notes').value=p.notes||'';
+  document.getElementById('po-delivery').value=p.delivery||0;
+  document.getElementById('po-clippacks').value=p.clipPacks||0;
+  document.getElementById('po-products').innerHTML='';
+  (p.lineItems||[]).forEach(function(li){ poAddP(li.code, li.unitPrice, li.qty); });
+  if(!document.querySelector('#po-products .pline')) poAddP();
+  var lbl=document.getElementById('po-save-label'); if(lbl) lbl.textContent='Update Pre-Order / อัปเดต';
+  var cx=document.getElementById('po-cancel-edit'); if(cx) cx.style.display='block';
+  poCalc();
+  try{ document.getElementById('ofv-preorder').scrollIntoView({behavior:'smooth',block:'start'}); }catch(e){}
+}
 function poCreate(){
   var res=document.getElementById('po-cres'); res.style.display='block';
   var name=(document.getElementById('po-cust').value||'').trim();
   var items=poReadProducts();
   if(!name){ res.style.background=OL;res.style.color=OT;res.textContent='Enter customer name / ใส่ชื่อลูกค้า'; return; }
   if(!items.length){ res.style.background=OL;res.style.color=OT;res.textContent='Add at least one product / เพิ่มสินค้าอย่างน้อย 1'; return; }
-  var po={
-    id:'po'+Date.now(), zone:document.getElementById('po-zone').value||'Bangkok',
+  var data={
+    zone:document.getElementById('po-zone').value||'Bangkok',
     customer:name, phone:(document.getElementById('po-phone').value||'').trim(),
     address:(document.getElementById('po-addr').value||'').trim(), location:(document.getElementById('po-loc').value||'').trim(),
     contact:(document.getElementById('po-contact').value||'').trim(),
     custRaw:(document.getElementById('po-paste').value||'').trim(),
     lineItems:items, notes:(document.getElementById('po-notes').value||'').trim(),
-    status:'open', createdBy:(typeof currentStaffName!=='undefined'?currentStaffName:'')||'Office', createdAt:Date.now()
+    delivery:parseInt(document.getElementById('po-delivery').value)||0,
+    clipPacks:parseInt(document.getElementById('po-clippacks').value)||0
   };
-  preOrders.push(po);
+  if(poEditId){
+    var p=preOrders.find(function(x){return x.id===poEditId;});
+    if(p){ for(var k in data) p[k]=data[k]; p.editedAt=Date.now(); }
+  } else {
+    data.id='po'+Date.now(); data.status='open'; data.createdBy=(typeof currentStaffName!=='undefined'?currentStaffName:'')||'Office'; data.createdAt=Date.now();
+    preOrders.push(data);
+  }
   syncPreOrders();
   // Save the customer in the CRM from the start (phone-based).
-  try{ var pk=normPhone(po.phone); if(pk){ customerMeta[pk]=customerMeta[pk]||{}; if(!customerMeta[pk].name)customerMeta[pk].name=po.customer; if(!customerMeta[pk].address&&po.address)customerMeta[pk].address=po.address; if(!customerMeta[pk].loc&&po.location)customerMeta[pk].loc=po.location; if(window.fbDB)window.fbDB.ref('customerMeta/'+pk).set(customerMeta[pk]); } }catch(e){}
-  // reset
-  ['po-cust','po-phone','po-loc','po-contact','po-paste','po-notes'].forEach(function(x){var e=document.getElementById(x);if(e)e.value='';});
-  document.getElementById('po-addr').value=''; document.getElementById('po-products').innerHTML=''; poAddP();
-  res.style.background=GL;res.style.color=GT;res.textContent='✓ Pre-Order saved / บันทึกแล้ว';
+  try{ var pk=normPhone(data.phone); if(pk){ customerMeta[pk]=customerMeta[pk]||{}; if(!customerMeta[pk].name)customerMeta[pk].name=data.customer; if(!customerMeta[pk].address&&data.address)customerMeta[pk].address=data.address; if(!customerMeta[pk].loc&&data.location)customerMeta[pk].loc=data.location; if(window.fbDB)window.fbDB.ref('customerMeta/'+pk).set(customerMeta[pk]); } }catch(e){}
+  var wasEdit=!!poEditId;
+  poResetForm();
+  res.style.background=GL;res.style.color=GT;res.textContent=wasEdit?'✓ Pre-Order updated / อัปเดตแล้ว':'✓ Pre-Order saved / บันทึกแล้ว';
+  res.style.display='block';
   setTimeout(function(){res.style.display='none';},2500);
   poRender();
 }
 function poRender(){
   var list=document.getElementById('po-list'); if(!list) return;
   if(!document.querySelector('#po-products .pline')) poAddP();
+  try{ poCalc(); }catch(e){}
   var open=preOrders.filter(function(p){return p.status==='open';}).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
   var done=preOrders.filter(function(p){return p.status!=='open';}).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);}).slice(0,30);
   function prodStr(p){ return (p.lineItems||[]).map(function(li){return li.code+' ×'+li.qty;}).join(' · '); }
+  function poTotal(p){ var sub=(p.lineItems||[]).reduce(function(a,x){return a+(parseFloat(x.amount)||0);},0); return sub+(parseInt(p.clipPacks)||0)*199+(parseInt(p.delivery)||0); }
   function card(p){
     var ready=poReady(p);
     var badge = p.status==='converted' ? '<span class="badge" style="background:var(--green-bg);color:var(--green)">→ '+(p.convertedId||'order')+'</span>'
@@ -4832,14 +4894,16 @@ function poRender(){
     if(p.status==='open'){
       actions='<div style="display:flex;gap:6px;margin-top:8px">'
         +'<button type="button" onclick="poConvert(\''+p.id+'\')" class="btnsm" style="flex:1;justify-content:center;background:'+(ready?'#16a34a':'#9ca3af')+';color:#fff;border:none"><i class="ti ti-arrow-right"></i> Convert → New / ย้ายเป็นออเดอร์</button>'
-        +'<button type="button" onclick="poCancel(\''+p.id+'\')" class="btnsm" style="background:#fee2e2;color:#dc2626;border-color:#fecaca"><i class="ti ti-x"></i> Cancel</button>'
+        +'<button type="button" onclick="poEdit(\''+p.id+'\')" class="btnsm"><i class="ti ti-pencil"></i> Edit</button>'
+        +'<button type="button" onclick="poCancel(\''+p.id+'\')" class="btnsm" style="background:#fee2e2;color:#dc2626;border-color:#fecaca"><i class="ti ti-x"></i></button>'
         +'</div>';
     }
     return '<div class="card" style="margin-bottom:8px'+(p.status==='cancelled'?';opacity:0.7':'')+'">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:14px;font-weight:700">'+(p.customer||'—')+zoneBadge(p.zone)+'</span>'+badge+'</div>'
       +'<div style="font-size:12px;color:var(--text2)">'+(p.phone?'📞 '+p.phone+'  ':'')+(p.contact?'💬 '+p.contact:'')+'</div>'
       +(p.address?'<div style="font-size:12px;color:var(--text2)">📍 '+p.address+'</div>':'')
-      +'<div style="font-size:13px;margin-top:3px">'+prodStr(p)+'</div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:3px"><span style="font-size:13px">'+prodStr(p)+'</span><b style="font-size:14px;white-space:nowrap;margin-left:8px">'+poTotal(p).toLocaleString()+' ฿</b></div>'
+      +((parseInt(p.delivery)||0)||(parseInt(p.clipPacks)||0)?'<div style="font-size:11px;color:var(--text2)">'+((parseInt(p.delivery)||0)?'ค่าส่ง '+p.delivery+'฿ ':'')+((parseInt(p.clipPacks)||0)?'· clip packs '+p.clipPacks:'')+'</div>':'')
       +(p.notes?'<div style="font-size:12px;color:#EF9F27;margin-top:2px">📝 '+p.notes+'</div>':'')
       +(p.cancelReason?'<div style="font-size:12px;color:#dc2626;margin-top:2px">✗ '+p.cancelReason+'</div>':'')
       +actions
@@ -4863,11 +4927,16 @@ function poConvert(id){
   var no=peekNextOrderNo(zone);
   // raise the stored counter (cosmetic; peek derives live anyway)
   try{ var zKey=zone.toLowerCase(); if(window.fbDB) window.fbDB.ref('orderCounters/'+zKey).transaction(function(cur){var c=parseInt(cur)||orderCounters[zKey]||0;var pp=orderIdParts(no);var n=pp?pp.num:0;return n>=c?n:c;}); }catch(e){}
-  var li=p.lineItems||[];
+  var li=(p.lineItems||[]).slice();
   var panels=li.filter(function(x){return x.type==='panel';}).map(function(x){return x.code+' × '+x.qty;});
   var lc=li.filter(function(x){return ['lcorner','tedge','uedge','ttrim','utrim'].indexOf(x.type)>=0;}).map(function(x){return x.code+' × '+x.qty;});
   var tq=li.filter(function(x){return x.type==='panel';}).reduce(function(a,x){return a+(parseInt(x.qty)||0);},0);
   var clips=tq*10;
+  // Add clip packs (paid), free clips (auto) and shipping as line items.
+  var packs=parseInt(p.clipPacks)||0, delivery=parseInt(p.delivery)||0;
+  if(packs>0) li.push({type:'clips',code:'Clip Pack / คลิปแพ็ค',qty:packs,unitPrice:199,amount:packs*199});
+  if(tq>0) li.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)',qty:tq*10,unitPrice:0,amount:0});
+  if(delivery>0) li.push({type:'delivery',code:'Delivery / ค่าจัดส่ง',qty:1,unitPrice:delivery,amount:delivery});
   var total=li.reduce(function(a,x){return a+(parseFloat(x.amount)||0);},0);
   var now=new Date(); var ts=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   var createdBy=(typeof currentStaffName!=='undefined'?currentStaffName:'')||'Office';
