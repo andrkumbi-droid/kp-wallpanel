@@ -218,6 +218,7 @@ function _writeRows(sheet, rowIdx, rows) {
   sheet.getRange(rowIdx, 11).setFormula(kf);             // K total
   if (m[15]) sheet.getRange(rowIdx, 16).setValue(m[15]); // P delivery round
   if (m[16]) sheet.getRange(rowIdx, 17).setValue(m[16]); // Q contact channel
+  if (m[17]) sheet.getRange(rowIdx, 18).setValue(m[17]); // R combined (quick-paste raw)
   if (m[18]) sheet.getRange(rowIdx, 19).setValue(m[18]); // S name
   if (m[19]) sheet.getRange(rowIdx, 20).setValue(m[19]); // T phone
   if (m[20]) sheet.getRange(rowIdx, 21).setValue(m[20]); // U address
