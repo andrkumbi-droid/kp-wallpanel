@@ -512,8 +512,14 @@ textarea{resize:none}
       db.ref('stockLog').on('value', function(snap) {
         stockLog = snap.val() ? Object.values(snap.val()) : [];
       });
+      db.ref('preOrders').on('value', function(snap) {
+        preOrders = snap.val() ? Object.values(snap.val()) : [];
+        try{ poUpdateBadge(); }catch(e){}
+        try{if(document.getElementById('ofv-preorder')&&document.getElementById('ofv-preorder').classList.contains('active'))poRender();}catch(e){}
+      });
       db.ref('containerLog').on('value', function(snap) {
         containerLog = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);}) : [];
+        try{ poUpdateBadge(); if(document.getElementById('ofv-preorder')&&document.getElementById('ofv-preorder').classList.contains('active'))poRender(); }catch(e){}
         try{if(document.getElementById('mgv-incoming')&&document.getElementById('mgv-incoming').classList.contains('active'))clRender();}catch(e){}
         try{if(document.getElementById('ofv-inc')&&document.getElementById('ofv-inc').classList.contains('active'))ofRenderInc();}catch(e){}
       });
@@ -1042,6 +1048,7 @@ textarea{resize:none}
   <div class="tabs" style="grid-template-columns:repeat(6,1fr)">
     <button type="button" class="tab active" onclick="oft('home')" id="oft-home"><i class="ti ti-home" style="font-size:14px"></i></button>
     <button type="button" class="tab" onclick="oft('new')" id="oft-new">New</button>
+    <button type="button" class="tab" onclick="oft('preorder')" id="oft-preorder" style="display:none">Pre-Order <span class="tc" id="oft-po-cnt" style="background:#fef3c7;color:#92400e;display:none"></span></button>
     <button type="button" class="tab" onclick="oft('orders')" id="oft-orders">Orders <span class="tc tcw" id="of-cnt">0</span></button>
     <button type="button" class="tab" onclick="oft('tour')" id="oft-tour">Tour</button>
     <button type="button" class="tab" onclick="oft('pics')" id="oft-pics">Pictures</button>
@@ -1449,6 +1456,40 @@ textarea{resize:none}
     <div id="of-att-list"></div>
   </div></div>
 
+  <!-- PRE-ORDER VIEW -->
+  <div class="view" id="ofv-preorder"><div class="sec">
+    <div class="stit">📝 Pre-Orders / พรีออเดอร์</div>
+    <div class="card" style="margin-bottom:14px">
+      <label class="fl" style="margin-top:0">Zone / โซน</label>
+      <select id="po-zone" style="width:100%;padding:9px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;margin-bottom:8px">
+        <option value="Bangkok"># Bangkok / กรุงเทพ</option>
+        <option value="Northern">1- Northern / ภาคเหนือ</option>
+        <option value="Northeastern">2- Northeastern / ภาคอีสาน</option>
+        <option value="Eastern">3- Eastern / ภาคตะวันออก</option>
+        <option value="Southern">4- Southern / ภาคใต้</option>
+        <option value="Instore">5- In-store / ขายในร้าน</option>
+      </select>
+      <div style="background:rgba(37,99,235,0.06);border:1px dashed var(--blue);border-radius:var(--rs);padding:8px;margin-bottom:8px">
+        <label class="fl" style="margin-top:0">⚡ Quick paste / วางทั้งหมด</label>
+        <textarea id="po-paste" rows="2" placeholder="วางข้อมูลลูกค้าทั้งหมด / Paste everything…" oninput="poQuickParse()" style="width:100%;box-sizing:border-box"></textarea>
+      </div>
+      <label class="fl">Customer / ลูกค้า</label><input type="text" id="po-cust" placeholder="Name / ชื่อ">
+      <label class="fl">Phone / เบอร์โทร</label><input type="tel" id="po-phone" placeholder="08x-xxx-xxxx">
+      <label class="fl">Address / ที่อยู่</label><textarea id="po-addr" rows="2" placeholder="Delivery address"></textarea>
+      <label class="fl">Location link <span style="font-size:11px;color:var(--text2)">(optional)</span></label><input type="text" id="po-loc" placeholder="https://maps.google.com/...">
+      <label class="fl">Contact channel / ช่องทางติดต่อ</label><input type="text" id="po-contact" placeholder="Line OA / หน้าร้าน / FB">
+      <label class="fl">Products / สินค้า</label>
+      <div class="colh"><span>Code</span><span>฿/pc</span><span>Qty</span><span></span></div>
+      <div id="po-products"></div>
+      <button type="button" class="abtn" onclick="poAddP()"><i class="ti ti-plus"></i> Add product / เพิ่มสินค้า</button>
+      <label class="fl" style="margin-top:10px">Notes / หมายเหตุ</label><textarea id="po-notes" rows="2" placeholder="…"></textarea>
+      <button type="button" class="btn btnp" style="margin-top:12px" onclick="poCreate()"><i class="ti ti-bookmark"></i> Save Pre-Order / บันทึกพรีออเดอร์</button>
+      <div id="po-cres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-top:8px;font-size:13px"></div>
+    </div>
+    <div class="stit" style="font-size:13px">Pre-Orders</div>
+    <div id="po-list"></div>
+  </div></div>
+
   <!-- PICTURES VIEW -->
   <div class="view" id="ofv-pics"><div class="sec">
     <div class="stit">📷 Pictures / รูปภาพ</div>
@@ -1808,6 +1849,9 @@ function checkPin() {
     if(blockCard) blockCard.style.display = s.blockAccess ? '' : 'none';
     const attendTab = document.getElementById('oft-attend');
     if(attendTab) attendTab.style.display = s.attendAccess ? '' : 'none';
+    const preorderTab = document.getElementById('oft-preorder');
+    if(preorderTab) preorderTab.style.display = s.preorderAccess ? '' : 'none';
+    try{ poUpdateBadge(); }catch(e){}
     // Store delete access globally
     window.canDeleteOrders = s.deleteAccess || false;
     // Request push permission for office role
@@ -1846,6 +1890,7 @@ function syncDrivers() { if(window.fbDB) { const obj = {}; drivers.forEach((d,i)
 function syncOrders() { if(window.fbDB) { const obj = {}; orders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('orders').set(obj); } }
 function syncWOrders() { if(window.fbDB) { const obj = {}; wOrders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('wOrders').set(obj); } }
 function syncTours() { if(window.fbDB) { const obj = {}; activeTours.forEach((t,i) => obj[t.id] = t); window.fbDB.ref('activeTours').set(obj); } }
+function syncPreOrders() { if(window.fbDB) { const obj = {}; preOrders.forEach(function(p){ obj[p.id] = p; }); window.fbDB.ref('preOrders').set(obj); } }
 function syncRevOrders() { if(window.fbDB) { const obj = {}; revOrders.forEach((r,i) => obj[r.rid] = r); window.fbDB.ref('revOrders').set(obj); } }
 function syncClaims() { if(window.fbDB) { const obj = {}; claims.forEach(function(c){ obj[c.cid] = c; }); window.fbDB.ref('claims').set(obj); } }
 function syncLog() { if(window.fbDB) { const obj = {}; stockLog.forEach((l,i) => obj['l'+i+'_'+Date.now()] = l); window.fbDB.ref('stockLog').set(obj); } }
@@ -1968,6 +2013,7 @@ var attStaff=[]; // separate employee list for attendance (+ payroll settings)
 var attEntries=[]; // payroll entries: {id,staffId,staffName,date,type,qty,note,ts} type=late|ot|trip|advance|hours
 var ofAttMonth=null; // 'yyyy-mm' selected in the office payroll view
 var customerMeta={}; // phoneKey -> {name,address,loc,note,blocked,blockReason} — manual overrides + blocklist
+var preOrders=[]; // pre-orders: {id,zone,customer,phone,address,location,contact,lineItems,notes,status(open|converted|cancelled),cancelReason,convertedId,createdBy,createdAt}
 var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
 var containerLog=[];
 var auditLog=[];
@@ -2206,7 +2252,7 @@ function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id)
 function delRev(rid){if(!confirm('Remove from revenue?'))return;revOrders=revOrders.filter(x=>x.rid!==rid);mgRevenue();syncRevOrders();}
 
 // OFFICE
-function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='pics')picsRender();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();if(t==='attend')ofAttRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
+function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();if(t==='attend')ofAttRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
 function custBlockToggle(){
   var b=document.getElementById('cust-block-body'), ch=document.getElementById('cust-block-chev');
   if(!b) return;
@@ -4705,6 +4751,141 @@ function closePhotoLightbox(){
   var lb=document.getElementById('photo-lightbox');
   if(lb){ lb.style.display='none'; document.getElementById('photo-lightbox-img').src=''; }
 }
+
+// ════════════════════════════════════════════════════════════
+//  PRE-ORDER SYSTEM (Office) — accept orders before stock arrives.
+//  Not counted in stock/sales until converted to a real order.
+//  Becomes "ready" when all product codes are in stock (container arrived).
+// ════════════════════════════════════════════════════════════
+var PO_PRODT = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1,clip:1,clips:1};
+function poReady(po){
+  var codes=(po.lineItems||[]).filter(function(li){return PO_PRODT[li.type];}).map(function(li){return li.code;});
+  if(!codes.length) return false;
+  return codes.every(function(c){ var s=(typeof stockItems!=='undefined'?stockItems.find(function(x){return x.code===c;}):null); return s && (parseInt(s.qty)||0)>0; });
+}
+function poUpdateBadge(){
+  var ready=(preOrders||[]).filter(function(p){return p.status==='open' && poReady(p);}).length;
+  var el=document.getElementById('oft-po-cnt');
+  if(el){ el.textContent=ready; el.style.display=ready>0?'':'none'; }
+}
+function poAddP(){
+  var d=document.createElement('div'); d.className='pline';
+  d.innerHTML='<input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase()"><input type="number" min="0" placeholder="฿/pc"><input type="number" min="0" placeholder="0"><button type="button" class="xbtn" onclick="this.closest(\'.pline\').remove()"><i class="ti ti-x"></i></button>';
+  document.getElementById('po-products').appendChild(d);
+}
+function poReadProducts(){
+  var items=[];
+  document.querySelectorAll('#po-products .pline').forEach(function(l){
+    var i=l.querySelectorAll('input');
+    var code=(i[0].value||'').trim().toUpperCase(), price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0;
+    if(code&&qty){ items.push({type:mirrorClassify(code), code:code, qty:qty, unitPrice:price, amount:price*qty}); }
+  });
+  return items;
+}
+function poQuickParse(){
+  var raw=(document.getElementById('po-paste')||{}).value||''; if(!raw.trim()) return;
+  var ex=kpParseCustomer(raw);
+  if(ex.name) document.getElementById('po-cust').value=ex.name;
+  if(ex.phone) document.getElementById('po-phone').value=ex.phone;
+  if(ex.address) document.getElementById('po-addr').value=ex.address;
+  if(ex.maps) document.getElementById('po-loc').value=ex.maps;
+}
+function poCreate(){
+  var res=document.getElementById('po-cres'); res.style.display='block';
+  var name=(document.getElementById('po-cust').value||'').trim();
+  var items=poReadProducts();
+  if(!name){ res.style.background=OL;res.style.color=OT;res.textContent='Enter customer name / ใส่ชื่อลูกค้า'; return; }
+  if(!items.length){ res.style.background=OL;res.style.color=OT;res.textContent='Add at least one product / เพิ่มสินค้าอย่างน้อย 1'; return; }
+  var po={
+    id:'po'+Date.now(), zone:document.getElementById('po-zone').value||'Bangkok',
+    customer:name, phone:(document.getElementById('po-phone').value||'').trim(),
+    address:(document.getElementById('po-addr').value||'').trim(), location:(document.getElementById('po-loc').value||'').trim(),
+    contact:(document.getElementById('po-contact').value||'').trim(),
+    custRaw:(document.getElementById('po-paste').value||'').trim(),
+    lineItems:items, notes:(document.getElementById('po-notes').value||'').trim(),
+    status:'open', createdBy:(typeof currentStaffName!=='undefined'?currentStaffName:'')||'Office', createdAt:Date.now()
+  };
+  preOrders.push(po);
+  syncPreOrders();
+  // Save the customer in the CRM from the start (phone-based).
+  try{ var pk=normPhone(po.phone); if(pk){ customerMeta[pk]=customerMeta[pk]||{}; if(!customerMeta[pk].name)customerMeta[pk].name=po.customer; if(!customerMeta[pk].address&&po.address)customerMeta[pk].address=po.address; if(!customerMeta[pk].loc&&po.location)customerMeta[pk].loc=po.location; if(window.fbDB)window.fbDB.ref('customerMeta/'+pk).set(customerMeta[pk]); } }catch(e){}
+  // reset
+  ['po-cust','po-phone','po-loc','po-contact','po-paste','po-notes'].forEach(function(x){var e=document.getElementById(x);if(e)e.value='';});
+  document.getElementById('po-addr').value=''; document.getElementById('po-products').innerHTML=''; poAddP();
+  res.style.background=GL;res.style.color=GT;res.textContent='✓ Pre-Order saved / บันทึกแล้ว';
+  setTimeout(function(){res.style.display='none';},2500);
+  poRender();
+}
+function poRender(){
+  var list=document.getElementById('po-list'); if(!list) return;
+  if(!document.querySelector('#po-products .pline')) poAddP();
+  var open=preOrders.filter(function(p){return p.status==='open';}).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
+  var done=preOrders.filter(function(p){return p.status!=='open';}).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);}).slice(0,30);
+  function prodStr(p){ return (p.lineItems||[]).map(function(li){return li.code+' ×'+li.qty;}).join(' · '); }
+  function card(p){
+    var ready=poReady(p);
+    var badge = p.status==='converted' ? '<span class="badge" style="background:var(--green-bg);color:var(--green)">→ '+(p.convertedId||'order')+'</span>'
+      : p.status==='cancelled' ? '<span class="badge" style="background:#fee2e2;color:#991b1b">cancelled</span>'
+      : ready ? '<span class="badge" style="background:#dcfce7;color:#166534">✅ พร้อม / ready</span>'
+      : '<span class="badge" style="background:#fef3c7;color:#92400e">⏳ waiting stock</span>';
+    var actions='';
+    if(p.status==='open'){
+      actions='<div style="display:flex;gap:6px;margin-top:8px">'
+        +'<button type="button" onclick="poConvert(\''+p.id+'\')" class="btnsm" style="flex:1;justify-content:center;background:'+(ready?'#16a34a':'#9ca3af')+';color:#fff;border:none"><i class="ti ti-arrow-right"></i> Convert → New / ย้ายเป็นออเดอร์</button>'
+        +'<button type="button" onclick="poCancel(\''+p.id+'\')" class="btnsm" style="background:#fee2e2;color:#dc2626;border-color:#fecaca"><i class="ti ti-x"></i> Cancel</button>'
+        +'</div>';
+    }
+    return '<div class="card" style="margin-bottom:8px'+(p.status==='cancelled'?';opacity:0.7':'')+'">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:14px;font-weight:700">'+(p.customer||'—')+zoneBadge(p.zone)+'</span>'+badge+'</div>'
+      +'<div style="font-size:12px;color:var(--text2)">'+(p.phone?'📞 '+p.phone+'  ':'')+(p.contact?'💬 '+p.contact:'')+'</div>'
+      +(p.address?'<div style="font-size:12px;color:var(--text2)">📍 '+p.address+'</div>':'')
+      +'<div style="font-size:13px;margin-top:3px">'+prodStr(p)+'</div>'
+      +(p.notes?'<div style="font-size:12px;color:#EF9F27;margin-top:2px">📝 '+p.notes+'</div>':'')
+      +(p.cancelReason?'<div style="font-size:12px;color:#dc2626;margin-top:2px">✗ '+p.cancelReason+'</div>':'')
+      +actions
+      +'</div>';
+  }
+  list.innerHTML = (open.length?open.map(card).join(''):'<div class="empty" style="padding:1rem;font-size:13px">No open pre-orders / ไม่มีพรีออเดอร์</div>')
+    + (done.length?'<div class="stit" style="font-size:12px;margin-top:12px">History</div>'+done.map(card).join(''):'');
+  poUpdateBadge();
+}
+function poCancel(id){
+  var p=preOrders.find(function(x){return x.id===id;}); if(!p) return;
+  var reason=prompt('Cancel reason / เหตุผลที่ยกเลิก:'); if(reason===null) return;
+  p.status='cancelled'; p.cancelReason=reason||'(no reason)'; p.cancelledAt=Date.now();
+  syncPreOrders(); poRender();
+}
+function poConvert(id){
+  var p=preOrders.find(function(x){return x.id===id;}); if(!p||p.status!=='open') return;
+  if(!poReady(p)){ if(!confirm('Stock not fully arrived yet. Convert anyway? / สต็อกยังไม่ครบ ยืนยันหรือไม่?')) return; }
+  if(!confirm('Convert this pre-order to a real order #'+'? / ย้ายเป็นออเดอร์จริง?')) return;
+  var zone=p.zone||'Bangkok';
+  var no=peekNextOrderNo(zone);
+  // raise the stored counter (cosmetic; peek derives live anyway)
+  try{ var zKey=zone.toLowerCase(); if(window.fbDB) window.fbDB.ref('orderCounters/'+zKey).transaction(function(cur){var c=parseInt(cur)||orderCounters[zKey]||0;var pp=orderIdParts(no);var n=pp?pp.num:0;return n>=c?n:c;}); }catch(e){}
+  var li=p.lineItems||[];
+  var panels=li.filter(function(x){return x.type==='panel';}).map(function(x){return x.code+' × '+x.qty;});
+  var lc=li.filter(function(x){return ['lcorner','tedge','uedge','ttrim','utrim'].indexOf(x.type)>=0;}).map(function(x){return x.code+' × '+x.qty;});
+  var tq=li.filter(function(x){return x.type==='panel';}).reduce(function(a,x){return a+(parseInt(x.qty)||0);},0);
+  var clips=tq*10;
+  var total=li.reduce(function(a,x){return a+(parseFloat(x.amount)||0);},0);
+  var now=new Date(); var ts=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  var createdBy=(typeof currentStaffName!=='undefined'?currentStaffName:'')||'Office';
+  var assignedReceiptNum=currentReceiptNum+1; currentReceiptNum=assignedReceiptNum; try{syncReceiptNum();}catch(e){}
+  var o={id:no,receiptNum:assignedReceiptNum,date:now.toISOString().split('T')[0],zone:zone,customer:p.customer||'—',phone:p.phone||'—',address:p.address||'—',location:p.location||'',contact:p.contact||'',deliveryRound:'',panels:panels.length?panels.join(' · '):'—',lcorner:lc.length?lc.join(' · '):'—',clips:clips,boxes:Math.max(1,Math.ceil(tq/10)),total:String(total),status:'new',notes:p.notes||'',custRaw:p.custRaw||'',createdBy:createdBy,editedBy:'',lineItems:li,_stockDeducted:true,_editTs:Date.now(),fromPreOrder:p.id,statusLog:[{status:'new',time:ts,by:createdBy}]};
+  orders.unshift(o);
+  wOrders.unshift({id:no,zone:zone,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:clips,packed:false,packedAt:null});
+  // deduct stock for products
+  li.forEach(function(x){ if(['panel','lcorner','tedge','uedge','ttrim','utrim'].indexOf(x.type)>=0){ var st=stockItems.find(function(s){return s.code===x.code;}); if(st){ st.qty=Math.max(0,st.qty-(parseInt(x.qty)||0)); addLog(x.code+' -'+x.qty+' pcs (order '+no+')','-'); } } });
+  // mark pre-order converted (kept for history)
+  p.status='converted'; p.convertedId=no; p.convertedAt=Date.now();
+  addLog('Pre-Order → '+no+' created','+');
+  syncOrders(); syncWOrders(); syncStockItems(); syncPreOrders();
+  try{ sheetsSyncToMaster(o); }catch(e){ console.error('Master sync failed (non-blocking):', e); }
+  try{ mgRender(); }catch(e){}
+  poRender();
+  try{ showNotif('Pre-Order → '+no+' ✓'); }catch(e){}
+}
 // ════════════════════════════════════════════════════════════
 //  GOOGLE SHEETS SYNC  (via Apps Script Web App — no secret key)
 // ════════════════════════════════════════════════════════════
@@ -5457,6 +5638,7 @@ function openStaffM(id) {
     document.getElementById('staffm-block').checked = s.blockAccess || false;
     document.getElementById('staffm-office').checked = s.officeAccess!==false; // default yes (backward-compat)
     document.getElementById('staffm-warehouse').checked = !!s.warehouseAccess;
+    document.getElementById('staffm-preorder').checked = !!s.preorderAccess;
   } else {
     ['staffm-name','staffm-pin','staffm-role'].forEach(x => document.getElementById(x).value = '');
     document.getElementById('staffm-sales').checked = false;
@@ -5467,6 +5649,7 @@ function openStaffM(id) {
     document.getElementById('staffm-block').checked = false;
     document.getElementById('staffm-office').checked = true;   // new staff: office by default
     document.getElementById('staffm-warehouse').checked = false;
+    document.getElementById('staffm-preorder').checked = false;
   }
   document.getElementById('staff-modal').classList.add('open');
 }
@@ -5485,11 +5668,12 @@ function saveStaffM() {
   const blockAccess = document.getElementById('staffm-block').checked;
   const officeAccess = document.getElementById('staffm-office').checked;
   const warehouseAccess = document.getElementById('staffm-warehouse').checked;
+  const preorderAccess = document.getElementById('staffm-preorder').checked;
   if(editStaffId) {
     const s = staffList.find(x => x.id === editStaffId);
-    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess;
+    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.preorderAccess = preorderAccess;
   } else {
-    staffList.push({ id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, officeAccess, warehouseAccess });
+    staffList.push({ id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, officeAccess, warehouseAccess, preorderAccess });
   }
   closeStaffM(); mgRenderStaff(); syncStaff();
 }
@@ -7697,6 +7881,13 @@ function calcViz() {
     <div>
       <div style="font-size:13px;font-weight:600">👥 Payroll access / เงินเดือน</div>
       <div style="font-size:11px;color:var(--text2)">Can view & edit the Payroll/Staff tab</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
+    <input type="checkbox" id="staffm-preorder" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">📝 Pre-Order access / พรีออเดอร์</div>
+      <div style="font-size:11px;color:var(--text2)">Can view & manage the Pre-Order tab</div>
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:#fee2e2;border-radius:var(--rs);border:1px solid #fca5a5">
