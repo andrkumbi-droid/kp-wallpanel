@@ -2026,6 +2026,8 @@ function syncWOrders() { if(window.fbDB) { const obj = {}; wOrders.forEach((o,i)
 function syncTours() { if(window.fbDB) { const obj = {}; activeTours.forEach((t,i) => obj[t.id] = t); window.fbDB.ref('activeTours').set(obj); } }
 function syncPreOrders() { if(window.fbDB) { const obj = {}; preOrders.forEach(function(p){ obj[p.id] = p; }); window.fbDB.ref('preOrders').set(obj); } }
 function syncRevOrders() { if(window.fbDB) { const obj = {}; revOrders.forEach((r,i) => obj[r.rid] = r); window.fbDB.ref('revOrders').set(obj); } }
+function syncClaims() { if(window.fbDB) { const obj = {}; claims.forEach(function(c){ obj[c.cid] = c; }); window.fbDB.ref('claims').set(obj); } }
+function syncLog() { if(window.fbDB) { const obj = {}; stockLog.forEach((l,i) => obj['l'+i+'_'+Date.now()] = l); window.fbDB.ref('stockLog').set(obj); } }
 
 const LOW=500;
 const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -2385,6 +2387,7 @@ function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s t
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').valueAsDate=new Date();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
 function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id){alert('Enter order number');return;}const amt=parseFloat(document.getElementById('rm-amt').value)||0,date=document.getElementById('rm-date').value;revOrders.push({rid:'r'+Date.now(),id,cust:document.getElementById('rm-cust').value||'—',amt,date,zone:document.getElementById('rm-zone').value,month:mkey(date)});addLog('Order '+id+': '+amt.toLocaleString()+' ฿ delivered','+');closeRM();mgRevenue();syncRevOrders();}
+function delRev(rid){if(!confirm('Remove from revenue?'))return;revOrders=revOrders.filter(x=>x.rid!==rid);mgRevenue();syncRevOrders();}
 
 // OFFICE
 function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();if(t==='attend')ofAttRender();if(t==='bills')billsRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
@@ -2502,6 +2505,23 @@ function notifClick() {
   go('warehouse');
 }
 
+function checkNewOrders(newOrders) {
+  if(lastOrderIds.size === 0) {
+    // First load — just record IDs, don't notify
+    newOrders.forEach(o => lastOrderIds.add(o.id));
+    return;
+  }
+  const newOnes = newOrders.filter(o => !lastOrderIds.has(o.id));
+  if(newOnes.length > 0) {
+    newOnes.forEach(o => lastOrderIds.add(o.id));
+    const text = newOnes.length === 1
+      ? '📦 New order: ' + newOnes[0].id + ' — ' + newOnes[0].customer
+      : '📦 ' + newOnes.length + ' new orders!';
+    showNotif(text);
+    // Update warehouse tab badge
+    updateWHBadge();
+  }
+}
 
 function updateWHBadge() {
   const cnt = document.getElementById('wh-tp');
@@ -3295,6 +3315,239 @@ function printDeliverySheet() {
   }
   return;
 }
+function _printDeliverySheetOLD() {
+  if(currentTourDetailIdx === null) return;
+  const t = activeTours[currentTourDetailIdx];
+  if(!t) return;
+
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('th-TH', {day:'numeric', month:'long', year:'numeric'});
+  const ORDERS_PER_PAGE = 8;
+
+  // Get all orders for this tour
+  const tourOrders = t.orders.map(id => {
+    const o = orders.find(x => x.id === id) || {id, customer:'—', address:'—', panels:'—', lcorner:'—', clips:0, total:'—', zone:'—', phone:'—'};
+    const status = t.status[id] || 'loaded';
+    return {...o, tourStatus: status};
+  });
+
+  // Split into pages
+  const pages = [];
+  for(let i = 0; i < tourOrders.length; i += ORDERS_PER_PAGE) {
+    pages.push(tourOrders.slice(i, i + ORDERS_PER_PAGE));
+  }
+
+  // Build HTML for each page
+  const pagesHTML = pages.map((pageOrders, pageIdx) => {
+    const rows = pageOrders.map((o, idx) => {
+      const isDel = o.tourStatus === 'delivered';
+      const isCan = o.tourStatus === 'cancelled';
+      const rowClass = isDel ? 'delivered-row' : isCan ? 'cancelled-row' : '';
+      const statusTxt = isDel ? '✓ ส่งแล้ว' : isCan ? '✗ ยกเลิก' : '⏳ รอส่ง';
+
+      // Parse line items
+      let itemRows = '';
+      if(o.lineItems && o.lineItems.length > 0) {
+        o.lineItems.filter(li => li.type !== 'free-clips').forEach(li => {
+          const typeLabels2 = {'panel':'WPC','lcorner':'L-Corner','pvc':'PVC Ceiling','utrim':'U-Trim','ttrim':'T-Trim'}; const typeLabel = '';
+          itemRows += `<tr class="${rowClass}">
+            <td class="order-num" style="text-align:center">${idx===0||itemRows===''?o.id:''}</td>
+            <td>${o.customer}</td>
+            <td style="text-align:center">${li.qty.toLocaleString()}</td>
+            <td>${typeLabel}${li.code}</td>
+            <td style="text-align:right">${li.unitPrice > 0 ? li.unitPrice.toLocaleString() : '—'}</td>
+            <td style="text-align:right">${li.amount > 0 ? li.amount.toLocaleString() : '—'}</td>
+            <td style="text-align:center">${o.clips ? o.clips.toLocaleString() : '—'}</td>
+            <td class="total-cell ${isDel?'highlight':''}" style="text-align:right">${itemRows===''?o.total:''}</td>
+            <td style="font-size:7.5pt">${itemRows===''?o.address+' '+o.phone:''}</td>
+            <td style="text-align:center;font-weight:600;color:${isDel?'green':isCan?'red':'orange'}">${itemRows===''?statusTxt:''}</td>
+          </tr>`;
+        });
+        // Free clips row
+        const freeClips = o.lineItems.find(li => li.type === 'free-clips');
+        if(freeClips) {
+          itemRows += `<tr style="background:#f5f5f5;font-size:7.5pt">
+            <td></td><td style="color:#888">Clips ฟรี</td>
+            <td style="text-align:center;color:#888">${freeClips.qty.toLocaleString()}</td>
+            <td style="color:#888">คลิป</td>
+            <td style="color:#888;text-align:right">ฟรี</td>
+            <td style="color:#888;text-align:right">—</td>
+            <td></td><td></td><td></td><td></td>
+          </tr>`;
+        }
+      } else {
+        // Fallback for old orders
+        itemRows = `<tr style="${rowStyle}">
+          <td class="order-num" style="text-align:center">${o.id}</td>
+          <td>${o.customer}</td>
+          <td style="text-align:center">${o.clips ? o.clips.toLocaleString() : '—'}</td>
+          <td>${o.panels}${o.lcorner&&o.lcorner!=='—'?' / '+o.lcorner:''}</td>
+          <td style="text-align:right">—</td>
+          <td style="text-align:right">—</td>
+          <td style="text-align:center">${o.clips||'—'}</td>
+          <td class="total-cell ${isDel?'highlight':''}" style="text-align:right">${o.total}</td>
+          <td style="font-size:7.5pt">${o.address} ${o.phone}</td>
+          <td style="text-align:center;font-weight:600;color:${isDel?'green':isCan?'red':'orange'}">${statusTxt}</td>
+        </tr>`;
+      }
+      return itemRows;
+    }).join('');
+
+    // Page totals
+    const pageDel = pageOrders.filter(o=>o.tourStatus==='delivered').length;
+    const pageTotal = pageOrders.filter(o=>o.tourStatus!=='cancelled').reduce((a,o)=>{
+      const amt = parseFloat((o.total||'').replace(/[^0-9.]/g,''))||0; return a+amt;
+    },0);
+
+    return `<div class="ds-page">
+      <div class="ds-header">
+        <div class="ds-header-title">📋 ใบส่งสินค้า / Delivery Sheet — ${t.driverName}</div>
+        <div class="ds-header-sub">${dateStr} &nbsp;|&nbsp; หน้า ${pageIdx+1}/${pages.length} &nbsp;|&nbsp; ${t.orders.length} ออเดอร์</div>
+      </div>
+      <table class="ds-table">
+        <thead>
+          <tr>
+            <th style="width:18mm">เลขที่<br>Order</th>
+            <th style="width:30mm">ลูกค้า<br>Customer</th>
+            <th style="width:14mm">จำนวน<br>Qty</th>
+            <th style="width:40mm">รายการ<br>Description</th>
+            <th style="width:18mm">หน่วยละ<br>Unit ฿</th>
+            <th style="width:20mm">รวม<br>Amount</th>
+            <th style="width:14mm">คลิป<br>Clips</th>
+            <th style="width:20mm">ยอดรวม<br>Total</th>
+            <th>ที่อยู่ / เบอร์<br>Address / Phone</th>
+            <th style="width:18mm">สถานะ<br>Status</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="footer">
+        <span>ออเดอร์ในหน้านี้: ${pageOrders.length} | ส่งแล้ว: ${pageDel}</span>
+        <span>ยอดรวมหน้านี้: <b>${pageTotal.toLocaleString()} ฿</b></span>
+        <span>คนขับ: ${t.driverName} &nbsp;&nbsp; ลายเซ็น: _______________</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Build total summary at end
+  const totalDel = t.orders.filter(id=>t.status[id]==='delivered').length;
+  const grandTotal = tourOrders.filter(o=>o.tourStatus!=='cancelled').reduce((a,o)=>{
+    return a + (parseFloat((o.total||'').replace(/[^0-9.]/g,''))||0);
+  }, 0);
+
+  const summaryHTML = `<div class="ds-page" style="page-break-after:avoid">
+    <div class="ds-header">
+      <div class="ds-header-title">สรุป / Summary — ${t.driverName}</div>
+      <div class="ds-header-sub">${dateStr}</div>
+    </div>
+    <div class="summary-grid">
+      <div class="summary-box">
+        <div class="summary-label">ออเดอร์ทั้งหมด / Total Orders</div>
+        <div class="summary-value">${t.orders.length}</div>
+      </div>
+      <div class="summary-box" style="background:#e8f5e9">
+        <div class="summary-label">ส่งสำเร็จ / Delivered</div>
+        <div class="summary-value" style="color:green">${totalDel}</div>
+      </div>
+      <div class="summary-box" style="background:#ffeb3b">
+        <div class="summary-label">ยอดรวมทั้งหมด / Grand Total</div>
+        <div class="summary-value" style="font-size:16pt">${grandTotal.toLocaleString()} ฿</div>
+      </div>
+    </div>
+    <div class="sign-row">
+      <div><div class="sign-line"></div><div class="sign-label">คนขับ / Driver: ${t.driverName}</div></div>
+      <div><div class="sign-line"></div><div class="sign-label">ผู้ตรวจสอบ / Checker</div></div>
+    </div>
+  </div>`;
+
+  // Open in new tab as full page for proper landscape printing
+  const fullHTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Delivery Sheet — ${t.driverName}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  @page { size: A4 landscape; margin: 6mm; }
+  body { font-family: Arial, sans-serif; color: #000; background: #fff; }
+  .ds-page { width: 100%; padding: 0; page-break-after: always; }
+  .ds-page:last-child { page-break-after: avoid; }
+  .ds-header { background: #ffeb3b; padding: 5px 8px; margin-bottom: 4mm; display: flex; justify-content: space-between; align-items: center; border: 1px solid #ccc; }
+  .ds-header-title { font-size: 12pt; font-weight: 700; }
+  .ds-header-sub { font-size: 10pt; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+  th { background: #444; color: #fff; border: 1px solid #333; padding: 3px 4px; text-align: center; font-weight: 700; font-size: 8.5pt; }
+  td { border: 1px solid #aaa; padding: 3px 5px; vertical-align: middle; }
+  .order-num { font-weight: 700; font-size: 10pt; }
+  .total-cell { font-weight: 700; }
+  .highlight { background: #ffeb3b !important; font-weight: 700; }
+  .delivered-row { background: #e8f5e9; }
+  .cancelled-row { background: #ffebee; opacity: 0.75; }
+  .footer { margin-top: 4mm; padding-top: 2mm; border-top: 1px solid #aaa; display: flex; justify-content: space-between; font-size: 8pt; color: #555; }
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 8mm 0; }
+  .summary-box { border: 1px solid #999; border-radius: 4px; padding: 8px; text-align: center; }
+  .summary-label { font-size: 9pt; color: #666; }
+  .summary-value { font-size: 20pt; font-weight: 700; }
+  .sign-row { margin-top: 12mm; display: flex; justify-content: space-around; text-align: center; }
+  .sign-line { border-bottom: 1px solid #999; width: 60mm; margin: 0 auto 4px; }
+  .sign-label { font-size: 8pt; color: #666; }
+</style>
+</head>
+<body>
+${pagesHTML}${summaryHTML}
+
+<!-- REVENUE DETAIL MODAL -->
+<div class="modal-overlay" id="rev-detail-modal">
+  <div class="modal" style="max-height:85vh;display:flex;flex-direction:column">
+    <div class="mhdr">
+      <div style="flex:1">
+        <span class="mtit" id="rev-detail-title">Orders</span>
+        <div style="font-size:12px;color:var(--text2);margin-top:2px" id="rev-detail-sub"></div>
+      </div>
+      <button type="button" class="mclose" onclick="closeRevDetail()"><i class="ti ti-x"></i></button>
+    </div>
+    <!-- Date picker for lookup -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <input type="date" lang="en-GB" id="rev-detail-date" onchange="refreshRevDetail()" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">
+      <select id="rev-detail-month" onchange="refreshRevDetail()" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)"></select>
+      <select id="rev-detail-year" onchange="refreshRevDetail()" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)"></select>
+    </div>
+    <!-- Summary -->
+    <div style="display:flex;justify-content:space-between;background:var(--bg2);border-radius:var(--rs);padding:10px 14px;margin-bottom:10px">
+      <div style="text-align:center">
+        <div style="font-size:11px;color:var(--text2)">Orders</div>
+        <div style="font-size:16px;font-weight:700" id="rev-detail-count">0</div>
+      </div>
+      <div style="text-align:center">
+        <div style="font-size:11px;color:var(--text2)">Total / รวม</div>
+        <div style="font-size:16px;font-weight:700;color:var(--green)" id="rev-detail-total">0 ฿</div>
+      </div>
+    </div>
+    <!-- Order list -->
+    <div id="rev-detail-list" style="overflow-y:auto;flex:1"></div>
+  </div>
+</div>
+
+</body></html>`;
+
+  if(printWin) {
+    printWin.addEventListener('load', function() {
+      setTimeout(function() { printWin.print(); }, 500);
+    });
+  }
+
+  var printWin = window.open('', '_blank');
+  if(printWin) {
+    printWin.document.open();
+    printWin.document.write(fullHTML);
+    printWin.document.close();
+    printWin.focus();
+    setTimeout(function() { printWin.print(); }, 800);
+  } else {
+    alert('Please allow popups for printing! / กรุณาอนุญาต popup');
+  }
+}
+
 function ofSelSalesMonth(m) { ofSalesMonth = m; ofRenderSales(); }
 
 
@@ -3306,6 +3559,11 @@ function addStatusLog(order, newStatus, byName) {
   order.statusLog.push({status: newStatus, time: ts, date: today, by: byName||'—'});
 }
 
+function getLastStatusTime(order) {
+  if(!order.statusLog || order.statusLog.length === 0) return '';
+  const last = order.statusLog[order.statusLog.length-1];
+  return last.time || '';
+}
 
 function tsNow() {
   const n = new Date();
@@ -3962,6 +4220,7 @@ function ofCreateTour(){
   }
   ofSelDriver=null;ofSelOrders=[];setTimeout(()=>{res.style.display='none';},3000);
   ofRenderTour();ofRenderOrders();mgRender();syncTours();syncOrders();}
+function ofEndTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"))return;activeTours.splice(i,1);ofRenderTour();mgRender();syncTours();}
 
 function openEM(idOrBtn){
   var id = typeof idOrBtn === 'string' ? idOrBtn : idOrBtn.getAttribute('data-id');
@@ -5955,6 +6214,7 @@ function whDonePacking(btn) {
 
 
 
+function whPackBtn(btn){whPack(btn.getAttribute('data-id'));}
 
 function whAcceptBtnSafe(btn) {
   var id = btn.getAttribute('data-id');
@@ -5979,6 +6239,17 @@ function whAcceptBtnSafe(btn) {
   syncOrders();
 }
 
+function whAcceptBtn(btn){
+  var id = btn.getAttribute('data-id');
+  var ord = orders.find(function(x){return x.id===id;});
+  if(!ord) return;
+  ord.status = 'packing';
+  addStatusLog(ord, 'packing', (typeof currentStaffName !== 'undefined' ? currentStaffName : null)||'Warehouse');
+  addLog('Order '+id+' accepted', '+');
+  whRender();
+  ofRenderOrders();
+  syncOrders();
+}
 function whUnpackBtn(btn){whUnpack(btn.getAttribute('data-id'));}
 function drLoginBtn(btn){drLogin(btn.getAttribute('data-id'));}
 function drLoadBtn(btn){drLoad(btn.getAttribute('data-id'));}
@@ -6107,6 +6378,37 @@ function peekNextOrderNo(zone) {
   return prefix + (current + 1);
 }
 
+function getNextOrderNo(zone, callback) {
+  var z = (zone||'').toLowerCase();
+  var prefix = '', key = '';
+  if(z==='bangkok'){prefix='#';key='bangkok';}
+  else if(z==='northern'){prefix='1-';key='northern';}
+  else if(z==='northeastern'){prefix='2-';key='northeastern';}
+  else if(z==='eastern'){prefix='3-';key='eastern';}
+  else if(z==='southern'){prefix='4-';key='southern';}
+  else if(z==='instore'){prefix='5-';key='instore';}
+  else { if(callback) callback(''); return; }
+
+  if(window.fbDB) {
+    window.fbDB.ref('orderCounters/'+key).transaction(function(current) {
+      // CRITICAL: always parse as integer before adding 1
+      var cur = parseInt(current) || parseInt(orderCounters[key]) || 0;
+      return cur + 1;
+    }, function(error, committed, snapshot) {
+      if(!error && committed) {
+        var newNum = parseInt(snapshot.val());
+        orderCounters[key] = newNum;
+        if(callback) callback(prefix + newNum);
+      } else {
+        orderCounters[key] = parseInt(orderCounters[key]) + 1;
+        if(callback) callback(prefix + parseInt(orderCounters[key]));
+      }
+    });
+  } else {
+    orderCounters[key] = parseInt(orderCounters[key]) + 1;
+    if(callback) callback(prefix + parseInt(orderCounters[key]));
+  }
+}
 
 
 // ── INCOMING MULTI-LINE ──
@@ -6120,6 +6422,32 @@ function imAddLine() {
   document.getElementById('im-lines').appendChild(d);
 }
 
+function openIM(btnOrId) {
+  var id = typeof btnOrId === 'string' ? btnOrId : (btnOrId && btnOrId.getAttribute ? btnOrId.getAttribute('data-id') : null);
+  // Clear lines
+  document.getElementById('im-lines').innerHTML = '';
+  imAddLine(); // Start with one line
+  if(id) {
+    var i = incomingItems.find(function(x){return x.id===id;});
+    if(i) {
+      document.getElementById('im-eta').value = i.eta || '';
+      document.getElementById('im-sup').value = i.sup || '';
+      document.getElementById('im-notes').value = i.notes || '';
+      var line = document.querySelector('.im-line');
+      if(line) {
+        line.querySelectorAll('input')[0].value = i.code;
+        line.querySelectorAll('input')[1].value = i.qty;
+      }
+    }
+    document.getElementById('im-modal')._editId = id;
+  } else {
+    document.getElementById('im-modal')._editId = null;
+    document.getElementById('im-eta').value = '';
+    document.getElementById('im-sup').value = '';
+    document.getElementById('im-notes').value = '';
+  }
+  document.getElementById('im-modal').classList.add('open');
+}
 
 function closeIM() { document.getElementById('im-modal').classList.remove('open'); }
 
@@ -6158,6 +6486,13 @@ function saveIM() {
   syncIncoming();
 }
 
+function deleteIncoming(btn) {
+  var id = btn.getAttribute('data-id');
+  if(!confirm('Delete this incoming item?')) return;
+  incomingItems = incomingItems.filter(function(x){return x.id!==id;});
+  mgIncoming();
+  syncIncoming();
+}
 
 function drVerify(){const res=document.getElementById('dr-vres');res.style.display='block';const bad=dTour.filter(id=>{const c=dChecks[id]||{};return !c.p||!c.l||!c.c;});if(bad.length===0){res.style.background=GL;res.style.color=GT;res.textContent='✓ All verified — ready to go! / ตรวจสอบครบแล้ว';}else{res.style.background=OL;res.style.color=OT;res.textContent='Not fully checked: '+bad.join(', ');}}
 
@@ -6988,6 +7323,169 @@ function qtShowImgPopup(pngBlob, code) {
     +'<button onclick="document.getElementById(\'qt-img-popup\').remove()" style="margin-top:12px;padding:10px 28px;background:rgba(255,255,255,0.15);color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">✕ Schließen</button>';
   ov.onclick = function(e){ if(e.target===ov) ov.remove(); };
   document.body.appendChild(ov);
+}
+
+function qtCopyImg() {
+  if(!qtItems.length) return;
+
+  // Collect data
+  var activeItems = qtItems.map(function(item) {
+    var p = QT_PRODUCTS.find(function(x){ return x.code===item.code; });
+    return { code: item.code, qty: item.qty, price: item.customPrice, name: p ? p.name : '', src: IMG_BASE + item.code + '.jpg' };
+  });
+
+  var imgSize = 160, gap = 12, pad = 24;
+  var cardW = 540;
+  var imgRowH = imgSize + 44; // image + label
+  var lineH = 34;
+  var headerH = 72;
+  var footerH = 80;
+
+  // Parse totals from rendered result
+  var resultText = (document.getElementById('qt-result')||{}).innerText || '';
+  var totalMatch = resultText.match(/ยอดรวม[:\s]*([\d,]+)/);
+  var totalLine = totalMatch ? 'ยอดรวม: ' + totalMatch[1] + '฿' : '';
+
+  // Build lines
+  var lines = [];
+  var grandTotal = 0;
+  activeItems.forEach(function(it) {
+    var sub = it.qty * it.price;
+    grandTotal += sub;
+    lines.push({ code: it.code, name: it.name, qty: it.qty, price: it.price, sub: sub });
+  });
+
+  var shipping = parseInt((document.getElementById('qt-shipping')||{}).value||0);
+  var discount = parseInt((document.getElementById('qt-discount')||{}).value||0);
+  var totalAmt = grandTotal - discount + shipping;
+
+  var dpr = 2;
+  var logH = headerH + imgRowH + gap + lines.length * lineH + 20 + footerH;
+  var canvas = document.createElement('canvas');
+  canvas.width = cardW * dpr;
+  canvas.height = logH * dpr;
+  var ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  // Background
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, cardW, logH);
+
+  // Header
+  ctx.fillStyle = '#1a73e8';
+  ctx.fillRect(0, 0, cardW, headerH);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 22px -apple-system,Arial,sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('🏠 KP Wallpanel', pad, 34);
+  ctx.font = '14px -apple-system,Arial,sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillText('ใบเสนอราคา / Quotation', pad, 56);
+
+  // Draw product images
+  var loadedCount = 0;
+  var totalImgs = activeItems.length;
+  var totalRowW = totalImgs * imgSize + (totalImgs-1) * gap;
+  var startX = (cardW - totalRowW) / 2;
+
+  function drawTextAndShow() {
+    var iy = headerH + 12;
+    // Image labels
+    activeItems.forEach(function(it, i) {
+      var ix = startX + i * (imgSize + gap);
+      // Code
+      ctx.fillStyle = '#111827';
+      ctx.font = 'bold 13px -apple-system,Arial,sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(it.code, ix + imgSize/2, iy + imgSize + 16);
+      // Qty
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '12px -apple-system,Arial,sans-serif';
+      ctx.fillText('×'+it.qty, ix + imgSize/2, iy + imgSize + 32);
+    });
+
+    // Divider
+    var lineY = headerH + imgRowH + gap;
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad, lineY); ctx.lineTo(cardW-pad, lineY); ctx.stroke();
+
+    // Line items
+    var ly = lineY + 24;
+    lines.forEach(function(l) {
+      ctx.fillStyle = '#111827';
+      ctx.font = 'bold 13px -apple-system,Arial,sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(l.code, pad, ly);
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '12px -apple-system,Arial,sans-serif';
+      ctx.fillText('×'+l.qty+' · '+l.price+'฿', pad+80, ly);
+      ctx.fillStyle = '#111827';
+      ctx.font = 'bold 13px -apple-system,Arial,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(l.sub.toLocaleString()+'฿', cardW-pad, ly);
+      ly += lineH;
+    });
+
+    // Footer
+    var fy = ly + 16;
+    ctx.fillStyle = '#e5e7eb';
+    ctx.fillRect(pad, fy, cardW-pad*2, 1);
+    fy += 18;
+    if(shipping > 0) {
+      ctx.fillStyle = '#6b7280'; ctx.font = '13px -apple-system,Arial,sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('ค่าส่ง', pad, fy);
+      ctx.textAlign = 'right';
+      ctx.fillText(shipping.toLocaleString()+'฿', cardW-pad, fy);
+      fy += lineH;
+    }
+    if(discount > 0) {
+      ctx.fillStyle = '#16a34a'; ctx.font = '13px -apple-system,Arial,sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('ส่วนลด', pad, fy);
+      ctx.textAlign = 'right';
+      ctx.fillText('-'+discount.toLocaleString()+'฿', cardW-pad, fy);
+      fy += lineH;
+    }
+    // Total
+    ctx.fillStyle = '#1a73e8';
+    ctx.font = 'bold 20px -apple-system,Arial,sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('ยอดรวม', pad, fy+4);
+    ctx.textAlign = 'right';
+    ctx.fillText(totalAmt.toLocaleString()+'฿', cardW-pad, fy+4);
+
+    // Show in overlay
+    var dataUrl = canvas.toDataURL('image/png');
+    qtShowImgOverlay(dataUrl);
+  }
+
+  if(totalImgs === 0) { drawTextAndShow(); return; }
+
+  activeItems.forEach(function(it, i) {
+    var ix = startX + i * (imgSize + gap);
+    var iy = headerH + 12;
+    var img = new Image();
+    img.onload = function() {
+      ctx.save();
+      ctx.beginPath();
+      if(ctx.roundRect) ctx.roundRect(ix, iy, imgSize, imgSize, 10); else ctx.rect(ix, iy, imgSize, imgSize);
+      ctx.clip();
+      ctx.drawImage(img, ix, iy, imgSize, imgSize);
+      ctx.restore();
+      ctx.strokeStyle='#e5e7eb'; ctx.lineWidth=1;
+      if(ctx.roundRect){ctx.beginPath();ctx.roundRect(ix,iy,imgSize,imgSize,10);ctx.stroke();}
+      else ctx.strokeRect(ix,iy,imgSize,imgSize);
+      loadedCount++;
+      if(loadedCount===totalImgs) drawTextAndShow();
+    };
+    img.onerror = function() {
+      // grey placeholder
+      ctx.fillStyle='#f3f4f6'; ctx.fillRect(ix,iy,imgSize,imgSize);
+      loadedCount++;
+      if(loadedCount===totalImgs) drawTextAndShow();
+    };
+    img.src = it.src;
+  });
 }
 
 function qtClipFromOverlay(dataUrl) {
@@ -8276,6 +8774,11 @@ function clFmtD(d) {
   var dt = new Date(d+'T00:00:00');
   if(isNaN(dt)) return d;
   return dt.getDate().toString().padStart(2,'0')+'/'+(dt.getMonth()+1).toString().padStart(2,'0')+'/'+dt.getFullYear();
+}
+function clPhaseLabel(days) {
+  if(days===null) return '<span style="color:var(--text2)">—</span>';
+  var color = days<=30?'var(--green)':days<=60?'var(--orange)':'var(--red)';
+  return '<span style="color:'+color+';font-weight:700">'+days+'d</span>';
 }
 function clAddLine(code, qty) {
   var d = document.createElement('div');
