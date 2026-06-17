@@ -552,7 +552,6 @@ textarea{resize:none}
       });
       db.ref('attStaff').on('value', function(snap) {
         attStaff = snap.val() ? Object.values(snap.val()) : [];
-        try{if(document.getElementById('mgv-attend')&&document.getElementById('mgv-attend').classList.contains('active'))attInit();}catch(e){}
         try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))ofAttRender();}catch(e){}
       });
       db.ref('attEntries').on('value', function(snap) {
@@ -561,7 +560,6 @@ textarea{resize:none}
       });
       db.ref('lateLog').on('value', function(snap) {
         lateLog = snap.val() ? Object.values(snap.val()) : [];
-        try{if(document.getElementById('mgv-attend')&&document.getElementById('mgv-attend').classList.contains('active'))attRender();}catch(e){}
         try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))ofAttRender();}catch(e){}
       });
       db.ref('recentlyDeleted').on('value', function(snap) { recentlyDeleted = snap.val() || {}; });
@@ -2147,7 +2145,6 @@ var recentlyDeleted={}; // orderId(sanitized) -> ts; blocks mirror re-adding a j
 var lateLog=[];
 var attStaff=[]; // separate employee list for attendance (+ payroll settings)
 var attEntries=[]; // payroll entries: {id,staffId,staffName,date,type,qty,note,ts} type=late|ot|trip|advance|hours
-var ofAttMonth=null; // 'yyyy-mm' selected in the office payroll view
 var customerMeta={}; // phoneKey -> {name,address,loc,note,blocked,blockReason} — manual overrides + blocklist
 var preOrders=[]; // pre-orders: {id,zone,customer,phone,address,location,contact,lineItems,notes,status(open|converted|cancelled),cancelReason,convertedId,createdBy,createdAt}
 var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
@@ -2204,7 +2201,7 @@ function addLog(m,t){const n=new Date();stockLog.push({m,t,ts:n.getHours().toStr
 function initials(n){return n.trim().split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);}
 
 // MANAGER
-function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();if(t==='audit')auditRender();if(t==='incoming')clRender();if(t==='attend')attInit();if(t==='block')blockRender();}
+function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();if(t==='audit')auditRender();if(t==='incoming')clRender();if(t==='block')blockRender();}
 
 function mgCleanup() {
   if(!window.fbDB) { alert('Not connected'); return; }
@@ -8290,37 +8287,6 @@ function calcViz() {
 
 
 <!-- REVENUE DETAIL MODAL -->
-<div class="modal-overlay" id="rev-detail-modal">
-  <div class="modal" style="max-height:85vh;display:flex;flex-direction:column">
-    <div class="mhdr">
-      <div style="flex:1">
-        <span class="mtit" id="rev-detail-title">Orders</span>
-        <div style="font-size:12px;color:var(--text2);margin-top:2px" id="rev-detail-sub"></div>
-      </div>
-      <button type="button" class="mclose" onclick="closeRevDetail()"><i class="ti ti-x"></i></button>
-    </div>
-    <!-- Date picker for lookup -->
-    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
-      <input type="date" lang="en-GB" id="rev-detail-date" onchange="refreshRevDetail()" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">
-      <select id="rev-detail-month" onchange="refreshRevDetail()" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)"></select>
-      <select id="rev-detail-year" onchange="refreshRevDetail()" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)"></select>
-    </div>
-    <!-- Summary -->
-    <div style="display:flex;justify-content:space-between;background:var(--bg2);border-radius:var(--rs);padding:10px 14px;margin-bottom:10px">
-      <div style="text-align:center">
-        <div style="font-size:11px;color:var(--text2)">Orders</div>
-        <div style="font-size:16px;font-weight:700" id="rev-detail-count">0</div>
-      </div>
-      <div style="text-align:center">
-        <div style="font-size:11px;color:var(--text2)">Total / รวม</div>
-        <div style="font-size:16px;font-weight:700;color:var(--green)" id="rev-detail-total">0 ฿</div>
-      </div>
-    </div>
-    <!-- Order list -->
-    <div id="rev-detail-list" style="overflow-y:auto;flex:1"></div>
-  </div>
-</div>
-
 <!-- CONTAINER LOG MODAL -->
 <div class="modal-overlay" id="cl-modal">
   <div class="modal">
@@ -8462,161 +8428,8 @@ function deleteShipper(idx) {
   mgRenderShippers();
 }
 
-// ── ATTENDANCE / LATE LOG ───────────────────────────────
-var attViewMonth = null; // {y, m} currently viewed month
-
-function attInit() {
-  var now = new Date();
-  if(!attViewMonth) attViewMonth = {y: now.getFullYear(), m: now.getMonth()};
-  // Set default date to today
-  var d = document.getElementById('att-date');
-  if(d && !d.value) d.value = now.toISOString().slice(0,10);
-  // Render staff chips
-  var chips = document.getElementById('att-staff-chips');
-  if(chips) {
-    chips.innerHTML = attStaff.length
-      ? attStaff.map(function(s){ return '<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;background:rgba(124,58,237,0.1);border:1px solid rgba(124,58,237,0.25);font-size:12px;font-weight:600;color:#7c3aed">'
-          +s.name+'<button type="button" onclick="attRemoveStaff(\''+s.id+'\')" style="background:none;border:none;cursor:pointer;padding:0;line-height:1;font-size:13px;color:#9ca3af">×</button></span>'; }).join('')
-      : '<span style="font-size:12px;color:var(--text2)">No employees yet — add below</span>';
-  }
-  // Populate employee dropdown from attStaff
-  var sel = document.getElementById('att-emp');
-  if(sel) {
-    var prev = sel.value;
-    sel.innerHTML = '<option value="">— select —</option>'
-      + attStaff.map(function(s){ return '<option value="'+s.id+'"'+(s.id===prev?' selected':'')+'>'+s.name+'</option>'; }).join('');
-  }
-  attRender();
-}
-
-function attAddStaff() {
-  var inp = document.getElementById('att-staff-input');
-  var name = (inp?inp.value:'').trim();
-  if(!name) return;
-  if(attStaff.find(function(s){ return s.name.toLowerCase()===name.toLowerCase(); })) { alert('Already exists / มีอยู่แล้ว'); return; }
-  var s = {id:'ats-'+Date.now(), name:name};
-  attStaff.push(s);
-  if(window.fbDB) window.fbDB.ref('attStaff/'+s.id).set(s);
-  if(inp) inp.value='';
-  attInit();
-}
-
-function attRemoveStaff(id) {
-  var s = attStaff.find(function(x){ return x.id===id; });
-  if(!s) return;
-  // Manager PIN required to delete an employee.
-  var pin = prompt('Manager PIN to remove "'+s.name+'" / ใส่รหัสผู้จัดการเพื่อลบพนักงาน:');
-  if(pin===null) return; // cancelled
-  if(String(pin) !== String(managerPin)) { alert('Wrong PIN / รหัสไม่ถูกต้อง'); return; }
-  attStaff = attStaff.filter(function(x){ return x.id!==id; });
-  if(window.fbDB) window.fbDB.ref('attStaff/'+id).remove();
-  try{ attInit(); }catch(e){}
-  try{ if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active')) ofAttRender(); }catch(e){}
-}
-
-function attRender() {
-  if(!attViewMonth) attViewMonth = {y: new Date().getFullYear(), m: new Date().getMonth()};
-  var lbl = document.getElementById('att-month-label');
-  if(lbl) {
-    var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    lbl.textContent = months[attViewMonth.m] + ' ' + attViewMonth.y;
-  }
-  // Summary
-  var sum = document.getElementById('att-summary');
-  if(sum) {
-    var entries = lateLog.filter(function(e){
-      var d = new Date(e.date);
-      return d.getFullYear()===attViewMonth.y && d.getMonth()===attViewMonth.m;
-    });
-    if(!attStaff.length) { sum.innerHTML = '<div class="empty">No employees yet — add above</div>'; }
-    else {
-      sum.innerHTML = '<div class="card" style="overflow:hidden;margin-bottom:10px">'
-        + '<table style="width:100%;border-collapse:collapse;font-size:13px">'
-        + '<thead><tr style="background:rgba(124,58,237,0.08)">'
-        + '<th style="padding:8px 10px;text-align:left;font-weight:700">Employee</th>'
-        + '<th style="padding:8px 10px;text-align:center;font-weight:700">Times</th>'
-        + '<th style="padding:8px 10px;text-align:right;font-weight:700">Total min.</th>'
-        + '</tr></thead><tbody>'
-        + attStaff.map(function(s){
-            var emp = entries.filter(function(e){ return e.staffId===s.id; });
-            var total = emp.reduce(function(a,e){ return a+(parseInt(e.minutes)||0); }, 0);
-            var color = total===0 ? '#16a34a' : total<30 ? '#d97706' : '#dc2626';
-            return '<tr style="border-top:1px solid var(--border)">'
-              + '<td style="padding:8px 10px;font-weight:600">'+s.name+'</td>'
-              + '<td style="padding:8px 10px;text-align:center;color:var(--text2)">'+emp.length+'×</td>'
-              + '<td style="padding:8px 10px;text-align:right;font-weight:700;color:'+color+'">'+total+' min</td>'
-              + '</tr>';
-          }).join('')
-        + '</tbody></table></div>';
-    }
-  }
-  // History list (all months, newest first)
-  var list = document.getElementById('att-list');
-  if(list) {
-    var sorted = lateLog.slice().sort(function(a,b){ return b.date.localeCompare(a.date); });
-    var hc=document.getElementById('att-histcnt'); if(hc) hc.textContent='('+sorted.length+')';
-    if(!sorted.length) { list.innerHTML = '<div class="empty">No entries yet / ยังไม่มีข้อมูล</div>'; }
-    else list.innerHTML = sorted.map(function(e){
-      var s = attStaff.find(function(x){ return x.id===e.staffId; });
-      var name = s ? s.name : (e.staffName||'?');
-      return '<div class="dcard" style="margin-bottom:6px">'
-        + '<div style="flex:1">'
-        + '<div style="font-size:13px;font-weight:700">'+name+' <span style="color:#dc2626;font-weight:800">+'+e.minutes+' min</span></div>'
-        + '<div style="font-size:11px;color:var(--text2)">'+e.date+(e.note?' · '+e.note:'')+'</div>'
-        + '</div>'
-        + '<button type="button" onclick="attDel(\''+e.id+'\')" style="padding:4px 8px;border-radius:var(--rs);border:1px solid #fee2e2;background:#fee2e2;color:#dc2626;font-size:12px;cursor:pointer"><i class="ti ti-trash"></i></button>'
-        + '</div>';
-    }).join('');
-  }
-}
-
-function attHistToggle() {
-  var l=document.getElementById('att-list'), ch=document.getElementById('att-hist-chev');
-  if(!l) return;
-  var open=l.style.display!=='none';
-  l.style.display=open?'none':'block';
-  if(ch) ch.style.transform=open?'':'rotate(180deg)';
-}
-function attPrevMonth() {
-  if(!attViewMonth) attViewMonth = {y: new Date().getFullYear(), m: new Date().getMonth()};
-  attViewMonth.m--;
-  if(attViewMonth.m < 0) { attViewMonth.m = 11; attViewMonth.y--; }
-  attRender();
-}
-function attNextMonth() {
-  if(!attViewMonth) attViewMonth = {y: new Date().getFullYear(), m: new Date().getMonth()};
-  attViewMonth.m++;
-  if(attViewMonth.m > 11) { attViewMonth.m = 0; attViewMonth.y++; }
-  attRender();
-}
-
-function attAdd() {
-  var staffId = (document.getElementById('att-emp').value||'').trim();
-  var date = (document.getElementById('att-date').value||'').trim();
-  var minutes = parseInt(document.getElementById('att-min').value||'0');
-  var note = (document.getElementById('att-note').value||'').trim();
-  if(!staffId) { alert('Please select an employee / เลือกพนักงาน'); return; }
-  if(!date) { alert('Please enter a date / ใส่วันที่'); return; }
-  if(!minutes || minutes < 1) { alert('Please enter minutes late / ใส่จำนวนนาที'); return; }
-  var s = staffList.find(function(x){ return x.id===staffId; });
-  var entry = { id: 'lat-'+Date.now(), staffId: staffId, staffName: s?s.name:'', date: date, minutes: minutes, note: note, addedBy: currentStaffId||'manager', ts: Date.now() };
-  lateLog.push(entry);
-  if(window.fbDB) window.fbDB.ref('lateLog/'+entry.id).set(entry);
-  document.getElementById('att-min').value = '';
-  document.getElementById('att-note').value = '';
-  attRender();
-}
-
-function attDel(id) {
-  if(!confirm('Delete this entry?')) return;
-  lateLog = lateLog.filter(function(e){ return e.id!==id; });
-  if(window.fbDB) window.fbDB.ref('lateLog/'+id).remove();
-  attRender();
-}
-
 // ── OFFICE: STAFF & PAYROLL ─────────────────────────────────
 function attBaht(n){ return Math.round(n).toLocaleString('en-US'); }
-function attCurMonthKey(){ var d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1<10?'0':'')+(d.getMonth()+1); }
 // Merge per-employee/month entries from the new store + legacy lateLog.
 function attStaffEntries(staffId, mk){
   var out=[];
@@ -8692,173 +8505,7 @@ var ATT_CALC_META={
   absent:    {labelA:'Days / วัน', labelB:'Rate ฿/day', op:'×'}
 };
 
-function ofAttRender(){
-  var ctrl=document.getElementById('of-att-controls');
-  var listEl=document.getElementById('of-att-list');
-  var sumEl=document.getElementById('of-att-summary');
-  if(!listEl) return;
-  if(sumEl) sumEl.innerHTML='';
-  if(!ofAttMonth) ofAttMonth=attCurMonthKey();
-  // Build last 12 month options
-  var opts=[]; var d=new Date();
-  for(var i=0;i<12;i++){ var y=d.getFullYear(), m=d.getMonth()-i; var dd=new Date(y,m,1); var mk=dd.getFullYear()+'-'+(dd.getMonth()+1<10?'0':'')+(dd.getMonth()+1); var MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; opts.push('<option value="'+mk+'"'+(mk===ofAttMonth?' selected':'')+'>'+MN[dd.getMonth()]+' '+dd.getFullYear()+'</option>'); }
-  if(ctrl){
-    ctrl.innerHTML = '<div style="display:flex;gap:6px;margin-bottom:10px">'
-      + '<select onchange="ofAttSetMonth(this.value)" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">'+opts.join('')+'</select>'
-      + '</div>'
-      + '<div style="display:flex;gap:6px;margin-bottom:12px">'
-      + '<input id="oatt-newname" type="text" placeholder="New employee name / ชื่อพนักงานใหม่" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">'
-      + '<button type="button" onclick="ofAttAddStaff()" style="padding:8px 14px;border-radius:var(--rs);border:none;background:var(--blue);color:#fff;font-weight:700;font-size:13px;cursor:pointer">+ Add</button>'
-      + '</div>';
-  }
-  if(!attStaff.length){ listEl.innerHTML='<div class="empty">No employees yet — add above / ยังไม่มีพนักงาน</div>'; return; }
-  var mk=ofAttMonth;
-  var typeOpts = ['late','ot','trip','commission','carton','km','ferry','advance','hours']
-    .map(function(t){ return '<option value="'+t+'">'+ATT_TYPE_LABEL[t]+'</option>'; }).join('');
-  // Group employees by category, in a fixed order (extras appended).
-  var cats=['Office','Driver','Warehouse','Other'];
-  var byCat={}; attStaff.forEach(function(s){ var cat=s.category||'Other'; (byCat[cat]=byCat[cat]||[]).push(s); });
-  var order=cats.concat(Object.keys(byCat).filter(function(c){return cats.indexOf(c)<0;}));
-  listEl.innerHTML = order.filter(function(cat){return byCat[cat]&&byCat[cat].length;}).map(function(cat){
-    var groupNet=byCat[cat].reduce(function(a,s){return a+attCalc(s,mk).net;},0);
-    return '<div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 6px"><span style="font-size:12px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.04em">'+cat+' ('+byCat[cat].length+')</span><span style="font-size:12px;font-weight:700;color:var(--text2)">'+attBaht(groupNet)+' ฿</span></div>'
-      + byCat[cat].map(function(s){ return attStaffCard(s, mk, typeOpts); }).join('');
-  }).join('');
-}
-function attStaffCard(s, mk, typeOpts){
-    var c=attCalc(s, mk); var key=s.id;
-    var tripRate=(s.tripRate!=null?s.tripRate:100);
-    return '<div class="card" style="padding:0;margin-bottom:8px;overflow:hidden">'
-      + '<div onclick="ofAttToggle(\''+key+'\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px;cursor:pointer">'
-        + '<div style="font-size:15px;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+s.name+'</div>'
-        + '<span style="font-size:15px;font-weight:800;color:var(--green);white-space:nowrap">'+attBaht(c.net)+' ฿</span>'
-        + '<i class="ti ti-chevron-down" id="oatt-chev-'+key+'" style="font-size:18px;color:var(--text2);transition:transform .2s;flex-shrink:0"></i>'
-      + '</div>'
-      + '<div id="oatt-det-'+key+'" style="display:none;padding:10px 12px;border-top:1px solid var(--border)">'
-        // 1) ADD ENTRY
-        + '<div style="background:var(--bg2);border-radius:var(--rs);padding:10px;margin-bottom:10px">'
-          + '<div style="font-size:12px;font-weight:700;margin-bottom:6px">➕ Add entry / เพิ่มรายการ</div>'
-          + '<select id="oatt-etype-'+key+'" style="width:100%;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;margin-bottom:5px">'+typeOpts+'</select>'
-          + '<div style="display:flex;gap:5px;margin-bottom:5px">'
-            + '<input id="oatt-edate-'+key+'" type="date" lang="en-GB" value="'+(mk+'-'+(new Date().getDate()<10?'0':'')+new Date().getDate())+'" style="flex:1;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px">'
-            + '<input id="oatt-eqty-'+key+'" type="number" step="0.5" placeholder="qty / จำนวน" style="width:90px;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px">'
-          + '</div>'
-          + '<input id="oatt-enote-'+key+'" type="text" placeholder="Note / หมายเหตุ (e.g. island, route)" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;margin-bottom:5px">'
-          + '<button type="button" onclick="ofAttAddEntry(\''+key+'\')" style="width:100%;padding:7px;border-radius:6px;border:none;background:#16a34a;color:#fff;font-weight:700;cursor:pointer">+ Add / เพิ่ม</button>'
-        + '</div>'
-        // 2) CALCULATION — separated by type
-        + '<div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:4px">📊 Calculation / การคำนวณ</div>'
-        + '<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0"><span>'+(s.payType==='hourly'?('Base / ฐาน ('+c.q.hours+'h × '+attBaht(s.hourlyRate||0)+')'):'Base salary / เงินเดือน')+'</span><b>'+attBaht(c.base)+' ฿</b></div>'
-        + (s.payType==='hourly' ? attGrp(c.entries,'hours',key,'#374151','') : '')
-        + attGrp(c.entries,'ot',key,'#16a34a','+'+attBaht(c.pay.ot)+' ฿')
-        + attGrp(c.entries,'trip',key,'#16a34a','+'+attBaht(c.pay.trip)+' ฿')
-        + attGrp(c.entries,'commission',key,'#16a34a','+'+attBaht(c.pay.commission)+' ฿')
-        + attGrp(c.entries,'carton',key,'#16a34a','+'+attBaht(c.pay.carton)+' ฿')
-        + attGrp(c.entries,'km',key,'#16a34a','+'+attBaht(c.pay.km)+' ฿')
-        + attGrp(c.entries,'ferry',key,'#16a34a','+'+attBaht(c.pay.ferry)+' ฿')
-        + attGrp(c.entries,'late',key,'#dc2626','−'+attBaht(c.pay.late)+' ฿')
-        + attGrp(c.entries,'advance',key,'#dc2626','−'+attBaht(c.pay.advance)+' ฿')
-        // 3) TOTAL SALARY
-        + '<div style="display:flex;justify-content:space-between;border-top:2px solid var(--border);margin-top:8px;padding-top:8px;font-weight:800;font-size:15px"><span>Total salary / เงินเดือนสุทธิ</span><span style="color:var(--green)">'+attBaht(c.net)+' ฿</span></div>'
-        // 4) settings (collapsible)
-        + '<div onclick="ofAttToggle(\'set-'+key+'\')" style="cursor:pointer;font-size:12px;font-weight:700;color:var(--blue);padding:8px 0 6px"><i class="ti ti-settings"></i> Settings / ตั้งค่า <i class="ti ti-chevron-down" id="oatt-chev-set-'+key+'" style="font-size:14px"></i></div>'
-        + '<div id="oatt-det-set-'+key+'" style="display:none;background:var(--bg2);border-radius:var(--rs);padding:10px;margin-bottom:8px;font-size:12px">'
-          + '<div style="margin-bottom:6px"><label style="color:var(--text2)">Category / หมวด</label><select id="oatt-cat-'+key+'" style="width:100%;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:2px">'+['Office','Driver','Warehouse','Other'].map(function(cc){return '<option value="'+cc+'"'+((s.category||'Other')===cc?' selected':'')+'>'+cc+'</option>';}).join('')+'</select></div>'
-          + '<div style="margin-bottom:6px"><label style="color:var(--text2)">Pay type / ประเภท</label><select id="oatt-paytype-'+key+'" style="width:100%;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:2px"><option value="monthly"'+(s.payType!=='hourly'?' selected':'')+'>Monthly fixed / รายเดือน</option><option value="hourly"'+(s.payType==='hourly'?' selected':'')+'>Hourly / รายชั่วโมง</option></select></div>'
-          + attField('Monthly salary ฿','oatt-salary-'+key, s.monthlySalary||'')
-          + attField('Hourly rate ฿/h','oatt-hourly-'+key, s.hourlyRate||'')
-          + attField('Late rate ฿/min','oatt-laterate-'+key, s.lateRate||'')
-          + attField('OT rate ฿/h','oatt-otrate-'+key, s.otRate||'')
-          + attField('Trip rate ฿/trip','oatt-triprate-'+key, tripRate)
-          + attField('Commission ฿/panel','oatt-commrate-'+key, s.commRate||'')
-          + attField('Carton rate ฿/carton','oatt-cartonrate-'+key, s.cartonRate||'')
-          + attField('Km rate ฿/km','oatt-kmrate-'+key, s.kmRate||'')
-          + '<button type="button" onclick="ofAttSaveStaff(\''+key+'\')" style="width:100%;margin-top:6px;padding:7px;border-radius:6px;border:none;background:var(--blue);color:#fff;font-weight:700;cursor:pointer">Save / บันทึก</button>'
-        + '</div>'
-        // 5) remove employee (always visible when expanded)
-        + '<button type="button" onclick="attRemoveStaff(\''+key+'\')" style="width:100%;margin-top:4px;padding:8px;border-radius:6px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;font-weight:700;cursor:pointer"><i class="ti ti-trash"></i> Remove employee / ลบพนักงาน (PIN)</button>'
-      + '</div>'
-      + '</div>';
-}
-// Render one type group: header (label + subtotal) and its entries with delete.
-function attGrp(entries, type, key, color, subtotalText){
-  var list=entries.filter(function(e){return e.type===type;});
-  if(!list.length) return '';
-  var unit=ATT_TYPE_UNIT[type]||'';
-  var label=(ATT_TYPE_LABEL[type]||type).replace(/\s*\(.*?\)\s*/g,''); // drop the "(unit)" hint
-  return '<div style="margin-top:6px">'
-    + '<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700"><span>'+label+'</span>'+(subtotalText?'<span style="color:'+color+'">'+subtotalText+'</span>':'')+'</div>'
-    + list.map(function(e){
-        return '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text2);padding:3px 0 3px 10px">'
-          + '<span>'+e.date+' · '+e.qty+' '+unit+(e.note?' · '+e.note:'')+'</span>'
-          + '<button type="button" onclick="ofAttDelEntry(\''+e.id+'\',\''+e._store+'\')" style="background:none;border:none;color:#9ca3af;cursor:pointer;font-size:12px">✕</button>'
-          + '</div>';
-      }).join('')
-    + '</div>';
-}
-function attField(label, id, val){
-  return '<div style="margin-bottom:6px"><label style="color:var(--text2)">'+label+'</label><input id="'+id+'" type="number" value="'+val+'" style="width:100%;box-sizing:border-box;padding:6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:2px"></div>';
-}
-function ofAttSetMonth(v){ ofAttMonth=v; ofAttRender(); }
-function ofAttToggle(key){
-  var d=document.getElementById('oatt-det-'+key), ch=document.getElementById('oatt-chev-'+key);
-  if(!d) return;
-  var open=d.style.display!=='none';
-  d.style.display=open?'none':'block';
-  if(ch) ch.style.transform=open?'':'rotate(180deg)';
-}
-function ofAttAddStaff(){
-  var inp=document.getElementById('oatt-newname'); var name=(inp&&inp.value||'').trim();
-  if(!name) return;
-  if(attStaff.find(function(s){return s.name.toLowerCase()===name.toLowerCase();})){ alert('Already exists / มีอยู่แล้ว'); return; }
-  var s={id:'ats-'+Date.now(), name:name, category:'Office', payType:'monthly', monthlySalary:0, hourlyRate:0, lateRate:0, otRate:0, tripRate:100, commRate:0, cartonRate:0, kmRate:0};
-  attStaff.push(s);
-  if(window.fbDB) window.fbDB.ref('attStaff/'+s.id).set(s);
-  if(inp) inp.value='';
-  ofAttRender();
-}
-function ofAttSaveStaff(id){
-  var s=attStaff.find(function(x){return x.id===id;}); if(!s) return;
-  function num(eid){ var el=document.getElementById(eid); return el?(parseFloat(el.value)||0):0; }
-  var ct=document.getElementById('oatt-cat-'+id);
-  if(ct) s.category=ct.value;
-  var pt=document.getElementById('oatt-paytype-'+id);
-  s.payType = pt?pt.value:'monthly';
-  s.monthlySalary=num('oatt-salary-'+id);
-  s.hourlyRate=num('oatt-hourly-'+id);
-  s.lateRate=num('oatt-laterate-'+id);
-  s.otRate=num('oatt-otrate-'+id);
-  s.tripRate=num('oatt-triprate-'+id);
-  s.commRate=num('oatt-commrate-'+id);
-  s.cartonRate=num('oatt-cartonrate-'+id);
-  s.kmRate=num('oatt-kmrate-'+id);
-  if(window.fbDB) window.fbDB.ref('attStaff/'+id).set(s);
-  showNotif('Saved / บันทึกแล้ว ✓');
-  ofAttRender();
-}
-function ofAttAddEntry(id){
-  var s=attStaff.find(function(x){return x.id===id;}); if(!s) return;
-  var type=(document.getElementById('oatt-etype-'+id)||{}).value||'late';
-  var date=(document.getElementById('oatt-edate-'+id)||{}).value||'';
-  var qty=parseFloat((document.getElementById('oatt-eqty-'+id)||{}).value||'');
-  var note=((document.getElementById('oatt-enote-'+id)||{}).value||'').trim();
-  if(!date){ alert('Date? / ใส่วันที่'); return; }
-  if(type==='trip' && (!qty||qty<1)) qty=1; // a trip defaults to 1
-  if(!qty || qty<=0){ alert('Enter a value / ใส่จำนวน'); return; }
-  var e={id:'ae-'+Date.now(), staffId:id, staffName:s.name, date:date, type:type, qty:qty, note:note, by:(typeof currentStaffName!=='undefined'?currentStaffName:'')||'office', ts:Date.now()};
-  attEntries.push(e);
-  if(window.fbDB) window.fbDB.ref('attEntries/'+e.id).set(e);
-  var q=document.getElementById('oatt-eqty-'+id); if(q) q.value='';
-  var n=document.getElementById('oatt-enote-'+id); if(n) n.value='';
-  ofAttRender();
-}
-function ofAttDelEntry(id, store){
-  if(!confirm('Delete this entry? / ลบรายการนี้?')) return;
-  if(store==='lateLog'){ lateLog=lateLog.filter(function(e){return e.id!==id;}); if(window.fbDB) window.fbDB.ref('lateLog/'+id).remove(); }
-  else { attEntries=attEntries.filter(function(e){return e.id!==id;}); if(window.fbDB) window.fbDB.ref('attEntries/'+id).remove(); }
-  ofAttRender();
-}
-// ── END ATTENDANCE / PAYROLL ──────────────────────────
+// (old payroll UI removed — replaced by paySub/* system below)
 
 // ── CUSTOMER CRM (phone-based) ──────────────────────────────────────
 // Normalise a phone number to a comparable key: digits only, +66 → 0,
