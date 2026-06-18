@@ -1452,8 +1452,10 @@ textarea{resize:none}
     <div id="psubv-overview" style="display:none">
       <div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Today / วันนี้</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px" id="pay-today-grid"></div>
-      <div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px" id="pay-month-label"></div>
+      <select id="pay-ov-month" onchange="payRenderOverview()" style="width:100%;padding:10px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;font-weight:700;margin-bottom:12px"></select>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px" id="pay-month-grid"></div>
+      <div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Breakdown / สรุปค่าใช้จ่าย <span id="pay-month-label" style="color:var(--text2)"></span></div>
+      <div id="pay-month-breakdown" style="margin-bottom:16px"></div>
       <div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Recent bookings / รายการล่าสุด</div>
       <div id="pay-recent-list"></div>
     </div>
@@ -7829,6 +7831,13 @@ function calcViz() {
       <button type="button" onclick="clAddLine()" style="background:var(--blue);color:#fff;border:none;border-radius:var(--rs);padding:5px 10px;font-size:12px;cursor:pointer"><i class="ti ti-plus"></i> Add</button>
     </div>
     <div id="clog-lines"></div>
+    <div style="margin:12px 0 6px">
+      <span style="font-size:12px;font-weight:700">🧑‍🤝‍🧑 Unload helpers / คนขนของ <span style="font-size:11px;color:var(--text2);font-weight:400">(per container / ต่อตู้)</span></span>
+    </div>
+    <input type="text" id="cl-helpers-group" placeholder="Group / source (optional) — e.g. Myanmar ice factory · Fastwork taxi" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;margin-bottom:8px">
+    <div id="cl-helpers"></div>
+    <button type="button" onclick="clAddHelper()" style="width:100%;background:var(--bg2);color:var(--blue);border:1px dashed var(--border);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer;margin-bottom:4px"><i class="ti ti-plus"></i> Add person / เพิ่มคน</button>
+    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:6px 2px 2px"><span><span id="cl-helpers-count">0</span> persons / คน</span><span id="cl-helpers-total" style="color:var(--green)">0 ฿</span></div>
     <label class="fl">Notes</label>
     <textarea id="cl-notes" rows="2" placeholder="Optional notes..."></textarea>
     <button type="button" class="btn btnp" style="margin-top:12px" onclick="saveCL()"><i class="ti ti-device-floppy"></i> Save</button>
@@ -8538,6 +8547,24 @@ function clCard(c, isPending) {
       +'</div></details>';
   }
 
+  // Unload helpers cost
+  if(c.helpersTotal>0) {
+    var hDropId = 'cl-hdrop-'+c.id;
+    html += '<details style="margin-bottom:8px" id="'+hDropId+'">'
+      +'<summary style="cursor:pointer;font-size:12px;font-weight:600;color:#92400e;background:var(--orange-l);border-radius:var(--rs);padding:6px 10px;list-style:none;display:flex;justify-content:space-between;align-items:center">'
+      +'<span>🧑‍🤝‍🧑 '+(c.helpersCount||(c.helpers?c.helpers.length:0))+' unload helper'+((c.helpersCount||0)>1?'s':'')+' / คนขนของ</span>'
+      +'<span style="font-weight:700">'+c.helpersTotal.toLocaleString()+' ฿ ▾</span>'
+      +'</summary>'
+      +'<div style="background:var(--bg2);border-radius:0 0 var(--rs) var(--rs);padding:6px 10px">'
+      + (c.helpersGroup?'<div style="font-size:11px;color:var(--text2);padding:2px 0 4px;font-style:italic">'+c.helpersGroup+'</div>':'')
+      + (c.helpers||[]).map(function(h,i){
+          return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)">'
+            +'<span>Person '+(i+1)+'</span>'
+            +'<span style="font-weight:700">'+(parseFloat(h.amount)||0).toLocaleString()+' ฿</span></div>';
+        }).join('')
+      +'</div></details>';
+  }
+
   // Visual timeline
   html += clTimeline(c);
 
@@ -8641,12 +8668,43 @@ function openCL(id) {
   } else {
     clAddLine();
   }
+  // Unload helpers
+  document.getElementById('cl-helpers-group').value = c ? (c.helpersGroup||'') : '';
+  document.getElementById('cl-helpers').innerHTML = '';
+  if(c && c.helpers && c.helpers.length) {
+    c.helpers.forEach(function(h){ clAddHelper(h.amount); });
+  }
+  clHelpersTotal();
   document.getElementById('cl-modal').classList.add('open');
 }
 
 function closeCL() {
   document.getElementById('cl-modal').classList.remove('open');
   _clEditId = null;
+}
+
+function clAddHelper(amount) {
+  var wrap = document.getElementById('cl-helpers');
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center';
+  row.innerHTML = '<span style="font-size:13px;color:var(--text2);width:64px">Person '+(wrap.children.length+1)+'</span>'
+    + '<input type="number" placeholder="฿ / paid" value="'+(amount!=null?amount:'')+'" oninput="clHelpersTotal()" style="flex:1;padding:7px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;text-align:right">'
+    + '<button type="button" onclick="this.parentNode.remove();clHelpersRenumber();clHelpersTotal()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:0 4px">✕</button>';
+  wrap.appendChild(row);
+  clHelpersTotal();
+}
+function clHelpersRenumber() {
+  document.querySelectorAll('#cl-helpers > div').forEach(function(r,i){ var s=r.querySelector('span'); if(s) s.textContent='Person '+(i+1); });
+}
+function clHelpersTotal() {
+  var t = 0, n = 0;
+  document.querySelectorAll('#cl-helpers > div').forEach(function(r){
+    var amt = parseFloat(r.querySelector('input').value)||0;
+    if(amt>0) n++;
+    t += amt;
+  });
+  var te = document.getElementById('cl-helpers-total'); if(te) te.textContent = t.toLocaleString()+' ฿';
+  var ce = document.getElementById('cl-helpers-count'); if(ce) ce.textContent = n;
 }
 
 function saveCL() {
@@ -8660,6 +8718,14 @@ function saveCL() {
     var qty = parseInt(inputs[1]&&inputs[1].value||0)||0;
     if(code && qty) items.push({code:code, qty:qty});
   });
+  // Collect unload helpers (amount per person, no names; optional group/source)
+  var helpers = [];
+  document.querySelectorAll('#cl-helpers > div').forEach(function(row) {
+    var amt = parseFloat((row.querySelector('input')||{}).value||0)||0;
+    if(amt>0) helpers.push({amount:amt});
+  });
+  var helpersGroup = (document.getElementById('cl-helpers-group').value||'').trim();
+  var helpersTotal = helpers.reduce(function(a,h){return a+h.amount;},0);
   var old = _clEditId ? containerLog.find(function(x){return x.id===_clEditId;}) : null;
   var entry = {
     id: _clEditId || 'cl'+Date.now(),
@@ -8673,6 +8739,10 @@ function saveCL() {
     arrivedThAct: document.getElementById('cl-arrived-th-act').value||'',
     arrivedWh: old ? (old.arrivedWh||'') : '',
     items: items,
+    helpers: helpers,
+    helpersGroup: helpersGroup,
+    helpersTotal: helpersTotal,
+    helpersCount: helpers.length,
     notes: (document.getElementById('cl-notes').value||'').trim(),
     createdAt: old ? (old.createdAt||Date.now()) : Date.now()
   };
@@ -9134,8 +9204,17 @@ function payStaffDelete(){
 
 // ═══ STATS / OVERVIEW ═══
 function payRenderOverview(){
-  var today=payToday(), mk=payCurMK(), all=payAllEntries();
+  var today=payToday(), all=payAllEntries();
   var MNS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  // Month selector
+  var msel=document.getElementById('pay-ov-month');
+  if(msel && msel.options.length===0){
+    var months=new Set(); var now=new Date();
+    for(var i=0;i<12;i++){var d2=new Date(now.getFullYear(),now.getMonth()-i,1);months.add(d2.getFullYear()+'-'+(d2.getMonth()+1<10?'0':'')+(d2.getMonth()+1));}
+    all.forEach(function(e){if(e.date)months.add(e.date.slice(0,7));});
+    msel.innerHTML=Array.from(months).sort().reverse().map(function(m){return '<option value="'+m+'">'+MNS[parseInt(m.slice(5))-1]+' '+m.slice(0,4)+'</option>';}).join('');
+  }
+  var mk = (msel && msel.value) ? msel.value : payCurMK();
 
   var todayEntries=all.filter(function(e){return e.date===today;});
   var tg=document.getElementById('pay-today-grid');
@@ -9148,25 +9227,83 @@ function payRenderOverview(){
   }
 
   var mLabel=document.getElementById('pay-month-label');
-  if(mLabel) mLabel.textContent=MNS[parseInt(mk.slice(5))-1]+' '+mk.slice(0,4)+' / เดือนนี้';
-  var monthEntries=all.filter(function(e){return (e.date||'').slice(0,7)===mk;});
-  var totComm=0,totTravel=0,totOT=0,totNeg=0;
-  monthEntries.forEach(function(e){
-    var amt=payEntryAmt(e);
-    if(e.type==='ot') totOT+=amt;            // commission handled per-staff below (live/auto aware)
-    else if(['trip','km','ferry','accommodation','fuel'].indexOf(e.type)>=0) totTravel+=amt;
-    if(payIsNeg(e.type)) totNeg+=amt;
+  if(mLabel) mLabel.textContent='· '+MNS[parseInt(mk.slice(5))-1]+' '+mk.slice(0,4);
+
+  // Aggregate every category across all staff for the selected month
+  var agg={base:0,workday:0,salary:0,ot:0,commission:0,trip:0,carton:0,km:0,ferry:0,
+           bonus:0,accommodation:0,fuel:0,other_income:0,late:0,absent:0,advance:0,damage:0,other_deduction:0};
+  var totPayroll=0;
+  attStaff.forEach(function(s){
+    var c=attCalc(s,mk);
+    totPayroll+=c.net;
+    agg.base+=c.base;
+    agg.commission+=c.pay.commission;
+    ['workday','salary','ot','trip','carton','km','ferry','bonus','accommodation','fuel','other_income','late','absent','advance','damage','other_deduction'].forEach(function(t){ agg[t]+=(c.q[t]||0); });
   });
-  var totPayroll=0; attStaff.forEach(function(s){ var c=attCalc(s,mk); totPayroll+=c.net; totComm+=c.pay.commission; });
+  // Unload helpers (per container, attributed to the warehouse-arrival month)
+  var unloadTotal=0;
+  (typeof containerLog!=='undefined'?containerLog:[]).forEach(function(cc){
+    if(cc && cc.arrivedWh && cc.arrivedWh.slice(0,7)===mk) unloadTotal += parseFloat(cc.helpersTotal)||0;
+  });
+  var totDeduct=agg.late+agg.absent+agg.advance+agg.damage+agg.other_deduction;
+
   var mg=document.getElementById('pay-month-grid');
   if(mg) mg.innerHTML=[
-    ['💰 Total payroll','var(--blue)',totPayroll],
-    ['🧱 Commission','#7c3aed',totComm],
-    ['✈ Travel','#0891b2',totTravel],
-    ['➖ Deductions','#dc2626',totNeg]
+    ['💰 Payroll (net)','var(--blue)',totPayroll],
+    ['🧑‍🤝‍🧑 Unload helpers','#92400e',unloadTotal],
+    ['🧱 Commission','#7c3aed',agg.commission],
+    ['➖ Deductions','#dc2626',totDeduct]
   ].map(function(x){
     return '<div style="background:var(--bg);border:1.5px solid var(--border);border-radius:var(--rs);padding:10px 12px"><div style="font-size:11px;color:'+x[1]+';font-weight:700">'+x[0]+'</div><div style="font-size:18px;font-weight:900">'+x[2].toLocaleString()+' ฿</div></div>';
   }).join('');
+
+  // Full breakdown — what for, how much
+  var incomeRows=[
+    ['💰 Base salaries / เงินเดือนฐาน',agg.base],
+    ['📆 Work days / ค่าแรงรายวัน',agg.workday],
+    ['💵 Salary entries / เงินเดือน(จด)',agg.salary],
+    ['⏱ Overtime / โอที',agg.ot],
+    ['🧱 Commission / คอมมิชชั่น',agg.commission],
+    ['🚗 Trip / ค่าเที่ยว',agg.trip],
+    ['📦 CTN delivery / ค่ากล่อง',agg.carton],
+    ['🛣 KM / ค่าระยะทาง',agg.km],
+    ['⛴ Ferry / ค่าเรือ',agg.ferry],
+    ['🎁 Bonus / โบนัส',agg.bonus],
+    ['🏨 Accommodation / ค่าที่พัก',agg.accommodation],
+    ['⛽ Fuel / ค่าน้ำมัน',agg.fuel],
+    ['➕ Other income / รายได้อื่น',agg.other_income]
+  ];
+  var deductRows=[
+    ['⏰ Late / หักสาย',agg.late],
+    ['🚫 Absent / ขาดงาน',agg.absent],
+    ['💵 Advance / เบิกล่วงหน้า',agg.advance],
+    ['💥 Damage / ค่าเสียหาย',agg.damage],
+    ['➖ Other deduction / หักอื่น',agg.other_deduction]
+  ];
+  function brRow(label,val,neg){
+    return '<div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 2px;border-bottom:1px solid var(--border)">'
+      +'<span style="color:var(--text2)">'+label+'</span>'
+      +'<span style="font-weight:700;color:'+(neg?'#dc2626':'#059669')+'">'+(neg?'−':'+')+Math.round(val).toLocaleString()+' ฿</span></div>';
+  }
+  var bd=document.getElementById('pay-month-breakdown');
+  if(bd){
+    var html='';
+    var anyInc=incomeRows.some(function(r){return r[1]>0;});
+    var anyDed=deductRows.some(function(r){return r[1]>0;});
+    if(anyInc){ html+=incomeRows.filter(function(r){return r[1]>0;}).map(function(r){return brRow(r[0],r[1],false);}).join(''); }
+    if(anyDed){ html+='<div style="height:6px"></div>'+deductRows.filter(function(r){return r[1]>0;}).map(function(r){return brRow(r[0],r[1],true);}).join(''); }
+    // Payroll subtotal
+    html+='<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:800;padding:8px 2px;border-top:2px solid var(--border);margin-top:2px"><span>Payroll net / ค่าจ้างสุทธิ</span><span style="color:'+(totPayroll>=0?'var(--green)':'#dc2626')+'">'+Math.round(totPayroll).toLocaleString()+' ฿</span></div>';
+    if(unloadTotal>0){
+      html+=brRow('🧑‍🤝‍🧑 Unload helpers / คนขนของ',unloadTotal,false);
+    }
+    if(!anyInc && !anyDed && unloadTotal===0){ html='<div style="color:var(--text2);font-size:13px;padding:8px 0">No costs this month / ยังไม่มีค่าใช้จ่าย</div>'; }
+    else {
+      var grand=totPayroll+unloadTotal;
+      html+='<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:var(--blue);border-radius:var(--rs);color:#fff;font-weight:800;font-size:15px;margin-top:10px"><span>TOTAL / รวมทั้งหมด</span><span>'+Math.round(grand).toLocaleString()+' ฿</span></div>';
+    }
+    bd.innerHTML=html;
+  }
 
   var recent=all.slice().sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0)||(b.date||'').localeCompare(a.date||'');}).slice(0,15);
   var rl=document.getElementById('pay-recent-list');
