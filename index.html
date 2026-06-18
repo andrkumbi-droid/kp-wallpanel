@@ -252,11 +252,15 @@ textarea{resize:none}
   body > * { display: none !important; }
   body.printing-receipt #print-receipt { display: block !important; position:fixed; top:0; left:0; }
   body.printing-delivery #print-delivery { display: block !important; }
+  body.printing-all-receipts #print-all-receipts { display: block !important; position:absolute; top:0; left:0; }
 }
 @media screen {
   #print-receipt { display: none; }
   #print-delivery { display: none; }
+  #print-all-receipts { display: none; }
 }
+.rcpt-page{font-family:'Sarabun',Arial,sans-serif;color:#000;background:#fff;padding:4mm;width:137mm;min-height:192mm;max-height:192mm;font-size:9.5pt;box-sizing:border-box;overflow:hidden;page-break-after:always}
+.rcpt-page:last-child{page-break-after:auto}
 @media screen {
   #print-receipt { display: none; }
   #print-delivery { display: none; }
@@ -3115,6 +3119,61 @@ function doPrint() {
   }, 300);
 }
 
+// Build one full receipt page (markup string) for an order — used for bulk tour printing
+function buildReceiptPageHTML(order) {
+  var rNum = order.receiptNum || currentReceiptNum;
+  var d = order.date ? new Date(order.date + 'T00:00:00') : new Date();
+  var dateStr = d.toLocaleDateString('th-TH', {day:'numeric',month:'long',year:'numeric'});
+  var items = buildReceiptItems(order);
+  var totalRows = 11;
+  var itemsHTML = '';
+  items.forEach(function(item){
+    var qtyStr = (item.qty||0) > 0 ? (item.qty).toLocaleString() : '';
+    var priceStr = item.unitPrice && item.unitPrice !== '' ? item.unitPrice : '';
+    var amtStr = item.amount && item.amount !== '' ? item.amount : '';
+    itemsHTML += '<tr><td class="qty">'+qtyStr+'</td><td>'+item.desc+'</td><td class="price">'+priceStr+'</td><td class="amount">'+amtStr+'</td></tr>';
+  });
+  for(var i=items.length;i<totalRows;i++){ itemsHTML += '<tr class="empty-row"><td></td><td></td><td></td><td></td></tr>'; }
+  return '<div class="rcpt-page">'
+    +'<div class="rcpt-header"><div class="rcpt-logo">KP<span>Wallpanel</span></div>'
+    +'<div class="rcpt-company"><div class="rcpt-company-name">KP Wallpanel ไม้เทียมเกรดพรีเมี่ยม</div>'
+    +'<div class="rcpt-company-sub">1128/60 ถนนเลียบคลองรังสิต ต.ประชาธิปัตย์ อ.ธัญบุรี จ.ปทุมธานี 12130<br>เลขประจำตัวผู้เสียภาษีอากร 0 1355 53000 95 4 &nbsp;&nbsp; โทร. 063-749-8655</div></div></div>'
+    +'<div class="rcpt-title-row"><div class="rcpt-title">บิลเงินสด / CASH SALE</div>'
+    +'<div style="text-align:right"><div style="font-size:8pt;color:#ccc">เลขที่ / NO.</div><div class="rcpt-num">'+rNum+'</div></div></div>'
+    +'<div class="rcpt-info-row"><div class="rcpt-info-field" style="flex:2"><div class="rcpt-info-label">นาม / Customer</div><div class="rcpt-info-value">'+(order.customer||'')+'</div></div>'
+    +'<div class="rcpt-info-field" style="flex:1"><div class="rcpt-info-label">วันที่ / Date</div><div class="rcpt-info-value">'+dateStr+'</div></div></div>'
+    +'<div class="rcpt-info-row"><div class="rcpt-info-field" style="flex:2"><div class="rcpt-info-label">ที่อยู่ / Address</div><div class="rcpt-info-value">'+(order.address||'')+'</div></div>'
+    +'<div class="rcpt-info-field" style="flex:1"><div class="rcpt-info-label">เลขออเดอร์ / Order No.</div><div class="rcpt-info-value" style="font-weight:700;color:#000">'+(order.id||'')+'</div></div></div>'
+    +'<table class="rcpt-table"><thead><tr><th style="width:18mm">จำนวน<br>QUANTITY</th><th>รายการ<br>DESCRIPTION</th><th style="width:22mm">หน่วยละ<br>UNIT PRICE</th><th style="width:22mm">จำนวนเงิน<br>AMOUNT</th></tr></thead><tbody>'+itemsHTML+'</tbody></table>'
+    +'<div class="rcpt-total-row"><div class="rcpt-total-box"><div class="rcpt-total-label">รวมเงิน / TOTAL</div><div class="rcpt-total-value">'+(order.total||'')+'</div></div></div>'
+    +'<div class="rcpt-footer"><div class="rcpt-sign"><div class="rcpt-sign-line"></div><div class="rcpt-sign-label">ผู้รับเงิน / Collector</div></div>'
+    +'<div class="rcpt-sign"><div class="rcpt-sign-line"></div><div class="rcpt-sign-label">ผู้รับสินค้า / Receiver</div></div></div>'
+    +'</div>';
+}
+
+// Print ALL receipts for every order in a tour, one page each
+function printTourReceipts(ti) {
+  var t = activeTours[ti];
+  if(!t || !t.orders || !t.orders.length){ alert('No orders in this tour.'); return; }
+  var ords = t.orders.map(function(id){ return orders.find(function(x){return x.id===id;}); }).filter(Boolean);
+  if(!ords.length){ alert('No matching orders found.'); return; }
+  if(!confirm('Print '+ords.length+' receipts for '+t.driverName+'? / พิมพ์ '+ords.length+' ใบเสร็จ?')) return;
+  document.getElementById('print-all-receipts').innerHTML = ords.map(buildReceiptPageHTML).join('');
+  document.body.classList.add('printing-all-receipts');
+  var ps = document.getElementById('portrait-style'); if(ps) ps.remove();
+  ps = document.createElement('style'); ps.id='portrait-style';
+  ps.textContent = '@page { size: 145mm 200mm !important; margin: 4mm !important; }';
+  document.head.appendChild(ps);
+  setTimeout(function(){
+    window.print();
+    setTimeout(function(){
+      document.body.classList.remove('printing-all-receipts');
+      document.getElementById('print-all-receipts').innerHTML = '';
+      var p = document.getElementById('portrait-style'); if(p) p.remove();
+    }, 1500);
+  }, 250);
+}
+
 function toggleSalesDetail(type) {
   const detail = document.getElementById('of-sales-'+type+'-detail');
   const chevron = document.getElementById('of-'+type+'-chevron');
@@ -3860,7 +3919,8 @@ function ofRenderTour(){
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;cursor:pointer" onclick="openTourDetail('+ti+')">'+
       '<div style="font-size:15px;font-weight:600"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+'</div>'+
       '<div style="display:flex;align-items:center;gap:6px">'+
-      (!t.driving?'<button type="button" onclick="ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 Departed</button>':'<span style="font-size:11px;color:var(--green);font-weight:600">🚚 Driving ('+t.departedAt+')</span>')+
+      '<button type="button" onclick="event.stopPropagation();printTourReceipts('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#1D4ED8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600"><i class="ti ti-printer"></i> All Print</button>'+
+      (!t.driving?'<button type="button" onclick="event.stopPropagation();ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 Departed</button>':'<span style="font-size:11px;color:var(--green);font-weight:600">🚚 Driving ('+t.departedAt+')</span>')+
       '<span class="badge bactive">'+t.orders.length+' orders</span><i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2)"></i></div>'+
       '</div>'+
       '<div style="margin-bottom:8px">'+orderList+'</div>'+
@@ -7761,6 +7821,9 @@ function calcViz() {
     </div>
   </div>
 </div>
+
+<!-- ALL-RECEIPTS PRINT CONTAINER (bulk tour print) -->
+<div id="print-all-receipts"></div>
 
 <!-- RECEIPT PREVIEW MODAL -->
 <div class="print-receipt-overlay" id="receipt-modal">
