@@ -1483,8 +1483,19 @@ textarea{resize:none}
         </div>
       </div>
       <div class="g2">
-        <div><label class="fl">Base salary ฿/mo</label><input type="number" id="pst-salary" placeholder="0"></div>
+        <div><label class="fl">Pay type / ประเภท</label>
+          <select id="pst-paytype" onchange="payStaffTypeUI()" style="width:100%;padding:9px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">
+            <option value="monthly">Monthly / รายเดือน</option>
+            <option value="daily">Daily / รายวัน</option>
+            <option value="hourly">Hourly / รายชั่วโมง</option>
+          </select>
+        </div>
         <div><label class="fl">Start date</label><input type="date" lang="en-GB" id="pst-start"></div>
+      </div>
+      <div class="g2">
+        <div id="pst-salary-wrap"><label class="fl">Base salary ฿/mo</label><input type="number" id="pst-salary" placeholder="0"></div>
+        <div id="pst-dayrate-wrap" style="display:none"><label class="fl">Day rate ฿/day</label><input type="number" id="pst-dayrate" placeholder="0"></div>
+        <div id="pst-hourly-wrap" style="display:none"><label class="fl">Hourly rate ฿/h</label><input type="number" id="pst-hourly" placeholder="0"></div>
       </div>
       <label class="fl">Phone / เบอร์ (optional)</label><input type="tel" id="pst-phone" placeholder="08x-xxx-xxxx">
       <label class="fl">Notes / หมายเหตุ</label><textarea id="pst-notes" rows="2" placeholder="…"></textarea>
@@ -1495,14 +1506,12 @@ textarea{resize:none}
           <div><label class="fl" style="margin-top:0">Late ฿/min</label><input type="number" id="pst-late"></div>
           <div><label class="fl" style="margin-top:0">OT ฿/h</label><input type="number" id="pst-ot"></div>
         </div>
-        <div class="g2">
-          <div><label class="fl" style="margin-top:0">Trip ฿/trip</label><input type="number" id="pst-trip"></div>
-          <div><label class="fl" style="margin-top:0">Commission ฿/pc</label><input type="number" id="pst-comm"></div>
+        <div>
+          <label class="fl" style="margin-top:0">Commission ฿/panel</label>
+          <input type="number" id="pst-comm">
+          <div style="font-size:11px;color:var(--text2);margin-top:3px">Auto: monthly panels × this rate / คอมอัตโนมัติ = แผ่นรวมต่อเดือน × อัตรานี้</div>
         </div>
-        <div class="g2">
-          <div><label class="fl" style="margin-top:0">CTN ฿/ctn</label><input type="number" id="pst-ctn"></div>
-          <div><label class="fl" style="margin-top:0">KM ฿/km</label><input type="number" id="pst-km"></div>
-        </div>
+        <div style="font-size:11px;color:var(--text2);margin-top:8px">Trip, CTN &amp; KM are entered directly per booking / ใส่ต่อรายการ</div>
       </div>
 
       <div style="display:flex;gap:8px;margin-top:16px">
@@ -7939,9 +7948,27 @@ function attStaffEntries(staffId, mk){
   lateLog.forEach(function(e){ if(e.staffId===staffId && String(e.date||'').indexOf(mk)===0) out.push({id:e.id,date:e.date,type:'late',qty:parseInt(e.minutes)||0,note:e.note||'',_store:'lateLog'}); });
   return out.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
 }
+// Total panels sold in a given month (mk='yyyy-mm') — same parse logic as the
+// Sales view (non-cancelled orders, excludes CL/clip codes). Used for auto commission.
+function payMonthPanels(mk){
+  var total=0;
+  orders.forEach(function(o){
+    if(!o||o.status==='cancelled'||!o.date) return;
+    var d=new Date((o.date||'')+'T00:00:00'); if(isNaN(d)) return;
+    var k=d.getFullYear()+'-'+(d.getMonth()+1<10?'0':'')+(d.getMonth()+1);
+    if(k!==mk) return;
+    if(o.panels && o.panels!=='—'){
+      o.panels.split('·').forEach(function(p){
+        var m=p.trim().match(/^([A-Z0-9\-]+)\s*[×x]\s*(\d+)/i);
+        if(m){ if(/^CL/.test(m[1].toUpperCase())) return; total+=parseInt(m[2])||0; }
+      });
+    }
+  });
+  return total;
+}
 function attCalc(s, mk){
   var es=attStaffEntries(s.id, mk);
-  var q={late:0,ot:0,trip:0,advance:0,hours:0,commission:0,carton:0,km:0,ferry:0,
+  var q={late:0,ot:0,trip:0,advance:0,hours:0,commission:0,carton:0,km:0,ferry:0,workday:0,
          bonus:0,accommodation:0,fuel:0,other_income:0,absent:0,damage:0,other_deduction:0,salary:0};
   es.forEach(function(e){
     var amt = e.amount!=null && e.amount!=='' ? parseFloat(e.amount)||0 : parseFloat(e.qty)||0;
@@ -7950,25 +7977,27 @@ function attCalc(s, mk){
   var rate={
     late:parseFloat(s.lateRate)||0,
     ot:parseFloat(s.otRate)||0,
-    trip:(s.tripRate!=null?parseFloat(s.tripRate):100)||0,
-    commission:parseFloat(s.commRate)||0,
-    carton:parseFloat(s.cartonRate)||0,
-    km:parseFloat(s.kmRate)||0
+    commission:parseFloat(s.commRate)||0
   };
+  // Commission: if a per-panel rate is set, compute it LIVE from the month's
+  // total panels; otherwise fall back to manually booked commission entries.
+  var monthPanels = rate.commission>0 ? payMonthPanels(mk) : 0;
+  var commission = rate.commission>0 ? (monthPanels*rate.commission) : q.commission;
   var base = s.payType==='hourly' ? (q.hours*(parseFloat(s.hourlyRate)||0)) : (parseFloat(s.monthlySalary)||0);
-  var posExtra = q.bonus+q.accommodation+q.fuel+q.other_income+q.salary+q.ferry+q.trip+q.commission+q.carton+q.km+q.ot;
+  var posExtra = q.workday+q.bonus+q.accommodation+q.fuel+q.other_income+q.salary+q.ferry+q.trip+commission+q.carton+q.km+q.ot;
   var negExtra = q.advance+q.absent+q.damage+q.other_deduction+q.late;
   var pay={
-    ot:q.ot, trip:q.trip, commission:q.commission,
+    ot:q.ot, trip:q.trip, commission:commission,
     carton:q.carton, km:q.km, ferry:q.ferry, late:q.late, advance:q.advance,
     bonus:q.bonus, accommodation:q.accommodation, fuel:q.fuel,
     other_income:q.other_income, absent:q.absent, damage:q.damage, other_deduction:q.other_deduction
   };
   var net = base + posExtra - negExtra;
-  return {entries:es, q:q, rate:rate, pay:pay, base:base, net:net};
+  return {entries:es, q:q, rate:rate, pay:pay, base:base, net:net, monthPanels:monthPanels, commissionAuto:(rate.commission>0?commission:0)};
 }
 var ATT_TYPE_LABEL={
   // positive
+  workday:'📆 Work Day / ค่าแรงรายวัน',
   salary:'💰 Salary / เงินเดือน',
   bonus:'🎁 Bonus / โบนัส',
   commission:'🧱 Commission / คอมมิชชั่น',
@@ -7989,15 +8018,16 @@ var ATT_TYPE_LABEL={
   // legacy
   hours:'🕒 Work Hours / ชม.ทำงาน'
 };
-var ATT_TYPE_POS=['salary','bonus','commission','ot','trip','carton','km','ferry','accommodation','fuel','other_income'];
+var ATT_TYPE_POS=['workday','salary','bonus','commission','ot','trip','carton','km','ferry','accommodation','fuel','other_income'];
 var ATT_TYPE_NEG=['late','absent','advance','damage','other_deduction'];
 var ATT_TYPE_UNIT={
-  salary:'฿', bonus:'฿', commission:'pcs', ot:'h', trip:'×', carton:'ctn',
+  workday:'day', salary:'฿', bonus:'฿', commission:'pcs', ot:'h', trip:'×', carton:'ctn',
   km:'km', ferry:'฿', accommodation:'฿', fuel:'฿', other_income:'฿',
   late:'min', absent:'day', advance:'฿', damage:'฿', other_deduction:'฿', hours:'h'
 };
 // Which categories use a qty×rate calculator
 var ATT_CALC_META={
+  workday:{labelA:'Days / วัน', labelB:'Rate ฿/day', op:'×'},
   commission:{labelA:'Panels / แผ่น', labelB:'Rate ฿/pc', op:'×'},
   ot:        {labelA:'Hours / ชม.', labelB:'Rate ฿/h', op:'×'},
   trip:      {labelA:'Trips / เที่ยว', labelB:'Rate ฿/trip', op:'×'},
@@ -8964,7 +8994,7 @@ function paySelectCat(t){
     document.getElementById('pay-calc-op').textContent = meta.op;
     var s = attStaff.find(function(x){return x.id===_payBookStaffId;});
     var rb = document.getElementById('pay-calc-b');
-    if(s && rb){ var rates={ot:s.otRate,trip:s.tripRate,commission:s.commRate,carton:s.cartonRate,km:s.kmRate,late:s.lateRate}; rb.value = rates[t]!=null?rates[t]:''; }
+    if(s && rb){ var rates={ot:s.otRate,late:s.lateRate,workday:s.dayRate}; rb.value = (rates[t]!=null&&rates[t]!=='')?rates[t]:''; }
     document.getElementById('pay-calc-a').value='';
     document.getElementById('pay-book-amount').value='';
     document.getElementById('pay-calc-result').textContent='= 0 ฿';
@@ -9048,20 +9078,27 @@ function payStaffOpen(id){
   document.getElementById('pst-name').value = s?s.name:'';
   document.getElementById('pst-category').value = s&&s.category?s.category:'Driver';
   document.getElementById('pst-status').value = s&&s.status?s.status:'active';
+  document.getElementById('pst-paytype').value = s&&s.payType?s.payType:'monthly';
   document.getElementById('pst-salary').value = s?(s.monthlySalary||''):'';
+  document.getElementById('pst-dayrate').value = s?(s.dayRate||''):'';
+  document.getElementById('pst-hourly').value = s?(s.hourlyRate||''):'';
   document.getElementById('pst-start').value = s?(s.startDate||''):'';
+  payStaffTypeUI();
   document.getElementById('pst-phone').value = s?(s.phone||''):'';
   document.getElementById('pst-notes').value = s?(s.notes||''):'';
   document.getElementById('pst-late').value = s?(s.lateRate||''):'';
   document.getElementById('pst-ot').value = s?(s.otRate||''):'';
-  document.getElementById('pst-trip').value = s?(s.tripRate!=null?s.tripRate:100):100;
   document.getElementById('pst-comm').value = s?(s.commRate||''):'';
-  document.getElementById('pst-ctn').value = s?(s.cartonRate||''):'';
-  document.getElementById('pst-km').value = s?(s.kmRate||''):'';
   document.getElementById('pst-rates').style.display='none';
   document.getElementById('pay-staff-modal').classList.add('open');
 }
 function payStaffClose(){ document.getElementById('pay-staff-modal').classList.remove('open'); _editStaffId=null; }
+function payStaffTypeUI(){
+  var t=document.getElementById('pst-paytype').value;
+  document.getElementById('pst-salary-wrap').style.display = t==='monthly'?'':'none';
+  document.getElementById('pst-dayrate-wrap').style.display = t==='daily'?'':'none';
+  document.getElementById('pst-hourly-wrap').style.display = t==='hourly'?'':'none';
+}
 
 function payStaffSave(){
   var name=document.getElementById('pst-name').value.trim();
@@ -9072,12 +9109,14 @@ function payStaffSave(){
   s.name=name;
   s.category=document.getElementById('pst-category').value;
   s.status=document.getElementById('pst-status').value;
+  s.payType=document.getElementById('pst-paytype').value;
   s.monthlySalary=num('pst-salary');
+  s.dayRate=num('pst-dayrate');
+  s.hourlyRate=num('pst-hourly');
   s.startDate=document.getElementById('pst-start').value;
   s.phone=document.getElementById('pst-phone').value.trim();
   s.notes=document.getElementById('pst-notes').value.trim();
-  s.lateRate=num('pst-late'); s.otRate=num('pst-ot'); s.tripRate=num('pst-trip');
-  s.commRate=num('pst-comm'); s.cartonRate=num('pst-ctn'); s.kmRate=num('pst-km');
+  s.lateRate=num('pst-late'); s.otRate=num('pst-ot'); s.commRate=num('pst-comm');
   if(window.fbDB) window.fbDB.ref('attStaff/'+s.id).set(s);
   payStaffClose();
   payRenderStaff();
@@ -9114,12 +9153,11 @@ function payRenderOverview(){
   var totComm=0,totTravel=0,totOT=0,totNeg=0;
   monthEntries.forEach(function(e){
     var amt=payEntryAmt(e);
-    if(e.type==='commission') totComm+=amt;
-    else if(e.type==='ot') totOT+=amt;
+    if(e.type==='ot') totOT+=amt;            // commission handled per-staff below (live/auto aware)
     else if(['trip','km','ferry','accommodation','fuel'].indexOf(e.type)>=0) totTravel+=amt;
     if(payIsNeg(e.type)) totNeg+=amt;
   });
-  var totPayroll=0; attStaff.forEach(function(s){ totPayroll+=attCalc(s,mk).net; });
+  var totPayroll=0; attStaff.forEach(function(s){ var c=attCalc(s,mk); totPayroll+=c.net; totComm+=c.pay.commission; });
   var mg=document.getElementById('pay-month-grid');
   if(mg) mg.innerHTML=[
     ['💰 Total payroll','var(--blue)',totPayroll],
@@ -9170,22 +9208,31 @@ function payRenderMonth(){
 
   var grandNet=0;
   listEl.innerHTML = attStaff.map(function(s){
+    var calc = attCalc(s, mk);
     var entries = all.filter(function(e){return e.staffId===s.id && (e.date||'').slice(0,7)===mk;});
-    var base = parseFloat(s.monthlySalary)||0;
+    var base = calc.base;
+    var commAuto = calc.commissionAuto; // >0 only when a per-panel rate is set
     var pos=base, neg=0;
+    var rowsArr=[];
     entries.forEach(function(e){
-      var amt=parseFloat(e.amount)||(parseFloat(e.qty)||0);
-      if(payIsNeg(e.type)) neg+=amt; else pos+=amt;
-    });
-    var net=pos-neg; grandNet+=net;
-    var rows = entries.map(function(e){
+      if(commAuto>0 && e.type==='commission') return; // replaced by live auto-commission
       var isN=payIsNeg(e.type); var amt=parseFloat(e.amount)||(parseFloat(e.qty)||0);
+      if(isN) neg+=amt; else pos+=amt;
       var label=(ATT_TYPE_LABEL[e.type]||e.type).split(' /')[0].replace(/^[^ ]+ /,'');
-      return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0 3px 12px;border-bottom:1px solid var(--border)">'
+      rowsArr.push('<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0 3px 12px;border-bottom:1px solid var(--border)">'
         +'<span style="color:var(--text2)">'+e.date+' · '+label+(e.note?' · '+e.note:'')+'</span>'
         +'<span style="font-weight:700;color:'+(isN?'#dc2626':'#059669')+'">'+(isN?'−':'+')+amt.toLocaleString()+' ฿</span>'
-        +'</div>';
-    }).join('');
+        +'</div>');
+    });
+    if(commAuto>0){
+      pos+=commAuto;
+      rowsArr.push('<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0 3px 12px;border-bottom:1px solid var(--border)">'
+        +'<span style="color:var(--text2)">Commission ('+calc.monthPanels.toLocaleString()+' panels × '+calc.rate.commission+')</span>'
+        +'<span style="font-weight:700;color:#059669">+'+commAuto.toLocaleString()+' ฿</span>'
+        +'</div>');
+    }
+    var net=calc.net; grandNet+=net;
+    var rows = rowsArr.join('');
     return '<div class="card" style="padding:0;margin-bottom:10px;overflow:hidden">'
       +'<div onclick="var d=this.nextElementSibling;d.style.display=d.style.display===\'none\'?\'\':\' none\'" style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;cursor:pointer">'
       +'<div><div style="font-size:15px;font-weight:700">'+s.name+'</div><div style="font-size:11px;color:var(--text2)">'+(s.category||'Staff')+(base?' · Base '+base.toLocaleString()+' ฿':'')+'</div></div>'
