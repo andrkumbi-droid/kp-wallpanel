@@ -122,6 +122,20 @@ function autoExtendIfNeeded(sh) {
   } catch (err) { /* never block the edit */ }
 }
 
+// Diagnostic: open the target tab, then Run this from the editor and read the
+// execution log (Ausführungsprotokoll). Tells us if auto-mode is on, whether
+// the block/totals row is detected, and how many free slots remain.
+function aeDebug() {
+  var sh = SpreadsheetApp.getActiveSheet();
+  var b = aeFindBlock(sh);
+  var msg = 'tab="' + sh.getName() + '" | AE_AUTO=' + AE_AUTO + ' | block=' +
+    (b ? (b.first + '..' + b.last + ' totals@' + b.totalsRow +
+          ' | emptySlots=' + aeStats(sh, b).emptySlots + ' (buffer ' + AE_MIN_BUFFER + ')')
+       : 'NULL — no =SUM(...) found in column G on this tab');
+  Logger.log(msg);
+  return msg;
+}
+
 // Handler for an INSTALLABLE "On edit" trigger (runs with full authorization,
 // so it reliably inserts rows — unlike the simple onEdit trigger).
 // SET UP once: Apps Script editor → ⏰ Triggers → + Add Trigger →
