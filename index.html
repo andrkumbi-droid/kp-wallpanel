@@ -3880,8 +3880,10 @@ function ofIncCard(c) {
       +'<span style="font-weight:700">'+c.helpersTotal.toLocaleString()+' ฿ ▾</span>'
       +'</summary>'
       +'<div style="background:var(--bg2);border-radius:0 0 var(--rs) var(--rs);padding:6px 10px">'
-      + (c.helpersGroup?'<div style="font-size:11px;color:var(--text2);padding:2px 0 4px;font-style:italic">'+c.helpersGroup+'</div>':'')
-      + '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span>'+(c.helpersCount||0)+' persons × '+(c.helpersPerPerson||0).toLocaleString()+' ฿</span><span style="font-weight:700">'+(c.helpersTotal||0).toLocaleString()+' ฿</span></div>'
+      + (function(){
+          var gs=(c.helperGroups&&c.helperGroups.length)?c.helperGroups:(c.helpersTotal>0?[{group:c.helpersGroup||'',count:c.helpersCount||0,per:c.helpersPerPerson||0}]:[]);
+          return gs.map(function(g){ return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)"><span>'+(g.group?'<b>'+g.group+'</b> · ':'')+(g.count||0)+' × '+(g.per||0).toLocaleString()+' ฿</span><span style="font-weight:700">'+((g.count||0)*(g.per||0)).toLocaleString()+' ฿</span></div>'; }).join('');
+        })()
       +'</div></details>';
   }
   html += '<button type="button" onclick="openCL(\''+c.id+'\')" style="width:100%;margin-top:6px;background:var(--bg2);color:#92400e;border:1px dashed var(--orange);border-radius:var(--rs);padding:8px;font-size:12px;font-weight:600;cursor:pointer">🧑‍🤝‍🧑 '+(c.helpersTotal>0?'Edit':'Add')+' unload helpers / คนขนของ</button>';
@@ -8098,15 +8100,12 @@ function calcViz() {
       <button type="button" onclick="clAddLine()" style="background:var(--blue);color:#fff;border:none;border-radius:var(--rs);padding:5px 10px;font-size:12px;cursor:pointer"><i class="ti ti-plus"></i> Add</button>
     </div>
     <div id="clog-lines"></div>
-    <div style="margin:12px 0 6px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 6px">
       <span style="font-size:12px;font-weight:700">🧑‍🤝‍🧑 Unload helpers / คนขนของ <span style="font-size:11px;color:var(--text2);font-weight:400">(per container / ต่อตู้)</span></span>
+      <button type="button" onclick="clAddHelperGroup()" style="background:var(--blue);color:#fff;border:none;border-radius:var(--rs);padding:5px 10px;font-size:12px;cursor:pointer"><i class="ti ti-plus"></i> Add group</button>
     </div>
-    <input type="text" id="cl-helpers-group" placeholder="Group / source (optional) — e.g. Myanmar ice factory · Fastwork taxi" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;margin-bottom:8px">
-    <div class="g2">
-      <div><label class="fl" style="margin-top:0">👥 Persons / จำนวนคน</label><input type="number" id="cl-helpers-count-in" min="0" placeholder="0" oninput="clHelpersTotal()"></div>
-      <div><label class="fl" style="margin-top:0">💵 ฿ per person / ต่อคน</label><input type="number" id="cl-helpers-per" min="0" placeholder="0" oninput="clHelpersTotal()"></div>
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding:8px 2px 2px;border-top:1px solid var(--border);margin-top:8px"><span>Total / รวม</span><span id="cl-helpers-total" style="color:var(--green)">0 ฿</span></div>
+    <div id="cl-helper-groups"></div>
+    <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:800;padding:8px 2px 2px;border-top:1px solid var(--border);margin-top:4px"><span><span id="cl-helpers-count">0</span> persons total / รวม</span><span id="cl-helpers-total" style="color:var(--green)">0 ฿</span></div>
     <label class="fl">Notes</label>
     <textarea id="cl-notes" rows="2" placeholder="Optional notes..."></textarea>
     <button type="button" class="btn btnp" style="margin-top:12px" onclick="saveCL()"><i class="ti ti-device-floppy"></i> Save</button>
@@ -8937,10 +8936,11 @@ function openCL(id) {
   } else {
     clAddLine();
   }
-  // Unload helpers
-  document.getElementById('cl-helpers-group').value = c ? (c.helpersGroup||'') : '';
-  document.getElementById('cl-helpers-count-in').value = c ? (c.helpersCount||'') : '';
-  document.getElementById('cl-helpers-per').value = c ? (c.helpersPerPerson||'') : '';
+  // Unload helpers (groups) — migrate old single-group records on the fly
+  document.getElementById('cl-helper-groups').innerHTML = '';
+  var grps = (c && c.helperGroups && c.helperGroups.length) ? c.helperGroups
+    : (c && c.helpersTotal>0 ? [{group:c.helpersGroup||'', count:c.helpersCount||0, per:c.helpersPerPerson||0}] : []);
+  grps.forEach(function(g){ clAddHelperGroup(g.group, g.count, g.per); });
   clHelpersTotal();
   document.getElementById('cl-modal').classList.add('open');
 }
@@ -8950,10 +8950,36 @@ function closeCL() {
   _clEditId = null;
 }
 
+function clAddHelperGroup(group, count, per){
+  var wrap = document.getElementById('cl-helper-groups'); if(!wrap) return;
+  var row = document.createElement('div');
+  row.className = 'cl-hg';
+  row.style.cssText = 'background:var(--bg2);border-radius:var(--rs);padding:8px;margin-bottom:8px';
+  var g = group ? String(group).replace(/"/g,'&quot;') : '';
+  row.innerHTML =
+    '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'
+    + '<input type="text" class="hg-group" placeholder="Group / source (e.g. Fastwork taxi)" value="'+g+'" style="flex:1;padding:7px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px">'
+    + '<button type="button" onclick="this.closest(\'.cl-hg\').remove();clHelpersTotal()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:0 4px">✕</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:6px;align-items:center">'
+    + '<input type="number" class="hg-count" min="0" placeholder="Persons / คน" value="'+(count!=null?count:'')+'" oninput="clHelpersTotal()" style="flex:1;padding:7px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;text-align:center">'
+    + '<span style="color:var(--text2);font-size:13px">×</span>'
+    + '<input type="number" class="hg-per" min="0" placeholder="฿/person" value="'+(per!=null?per:'')+'" oninput="clHelpersTotal()" style="flex:1;padding:7px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;text-align:center">'
+    + '<span class="hg-sub" style="font-weight:700;font-size:13px;min-width:64px;text-align:right;color:var(--green)">0 ฿</span>'
+    + '</div>';
+  wrap.appendChild(row);
+  clHelpersTotal();
+}
 function clHelpersTotal() {
-  var n = parseInt((document.getElementById('cl-helpers-count-in')||{}).value)||0;
-  var per = parseFloat((document.getElementById('cl-helpers-per')||{}).value)||0;
-  var te = document.getElementById('cl-helpers-total'); if(te) te.textContent = (n*per).toLocaleString()+' ฿';
+  var total=0, persons=0;
+  document.querySelectorAll('#cl-helper-groups .cl-hg').forEach(function(r){
+    var c=parseInt(r.querySelector('.hg-count').value)||0;
+    var p=parseFloat(r.querySelector('.hg-per').value)||0;
+    var sub=c*p; total+=sub; persons+=c;
+    var se=r.querySelector('.hg-sub'); if(se) se.textContent=sub.toLocaleString()+' ฿';
+  });
+  var te=document.getElementById('cl-helpers-total'); if(te) te.textContent=total.toLocaleString()+' ฿';
+  var ce=document.getElementById('cl-helpers-count'); if(ce) ce.textContent=persons;
 }
 
 function saveCL() {
@@ -8967,11 +8993,16 @@ function saveCL() {
     var qty = parseInt(inputs[1]&&inputs[1].value||0)||0;
     if(code && qty) items.push({code:code, qty:qty});
   });
-  // Unload helpers: group + persons × per-person
-  var helpersGroup = (document.getElementById('cl-helpers-group').value||'').trim();
-  var helpersCount = parseInt(document.getElementById('cl-helpers-count-in').value)||0;
-  var helpersPerPerson = parseFloat(document.getElementById('cl-helpers-per').value)||0;
-  var helpersTotal = helpersCount*helpersPerPerson;
+  // Unload helpers: one or more groups (group · persons × per-person)
+  var helperGroups = [];
+  document.querySelectorAll('#cl-helper-groups .cl-hg').forEach(function(r){
+    var group=(r.querySelector('.hg-group').value||'').trim();
+    var count=parseInt(r.querySelector('.hg-count').value)||0;
+    var per=parseFloat(r.querySelector('.hg-per').value)||0;
+    if(count>0||per>0) helperGroups.push({group:group, count:count, per:per});
+  });
+  var helpersTotal = helperGroups.reduce(function(a,g){return a+g.count*g.per;},0);
+  var helpersCount = helperGroups.reduce(function(a,g){return a+g.count;},0);
   var old = _clEditId ? containerLog.find(function(x){return x.id===_clEditId;}) : null;
   var entry = {
     id: _clEditId || 'cl'+Date.now(),
@@ -8985,9 +9016,8 @@ function saveCL() {
     arrivedThAct: document.getElementById('cl-arrived-th-act').value||'',
     arrivedWh: old ? (old.arrivedWh||'') : '',
     items: items,
-    helpersGroup: helpersGroup,
+    helperGroups: helperGroups,
     helpersCount: helpersCount,
-    helpersPerPerson: helpersPerPerson,
     helpersTotal: helpersTotal,
     notes: (document.getElementById('cl-notes').value||'').trim(),
     createdAt: old ? (old.createdAt||Date.now()) : Date.now()
