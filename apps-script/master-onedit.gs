@@ -58,6 +58,9 @@ function onEdit(e) {
       }
     }
 
+    // Keep a buffer of pre-formatted blank rows below the data (see auto-extend.gs).
+    try { autoExtendIfNeeded(sh); } catch (eAE) {}
+
     // Only react to edits in the combined source column, below the header.
     if (e.range.getColumn() !== srcCol) return;
     var row = e.range.getRow();
@@ -93,6 +96,65 @@ function onEdit(e) {
     put('name', ex.name);
     put('address', ex.address);
   } catch (err) { /* never block the edit */ }
+}
+
+// ── Manual batch splitter (menu) ────────────────────────────────────
+// onEdit only fires on MANUAL edits — rows added via the app sync / LINE
+// bot / Sheets API never trigger it, so they stay unsplit. This menu lets
+// you split every still-unsplit row on demand (uses the tolerant parser,
+// so dash-format phone numbers like 092-109-0111 split fine too).
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi().createMenu('KP Tools')
+      .addItem('Split all customer rows / แยกข้อมูลทั้งหมด', 'splitAllRows')
+      .addItem('Add formatted rows now / เติมแถวรูปแบบ', 'autoExtendAllNow')
+      .addToUi();
+  } catch (e) {}
+}
+
+function splitAllRows() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var filled = 0, sheetsDone = 0;
+  ss.getSheets().forEach(function (sh) {
+    var lastCol = sh.getLastColumn(), lastRow = sh.getLastRow();
+    if (lastCol < 1 || lastRow < 1) return;
+    // find header row + combined source column
+    var headerRow = -1, srcCol = -1, headerVals = null;
+    for (var r = 1; r <= Math.min(HEADER_SCAN, lastRow); r++) {
+      var vals = sh.getRange(r, 1, 1, lastCol).getValues()[0];
+      for (var c = 0; c < vals.length; c++) {
+        if (SRC_RE.test(String(vals[c]).trim())) { headerRow = r; srcCol = c + 1; headerVals = vals; break; }
+      }
+      if (srcCol > 0) break;
+    }
+    if (srcCol < 0) return;
+    // map the 4 target columns
+    var colMap = {};
+    for (var k = 0; k < headerVals.length; k++) {
+      if (k + 1 === srcCol) continue;
+      var h = String(headerVals[k]).trim(); if (!h) continue;
+      for (var t = 0; t < TARGETS.length; t++) {
+        if (!colMap[TARGETS[t].key] && TARGETS[t].re.test(h)) { colMap[TARGETS[t].key] = k + 1; break; }
+      }
+    }
+    if (!colMap.name && !colMap.phone && !colMap.address) return;
+    var srcVals = sh.getRange(headerRow + 1, srcCol, lastRow - headerRow, 1).getValues();
+    for (var i = 0; i < srcVals.length; i++) {
+      var row = headerRow + 1 + i;
+      var cell = String(srcVals[i][0] || '').trim();
+      if (!cell) continue;
+      var ex = kpParseCustomer(cell);
+      // only fill cells that are currently empty (never overwrite)
+      ['maps', 'phone', 'name', 'address'].forEach(function (key) {
+        var col = colMap[key], val = ex[key];
+        if (!col || !val) return;
+        var tc = sh.getRange(row, col);
+        if (!String(tc.getValue()).trim()) { tc.setValue(val); filled++; }
+      });
+    }
+    sheetsDone++;
+  });
+  SpreadsheetApp.getUi().alert('Done / เสร็จแล้ว\n\nFilled ' + filled + ' empty cell(s) across ' + sheetsDone + ' sheet(s).');
 }
 
 // Parse a combined customer blob into {name, phone, maps, address}.
