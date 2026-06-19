@@ -1,98 +1,130 @@
 /**
- * KP Wallpanel — Master Sheet AUTO-EXTEND
- * ─────────────────────────────────────────
- * Problem: when the formatted data area fills up, an office worker has to
- * add rows by hand (and formatting / dropdowns / per-row formulas get lost).
+ * KP Wallpanel — Master Sheet ORDER-ROW EXTENDER
+ * ────────────────────────────────────────────────
+ * Inserts more pre-formatted, sequentially-numbered order rows INSIDE the
+ * order block — directly above the last slot row — so:
+ *   • the green totals row (=SUM(G26:G107) etc.) auto-expands and stays correct,
+ *   • the green/summary section BELOW the totals just moves down, unchanged,
+ *   • new rows get the next order numbers (e.g. 1-308, 1-309 …) in column B.
  *
- * Solution: this keeps at least AE_MIN_BUFFER empty *formatted* rows below
- * the last data row at all times. When that buffer runs low it appends
- * AE_ROWS_TO_ADD rows and copies format + data-validation + row-relative
- * formulas from a template row — but NOT the template's text/values.
+ * The order block is detected as the FIRST contiguous run of rows that have
+ * the Status dropdown (data validation) in column A. The totals row has no
+ * such dropdown, so it cleanly marks the end of the block.
  *
- * It is called automatically from the onEdit handler in master-onedit.gs
- * (so it runs whenever someone types into a sheet that has the combined
- * "ชื่อ-ที่อยู่ลูกค้า" column). It returns instantly when the buffer is fine,
- * so it adds no noticeable lag.
+ * SAFETY: it shows a confirmation dialog (which tab, where, which numbers)
+ * before changing anything, and never touches the totals row or anything
+ * below it. Runs from the "KP Tools" menu. Auto-mode is OFF by default.
  *
- * INSTALL: paste this file into the MASTER sheet's Apps Script project
- * (alongside master-onedit.gs) and Save. No trigger setup needed.
+ * ⚠️ TEST FIRST on a COPY of the sheet (Datei → Kopie erstellen) and verify
+ * the totals + numbering before using it on the live file.
  *
- * ── ADJUST HERE (the only knobs you normally touch) ──────────────────── */
-var AE_ROWS_TO_ADD  = 50;   // how many formatted rows to append each time
-var AE_MIN_BUFFER   = 20;   // keep at least this many empty formatted rows spare
-var AE_TEMPLATE_ROW = 0;    // 0 = use the last data row as the template;
-                            //     or set a fixed row number (a clean formatted row)
+ * ── ADJUST HERE ───────────────────────────────────────────────────────── */
+var AE_ROWS_TO_ADD = 50;     // how many new order rows to add per run
+var AE_MIN_BUFFER  = 20;     // (auto-mode) keep at least this many empty slots
+var AE_AUTO        = false;  // true = also top up automatically on edit; leave
+                             //        false until you've verified it on a copy
+var AE_STATUS_COL  = 1;      // column A — order rows have the Status dropdown
+var AE_NUM_COL     = 2;      // column B — order number "<prefix><n>"
+var AE_DATA_COLS   = [3, 7]; // a row counts as USED if any of these has content
+                             // (C = date, G = total). Empty in all = free slot.
 /* ─────────────────────────────────────────────────────────────────────── */
 
-// Called from master-onedit.gs onEdit(). `sh` = the edited sheet (already
-// known to be a target sheet with the combined column).
-function autoExtendIfNeeded(sh) {
-  try {
-    var P = PropertiesService.getDocumentProperties();
-    var key = 'fmtEnd_' + sh.getSheetId();
-    var lastData = sh.getLastRow();
-    var fmtEnd = parseInt(P.getProperty(key), 10) || sh.getMaxRows();
-
-    // Enough formatted buffer still below the last data row? → nothing to do.
-    if (lastData <= fmtEnd - AE_MIN_BUFFER) return;
-
-    var lastCol  = sh.getLastColumn();
-    var tplRow   = (AE_TEMPLATE_ROW > 0) ? AE_TEMPLATE_ROW : lastData;
-    if (tplRow < 1) return;
-
-    var startRow = Math.max(fmtEnd, lastData) + 1;
-    var newEnd   = lastData + AE_MIN_BUFFER + AE_ROWS_TO_ADD;
-    var nRows    = newEnd - startRow + 1;
-    if (nRows < 1) return;
-
-    // Make sure the physical rows exist.
-    var maxRows = sh.getMaxRows();
-    if (newEnd > maxRows) sh.insertRowsAfter(maxRows, newEnd - maxRows);
-
-    var tpl  = sh.getRange(tplRow, 1, 1, lastCol);
-    var dest = sh.getRange(startRow, 1, nRows, lastCol);
-
-    // 1) Format only (colours, borders, number formats) — never the values.
-    tpl.copyTo(dest, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
-
-    // 2) Data validation (dropdowns) — repeat the template row down.
-    try {
-      var dv = tpl.getDataValidations()[0];
-      var dvM = [];
-      for (var i = 0; i < nRows; i++) dvM.push(dv.slice());
-      dest.setDataValidations(dvM);
-    } catch (e1) {}
-
-    // 3) Per-row formulas, relative (R1C1) so references shift per row.
-    //    Non-formula cells come back as '' → stay empty (no copied values).
-    try {
-      var f = tpl.getFormulasR1C1()[0];
-      var fM = [];
-      for (var j = 0; j < nRows; j++) fM.push(f.slice());
-      dest.setFormulasR1C1(fM);
-    } catch (e2) {}
-
-    P.setProperty(key, String(newEnd));
-  } catch (err) { /* never block the edit */ }
+// Find the first contiguous block of order rows (Status dropdown in col A).
+function aeFindBlock(sh) {
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  if (lastRow < 2 || lastCol < AE_NUM_COL) return null;
+  var dv = sh.getRange(1, AE_STATUS_COL, lastRow, 1).getDataValidations();
+  var first = -1, last = -1;
+  for (var r = 0; r < lastRow; r++) {
+    if (dv[r][0] != null) { if (first < 0) first = r + 1; last = r + 1; }
+    else if (first >= 0) break; // first gap after the block → stop
+  }
+  if (first < 0 || last < first) return null;
+  return { first: first, last: last, lastCol: lastCol };
 }
 
-// Optional: run once from the editor (or a menu) to (re)apply formatting to
-// the buffer right now, e.g. after first install. Safe to run repeatedly.
+function aeParseNum(s) {
+  var m = String(s == null ? '' : s).match(/^\s*(.*?)(\d+)\s*$/);
+  return m ? { prefix: m[1], n: parseInt(m[2], 10) } : null;
+}
+
+// Analyse a block: max used order number, prefix, count of empty slots.
+function aeStats(sh, b) {
+  var rows = sh.getRange(b.first, 1, b.last - b.first + 1, b.lastCol).getValues();
+  var maxFilled = 0, prefix = null, emptySlots = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var used = AE_DATA_COLS.some(function (c) { return String(rows[i][c - 1]).trim() !== ''; });
+    var pn = aeParseNum(rows[i][AE_NUM_COL - 1]);
+    if (pn) { if (prefix === null) prefix = pn.prefix; if (used && pn.n > maxFilled) maxFilled = pn.n; }
+    if (!used) emptySlots++;
+  }
+  return { maxFilled: maxFilled, prefix: prefix == null ? '' : prefix, emptySlots: emptySlots, rows: rows };
+}
+
+// Core: insert AE_ROWS_TO_ADD rows above the last slot, clone formatting +
+// validation + formulas from the last order row, then renumber empty slots.
+function aeInsert(sh, silent) {
+  var b = aeFindBlock(sh);
+  if (!b) return { ok: false, msg: 'No order block found on "' + sh.getName() + '".' };
+  var st = aeStats(sh, b);
+  var startNum = st.maxFilled + 1;
+  var endNum = startNum + (st.emptySlots + AE_ROWS_TO_ADD) - 1;
+
+  if (!silent) {
+    var ui = SpreadsheetApp.getUi();
+    var resp = ui.alert('Add order rows',
+      'Tab: ' + sh.getName() + '\n' +
+      'Insert ' + AE_ROWS_TO_ADD + ' rows above row ' + b.last + ' (inside the totals range).\n' +
+      'Empty slots will be renumbered ' + st.prefix + startNum + ' … ' + st.prefix + endNum + '.\n\n' +
+      'Totals + everything below the green row stay correct. Proceed?',
+      ui.ButtonSet.OK_CANCEL);
+    if (resp !== ui.Button.OK) return { ok: false, msg: 'Cancelled.' };
+  }
+
+  // 1) Insert blank rows above the last slot → totals SUM range expands.
+  sh.insertRowsBefore(b.last, AE_ROWS_TO_ADD);
+  var tplRow = b.last + AE_ROWS_TO_ADD;            // original last slot, shifted down
+  var lastCol = sh.getLastColumn();
+  var tpl  = sh.getRange(tplRow, 1, 1, lastCol);
+  var dest = sh.getRange(b.last, 1, AE_ROWS_TO_ADD, lastCol);
+
+  // 2) Clone look + dropdowns + per-row formulas (NOT values).
+  tpl.copyTo(dest, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+  try {
+    var dv = tpl.getDataValidations()[0], dvM = [];
+    for (var i = 0; i < AE_ROWS_TO_ADD; i++) dvM.push(dv.slice());
+    dest.setDataValidations(dvM);
+  } catch (e1) {}
+  try {
+    var f = tpl.getFormulasR1C1()[0], fM = [];
+    for (var j = 0; j < AE_ROWS_TO_ADD; j++) fM.push(f.slice());
+    dest.setFormulasR1C1(fM);
+  } catch (e2) {}
+
+  // 3) Renumber every empty slot in the (now bigger) block, sequentially.
+  var nb = aeFindBlock(sh);
+  var vals = sh.getRange(nb.first, 1, nb.last - nb.first + 1, nb.lastCol).getValues();
+  var counter = startNum;
+  for (var k = 0; k < vals.length; k++) {
+    var used = AE_DATA_COLS.some(function (c) { return String(vals[k][c - 1]).trim() !== ''; });
+    if (!used) { sh.getRange(nb.first + k, AE_NUM_COL).setValue(st.prefix + counter); counter++; }
+  }
+  return { ok: true, msg: 'Added ' + AE_ROWS_TO_ADD + ' rows on "' + sh.getName() + '" (' + st.prefix + startNum + '…' + st.prefix + endNum + ').' };
+}
+
+// Menu action: add rows to the CURRENTLY OPEN tab (with confirmation).
 function autoExtendAllNow() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.getSheets().forEach(function (sh) {
-    // only sheets that have the combined column (same check the splitter uses)
-    var lastCol = sh.getLastColumn();
-    if (lastCol < 1) return;
-    var has = false;
-    for (var r = 1; r <= Math.min(6, sh.getLastRow()); r++) {
-      var vals = sh.getRange(r, 1, 1, lastCol).getValues()[0];
-      for (var c = 0; c < vals.length; c++) { if (/ชื่อ.*ที่อยู่/.test(String(vals[c]).trim())) { has = true; break; } }
-      if (has) break;
-    }
-    if (!has) return;
-    PropertiesService.getDocumentProperties().deleteProperty('fmtEnd_' + sh.getSheetId());
-    autoExtendIfNeeded(sh);
-  });
-  try { SpreadsheetApp.getUi().alert('Auto-extend applied to all data sheets.'); } catch (e) {}
+  var sh = SpreadsheetApp.getActiveSheet();
+  var r = aeInsert(sh, false);
+  try { SpreadsheetApp.getUi().alert(r.ok ? 'Done' : 'Note', r.msg, SpreadsheetApp.getUi().ButtonSet.OK); } catch (e) {}
+}
+
+// Auto-mode hook (called from master-onedit.gs onEdit). Off unless AE_AUTO.
+function autoExtendIfNeeded(sh) {
+  try {
+    if (!AE_AUTO) return;
+    var b = aeFindBlock(sh); if (!b) return;
+    if (aeStats(sh, b).emptySlots > AE_MIN_BUFFER) return;
+    aeInsert(sh, true); // silent
+  } catch (err) { /* never block the edit */ }
 }
