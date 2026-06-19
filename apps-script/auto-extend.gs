@@ -23,7 +23,9 @@ var AE_AUTO        = false;  // true = also top up automatically on edit
 var AE_STATUS_COL  = 1;      // column A — order rows have the Status dropdown
 var AE_NUM_COL     = 2;      // column B — order number "<prefix><n>"
 var AE_SUM_COL     = 7;      // column G — the totals row has =SUM(...) here
-var AE_DATA_COLS   = [3, 7]; // a row is USED if any of these has content (C,G)
+var AE_DATA_COLS   = [3, 4]; // a row is USED if any of these has content
+                             // (C = date, D = product). Empty slots have a "-"
+                             // placeholder in G/O, so do NOT use those columns.
 /* ─────────────────────────────────────────────────────────────────────── */
 
 // Locate the order block: first Status-validation row → up to the totals row
