@@ -85,20 +85,11 @@ function aeInsert(sh, silent) {
   sh.insertRowsBefore(lastSlot, AE_ROWS_TO_ADD); // → inside SUM range, it expands
   var lastCol = sh.getLastColumn();
   var tplRow  = lastSlot + AE_ROWS_TO_ADD;        // original last slot, shifted down
-  var tpl  = sh.getRange(tplRow, 1, 1, lastCol);
-  var dest = sh.getRange(lastSlot, 1, AE_ROWS_TO_ADD, lastCol);
-
-  tpl.copyTo(dest, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
-  try {
-    var dvv = tpl.getDataValidations()[0], dvM = [];
-    for (var i = 0; i < AE_ROWS_TO_ADD; i++) dvM.push(dvv.slice());
-    dest.setDataValidations(dvM);
-  } catch (e1) {}
-  try {
-    var f = tpl.getFormulasR1C1()[0], fM = [];
-    for (var j = 0; j < AE_ROWS_TO_ADD; j++) fM.push(f.slice());
-    dest.setFormulasR1C1(fM);
-  } catch (e2) {}
+  // Clone the whole template slot row into the new rows. The native copyTo does
+  // a true "fill down": format + data-validation + formulas (relative refs auto-
+  // adjusted per row) + the slot's placeholder values. No broken formulas.
+  sh.getRange(tplRow, 1, 1, lastCol)
+    .copyTo(sh.getRange(lastSlot, 1, AE_ROWS_TO_ADD, lastCol));
 
   // Renumber empty slots STRICTLY above the (shifted) totals row.
   var newTotalsRow = b.totalsRow + AE_ROWS_TO_ADD;
