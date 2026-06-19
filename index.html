@@ -3936,6 +3936,7 @@ function ofRenderTour(){
   }
 
   // Active tours
+  var _multiTour = activeTours.filter(function(t){return t&&t.orders&&t.orders.length;}).length>1;
   var tourCards = activeTours.filter(function(t){return t&&t.orders;}).map(function(t,ti) {
     var del=t.orders.filter(function(id){return (t.status||{})[id]==='delivered';}).length;
     var can=t.orders.filter(function(id){return (t.status||{})[id]==='cancelled';}).length;
@@ -3950,7 +3951,8 @@ function ofRenderTour(){
         '<div style="display:flex;align-items:center;gap:6px">'+
         '<span style="font-size:11px;color:var(--text2)">'+(ord?ord.zone:'')+'</span>'+
         (st==='loaded'||st==='ready'
-          ? '<button type="button" onclick="ofTourDeliver(\''+t.id+'\',\''+id+'\')" style="font-size:11px;padding:2px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">✓ Delivered</button>'
+          ? (_multiTour?'<button type="button" onclick="ofMoveOrder(\''+t.id+'\',\''+id+'\')" title="Move to another tour" style="font-size:11px;padding:2px 8px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">⇄</button>':'')
+            +'<button type="button" onclick="ofTourDeliver(\''+t.id+'\',\''+id+'\')" style="font-size:11px;padding:2px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">✓ Delivered</button>'
             +'<button type="button" data-tid="'+t.id+'" data-oid="'+id+'" onclick="rmFromTour(this)" style="font-size:11px;padding:2px 8px;border:1px solid #dc2626;background:#fee2e2;color:#dc2626;border-radius:var(--rs);cursor:pointer">✕ ลบ</button>'
           : '<span class="badge" style="font-size:10px;background:var(--green-bg);color:var(--green)">'+st+'</span>')+
         '</div>'+
@@ -4072,6 +4074,31 @@ function ofTourDeliver(tourId, orderId){
   ofRenderTour();ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();
   try{ payUpdateBadge(); }catch(e){}
   try{ if(ord) sheetsSyncOrder(ord); }catch(e){}
+}
+
+// Move an order from one active tour to another (e.g. driver came back for it)
+function ofMoveOrder(fromTourId, orderId){
+  var from = activeTours.find(function(x){return x.id===fromTourId;}); if(!from) return;
+  var targets = activeTours.filter(function(t){return t&&t.orders&&t.id!==fromTourId;});
+  if(!targets.length){ alert('No other active tour to move to. / ไม่มีทัวร์อื่น'); return; }
+  var target;
+  if(targets.length===1){
+    target=targets[0];
+    if(!confirm('Move '+orderId+' → '+target.driverName+"'s tour ("+target.orders.length+' orders)?')) return;
+  } else {
+    var msg='Move '+orderId+' to which tour?\n\n'+targets.map(function(t,i){return (i+1)+') '+t.driverName+' — '+t.orders.length+' orders';}).join('\n')+'\n\nEnter number:';
+    var pick=prompt(msg,'1'); if(pick===null) return;
+    var idx=parseInt(pick)-1; if(isNaN(idx)||idx<0||idx>=targets.length){ alert('Invalid choice / เลือกไม่ถูกต้อง'); return; }
+    target=targets[idx];
+  }
+  var st=(from.status&&from.status[orderId])||'loaded';
+  from.orders=from.orders.filter(function(x){return x!==orderId;});
+  if(from.status) delete from.status[orderId];
+  if(target.orders.indexOf(orderId)<0) target.orders.push(orderId);
+  target.status=target.status||{}; target.status[orderId]=st;
+  // remove now-empty source tour
+  if(from.orders.length===0){ activeTours=activeTours.filter(function(x){return x.id!==fromTourId;}); }
+  ofRenderTour(); syncTours();
 }
 
 // Mark/unmark an existing order as priority (with confirm + reason)
