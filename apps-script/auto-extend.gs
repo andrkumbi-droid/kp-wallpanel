@@ -121,3 +121,15 @@ function autoExtendIfNeeded(sh) {
     aeInsert(sh, true);
   } catch (err) { /* never block the edit */ }
 }
+
+// Handler for an INSTALLABLE "On edit" trigger (runs with full authorization,
+// so it reliably inserts rows — unlike the simple onEdit trigger).
+// SET UP once: Apps Script editor → ⏰ Triggers → + Add Trigger →
+//   function: aeInstallableOnEdit · event source: From spreadsheet ·
+//   event type: On edit → Save (authorize once).
+function aeInstallableOnEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    autoExtendIfNeeded(e.range.getSheet());
+  } catch (err) {}
+}
