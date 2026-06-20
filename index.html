@@ -249,6 +249,7 @@ textarea{resize:none}
 .notif-dot.show{display:block}
 .wh-new-badge{background:var(--red);color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:20px;margin-left:6px;animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes blink{0%,100%{box-shadow:0 0 0 0 rgba(124,58,237,0)}50%{box-shadow:0 0 14px 2px rgba(124,58,237,0.55)}}
 @keyframes kpFloat{0%{transform:translateY(0) scale(1);opacity:1}100%{transform:translateY(-160px) scale(1.3);opacity:0}}
 @keyframes kpPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.25)}}
 @keyframes slideDown{0%{opacity:0;transform:translateX(-50%) translateY(-10px)}100%{opacity:1;transform:translateX(-50%) translateY(0)}}
@@ -4537,7 +4538,8 @@ function drTour(){
     document.getElementById('dr-tlist').innerHTML=myTour.map((id,idx)=>{
       const o=dAllOrders.find(x=>x.id===id);if(!o)return '';
       const c=dChecks[id]||{p:false,l:false,c:false};
-      const murl='https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(o.address);
+      const _pin=custGeoGet(o.phone);
+      const murl=_pin?('https://www.google.com/maps/search/?api=1&query='+_pin.lat+','+_pin.lng):('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(o.address));
       const ck=(f,v)=>'<div class="chkrow" onclick="drChkBtn(this)" data-id="'+id+'" data-field="'+f+'"><div class="chkbox '+(v?'on':'')+'">'+( v?'<i class="ti ti-check" style="font-size:12px;color:var(--green)"></i>':''  )+'</div>';
       return '<div class="tcard">'+
         '<div class="ttop">'+
@@ -4546,6 +4548,7 @@ function drTour(){
         '<div class="crow"><i class="ti ti-user" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.customer+'</span></div>'+
         '<div class="crow"><i class="ti ti-phone" style="font-size:13px;color:var(--text2)"></i><a class="clink" href="tel:'+o.phone+'">'+o.phone+'</a></div>'+
         '<div class="crow"><i class="ti ti-map-pin" style="font-size:13px;color:var(--text2)"></i><a class="clink" href="'+murl+'" target="_blank">'+o.address+'</a></div>'+
+        (_pin?'<div class="crow"><i class="ti ti-navigation" style="font-size:13px;color:#16a34a"></i><a class="clink" href="https://www.google.com/maps/dir/?api=1&destination='+_pin.lat+','+_pin.lng+'" target="_blank" style="color:#16a34a;font-weight:600">🧭 Navigate to saved pin / นำทาง</a></div>':'')+
         (o.contact?'<div class="crow"><i class="ti ti-message-circle" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.contact+'</span></div>':'')+
         '</div>'+
         '<div class="tfoot"><button type="button" class="btn btng" style="margin-top:0;flex:1" onclick="drDeliverBtn(this)" data-id="'+id+'"><i class="ti ti-check"></i> Delivered / ส่งแล้ว</button><button type="button" class="btncancel" onclick="drCancelBtn(this)" data-id="'+id+'"><i class="ti ti-x"></i> Cancel</button></div>'+
@@ -4630,6 +4633,7 @@ function drSyncTourOrder(){
 }
 var _deliveryId = null;
 var _deliveryPhoto = null;
+var _deliveryPhone = '';
 
 var _deliveryTotal = 0;
 function openDeliveryModal(id){
@@ -4637,6 +4641,7 @@ function openDeliveryModal(id){
   _deliveryPhoto = null;
   var o = dAllOrders.find(function(x){return x.id===id;}) || orders.find(function(x){return x.id===id;});
   var full = orders.find(function(x){return x.id===id;}) || o || {};
+  _deliveryPhone = (full.phone || (o&&o.phone) || '');
   _deliveryTotal = parseFloat(String(full.total||'').replace(/[^0-9.]/g,''))||0;
   document.getElementById('delivery-modal-order').textContent = id;
   document.getElementById('delivery-modal-cust').textContent = o ? (o.customer||'') : '';
@@ -4652,6 +4657,7 @@ function openDeliveryModal(id){
   document.getElementById('dl-online-amt').value = '';
   document.getElementById('dl-pay-msg').textContent = '';
   dlPhotoRefresh();
+  dlGeoRefresh();
   document.getElementById('delivery-modal').classList.add('open');
 }
 // Checkbox toggle: auto-fill the amount for the single ticked method with the total.
@@ -4689,6 +4695,17 @@ function handleDeliveryPhoto(input){
   var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
   var prog = document.getElementById('delivery-upload-progress');
   if(prog) prog.style.display = 'block';
+  // EXIF bonus: if the photo carries GPS and this customer has no pin yet,
+  // use the photo's real location (true delivery spot). Never overrides an
+  // existing pin (driver tap / office edit win).
+  if(files[0] && normPhone(_deliveryPhone) && !custGeoGet(_deliveryPhone)){
+    readExifGps(files[0], function(g){
+      if(g && !custGeoGet(_deliveryPhone)){
+        custGeoSet(_deliveryPhone, { lat:+g.lat.toFixed(6), lng:+g.lng.toFixed(6), at:new Date().toISOString(), by:'photo', src:'exif' });
+        try{ dlGeoRefresh(); }catch(e){}
+      }
+    });
+  }
   var pending = files.length;
   files.forEach(function(f){
     compressPhotoFile(f, function(dataUrl){
@@ -4708,6 +4725,112 @@ function dlPhotoRefresh(){
   box.style.background = n>0 ? '#dcfce7' : 'var(--bg2)';
 }
 function clearDeliveryPhoto(){}
+
+// ════════════════════════════════════════════════════════════
+//  CUSTOMER LOCATION (GPS pin)  — stored on customerMeta[phone].geo
+//  = { lat, lng, acc, at, by, src:'driver'|'exif'|'office' }
+//  Used so a future delivery to the same phone already has the spot.
+// ════════════════════════════════════════════════════════════
+function custGeoGet(phone){
+  try{ var k=normPhone(phone); if(!k) return null; var m=customerMeta[k]; return (m&&m.geo&&typeof m.geo.lat==='number')?m.geo:null; }catch(e){ return null; }
+}
+function custGeoSet(phone, geo){
+  var k=normPhone(phone); if(!k) return false;
+  customerMeta[k]=customerMeta[k]||{};
+  customerMeta[k].geo=geo;
+  if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').set(geo);
+  return true;
+}
+function geoSane(lat,lng){ return typeof lat==='number'&&typeof lng==='number'&&isFinite(lat)&&isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180&&!(lat===0&&lng===0); }
+
+// Refresh the delivery-modal location button based on whether this
+// customer already has a saved pin.
+function dlGeoRefresh(){
+  var btn=document.getElementById('dl-geo-btn'), st=document.getElementById('dl-geo-status');
+  if(!btn||!st) return;
+  if(!normPhone(_deliveryPhone)){
+    btn.style.display='none'; st.textContent='No phone number — cannot save location'; return;
+  }
+  btn.style.display='block';
+  var g=custGeoGet(_deliveryPhone);
+  if(g){
+    // already saved → quiet "update" style
+    btn.style.background='var(--bg2)'; btn.style.color='var(--text)'; btn.style.border='1.5px solid var(--border)';
+    btn.style.animation='';
+    btn.innerHTML='📍 Update location / อัปเดตตำแหน่ง';
+    st.innerHTML='✅ Saved'+(g.acc?' (±'+g.acc+' m)':'')+(g.at?' · '+(g.at.split('T')[0]):'')+' · <a href="https://www.google.com/maps/search/?api=1&query='+g.lat+','+g.lng+'" target="_blank" style="color:var(--blue)">map</a>';
+    st.style.color='var(--text2)';
+  } else {
+    // no pin yet → make it prominent so the driver captures it on-site
+    btn.style.background='#7c3aed'; btn.style.color='#fff'; btn.style.border='none';
+    btn.style.animation='blink 1.2s infinite';
+    btn.innerHTML='📍 Save location (you are here) / บันทึกตำแหน่ง';
+    st.textContent='Tap while at the customer to save the spot for next time';
+    st.style.color='var(--text2)';
+  }
+}
+// Capture the device GPS now and store it on the customer. Never blocks delivery.
+function dlSaveGeo(){
+  var st=document.getElementById('dl-geo-status'), btn=document.getElementById('dl-geo-btn');
+  if(!normPhone(_deliveryPhone)){ if(st) st.textContent='No phone number — cannot save location'; return; }
+  if(!navigator.geolocation){ if(st){st.style.color='#dc2626';st.textContent='GPS not supported on this device';} return; }
+  if(st){ st.style.color='var(--text2)'; st.innerHTML='<i class="ti ti-loader"></i> Getting location…'; }
+  if(btn) btn.style.animation='';
+  var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
+  navigator.geolocation.getCurrentPosition(function(pos){
+    var lat=pos.coords.latitude, lng=pos.coords.longitude;
+    if(!geoSane(lat,lng)){ if(st){st.style.color='#dc2626';st.textContent='Invalid position — try again';} dlGeoRefresh(); return; }
+    custGeoSet(_deliveryPhone, { lat:+lat.toFixed(6), lng:+lng.toFixed(6), acc:Math.round(pos.coords.accuracy||0), at:new Date().toISOString(), by:drName, src:'driver' });
+    dlGeoRefresh();
+  }, function(err){
+    if(st){ st.style.color='#dc2626'; st.textContent = err && err.code===1 ? 'Location permission denied' : 'Could not get location — try again'; }
+    if(btn) btn.style.animation='blink 1.2s infinite';
+  }, { enableHighAccuracy:true, timeout:12000, maximumAge:0 });
+}
+
+// Minimal JPEG EXIF GPS reader (no library). cb({lat,lng}) or cb(null).
+function readExifGps(file, cb){
+  try{
+    var reader=new FileReader();
+    reader.onerror=function(){ cb(null); };
+    reader.onload=function(e){
+      try{
+        var view=new DataView(e.target.result);
+        if(view.getUint16(0,false)!==0xFFD8){ cb(null); return; } // not JPEG
+        var len=view.byteLength, off=2;
+        while(off<len-4){
+          var marker=view.getUint16(off,false);
+          if(marker===0xFFE1){ // APP1 (Exif)
+            var seg=view.getUint16(off+2,false), s=off+4;
+            if(view.getUint32(s,false)===0x45786966){ // "Exif"
+              var tiff=s+6, little=view.getUint16(tiff,false)===0x4949;
+              var ifd0=tiff+view.getUint32(tiff+4,little), n0=view.getUint16(ifd0,little), gpsPtr=0, i;
+              for(i=0;i<n0;i++){ var ent=ifd0+2+i*12; if(view.getUint16(ent,little)===0x8825){ gpsPtr=view.getUint32(ent+8,little); break; } }
+              if(!gpsPtr){ cb(null); return; }
+              var gps=tiff+gpsPtr, ng=view.getUint16(gps,little);
+              var latRef='N', lngRef='E', lat=null, lng=null;
+              function rat(p){ var num=view.getUint32(p,little), den=view.getUint32(p+4,little); return den?num/den:0; }
+              function dms(vOff){ var o=tiff+vOff; return rat(o)+rat(o+8)/60+rat(o+16)/3600; }
+              for(i=0;i<ng;i++){
+                var ge=gps+2+i*12, tag=view.getUint16(ge,little);
+                if(tag===1) latRef=String.fromCharCode(view.getUint8(ge+8));
+                else if(tag===3) lngRef=String.fromCharCode(view.getUint8(ge+8));
+                else if(tag===2) lat=dms(view.getUint32(ge+8,little));
+                else if(tag===4) lng=dms(view.getUint32(ge+8,little));
+              }
+              if(lat!=null&&lng!=null){ if(latRef==='S')lat=-lat; if(lngRef==='W')lng=-lng; cb(geoSane(lat,lng)?{lat:lat,lng:lng}:null); return; }
+              cb(null); return;
+            }
+            off+=2+seg;
+          } else if((marker&0xFF00)!==0xFF00){ break; }
+          else { off+=2+view.getUint16(off+2,false); }
+        }
+        cb(null);
+      }catch(err){ cb(null); }
+    };
+    reader.readAsArrayBuffer(file);
+  }catch(e){ cb(null); }
+}
 
 // ════════════════════════════════════════════════════════════
 //  ORDER PHOTOS  (warehouse pack + delivery) — stored in a separate
@@ -8167,6 +8290,13 @@ function calcViz() {
       <div id="delivery-upload-progress" style="display:none;font-size:12px;color:var(--blue);margin-top:6px;text-align:center"><i class="ti ti-loader"></i> Uploading...</div>
     </div>
 
+    <!-- Save delivery location (per customer / phone) -->
+    <div style="margin-bottom:14px">
+      <label class="fl" style="margin-top:0">📍 Customer location / ตำแหน่งลูกค้า</label>
+      <button type="button" id="dl-geo-btn" onclick="dlSaveGeo()" style="width:100%;padding:12px;border:none;border-radius:var(--rs);font-size:14px;font-weight:700;cursor:pointer">📍 Save location / บันทึกตำแหน่ง</button>
+      <div id="dl-geo-status" style="font-size:12px;margin-top:6px;text-align:center;color:var(--text2)"></div>
+    </div>
+
     <!-- Payment -->
     <div style="background:var(--bg2);border-radius:var(--rs);padding:12px;margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
@@ -8192,6 +8322,21 @@ function calcViz() {
       <i class="ti ti-check"></i> Confirm Delivered / ยืนยัน
     </button>
     <button type="button" class="btn" onclick="closeDeliveryModal()" style="margin-top:6px">Cancel</button>
+  </div>
+</div>
+
+<!-- CUSTOMER LOCATION PIN EDITOR (office) -->
+<div class="modal-overlay" id="geo-modal">
+  <div class="modal" style="max-width:560px">
+    <div class="mhdr">
+      <span class="mtit">📍 <span id="geo-modal-title">Location</span></span>
+      <button type="button" class="mclose" onclick="closeGeoEditor()"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Drag the pin to the exact spot / ลากหมุดไปยังตำแหน่งที่ถูกต้อง</div>
+    <div id="geo-map" style="width:100%;height:340px;border-radius:var(--rs);overflow:hidden;background:var(--bg2);z-index:0"></div>
+    <div id="geo-coords" style="font-size:11px;color:var(--text2);margin-top:6px;text-align:center"></div>
+    <button type="button" class="btn" onclick="geoUseMyLocation()" style="margin-top:8px">🎯 Use my current location</button>
+    <button type="button" class="btn btnp" onclick="saveGeoEditor()" style="margin-top:6px"><i class="ti ti-device-floppy"></i> Save pin / บันทึก</button>
   </div>
 </div>
 
@@ -8391,6 +8536,7 @@ function getCustomer(phone) {
     address: meta.address || base.address,
     loc:     meta.loc     || base.loc,
     note:    meta.note    || '',
+    geo:     (meta.geo && typeof meta.geo.lat==='number') ? meta.geo : null,
     blocked: !!meta.blocked,
     blockReason: meta.blockReason || '',
     orders:  base.orders.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); }),
@@ -8479,6 +8625,7 @@ function ofLookupCustomer() {
     + '<div style="background:rgba(22,163,74,0.08);border:1px solid rgba(22,163,74,0.3);border-radius:var(--rs);padding:8px 10px;font-size:12px;color:var(--text)">'
     + '<b>📋 '+(c.name||'Customer')+'</b> · '+c.orders.length+' order'+(c.orders.length===1?'':'s')
     + (c.lastDate?' · last: '+c.lastDate:'')
+    + (c.geo?'<div style="font-size:12px;margin-top:4px;font-weight:600">📍 Known location · <a href="https://www.google.com/maps/search/?api=1&query='+c.geo.lat+','+c.geo.lng+'" target="_blank" style="color:#16a34a">View map</a> · <a href="https://www.google.com/maps/dir/?api=1&destination='+c.geo.lat+','+c.geo.lng+'" target="_blank" style="color:#16a34a">🧭 Navigate</a></div>':'')
     + (c.orders.length?'<div style="font-size:11px;color:var(--text2);margin-top:3px">'+c.orders.slice(0,3).map(function(o){return o.id+' ('+(o.total||0)+'฿)';}).join(' · ')+'</div>':'')
     + '</div>';
 }
@@ -8519,6 +8666,12 @@ function custCard(c) {
     + '<div id="cust-det-'+key+'" style="display:none;padding:0 12px 12px;border-top:1px solid var(--border)">'
     + (c.address?'<div style="font-size:12px;color:var(--text2);white-space:pre-wrap;margin-top:8px">'+c.address+'</div>':'')
     + (c.loc?'<div style="margin-top:6px"><a href="'+c.loc+'" target="_blank" style="font-size:12px;color:var(--blue)">🗺️ Map / แผนที่</a></div>':'')
+    + '<div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+    + (c.geo
+        ? '<a href="https://www.google.com/maps/search/?api=1&query='+c.geo.lat+','+c.geo.lng+'" target="_blank" style="font-size:12px;color:#16a34a;font-weight:600">📍 Saved pin'+(c.geo.acc?' (±'+c.geo.acc+'m)':'')+'</a><span style="font-size:11px;color:var(--text2)">'+(c.geo.src==='exif'?'from photo':c.geo.src==='office'?'office':'driver')+(c.geo.at?' · '+c.geo.at.split('T')[0]:'')+'</span>'
+        : '<span style="font-size:12px;color:var(--text2)">📍 No saved pin yet</span>')
+    + '<button type="button" onclick="event.stopPropagation();openGeoEditor(\''+key+'\')" class="btnsm"><i class="ti ti-map-pin"></i> '+(c.geo?'Move pin':'Set pin')+'</button>'
+    + '</div>'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">'
     + '<span style="font-size:11px;color:var(--text2)">📦 last '+(c.lastDate||'—')+'</span>'
     + '<button type="button" onclick="event.stopPropagation();custEdit(\''+key+'\')" class="btnsm"><i class="ti ti-pencil"></i> Edit</button>'
@@ -8553,6 +8706,51 @@ function custEdit(phone) {
   if(window.fbDB) window.fbDB.ref('customerMeta/'+key).set(meta);
   custRender();
 }
+
+// ── OFFICE: DRAGGABLE MAP PIN EDITOR (Leaflet, lazy-loaded) ─────────
+var _geoKey=null, _geoMap=null, _geoMarker=null;
+function loadLeaflet(cb){
+  if(window.L){ cb(); return; }
+  if(!document.getElementById('leaflet-css')){ var css=document.createElement('link'); css.id='leaflet-css'; css.rel='stylesheet'; css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(css); }
+  var s=document.createElement('script'); s.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'; s.onload=function(){cb();}; s.onerror=function(){ alert('Could not load map (check internet) / โหลดแผนที่ไม่ได้'); }; document.head.appendChild(s);
+}
+function geoUpdCoords(){ var el=document.getElementById('geo-coords'); if(el&&_geoMarker){ var p=_geoMarker.getLatLng(); el.textContent=p.lat.toFixed(6)+', '+p.lng.toFixed(6); } }
+function openGeoEditor(key){
+  _geoKey=key;
+  var c=getCustomer(key)||{}; var g=c.geo||null;
+  var t=document.getElementById('geo-modal-title'); if(t) t.textContent=(c.name||formatPhone(key));
+  document.getElementById('geo-modal').classList.add('open');
+  loadLeaflet(function(){
+    var lat=g?g.lat:13.7563, lng=g?g.lng:100.5018, zoom=g?17:6;
+    setTimeout(function(){
+      if(!_geoMap){
+        _geoMap=L.map('geo-map');
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(_geoMap);
+      }
+      _geoMap.setView([lat,lng],zoom);
+      if(_geoMarker){ _geoMap.removeLayer(_geoMarker); }
+      _geoMarker=L.marker([lat,lng],{draggable:true}).addTo(_geoMap);
+      _geoMarker.on('move',geoUpdCoords); _geoMarker.on('dragend',geoUpdCoords);
+      geoUpdCoords();
+      setTimeout(function(){ _geoMap.invalidateSize(); },60);
+    },80);
+  });
+}
+function geoUseMyLocation(){
+  if(!navigator.geolocation){ alert('GPS not supported'); return; }
+  navigator.geolocation.getCurrentPosition(function(pos){
+    if(_geoMap&&_geoMarker){ var ll=[pos.coords.latitude,pos.coords.longitude]; _geoMarker.setLatLng(ll); _geoMap.setView(ll,17); geoUpdCoords(); }
+  }, function(){ alert('Could not get location'); }, {enableHighAccuracy:true,timeout:12000});
+}
+function saveGeoEditor(){
+  if(!_geoKey||!_geoMarker){ closeGeoEditor(); return; }
+  var p=_geoMarker.getLatLng();
+  if(!geoSane(p.lat,p.lng)){ alert('Invalid position'); return; }
+  custGeoSet(_geoKey, { lat:+p.lat.toFixed(6), lng:+p.lng.toFixed(6), at:new Date().toISOString(), by:'Office', src:'office' });
+  closeGeoEditor();
+  try{ custRender(); }catch(e){}
+}
+function closeGeoEditor(){ document.getElementById('geo-modal').classList.remove('open'); }
 
 // ── BLOCKLIST (shared by Management + Office) ───────────────────────
 function blockRender() {
