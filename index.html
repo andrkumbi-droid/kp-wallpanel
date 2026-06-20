@@ -516,6 +516,16 @@ textarea{resize:none}
           if(t && t.id) db.ref('activeTours/'+t.id).remove();
         });
         activeTours = raw.filter(function(t){ return t && t.orders && t.orders.length > 0; });
+        // Rebuild raw-id keys for status/checks from the sanitised keys (see tourKey).
+        activeTours.forEach(function(t){
+          var s=t.status||{}, c=t.checks||{}, ns={}, nc={};
+          t.orders.forEach(function(id){
+            var k=tourKey(id);
+            if(s[k]!==undefined) ns[id]=s[k]; else if(s[id]!==undefined) ns[id]=s[id];
+            if(c[k]!==undefined) nc[id]=c[k]; else if(c[id]!==undefined) nc[id]=c[id];
+          });
+          t.status=ns; t.checks=nc;
+        });
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
         try{if(document.getElementById('s-office').classList.contains('active')){ofRenderTour();if(document.getElementById('ofv-home').classList.contains('active'))ofRenderDashboard();}}catch(e){}
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
@@ -2062,7 +2072,23 @@ function syncIncoming() { if(window.fbDB) { const obj = {}; incomingItems.forEac
 function syncDrivers() { if(window.fbDB) { const obj = {}; drivers.forEach((d,i) => obj[d.id] = d); window.fbDB.ref('drivers').set(obj); } }
 function syncOrders() { if(window.fbDB) { const obj = {}; orders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('orders').set(obj); } }
 function syncWOrders() { if(window.fbDB) { const obj = {}; wOrders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('wOrders').set(obj); } }
-function syncTours() { if(window.fbDB) { const obj = {}; activeTours.forEach((t,i) => obj[t.id] = t); window.fbDB.ref('activeTours').set(obj); } }
+// Firebase keys can't contain . # $ / [ ]. Order ids can (e.g. Bangkok "#832"),
+// so tour.status/checks (keyed by order id) must use a sanitised key — otherwise
+// the whole tour write fails and the tour silently vanishes. The raw ids live in
+// t.orders, so the reader rebuilds the real keys from there (see activeTours .on).
+function tourKey(id){ return String(id||'').replace(/[.#$/\[\]]/g,'_'); }
+function tourForFb(t){
+  var out={}; for(var k in t){ if(k!=='status'&&k!=='checks') out[k]=t[k]; }
+  var s={}; if(t.status){ for(var a in t.status) s[tourKey(a)]=t.status[a]; }
+  var c={}; if(t.checks){ for(var b in t.checks) c[tourKey(b)]=t.checks[b]; }
+  out.status=s; out.checks=c; return out;
+}
+// Write each tour individually (merge) instead of replacing the whole node.
+// A full .set() let a stale client wipe another client's freshly-created tour
+// (the orders survived as "loaded" but the tour vanished). Per-tour writes +
+// explicit removals (fbRemoveTour) below avoid that clobbering.
+function syncTours() { if(window.fbDB) { activeTours.forEach(function(t){ if(t&&t.id) window.fbDB.ref('activeTours/'+t.id).set(tourForFb(t)); }); } }
+function fbRemoveTour(id){ if(window.fbDB && id) window.fbDB.ref('activeTours/'+id).remove(); }
 function syncPreOrders() { if(window.fbDB) { const obj = {}; preOrders.forEach(function(p){ obj[p.id] = p; }); window.fbDB.ref('preOrders').set(obj); } }
 function syncRevOrders() { if(window.fbDB) { const obj = {}; revOrders.forEach((r,i) => obj[r.rid] = r); window.fbDB.ref('revOrders').set(obj); } }
 
@@ -2419,7 +2445,7 @@ function openDM(id){editDM=id;document.getElementById('dm-title').textContent=id
 function closeDM(){document.getElementById('dm-modal').classList.remove('open');editDM=null;}
 function saveDM(){const name=document.getElementById('dm-name').value.trim();if(!name){alert('Enter a name');return;}const phone=document.getElementById('dm-phone').value.trim(),vehicle=document.getElementById('dm-vehicle').value.trim();if(editDM){const d=drivers.find(x=>x.id===editDM);d.name=name;d.phone=phone;d.vehicle=vehicle;}else drivers.push({id:'d'+Date.now(),name,phone,vehicle});closeDM();mgRender();syncDrivers();}
 function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filter(x=>x.id!==editDM);closeDM();mgRender();syncDrivers();}
-function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"))return;activeTours.splice(i,1);mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"))return;var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').valueAsDate=new Date();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -3277,7 +3303,9 @@ function ofEndTourFromDetail() {
   if(currentTourDetailIdx === null) return;
   const t = activeTours[currentTourDetailIdx];
   if(!confirm('End ' + t.driverName + "'s tour?")) return;
+  var _rid = t && t.id;
   activeTours.splice(currentTourDetailIdx, 1);
+  fbRemoveTour(_rid);
   closeTourDetail();
   ofRenderTour();
   mgRender();
@@ -4075,6 +4103,7 @@ function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.
   // If tour is now empty, remove it
   if(t.orders.length===0) {
     activeTours = activeTours.filter(function(x){return x.id!==tourId;});
+    fbRemoveTour(tourId);
   }
   ofRenderTour();
   ofRenderOrders();
@@ -4123,7 +4152,7 @@ function ofMoveOrder(fromTourId, orderId){
   if(target.orders.indexOf(orderId)<0) target.orders.push(orderId);
   target.status=target.status||{}; target.status[orderId]=st;
   // remove now-empty source tour
-  if(from.orders.length===0){ activeTours=activeTours.filter(function(x){return x.id!==fromTourId;}); }
+  if(from.orders.length===0){ activeTours=activeTours.filter(function(x){return x.id!==fromTourId;}); fbRemoveTour(fromTourId); }
   ofRenderTour(); syncTours();
 }
 
