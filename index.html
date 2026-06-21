@@ -6087,6 +6087,7 @@ function openStaffM(id) {
     document.getElementById('staffm-warehouse').checked = !!s.warehouseAccess;
     document.getElementById('staffm-preorder').checked = !!s.preorderAccess;
     document.getElementById('staffm-bills').checked = !!s.billsAccess;
+    document.getElementById('staffm-payroll').checked = !!s.payrollOn;
   } else {
     ['staffm-name','staffm-pin','staffm-role'].forEach(x => document.getElementById(x).value = '');
     document.getElementById('staffm-sales').checked = false;
@@ -6099,6 +6100,7 @@ function openStaffM(id) {
     document.getElementById('staffm-warehouse').checked = false;
     document.getElementById('staffm-preorder').checked = false;
     document.getElementById('staffm-bills').checked = false;
+    document.getElementById('staffm-payroll').checked = false;
   }
   document.getElementById('staff-modal').classList.add('open');
 }
@@ -6119,11 +6121,12 @@ function saveStaffM() {
   const warehouseAccess = document.getElementById('staffm-warehouse').checked;
   const preorderAccess = document.getElementById('staffm-preorder').checked;
   const billsAccess = document.getElementById('staffm-bills').checked;
+  const payrollOn = document.getElementById('staffm-payroll').checked;
   if(editStaffId) {
     const s = staffList.find(x => x.id === editStaffId);
-    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess;
+    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.payrollOn = payrollOn;
   } else {
-    staffList.push({ id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, officeAccess, warehouseAccess, preorderAccess, billsAccess });
+    staffList.push({ id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, officeAccess, warehouseAccess, preorderAccess, billsAccess, payrollOn });
   }
   closeStaffM(); mgRenderStaff(); syncStaff();
 }
@@ -8167,6 +8170,13 @@ function calcViz() {
       <div style="font-size:11px;color:var(--text2)">Can view & manage the Bills tab</div>
     </div>
   </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
+    <input type="checkbox" id="staffm-payroll" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">💰 In payroll / อยู่ในเงินเดือน</div>
+      <div style="font-size:11px;color:var(--text2)">Show this person in the Payroll name lists</div>
+    </div>
+  </div>
   <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:#fee2e2;border-radius:var(--rs);border:1px solid #fca5a5">
     <input type="checkbox" id="staffm-block" style="width:18px;height:18px;cursor:pointer">
     <div>
@@ -9622,9 +9632,13 @@ function payNewRender(){
   try{ payRenderNameLog(); }catch(e){}
 }
 function payNames(){
+  // Names come from Management Staff only (covers Office/Warehouse/Driver via role),
+  // filtered to those enabled for payroll (s.payrollOn), ordered Office→Warehouse→Driver→Other.
+  var ORD={Office:0,Warehouse:1,Driver:2,Other:3};
+  function grp(role){ role=role||''; if(/office|boss|sales|manager/i.test(role))return 'Office'; if(/warehouse/i.test(role))return 'Warehouse'; if(/driver/i.test(role))return 'Driver'; return 'Other'; }
   var out=[];
-  try{ (staffList||[]).forEach(function(s){ out.push({key:'staff:'+s.id, name:s.name, group:'Staff'}); }); }catch(e){}
-  try{ (drivers||[]).forEach(function(d){ out.push({key:'driver:'+d.id, name:d.name, group:'Drivers'}); }); }catch(e){}
+  try{ (staffList||[]).forEach(function(s){ if(!s.payrollOn) return; out.push({key:'staff:'+s.id, name:s.name||'—', group:grp(s.role)}); }); }catch(e){}
+  out.sort(function(a,b){ return (ORD[a.group]-ORD[b.group]) || a.name.localeCompare(b.name); });
   return out;
 }
 function payCats(){ return [
@@ -9700,9 +9714,15 @@ function payRenderNameLog(){
   var who=sel.value;
   if(!who){ list.innerHTML='<div class="empty" style="padding:14px;font-size:13px">Select a name to see their log / เลือกชื่อ</div>'; return; }
   var entries=(payLog||[]).filter(function(e){return e.who===who;}).sort(function(a,b){return (b.ts||0)-(a.ts||0);});
-  var net=entries.reduce(function(a,e){return a+payCatMeta(e.cat).sign*(parseFloat(e.amount)||0);},0);
+  var income=entries.reduce(function(a,e){return payCatMeta(e.cat).sign>0 ? a+(parseFloat(e.amount)||0) : a;},0);
+  var deduct=entries.reduce(function(a,e){return payCatMeta(e.cat).sign<0 ? a+(parseFloat(e.amount)||0) : a;},0);
+  var total=income-deduct;
   function whenStr(e){ var t=''; if(e.ts){var d=new Date(e.ts);t=' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');} return (e.date||'')+t; }
-  var html='<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);font-weight:800;margin-bottom:10px"><span style="font-size:13px">Net / สุทธิ</span><span style="font-size:15px;color:'+(net<0?'#dc2626':'var(--blue)')+'">'+net.toLocaleString()+' ฿</span></div>';
+  var html='<div style="background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px;font-size:13px">'
+    +'<div style="display:flex;justify-content:space-between;margin-bottom:3px"><span>Income / รายรับ</span><span style="font-weight:700;color:#16a34a">+'+income.toLocaleString()+' ฿</span></div>'
+    +'<div style="display:flex;justify-content:space-between;margin-bottom:3px"><span>Deductions / หักเงิน</span><span style="font-weight:700;color:#dc2626">-'+deduct.toLocaleString()+' ฿</span></div>'
+    +'<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);padding-top:5px;margin-top:5px"><span style="font-weight:800">Total / รวมสุทธิ</span><span style="font-weight:900;color:var(--blue)">'+total.toLocaleString()+' ฿</span></div>'
+    +'</div>';
   if(entries.length===0){ html+='<div class="empty" style="padding:14px;font-size:13px">No entries yet / ยังไม่มีรายการ</div>'; list.innerHTML=html; return; }
   html+=entries.map(function(e){
     var m=payCatMeta(e.cat), neg=m.sign<0;
@@ -10205,9 +10225,20 @@ function costsRender(){
     html+='<button type="button" onclick="catAdd(\''+section+'\')" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add category / เพิ่มหมวด</button></div>';
   });
 
-  // 4) Staff — auto from payroll later (placeholder)
-  html+='<div style="background:var(--bg2);border:1px dashed var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
-    '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:13px;font-weight:700">👤 Staff / พนักงาน</span><span style="font-size:11px;color:var(--text2)">auto from payroll (soon)</span></div></div>';
+  // 4) Staff — net per person from the payroll log (payLog) for this month
+  var _perP={};
+  (typeof payLog!=='undefined'?payLog:[]).forEach(function(e){
+    if(billsMKey(e.date)!==mk) return;
+    var amt=(typeof payCatMeta==='function'?payCatMeta(e.cat).sign:1)*(parseFloat(e.amount)||0);
+    if(!_perP[e.who]) _perP[e.who]={name:e.whoName||e.who, net:0};
+    _perP[e.who].net+=amt;
+  });
+  var _pKeys=Object.keys(_perP); var staffTot=0; _pKeys.forEach(function(k){ staffTot+=_perP[k].net; }); grand+=staffTot;
+  html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">👤 Staff / พนักงาน</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+staffTot.toLocaleString()+' ฿</span></div>';
+  if(_pKeys.length===0){ html+='<div style="font-size:11px;color:var(--text2)">No payroll this month / ยังไม่มีเงินเดือน</div>'; }
+  _pKeys.forEach(function(k){ var p=_perP[k]; html+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 9px;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px"><span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(p.name)+'</span><span style="font-weight:700">'+p.net.toLocaleString()+' ฿</span></div>'; });
+  html+='</div>';
 
   html+='<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);font-weight:800"><span style="font-size:13px">Total monthly / รวมต่อเดือน</span><span style="font-size:15px;color:var(--blue)">'+grand.toLocaleString()+' ฿</span></div>';
   el.innerHTML=html;
