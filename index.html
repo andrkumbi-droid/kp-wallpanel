@@ -587,7 +587,7 @@ textarea{resize:none}
       });
       db.ref('payLog').on('value', function(snap) {
         payLog = snap.val() ? Object.values(snap.val()) : [];
-        try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))payRenderNameLog();}catch(e){}
+        try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active')){payBreakdownRender();payRenderNameLog();}}catch(e){}
       });
       db.ref('attEntries').on('value', function(snap) {
         attEntries = snap.val() ? Object.values(snap.val()) : [];
@@ -9630,6 +9630,7 @@ function payNewRender(){
   try{ if(!document.getElementById('pay-e-name')) payEntryRender(); }catch(e){}
   try{ if(!document.getElementById('pay-log-name')) payLogSectionRender(); }catch(e){}
   try{ payFillNames(); }catch(e){}
+  try{ payBreakdownRender(); }catch(e){}
   try{ payRenderNameLog(); }catch(e){}
 }
 function payNames(){
@@ -9709,26 +9710,34 @@ function payLogSectionRender(){
     +'<select id="pay-log-name" onchange="payRenderNameLog()" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:10px"><option value="">— select name / เลือกชื่อ —</option>'+_payNameOpts()+'</select>'
     +'<div id="pay-log-list"></div>';
 }
+// Fixed summary of ALL payroll-enabled staff (independent of the log dropdown).
+function payBreakdownRender(){
+  var el=document.getElementById('pay-breakdown'); if(!el) return;
+  var names=payNames();
+  if(names.length===0){ el.innerHTML='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;font-size:12px;color:var(--text2);text-align:center">No staff enabled for payroll — enable them in Management / เปิดใช้ใน Management</div>'; return; }
+  function calc(who){ var inc=0,ded=0; (payLog||[]).forEach(function(e){ if(e.who!==who)return; var amt=parseFloat(e.amount)||0; if(payCatMeta(e.cat).sign<0) ded+=amt; else inc+=amt; }); return {inc:inc,ded:ded,tot:inc-ded}; }
+  var gInc=0,gDed=0;
+  var rows=names.map(function(n){
+    var c=calc(n.key); gInc+=c.inc; gDed+=c.ded;
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border);gap:8px">'
+      +'<div style="min-width:0"><div style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(n.name)+'</div>'
+      +'<div style="font-size:10px;color:var(--text2)"><span style="color:#16a34a">+'+c.inc.toLocaleString()+'</span> · <span style="color:#dc2626">-'+c.ded.toLocaleString()+'</span></div></div>'
+      +'<div style="font-size:14px;font-weight:800;color:var(--blue);white-space:nowrap">'+c.tot.toLocaleString()+' ฿</div>'
+      +'</div>';
+  }).join('');
+  el.innerHTML='<div style="background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);overflow:hidden">'
+    +'<div style="padding:8px 10px;font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;background:var(--bg)">💰 Payroll summary / สรุปเงินเดือน <span style="float:right;color:var(--text2)">+income · -deduct · total</span></div>'
+    +rows
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 10px;font-weight:900;background:var(--bg)"><span style="font-size:13px">Total / รวมทั้งหมด</span><span style="font-size:15px;color:var(--blue)">'+(gInc-gDed).toLocaleString()+' ฿</span></div>'
+    +'</div>';
+}
 function payRenderNameLog(){
-  var sel=document.getElementById('pay-log-name'), list=document.getElementById('pay-log-list'), bd=document.getElementById('pay-breakdown');
+  var sel=document.getElementById('pay-log-name'), list=document.getElementById('pay-log-list');
   if(!sel||!list) return;
   var who=sel.value;
   function whenStr(e){ var t=''; if(e.ts){var d=new Date(e.ts);t=' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');} return (e.date||'')+t; }
-  if(!who){
-    if(bd) bd.innerHTML='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;font-size:12px;color:var(--text2);text-align:center">Select a name below for the summary / เลือกชื่อด้านล่าง</div>';
-    list.innerHTML='<div class="empty" style="padding:14px;font-size:13px">Select a name to see their log / เลือกชื่อ</div>';
-    return;
-  }
+  if(!who){ list.innerHTML='<div class="empty" style="padding:14px;font-size:13px">Select a name to see their log / เลือกชื่อ</div>'; return; }
   var entries=(payLog||[]).filter(function(e){return e.who===who;}).sort(function(a,b){return (b.ts||0)-(a.ts||0);});
-  var income=entries.reduce(function(a,e){return payCatMeta(e.cat).sign>0 ? a+(parseFloat(e.amount)||0) : a;},0);
-  var deduct=entries.reduce(function(a,e){return payCatMeta(e.cat).sign<0 ? a+(parseFloat(e.amount)||0) : a;},0);
-  var total=income-deduct;
-  // Breakdown — separate field above "Log by name"
-  if(bd) bd.innerHTML='<div style="background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);padding:10px 12px;font-size:13px">'
-    +'<div style="display:flex;justify-content:space-between;margin-bottom:3px"><span>Income / รายรับ</span><span style="font-weight:700;color:#16a34a">+'+income.toLocaleString()+' ฿</span></div>'
-    +'<div style="display:flex;justify-content:space-between;margin-bottom:3px"><span>Deductions / หักเงิน</span><span style="font-weight:700;color:#dc2626">-'+deduct.toLocaleString()+' ฿</span></div>'
-    +'<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);padding-top:5px;margin-top:5px"><span style="font-weight:800">Total / รวมสุทธิ</span><span style="font-weight:900;color:var(--blue)">'+total.toLocaleString()+' ฿</span></div>'
-    +'</div>';
   if(entries.length===0){ list.innerHTML='<div class="empty" style="padding:14px;font-size:13px">No entries yet / ยังไม่มีรายการ</div>'; return; }
   list.innerHTML=entries.map(function(e){
     var m=payCatMeta(e.cat), neg=m.sign<0;
