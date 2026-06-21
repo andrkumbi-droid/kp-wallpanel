@@ -585,6 +585,10 @@ textarea{resize:none}
         attStaff = snap.val() ? Object.values(snap.val()) : [];
         try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))ofAttRender();}catch(e){}
       });
+      db.ref('payLog').on('value', function(snap) {
+        payLog = snap.val() ? Object.values(snap.val()) : [];
+        try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))payRenderNameLog();}catch(e){}
+      });
       db.ref('attEntries').on('value', function(snap) {
         attEntries = snap.val() ? Object.values(snap.val()) : [];
         try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))ofAttRender();}catch(e){}
@@ -1427,13 +1431,10 @@ textarea{resize:none}
 
   <!-- ATTENDANCE / PAYROLL VIEW -->
   <div class="view" id="ofv-attend"><div class="sec">
-    <!-- Segmented tabs: Book first (most used) -->
-    <div class="tabs t2" style="margin-bottom:14px">
-      <button type="button" class="tab active" onclick="paySub('book')" id="psub-book">➕ Book</button>
-      <button type="button" class="tab" onclick="paySub('month')" id="psub-month">💰 Payroll</button>
-      <button type="button" class="tab" onclick="paySub('staff')" id="psub-staff">👥 Staff</button>
-      <button type="button" class="tab" onclick="paySub('overview')" id="psub-overview">📊 Stats</button>
-    </div>
+    <!-- NEW Bills-style payroll: entry on top, per-name log below -->
+    <div class="stit" style="margin-bottom:10px">💰 Payroll / เงินเดือน</div>
+    <div id="pay-entry" style="margin-bottom:14px"></div>
+    <div id="pay-log-section"></div>
 
     <!-- ═══ BOOK — the fast daily entry ═══ -->
     <div id="psubv-book">
@@ -2217,6 +2218,7 @@ var recentlyDeleted={}; // orderId(sanitized) -> ts; blocks mirror re-adding a j
 var lateLog=[];
 var attStaff=[]; // separate employee list for attendance (+ payroll settings)
 var attEntries=[]; // payroll entries: {id,staffId,staffName,date,type,qty,note,ts} type=late|ot|trip|advance|hours
+var payLog=[]; // NEW Bills-style payroll log: {id,who,whoName,cat,amount,date,ts,note,by,photoUrl} who='staff:<id>'|'driver:<id>'
 var customerMeta={}; // phoneKey -> {name,address,loc,note,blocked,blockReason} — manual overrides + blocklist
 var preOrders=[]; // pre-orders: {id,zone,customer,phone,address,location,contact,lineItems,notes,status(open|converted|cancelled),cancelReason,convertedId,createdBy,createdAt}
 var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
@@ -9610,7 +9612,120 @@ var _paySubCur = 'book';
 var _payBookStaffId = '';
 var _editStaffId = null;
 
-function ofAttRender(){ paySub(_paySubCur||'book'); }
+// ── NEW Bills-style payroll (names = Management Staff + Drivers) ──
+function ofAttRender(){ payNewRender(); }
+function payNewRender(){
+  ['psubv-book','psubv-month','psubv-staff','psubv-overview'].forEach(function(id){ var e=document.getElementById(id); if(e)e.style.display='none'; });
+  try{ if(!document.getElementById('pay-e-name')) payEntryRender(); }catch(e){}
+  try{ if(!document.getElementById('pay-log-name')) payLogSectionRender(); }catch(e){}
+  try{ payFillNames(); }catch(e){}
+  try{ payRenderNameLog(); }catch(e){}
+}
+function payNames(){
+  var out=[];
+  try{ (staffList||[]).forEach(function(s){ out.push({key:'staff:'+s.id, name:s.name, group:'Staff'}); }); }catch(e){}
+  try{ (drivers||[]).forEach(function(d){ out.push({key:'driver:'+d.id, name:d.name, group:'Drivers'}); }); }catch(e){}
+  return out;
+}
+function payCats(){ return [
+  {key:'salary_monthly', label:'💵 Salary (Monthly)', sign:1},
+  {key:'salary_daily',   label:'📅 Salary (Daily)',   sign:1},
+  {key:'bonus',          label:'🎁 Bonus',            sign:1},
+  {key:'advanced',       label:'➖ Advance (deduct)',  sign:-1}
+]; }
+function payCatMeta(k){ return payCats().find(function(c){return c.key===k;})||{label:k,sign:1}; }
+function _payNameOpts(){
+  var names=payNames(), groups={};
+  names.forEach(function(n){ (groups[n.group]=groups[n.group]||[]).push(n); });
+  return Object.keys(groups).map(function(g){
+    return '<optgroup label="'+g+'">'+groups[g].map(function(n){return '<option value="'+n.key+'">'+_esc(n.name)+'</option>';}).join('')+'</optgroup>';
+  }).join('');
+}
+function payNameLabel(key){ var n=payNames().find(function(x){return x.key===key;}); return n?n.name:key; }
+function payEntryRender(){
+  var el=document.getElementById('pay-entry'); if(!el) return;
+  var inp='padding:9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)';
+  el.innerHTML='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px">'
+    +'<div style="font-size:13px;font-weight:700;margin-bottom:8px">➕ Add entry / เพิ่มรายการ</div>'
+    +'<select id="pay-e-name" style="width:100%;margin-bottom:8px;box-sizing:border-box;'+inp+'">'+_payNameOpts()+'</select>'
+    +'<div style="display:flex;gap:6px;margin-bottom:8px">'
+      +'<select id="pay-e-cat" style="flex:1;min-width:0;'+inp+'">'+payCats().map(function(c){return '<option value="'+c.key+'">'+c.label+'</option>';}).join('')+'</select>'
+      +'<input type="number" id="pay-e-amount" placeholder="Amount ฿" style="flex:1;min-width:0;'+inp+';font-weight:700;text-align:right">'
+    +'</div>'
+    +'<input type="date" id="pay-e-date" lang="en-GB" style="width:100%;margin-bottom:8px;box-sizing:border-box;'+inp+'">'
+    +'<input type="text" id="pay-e-note" placeholder="Note (optional) / หมายเหตุ" style="width:100%;margin-bottom:8px;box-sizing:border-box;'+inp+'">'
+    +'<input type="file" id="pay-e-photo" accept="image/*" style="font-size:13px;display:block;margin-bottom:6px">'
+    +'<div id="pay-e-photo-prev" style="margin-bottom:8px"></div>'
+    +'<button type="button" onclick="payEntrySubmit()" style="width:100%;padding:11px;border:none;border-radius:var(--rs);background:var(--green);color:#fff;font-weight:700;font-size:14px;cursor:pointer"><i class="ti ti-check"></i> Save / บันทึก</button>'
+    +'</div>';
+  try{ document.getElementById('pay-e-date').valueAsDate=new Date(); }catch(e){}
+}
+function payFillNames(){
+  var opts=_payNameOpts();
+  ['pay-e-name','pay-log-name'].forEach(function(id){ var s=document.getElementById(id); if(!s)return; var p=s.value; s.innerHTML=(id==='pay-log-name'?'<option value="">— select name / เลือกชื่อ —</option>':'')+opts; if(p)s.value=p; });
+}
+function payEntrySubmit(){
+  var who=document.getElementById('pay-e-name').value;
+  if(!who){ alert('Pick a name / เลือกชื่อ'); return; }
+  var cat=document.getElementById('pay-e-cat').value;
+  var amt=parseFloat(document.getElementById('pay-e-amount').value)||0;
+  if(amt<=0){ alert('Enter an amount / ใส่จำนวนเงิน'); return; }
+  var date=document.getElementById('pay-e-date').value||new Date().toISOString().slice(0,10);
+  var note=document.getElementById('pay-e-note').value.trim();
+  var photoFile=document.getElementById('pay-e-photo').files[0];
+  var by=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office';
+  function persist(url){
+    var id='pl-'+Date.now();
+    var rec={id:id, who:who, whoName:payNameLabel(who), cat:cat, amount:amt, date:date, ts:Date.now(), note:note, by:by, photoUrl:url||''};
+    if(window.fbDB) window.fbDB.ref('payLog/'+id).set(rec);
+    var a=document.getElementById('pay-e-amount'); if(a)a.value='';
+    var n=document.getElementById('pay-e-note'); if(n)n.value='';
+    var p=document.getElementById('pay-e-photo'); if(p)p.value='';
+    var pv=document.getElementById('pay-e-photo-prev'); if(pv)pv.innerHTML='';
+  }
+  if(photoFile && window.fbStorage){
+    window.fbStorage.ref('payLog/'+Date.now()+'_'+photoFile.name).put(photoFile).then(function(s){return s.ref.getDownloadURL();}).then(persist).catch(function(){persist('');});
+  } else if(photoFile){ var r=new FileReader(); r.onload=function(e){persist(e.target.result);}; r.readAsDataURL(photoFile); }
+  else persist('');
+}
+function payLogSectionRender(){
+  var el=document.getElementById('pay-log-section'); if(!el) return;
+  el.innerHTML='<div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:6px 0">📜 Log by name / ประวัติตามชื่อ</div>'
+    +'<select id="pay-log-name" onchange="payRenderNameLog()" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:10px"><option value="">— select name / เลือกชื่อ —</option>'+_payNameOpts()+'</select>'
+    +'<div id="pay-log-list"></div>';
+}
+function payRenderNameLog(){
+  var sel=document.getElementById('pay-log-name'), list=document.getElementById('pay-log-list');
+  if(!sel||!list) return;
+  var who=sel.value;
+  if(!who){ list.innerHTML='<div class="empty" style="padding:14px;font-size:13px">Select a name to see their log / เลือกชื่อ</div>'; return; }
+  var entries=(payLog||[]).filter(function(e){return e.who===who;}).sort(function(a,b){return (b.ts||0)-(a.ts||0);});
+  var net=entries.reduce(function(a,e){return a+payCatMeta(e.cat).sign*(parseFloat(e.amount)||0);},0);
+  function whenStr(e){ var t=''; if(e.ts){var d=new Date(e.ts);t=' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');} return (e.date||'')+t; }
+  var html='<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);font-weight:800;margin-bottom:10px"><span style="font-size:13px">Net / สุทธิ</span><span style="font-size:15px;color:'+(net<0?'#dc2626':'var(--blue)')+'">'+net.toLocaleString()+' ฿</span></div>';
+  if(entries.length===0){ html+='<div class="empty" style="padding:14px;font-size:13px">No entries yet / ยังไม่มีรายการ</div>'; list.innerHTML=html; return; }
+  html+=entries.map(function(e){
+    var m=payCatMeta(e.cat), neg=m.sign<0;
+    return '<div class="card" style="padding:10px 12px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
+      +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700">'+m.label+'</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'+(e.note?_esc(e.note)+' · ':'')+whenStr(e)+(e.by?' · '+_esc(e.by):'')+'</div>'
+      +(e.photoUrl?'<div style="margin-top:6px"><img src="'+e.photoUrl+'" style="max-height:70px;border-radius:6px;cursor:pointer" onclick="window.open(\''+e.photoUrl+'\',\'_blank\')"></div>':'')
+      +'</div><div style="text-align:right;flex-shrink:0"><div style="font-size:15px;font-weight:900;color:'+(neg?'#dc2626':'#16a34a')+'">'+(neg?'-':'+')+(parseFloat(e.amount)||0).toLocaleString()+' ฿</div>'
+      +'<button type="button" onclick="payDelete(\''+e.id+'\')" title="Delete (PIN)" style="margin-top:6px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);padding:3px 9px;font-size:11px;cursor:pointer"><i class="ti ti-trash"></i></button>'
+      +'</div></div></div>';
+  }).join('');
+  list.innerHTML=html;
+}
+function payDelete(id){
+  var e=(payLog||[]).find(function(x){return x.id===id;}); if(!e) return;
+  var me=(typeof staffList!=='undefined'&&typeof currentStaffId!=='undefined')?staffList.find(function(s){return s.id===currentStaffId;}):null;
+  if(!me){ alert('Log in with your office PIN to delete.'); return; }
+  if(!me.pin){ alert('Your account has no PIN set.'); return; }
+  var entered=prompt('Enter YOUR office PIN to delete / ใส่ PIN ของคุณเพื่อลบ:'); if(entered===null) return;
+  if(String(entered).trim()!==String(me.pin)){ alert('Wrong PIN / PIN ไม่ถูกต้อง'); return; }
+  if(window.fbDB) window.fbDB.ref('payLog/'+id).remove();
+  try{ auditAdd({type:'delete', orderId:'Payroll: '+(e.whoName||'')+' '+payCatMeta(e.cat).label+' ('+(parseFloat(e.amount)||0)+'฿)', by:me.name}); }catch(e2){}
+}
 
 function paySub(t){
   _paySubCur = t;
@@ -10295,9 +10410,9 @@ function billsDelete(){
 }
 
 document.addEventListener('change', function(e){
-  if(e.target && (e.target.id==='bills-photo'||e.target.id==='bills-e-photo')){
+  if(e.target && (e.target.id==='bills-photo'||e.target.id==='bills-e-photo'||e.target.id==='pay-e-photo')){
     var f = e.target.files[0]; if(!f) return;
-    var prev = document.getElementById(e.target.id==='bills-e-photo'?'bills-e-photo-prev':'bills-photo-preview'); if(!prev) return;
+    var prev = document.getElementById(e.target.id==='bills-e-photo'?'bills-e-photo-prev':e.target.id==='pay-e-photo'?'pay-e-photo-prev':'bills-photo-preview'); if(!prev) return;
     var reader = new FileReader();
     reader.onload = function(ev){ prev.innerHTML = '<img src="'+ev.target.result+'" style="max-height:80px;border-radius:6px;margin-top:4px">'; };
     reader.readAsDataURL(f);
