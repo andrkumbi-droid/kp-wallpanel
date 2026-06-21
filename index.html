@@ -617,9 +617,15 @@ textarea{resize:none}
         bills = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}) : [];
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
       });
-      db.ref('monthlyCosts').on('value', function(snap) {
+      db.ref('costFixed').on('value', function(snap) {
+        var v=snap.val()||{}; var out={};
+        Object.keys(v).forEach(function(mk){ out[mk]=Array.isArray(v[mk])?v[mk]:Object.values(v[mk]||{}); });
+        costFixed=out;
+        try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
+      });
+      db.ref('costCats').on('value', function(snap) {
         var v=snap.val()||{}; function _arr(x){ return x?(Array.isArray(x)?x:Object.values(x)):[]; }
-        monthlyCosts={ fixed:_arr(v.fixed), utilities:_arr(v.utilities), staff:_arr(v.staff) };
+        costCats={ utilities:_arr(v.utilities), other:_arr(v.other) };
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
       });
       // Lightweight photo index (counts/metadata only, NOT the image data) so the
@@ -1604,33 +1610,21 @@ textarea{resize:none}
 
   <!-- BILLS VIEW -->
   <div class="view" id="ofv-bills"><div class="sec">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div class="stit" style="margin-bottom:0">🧾 Bills / ใบเสร็จ</div>
-      <button type="button" onclick="billsOpenAdd()" style="background:var(--blue);color:#fff;border:none;border-radius:var(--rs);padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add</button>
-    </div>
-    <!-- Monthly cost sections (fixed / utilities / staff) -->
-    <div id="bills-costs" style="margin-bottom:14px"></div>
-    <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">🧾 Receipts / ใบเสร็จ</div>
-    <!-- Filter row -->
-    <div style="display:flex;gap:6px;margin-bottom:12px">
+    <div class="stit" style="margin-bottom:10px">🧾 Bills / ใบเสร็จ</div>
+    <!-- Receipt entry (top) -->
+    <div id="bills-entry" style="margin-bottom:14px"></div>
+    <!-- Month selector -->
+    <div style="display:flex;gap:6px;margin-bottom:12px;align-items:center">
+      <span style="font-size:12px;color:var(--text2);font-weight:700;white-space:nowrap">📅 Month / เดือน</span>
       <select id="bills-filter-month" onchange="billsRender()" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px"></select>
-      <select id="bills-filter-cat" onchange="billsRender()" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">
-        <option value="">All categories</option>
-        <option>Transport / ขนส่ง</option>
-        <option>Supplies / วัสดุ</option>
-        <option>Repair / ซ่อม</option>
-        <option>Food / อาหาร</option>
-        <option>Rent / ค่าเช่า</option>
-        <option>Water / ค่าน้ำ</option>
-        <option>Electricity / ค่าไฟ</option>
-        <option>Garbage / ค่าขยะ</option>
-        <option>Other / อื่นๆ</option>
-      </select>
     </div>
-    <!-- Summary bar -->
-    <div id="bills-summary" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px"></div>
-    <!-- List -->
-    <div id="bills-list"></div>
+    <!-- Cost dashboard -->
+    <div id="bills-costs" style="margin-bottom:14px"></div>
+    <!-- Receipt log (bottom, collapsible) -->
+    <details style="border:1px solid var(--border);border-radius:var(--rs);overflow:hidden">
+      <summary style="cursor:pointer;padding:10px 12px;font-size:13px;font-weight:700;background:var(--bg2);user-select:none">📜 Receipt log / ประวัติใบเสร็จ</summary>
+      <div id="bills-list" style="padding:10px 12px"></div>
+    </details>
   </div></div>
 
   <!-- BILLS ADD/EDIT MODAL -->
@@ -2228,7 +2222,8 @@ var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่�
 var containerLog=[];
 var auditLog=[];
 var bills=[];
-var monthlyCosts={fixed:[],utilities:[],staff:[]}; // Bills tab: fixed costs / utilities / staff cost lists
+var costFixed={};                     // Bills: {"YYYY-MM":[{id,label,amount}]} per-month fixed costs (manual, carried over)
+var costCats={utilities:[],other:[]}; // Bills: sub-category defs for utilities/other (office add/remove); amounts come from receipts
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
 let ofFilt_='all',ofSelDriver=null,ofSelOrders=[],currentDriverId=null;
 let editId=null,editSM=null,editIM=null,editDM=null,selMonth='';
@@ -10008,54 +10003,80 @@ function billsMKey(dateStr){
   return d.getFullYear()+'-'+(d.getMonth()+1<10?'0':'')+(d.getMonth()+1);
 }
 
-// ── BILLS: monthly cost lists (fixed / utilities / staff) ──
-function syncMonthlyCosts(){ if(window.fbDB) window.fbDB.ref('monthlyCosts').set(monthlyCosts); }
-function _costArr(section){ if(!monthlyCosts[section]) monthlyCosts[section]=[]; return monthlyCosts[section]; }
-function costAdd(section){ _costArr(section).push({id:'c'+Date.now()+Math.floor(Math.random()*1000),label:'',amount:''}); syncMonthlyCosts(); costsRender(); }
-function costRemove(section,id){ monthlyCosts[section]=_costArr(section).filter(function(r){return r.id!==id;}); syncMonthlyCosts(); costsRender(); }
-function costSet(section,id,field,val){
-  var r=_costArr(section).find(function(x){return x.id===id;}); if(!r) return;
-  if(field==='amount'){ r.amount=(val===''?'':(parseFloat(val)||0)); } else { r[field]=val; }
-  syncMonthlyCosts();
-  if(field==='amount') costsRender(); // refresh totals
-}
+// ── BILLS: monthly cost dashboard (fixed / utilities / other / staff) ──
+function _nowMonthKey(){ var d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1<10?'0':'')+(d.getMonth()+1); }
+function _costMonthKey(){ var m=document.getElementById('bills-filter-month'); return (m&&m.value)||_nowMonthKey(); }
+function _esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function syncCostFixed(){ if(window.fbDB) window.fbDB.ref('costFixed').set(costFixed); }
+function syncCostCats(){ if(window.fbDB) window.fbDB.ref('costCats').set(costCats); }
+
+// Fixed costs — manual per-month, with auto-carryover into the current month.
+function _fixedArr(mk){ if(!costFixed[mk]) costFixed[mk]=[]; return costFixed[mk]; }
+function fixedAdd(){ var mk=_costMonthKey(); _fixedArr(mk).push({id:'f'+Date.now()+Math.floor(Math.random()*1000),label:'',amount:''}); syncCostFixed(); costsRender(); }
+function fixedRemove(id){ var mk=_costMonthKey(); costFixed[mk]=_fixedArr(mk).filter(function(r){return r.id!==id;}); syncCostFixed(); costsRender(); }
+function fixedSet(id,field,val){ var mk=_costMonthKey(); var r=_fixedArr(mk).find(function(x){return x.id===id;}); if(!r)return; if(field==='amount'){r.amount=(val===''?'':(parseFloat(val)||0));}else{r[field]=val;} syncCostFixed(); if(field==='amount')costsRender(); }
+
+// Sub-categories for utilities / other — office adds/removes them.
+function catAdd(section){ var nm=prompt('New category / ชื่อหมวดใหม่:',''); if(nm===null)return; nm=nm.trim(); if(!nm)return; if(!costCats[section])costCats[section]=[]; costCats[section].push({id:'k'+Date.now()+Math.floor(Math.random()*1000),label:nm}); syncCostCats(); costsRender(); }
+function catRemove(section,id){ var c=(costCats[section]||[]).find(function(x){return x.id===id;}); if(!confirm('Remove category "'+(c?c.label:'')+'"? / ลบหมวดนี้?'))return; costCats[section]=(costCats[section]||[]).filter(function(x){return x.id!==id;}); syncCostCats(); costsRender(); }
+// Sum of receipts (bills tagged with section+subcatId) for a category in a month.
+function _catTotal(section,catId,mk){ return bills.reduce(function(a,b){ return (b.section===section&&b.subcatId===catId&&billsMKey(b.date)===mk)?a+(parseFloat(b.amount)||0):a; },0); }
+
 function costsRender(){
   var el=document.getElementById('bills-costs'); if(!el) return;
-  var secs=[
-    {key:'fixed',     title:'🏠 Fixed costs / ค่าใช้จ่ายคงที่', ph:'Rent, car, insurance, garbage…'},
-    {key:'utilities', title:'⚡ Utilities / ค่าสาธารณูปโภค',     ph:'Electricity, water, fuel, gas…'},
-    {key:'staff',     title:'👤 Staff / พนักงาน',                ph:'Salary, bonus, deduction (−)…'}
-  ];
-  var esc=function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); };
+  var mk=_costMonthKey();
+  // Carryover: seed the CURRENT month's fixed costs from the latest previous month if still empty.
+  if(mk===_nowMonthKey() && (!costFixed[mk]||costFixed[mk].length===0)){
+    var prev=Object.keys(costFixed).filter(function(k){return k<mk && costFixed[k] && costFixed[k].length;}).sort();
+    if(prev.length){ var src=costFixed[prev[prev.length-1]]; costFixed[mk]=src.map(function(r){return {id:'f'+Date.now()+Math.floor(Math.random()*1e6),label:r.label,amount:r.amount};}); syncCostFixed(); }
+  }
   var html='', grand=0;
-  secs.forEach(function(sec){
-    var rows=_costArr(sec.key);
-    var tot=rows.reduce(function(a,r){return a+(parseFloat(r.amount)||0);},0); grand+=tot;
-    html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
-        '<span style="font-size:13px;font-weight:700">'+sec.title+'</span>'+
-        '<span style="font-size:14px;font-weight:800;color:var(--blue)">'+tot.toLocaleString()+' ฿</span>'+
-      '</div>';
-    rows.forEach(function(r){
-      html+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'+
-        '<input type="text" value="'+esc(r.label)+'" placeholder="'+sec.ph+'" onchange="costSet(\''+sec.key+'\',\''+r.id+'\',\'label\',this.value)" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'+
-        '<input type="number" value="'+(r.amount!=null&&r.amount!==''?r.amount:'')+'" placeholder="0" onchange="costSet(\''+sec.key+'\',\''+r.id+'\',\'amount\',this.value)" style="width:96px;flex-shrink:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
-        '<button type="button" onclick="costRemove(\''+sec.key+'\',\''+r.id+'\')" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:32px;flex-shrink:0;cursor:pointer">✕</button>'+
-      '</div>';
-    });
-    html+='<button type="button" onclick="costAdd(\''+sec.key+'\')" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add / เพิ่ม</button>'+
+
+  // 1) Fixed costs — editable line items
+  var frows=_fixedArr(mk), ftot=frows.reduce(function(a,r){return a+(parseFloat(r.amount)||0);},0); grand+=ftot;
+  html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">🏠 Fixed costs / ค่าใช้จ่ายคงที่</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+ftot.toLocaleString()+' ฿</span></div>';
+  frows.forEach(function(r){
+    html+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'+
+      '<input type="text" value="'+_esc(r.label)+'" placeholder="Rent, car, insurance…" onchange="fixedSet(\''+r.id+'\',\'label\',this.value)" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'+
+      '<input type="number" value="'+(r.amount!=null&&r.amount!==''?r.amount:'')+'" placeholder="0" onchange="fixedSet(\''+r.id+'\',\'amount\',this.value)" style="width:96px;flex-shrink:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
+      '<button type="button" onclick="fixedRemove(\''+r.id+'\')" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:32px;flex-shrink:0;cursor:pointer">✕</button>'+
     '</div>';
   });
+  html+='<button type="button" onclick="fixedAdd()" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add / เพิ่ม</button></div>';
+
+  // 2) & 3) Utilities + Other — category lists (amounts come from receipts)
+  [['utilities','⚡ Utilities / ค่าสาธารณูปโภค'],['other','📦 Other / อื่นๆ']].forEach(function(p){
+    var section=p[0], cats=costCats[section]||[];
+    var stot=cats.reduce(function(a,c){return a+_catTotal(section,c.id,mk);},0); grand+=stot;
+    html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">'+p[1]+'</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+stot.toLocaleString()+' ฿</span></div>';
+    if(cats.length===0){ html+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">No categories yet — add one below</div>'; }
+    cats.forEach(function(c){
+      var t=_catTotal(section,c.id,mk);
+      html+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;padding:6px 9px;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs)">'+
+        '<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(c.label)+'</span>'+
+        '<span style="font-size:13px;font-weight:800;color:var(--text)">'+t.toLocaleString()+' ฿</span>'+
+        '<button type="button" onclick="catRemove(\''+section+'\',\''+c.id+'\')" title="Remove category" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>'+
+      '</div>';
+    });
+    html+='<button type="button" onclick="catAdd(\''+section+'\')" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add category / เพิ่มหมวด</button></div>';
+  });
+
+  // 4) Staff — auto from payroll later (placeholder)
+  html+='<div style="background:var(--bg2);border:1px dashed var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:13px;font-weight:700">👤 Staff / พนักงาน</span><span style="font-size:11px;color:var(--text2)">auto from payroll (soon)</span></div></div>';
+
   html+='<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);font-weight:800"><span style="font-size:13px">Total monthly / รวมต่อเดือน</span><span style="font-size:15px;color:var(--blue)">'+grand.toLocaleString()+' ฿</span></div>';
   el.innerHTML=html;
+  try{ billsFillSubcats(); }catch(e){} // keep the receipt entry's sub-category dropdown in sync
 }
 
 function billsRender(){
+  try{ if(!document.getElementById('bills-e-section')) billsEntryRender(); }catch(e){}
   try{ costsRender(); }catch(e){}
   var listEl = document.getElementById('bills-list');
-  var sumEl  = document.getElementById('bills-summary');
   var msel   = document.getElementById('bills-filter-month');
-  var csel   = document.getElementById('bills-filter-cat');
   if(!listEl) return;
   var months = new Set();
   var now = new Date();
@@ -10074,40 +10095,95 @@ function billsRender(){
     if(curVal && mArr.includes(curVal)) msel.value = curVal;
   }
   var selMon = msel ? msel.value : (mArr[0]||'');
-  var selCat = csel ? csel.value : '';
-  var filtered = bills.filter(function(b){
-    if(billsMKey(b.date)!==selMon) return false;
-    if(selCat && b.cat!==selCat) return false;
-    return true;
-  });
-  var total = filtered.reduce(function(a,b){return a+(parseFloat(b.amount)||0);},0);
-  var notReim = filtered.filter(function(b){return b.reimbursed==='no';}).reduce(function(a,b){return a+(parseFloat(b.amount)||0);},0);
-  if(sumEl) sumEl.innerHTML =
-    '<div style="background:var(--bg);border:1.5px solid var(--border);border-radius:var(--rs);padding:10px 14px"><div style="font-size:11px;color:var(--text2);font-weight:700;text-transform:uppercase">Total expenses</div><div style="font-size:22px;font-weight:900;color:var(--text)">'+total.toLocaleString()+' ฿</div></div>'
-   +'<div style="background:var(--bg);border:1.5px solid #fecaca;border-radius:var(--rs);padding:10px 14px"><div style="font-size:11px;color:#dc2626;font-weight:700;text-transform:uppercase">Not reimbursed</div><div style="font-size:22px;font-weight:900;color:#dc2626">'+notReim.toLocaleString()+' ฿</div></div>';
+  var filtered = bills.filter(function(b){ return billsMKey(b.date)===selMon; })
+                      .sort(function(a,b){ return (b.ts||0)-(a.ts||0) || (b.date||'').localeCompare(a.date||''); });
   if(filtered.length===0){
-    listEl.innerHTML='<div class="empty"><i class="ti ti-receipt-off" style="font-size:36px;display:block;margin-bottom:8px"></i>No bills this month</div>';
+    listEl.innerHTML='<div class="empty" style="padding:18px"><i class="ti ti-receipt-off" style="font-size:30px;display:block;margin-bottom:6px"></i>No receipts this month / ไม่มีใบเสร็จ</div>';
     return;
   }
+  function secLbl(s){ return s==='utilities'?'⚡ Utilities':s==='other'?'📦 Other':(s||''); }
+  function whenStr(b){ var t=''; if(b.ts){ var d=new Date(b.ts); t=' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); } return (b.date||'')+t; }
   listEl.innerHTML = filtered.map(function(b){
-    var reimHtml = b.reimbursed==='yes'
-      ? '<span style="font-size:11px;background:#d1fae5;color:#065f46;border-radius:10px;padding:2px 7px;font-weight:700">✓ Reimbursed</span>'
-      : b.reimbursed==='na'
-      ? '<span style="font-size:11px;background:var(--bg2);color:var(--text2);border-radius:10px;padding:2px 7px">Company</span>'
-      : '<span style="font-size:11px;background:#fee2e2;color:#dc2626;border-radius:10px;padding:2px 7px;font-weight:700">⚠ Pending</span>';
-    return '<div class="card" style="padding:12px 14px;margin-bottom:8px;cursor:pointer" onclick="billsOpenEdit(\''+b.id+'\')">'
+    var title=b.subcatLabel||b.cat||b.what||'—';
+    var sub=(b.what?_esc(b.what)+' · ':'')+whenStr(b)+(b.section?' · '+secLbl(b.section):'');
+    return '<div class="card" style="padding:10px 12px;margin-bottom:8px">'
       +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
       +'<div style="flex:1;min-width:0">'
-      +'<div style="font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+b.what+'</div>'
-      +'<div style="font-size:12px;color:var(--text2);margin-top:2px">'+b.date+' · '+(b.cat||'')+(b.paidby?' · <b>'+b.paidby+'</b>':'')+(b.shipper?' · '+b.shipper:'')+'</div>'
-      +(b.notes?'<div style="font-size:11px;color:var(--text2);margin-top:3px">'+b.notes+'</div>':'')
-      +(b.photoUrl?'<div style="margin-top:6px"><img src="'+b.photoUrl+'" style="max-height:80px;border-radius:6px" onclick="event.stopPropagation();window.open(\''+b.photoUrl+'\',\'_blank\')"></div>':'')
+      +'<div style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(title)+'</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'+sub+'</div>'
+      +(b.photoUrl?'<div style="margin-top:6px"><img src="'+b.photoUrl+'" style="max-height:70px;border-radius:6px;cursor:pointer" onclick="window.open(\''+b.photoUrl+'\',\'_blank\')"></div>':'')
       +'</div>'
       +'<div style="text-align:right;flex-shrink:0">'
-      +'<div style="font-size:16px;font-weight:900;color:var(--text)">'+(parseFloat(b.amount)||0).toLocaleString()+' ฿</div>'
-      +reimHtml
+      +'<div style="font-size:15px;font-weight:900">'+(parseFloat(b.amount)||0).toLocaleString()+' ฿</div>'
+      +'<button type="button" onclick="billsDeletePin(\''+b.id+'\')" title="Delete (PIN)" style="margin-top:6px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer"><i class="ti ti-trash"></i></button>'
       +'</div></div></div>';
   }).join('');
+}
+
+// Receipt entry (top of Bills tab): pick section → sub-category, amount, photo.
+function billsEntryRender(){
+  var el=document.getElementById('bills-entry'); if(!el) return;
+  var inp='padding:9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)';
+  el.innerHTML='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px">'
+    +'<div style="font-size:13px;font-weight:700;margin-bottom:8px">➕ Add receipt / เพิ่มใบเสร็จ</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:8px">'
+      +'<select id="bills-e-section" onchange="billsFillSubcats()" style="flex:1;'+inp+'"><option value="utilities">⚡ Utilities</option><option value="other">📦 Other</option></select>'
+      +'<select id="bills-e-subcat" style="flex:1;'+inp+'"></select>'
+    +'</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:8px">'
+      +'<input type="number" id="bills-e-amount" placeholder="Amount ฿ / จำนวน" style="flex:1;'+inp+';font-weight:700;text-align:right">'
+      +'<input type="date" id="bills-e-date" lang="en-GB" style="flex:1;'+inp+'">'
+    +'</div>'
+    +'<input type="text" id="bills-e-what" placeholder="Note (optional) / รายละเอียด" style="width:100%;margin-bottom:8px;box-sizing:border-box;'+inp+'">'
+    +'<input type="file" id="bills-e-photo" accept="image/*" style="font-size:13px;display:block;margin-bottom:6px">'
+    +'<div id="bills-e-photo-prev" style="margin-bottom:8px"></div>'
+    +'<button type="button" onclick="billsEntrySubmit()" style="width:100%;padding:10px;border:none;border-radius:var(--rs);background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer"><i class="ti ti-plus"></i> Save receipt / บันทึก</button>'
+    +'</div>';
+  try{ document.getElementById('bills-e-date').valueAsDate=new Date(); }catch(e){}
+  billsFillSubcats();
+}
+function billsFillSubcats(){
+  var sel=document.getElementById('bills-e-section'), sub=document.getElementById('bills-e-subcat');
+  if(!sel||!sub) return;
+  var sec=sel.value||'utilities', cats=costCats[sec]||[], prev=sub.value;
+  sub.innerHTML = cats.length ? cats.map(function(c){return '<option value="'+c.id+'">'+_esc(c.label)+'</option>';}).join('') : '<option value="">— add a category first —</option>';
+  if(prev && cats.some(function(c){return c.id===prev;})) sub.value=prev;
+}
+function billsEntrySubmit(){
+  var sec=document.getElementById('bills-e-section').value;
+  var subId=document.getElementById('bills-e-subcat').value;
+  if(!subId){ alert('Add a category in that section first / เพิ่มหมวดก่อน'); return; }
+  var cat=(costCats[sec]||[]).find(function(c){return c.id===subId;})||{};
+  var amt=parseFloat(document.getElementById('bills-e-amount').value)||0;
+  if(amt<=0){ alert('Enter an amount / ใส่จำนวนเงิน'); return; }
+  var date=document.getElementById('bills-e-date').value || new Date().toISOString().slice(0,10);
+  var what=document.getElementById('bills-e-what').value.trim();
+  var photoFile=document.getElementById('bills-e-photo').files[0];
+  var by=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office';
+  function persist(url){
+    var id='bill-'+Date.now();
+    var rec={id:id,section:sec,subcatId:subId,subcatLabel:cat.label||'',what:what,amount:amt,date:date,ts:Date.now(),by:by,photoUrl:url||''};
+    if(window.fbDB) window.fbDB.ref('bills/'+id).set(rec);
+    var a=document.getElementById('bills-e-amount'); if(a)a.value='';
+    var w=document.getElementById('bills-e-what'); if(w)w.value='';
+    var p=document.getElementById('bills-e-photo'); if(p)p.value='';
+    var pv=document.getElementById('bills-e-photo-prev'); if(pv)pv.innerHTML='';
+  }
+  if(photoFile && window.fbStorage){
+    window.fbStorage.ref('bills/'+Date.now()+'_'+photoFile.name).put(photoFile).then(function(s){return s.ref.getDownloadURL();}).then(persist).catch(function(){persist('');});
+  } else if(photoFile){ var r=new FileReader(); r.onload=function(e){persist(e.target.result);}; r.readAsDataURL(photoFile); }
+  else persist('');
+}
+// Delete a receipt — requires the logged-in office user's OWN PIN + writes an audit entry.
+function billsDeletePin(id){
+  var b=bills.find(function(x){return x.id===id;}); if(!b) return;
+  var me=(typeof staffList!=='undefined'&&typeof currentStaffId!=='undefined') ? staffList.find(function(s){return s.id===currentStaffId;}) : null;
+  if(!me){ alert('Log in with your office PIN to delete. / เข้าสู่ระบบด้วย PIN'); return; }
+  if(!me.pin){ alert('Your account has no PIN set.'); return; }
+  var entered=prompt('Enter YOUR office PIN to delete this receipt / ใส่ PIN ของคุณเพื่อลบ:'); if(entered===null) return;
+  if(String(entered).trim()!==String(me.pin)){ alert('Wrong PIN / PIN ไม่ถูกต้อง'); return; }
+  if(window.fbDB) window.fbDB.ref('bills/'+id).remove();
+  try{ auditAdd({type:'delete', orderId:'Bill: '+(b.subcatLabel||b.what||b.cat||id)+' ('+(parseFloat(b.amount)||0)+'฿)', by:me.name}); }catch(e){}
 }
 
 function billsOpenAdd(){
@@ -10192,9 +10268,9 @@ function billsDelete(){
 }
 
 document.addEventListener('change', function(e){
-  if(e.target && e.target.id==='bills-photo'){
+  if(e.target && (e.target.id==='bills-photo'||e.target.id==='bills-e-photo')){
     var f = e.target.files[0]; if(!f) return;
-    var prev = document.getElementById('bills-photo-preview'); if(!prev) return;
+    var prev = document.getElementById(e.target.id==='bills-e-photo'?'bills-e-photo-prev':'bills-photo-preview'); if(!prev) return;
     var reader = new FileReader();
     reader.onload = function(ev){ prev.innerHTML = '<img src="'+ev.target.result+'" style="max-height:80px;border-radius:6px;margin-top:4px">'; };
     reader.readAsDataURL(f);
