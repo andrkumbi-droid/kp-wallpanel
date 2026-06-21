@@ -617,6 +617,11 @@ textarea{resize:none}
         bills = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}) : [];
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
       });
+      db.ref('monthlyCosts').on('value', function(snap) {
+        var v=snap.val()||{}; function _arr(x){ return x?(Array.isArray(x)?x:Object.values(x)):[]; }
+        monthlyCosts={ fixed:_arr(v.fixed), utilities:_arr(v.utilities), staff:_arr(v.staff) };
+        try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
+      });
       // Lightweight photo index (counts/metadata only, NOT the image data) so the
       // Pictures tab can list orders without downloading every photo on startup.
       db.ref('photoIndex').on('value', function(snap) {
@@ -1603,6 +1608,9 @@ textarea{resize:none}
       <div class="stit" style="margin-bottom:0">🧾 Bills / ใบเสร็จ</div>
       <button type="button" onclick="billsOpenAdd()" style="background:var(--blue);color:#fff;border:none;border-radius:var(--rs);padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add</button>
     </div>
+    <!-- Monthly cost sections (fixed / utilities / staff) -->
+    <div id="bills-costs" style="margin-bottom:14px"></div>
+    <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">🧾 Receipts / ใบเสร็จ</div>
     <!-- Filter row -->
     <div style="display:flex;gap:6px;margin-bottom:12px">
       <select id="bills-filter-month" onchange="billsRender()" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px"></select>
@@ -2220,6 +2228,7 @@ var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่�
 var containerLog=[];
 var auditLog=[];
 var bills=[];
+var monthlyCosts={fixed:[],utilities:[],staff:[]}; // Bills tab: fixed costs / utilities / staff cost lists
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
 let ofFilt_='all',ofSelDriver=null,ofSelOrders=[],currentDriverId=null;
 let editId=null,editSM=null,editIM=null,editDM=null,selMonth='';
@@ -9999,7 +10008,50 @@ function billsMKey(dateStr){
   return d.getFullYear()+'-'+(d.getMonth()+1<10?'0':'')+(d.getMonth()+1);
 }
 
+// ── BILLS: monthly cost lists (fixed / utilities / staff) ──
+function syncMonthlyCosts(){ if(window.fbDB) window.fbDB.ref('monthlyCosts').set(monthlyCosts); }
+function _costArr(section){ if(!monthlyCosts[section]) monthlyCosts[section]=[]; return monthlyCosts[section]; }
+function costAdd(section){ _costArr(section).push({id:'c'+Date.now()+Math.floor(Math.random()*1000),label:'',amount:''}); syncMonthlyCosts(); costsRender(); }
+function costRemove(section,id){ monthlyCosts[section]=_costArr(section).filter(function(r){return r.id!==id;}); syncMonthlyCosts(); costsRender(); }
+function costSet(section,id,field,val){
+  var r=_costArr(section).find(function(x){return x.id===id;}); if(!r) return;
+  if(field==='amount'){ r.amount=(val===''?'':(parseFloat(val)||0)); } else { r[field]=val; }
+  syncMonthlyCosts();
+  if(field==='amount') costsRender(); // refresh totals
+}
+function costsRender(){
+  var el=document.getElementById('bills-costs'); if(!el) return;
+  var secs=[
+    {key:'fixed',     title:'🏠 Fixed costs / ค่าใช้จ่ายคงที่', ph:'Rent, car, insurance, garbage…'},
+    {key:'utilities', title:'⚡ Utilities / ค่าสาธารณูปโภค',     ph:'Electricity, water, fuel, gas…'},
+    {key:'staff',     title:'👤 Staff / พนักงาน',                ph:'Salary, bonus, deduction (−)…'}
+  ];
+  var esc=function(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); };
+  var html='', grand=0;
+  secs.forEach(function(sec){
+    var rows=_costArr(sec.key);
+    var tot=rows.reduce(function(a,r){return a+(parseFloat(r.amount)||0);},0); grand+=tot;
+    html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+        '<span style="font-size:13px;font-weight:700">'+sec.title+'</span>'+
+        '<span style="font-size:14px;font-weight:800;color:var(--blue)">'+tot.toLocaleString()+' ฿</span>'+
+      '</div>';
+    rows.forEach(function(r){
+      html+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'+
+        '<input type="text" value="'+esc(r.label)+'" placeholder="'+sec.ph+'" onchange="costSet(\''+sec.key+'\',\''+r.id+'\',\'label\',this.value)" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'+
+        '<input type="number" value="'+(r.amount!=null&&r.amount!==''?r.amount:'')+'" placeholder="0" onchange="costSet(\''+sec.key+'\',\''+r.id+'\',\'amount\',this.value)" style="width:96px;flex-shrink:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
+        '<button type="button" onclick="costRemove(\''+sec.key+'\',\''+r.id+'\')" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:32px;flex-shrink:0;cursor:pointer">✕</button>'+
+      '</div>';
+    });
+    html+='<button type="button" onclick="costAdd(\''+sec.key+'\')" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add / เพิ่ม</button>'+
+    '</div>';
+  });
+  html+='<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);font-weight:800"><span style="font-size:13px">Total monthly / รวมต่อเดือน</span><span style="font-size:15px;color:var(--blue)">'+grand.toLocaleString()+' ฿</span></div>';
+  el.innerHTML=html;
+}
+
 function billsRender(){
+  try{ costsRender(); }catch(e){}
   var listEl = document.getElementById('bills-list');
   var sumEl  = document.getElementById('bills-summary');
   var msel   = document.getElementById('bills-filter-month');
