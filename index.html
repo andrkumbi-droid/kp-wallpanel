@@ -595,6 +595,10 @@ textarea{resize:none}
         payLog = snap.val() ? Object.values(snap.val()) : [];
         try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active')){payBreakdownRender();payRenderNameLog();}}catch(e){}
       });
+      db.ref('payCats').on('value', function(snap) {
+        var v=snap.val(); payCatsData = v ? (Array.isArray(v)?v.filter(Boolean):Object.values(v)) : [];
+        try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))payNewRender();}catch(e){}
+      });
       db.ref('attEntries').on('value', function(snap) {
         attEntries = snap.val() ? Object.values(snap.val()) : [];
         try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))ofAttRender();}catch(e){}
@@ -1441,6 +1445,7 @@ textarea{resize:none}
     <div id="pay-entry" style="margin-bottom:14px"></div>
     <div id="pay-breakdown" style="margin-bottom:12px"></div>
     <div id="pay-log-section"></div>
+    <div id="pay-cats-manage"></div>
 
     <!-- ═══ BOOK — the fast daily entry ═══ -->
     <div id="psubv-book">
@@ -9666,6 +9671,8 @@ function payNewRender(){
   try{ if(!document.getElementById('pay-e-name')) payEntryRender(); }catch(e){}
   try{ if(!document.getElementById('pay-log-name')) payLogSectionRender(); }catch(e){}
   try{ payFillNames(); }catch(e){}
+  try{ payFillCats(); }catch(e){}
+  try{ payCatRender(); }catch(e){}
   try{ payBreakdownRender(); }catch(e){}
   try{ payRenderNameLog(); }catch(e){}
 }
@@ -9679,12 +9686,51 @@ function payNames(){
   out.sort(function(a,b){ return (ORD[a.group]-ORD[b.group]) || a.name.localeCompare(b.name); });
   return out;
 }
-function payCats(){ return [
+var DEFAULT_PAYCATS=[
   {key:'salary_monthly', label:'💵 Salary (Monthly)', sign:1},
   {key:'salary_daily',   label:'📅 Salary (Daily)',   sign:1},
   {key:'bonus',          label:'🎁 Bonus',            sign:1},
   {key:'advanced',       label:'➖ Advance (deduct)',  sign:-1}
-]; }
+];
+var payCatsData=[]; // office-editable categories (Firebase 'payCats'); falls back to defaults
+function payCats(){ return (payCatsData&&payCatsData.length)?payCatsData:DEFAULT_PAYCATS; }
+function syncPayCats(){ if(window.fbDB) window.fbDB.ref('payCats').set(payCats()); }
+function payFillCats(){ var sel=document.getElementById('pay-e-cat'); if(!sel)return; var p=sel.value; sel.innerHTML=payCats().map(function(c){return '<option value="'+c.key+'">'+_esc(c.label)+'</option>';}).join(''); if(p)sel.value=p; }
+function payCatAdd(){
+  var lab=((document.getElementById('pay-newcat-label')||{}).value||'').trim();
+  if(!lab){ alert('Enter a category name / ใส่ชื่อประเภท'); return; }
+  var sign=parseInt((document.getElementById('pay-newcat-sign')||{}).value)||1;
+  var arr=payCats().slice(); arr.push({key:'c'+Date.now(), label:lab, sign:(sign<0?-1:1)});
+  payCatsData=arr; syncPayCats();
+  var li=document.getElementById('pay-newcat-label'); if(li)li.value='';
+  payCatRender(); payFillCats(); try{payBreakdownRender();}catch(e){}
+}
+function payCatRemove(key){
+  var used=(payLog||[]).some(function(e){return e.cat===key;});
+  if(!confirm('Remove this category? / ลบประเภทนี้?'+(used?'\n(Old entries stay but may not be counted.)':''))) return;
+  payCatsData=payCats().filter(function(c){return c.key!==key;}); syncPayCats();
+  payCatRender(); payFillCats(); try{payBreakdownRender();payRenderNameLog();}catch(e){}
+}
+function payCatRender(){
+  var el=document.getElementById('pay-cats-manage'); if(!el) return;
+  var inp='padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)';
+  var rows=payCats().map(function(c){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">'
+      +'<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(c.label)+'</span>'
+      +'<span style="font-size:11px;font-weight:700;flex-shrink:0;color:'+(c.sign<0?'#dc2626':'#16a34a')+'">'+(c.sign<0?'➖ Deduct':'➕ Income')+'</span>'
+      +'<button type="button" onclick="payCatRemove(\''+c.key+'\')" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:28px;height:28px;flex-shrink:0;cursor:pointer">✕</button>'
+      +'</div>';
+  }).join('');
+  el.innerHTML='<details style="border:1px solid var(--border);border-radius:var(--rs);overflow:hidden;margin-top:14px">'
+    +'<summary style="cursor:pointer;padding:9px 12px;font-size:13px;font-weight:700;background:var(--bg2);user-select:none">⚙️ Manage categories / จัดการประเภท</summary>'
+    +'<div style="padding:8px 12px">'+rows
+      +'<div style="display:flex;gap:6px;margin-top:10px">'
+        +'<input type="text" id="pay-newcat-label" placeholder="New category / ประเภทใหม่" style="flex:1;min-width:0;'+inp+'">'
+        +'<select id="pay-newcat-sign" style="flex-shrink:0;'+inp+'"><option value="1">➕ Income</option><option value="-1">➖ Deduct</option></select>'
+        +'<button type="button" onclick="payCatAdd()" style="flex-shrink:0;border:none;background:var(--green);color:#fff;border-radius:var(--rs);padding:0 14px;font-weight:700;cursor:pointer">Add</button>'
+      +'</div>'
+    +'</div></details>';
+}
 function payCatMeta(k){ return payCats().find(function(c){return c.key===k;})||{label:k,sign:1}; }
 function _payNameOpts(){
   var names=payNames(), groups={};
