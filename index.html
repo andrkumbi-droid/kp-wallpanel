@@ -2469,7 +2469,7 @@ function openDM(id){editDM=id;document.getElementById('dm-title').textContent=id
 function closeDM(){document.getElementById('dm-modal').classList.remove('open');editDM=null;}
 function saveDM(){const name=document.getElementById('dm-name').value.trim();if(!name){alert('Enter a name');return;}const phone=document.getElementById('dm-phone').value.trim(),vehicle=document.getElementById('dm-vehicle').value.trim();if(editDM){const d=drivers.find(x=>x.id===editDM);d.name=name;d.phone=phone;d.vehicle=vehicle;}else drivers.push({id:'d'+Date.now(),name,phone,vehicle});closeDM();mgRender();syncDrivers();}
 function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filter(x=>x.id!==editDM);closeDM();mgRender();syncDrivers();}
-function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"))return;var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"+(parseFloat(t.driverPay)>0?'\nTour pay '+(parseFloat(t.driverPay)||0).toLocaleString()+' ฿ → payroll':'')))return;try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').valueAsDate=new Date();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -3338,7 +3338,8 @@ function closeTourDetail() {
 function ofEndTourFromDetail() {
   if(currentTourDetailIdx === null) return;
   const t = activeTours[currentTourDetailIdx];
-  if(!confirm('End ' + t.driverName + "'s tour?")) return;
+  if(!confirm('End ' + t.driverName + "'s tour?"+(parseFloat(t.driverPay)>0?'\nTour pay '+(parseFloat(t.driverPay)||0).toLocaleString()+' ฿ → payroll':''))) return;
+  try{ endTourPayroll(t); }catch(e){}
   var _rid = t && t.id;
   activeTours.splice(currentTourDetailIdx, 1);
   fbRemoveTour(_rid);
@@ -4148,6 +4149,21 @@ function ofSetTourPay(tourId, val){
   if(!t) return;
   t.driverPay = (val===''||val==null) ? '' : (parseFloat(val)||0);
   syncTours();
+}
+// Category key for tour pay: the office-managed "Tour Pay" category if present, else 'tour_pay'.
+function payTourCatKey(){ try{ var c=payCats().find(function(x){ return x.key==='tour_pay' || /tour\s*pay/i.test(x.label||''); }); return c?c.key:'tour_pay'; }catch(e){ return 'tour_pay'; } }
+// On End tour: if a tour pay amount was entered, book it into the driver's payroll.
+function endTourPayroll(t){
+  if(!t) return;
+  var amt=parseFloat(t.driverPay)||0; if(amt<=0) return;
+  var s=(staffList||[]).find(function(x){return x.driverId && x.driverId===t.driverId;})
+       || (staffList||[]).find(function(x){return x.name===t.driverName;});
+  if(!s){ return; } // can't attribute to a payroll person
+  var now=new Date();
+  var rec={ id:'pl-'+Date.now(), who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:amt,
+    date: now.toISOString().slice(0,10), ts:Date.now(),
+    note:'Tour'+(t.created?' '+t.created:''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
+  if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
 }
 function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.getAttribute("data-oid");
   var t = activeTours.find(function(x){return x.id===tourId;});
