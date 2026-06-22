@@ -479,8 +479,11 @@ textarea{resize:none}
       });
       db.ref('staffList').on('value', function(snap) {
         staffList = snap.val() ? Object.values(snap.val()) : [];
+        rebuildDrivers(); // drivers are derived from staffList (single source of truth)
         try{if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active'))mgRenderStaff();}catch(e){}
         try{if(document.getElementById('s-office-login').classList.contains('active'))ofLoginRender();}catch(e){}
+        try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
+        try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
       });
       db.ref('orders').on('value', function(snap) {
         orders = snap.val() ? Object.values(snap.val()) : [];
@@ -509,8 +512,9 @@ textarea{resize:none}
         incomingItems = snap.val() ? Object.values(snap.val()) : [];
         try{if(document.getElementById('s-manager').classList.contains('active'))mgIncoming();}catch(e){}
       });
+      // drivers are now derived from staffList; this just refreshes the views.
       db.ref('drivers').on('value', function(snap) {
-        drivers = snap.val() ? Object.values(snap.val()) : [];
+        rebuildDrivers();
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
       });
@@ -850,7 +854,6 @@ textarea{resize:none}
   <div class="tabs" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr">
     <button type="button" class="tab active" onclick="mgt('stock')" id="mgt-stock">Stock / สต็อก</button>
     <button type="button" class="tab" onclick="mgt('incoming')" id="mgt-incoming">Incoming / ขาเข้า</button>
-    <button type="button" class="tab" onclick="mgt('drivers')" id="mgt-drivers">Drivers / คนขับ</button>
     <button type="button" class="tab" onclick="mgt('staff')" id="mgt-staff">Staff / พนักงาน</button>
     <button type="button" class="tab" onclick="mgt('revenue')" id="mgt-revenue">Revenue / รายได้</button>
     <button type="button" class="tab" onclick="mgt('audit')" id="mgt-audit">Audit Log</button>
@@ -6068,6 +6071,13 @@ function drCancel(id){
 function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();}
 
 // ── STAFF MODAL FUNCTIONS ──
+// Drivers are derived from staffList (staff flagged isDriver). Old driver ids are
+// kept in s.driverId so existing tours/login keep matching — single source, no dups.
+function rebuildDrivers(){
+  drivers = (staffList||[]).filter(function(s){return s.isDriver;}).map(function(s){
+    return { id: s.driverId || s.id, name: s.name, phone: s.phone||'', vehicle: s.vehicle||'' };
+  });
+}
 function syncStaff() { if(window.fbDB) { const obj = {}; staffList.forEach(s => obj[s.id] = s); window.fbDB.ref('staffList').set(obj); } }
 function openStaffM(id) {
   editStaffId = id;
@@ -6089,6 +6099,9 @@ function openStaffM(id) {
     document.getElementById('staffm-preorder').checked = !!s.preorderAccess;
     document.getElementById('staffm-bills').checked = !!s.billsAccess;
     document.getElementById('staffm-payroll').checked = !!s.payrollOn;
+    document.getElementById('staffm-driver').checked = !!s.isDriver;
+    document.getElementById('staffm-phone').value = s.phone||'';
+    document.getElementById('staffm-vehicle').value = s.vehicle||'';
   } else {
     ['staffm-name','staffm-pin','staffm-role'].forEach(x => document.getElementById(x).value = '');
     document.getElementById('staffm-sales').checked = false;
@@ -6102,6 +6115,9 @@ function openStaffM(id) {
     document.getElementById('staffm-preorder').checked = false;
     document.getElementById('staffm-bills').checked = false;
     document.getElementById('staffm-payroll').checked = false;
+    document.getElementById('staffm-driver').checked = false;
+    document.getElementById('staffm-phone').value = '';
+    document.getElementById('staffm-vehicle').value = '';
   }
   document.getElementById('staff-modal').classList.add('open');
 }
@@ -6123,12 +6139,19 @@ function saveStaffM() {
   const preorderAccess = document.getElementById('staffm-preorder').checked;
   const billsAccess = document.getElementById('staffm-bills').checked;
   const payrollOn = document.getElementById('staffm-payroll').checked;
+  const isDriver = document.getElementById('staffm-driver').checked;
+  const phone = document.getElementById('staffm-phone').value.trim();
+  const vehicle = document.getElementById('staffm-vehicle').value.trim();
   if(editStaffId) {
     const s = staffList.find(x => x.id === editStaffId);
-    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.payrollOn = payrollOn;
+    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.payrollOn = payrollOn; s.isDriver = isDriver; s.phone = phone; s.vehicle = vehicle;
+    if(isDriver && !s.driverId) s.driverId = 'd' + Date.now();
   } else {
-    staffList.push({ id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, officeAccess, warehouseAccess, preorderAccess, billsAccess, payrollOn });
+    var ns = { id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, officeAccess, warehouseAccess, preorderAccess, billsAccess, payrollOn, isDriver, phone, vehicle };
+    if(isDriver) ns.driverId = 'd' + Date.now();
+    staffList.push(ns);
   }
+  rebuildDrivers();
   closeStaffM(); mgRenderStaff(); syncStaff();
 }
 function delStaffM() {
@@ -6142,7 +6165,7 @@ function mgRenderStaff() {
   if(!el) return;
   el.innerHTML = staffList.length === 0
     ? '<div class="empty"><i class="ti ti-user-circle" style="font-size:36px;display:block;margin-bottom:8px"></i>No staff yet<br>Add office team members</div>'
-    : staffList.map(s => '<div class="dcard"><div class="dav">'+initials(s.name)+'</div><div style="flex:1"><div style="font-size:14px;font-weight:600">'+s.name+(s.salesAccess?'<span class="badge bactive" style="margin-left:6px;font-size:10px">Sales</span>':'')+(s.deleteAccess?'<span class="badge" style="margin-left:4px;font-size:10px;background:#FEE2E2;color:#DC2626">Delete</span>':'')+(s.paymentAccess?'<span class="badge" style="margin-left:4px;font-size:10px;background:#fef3c7;color:#92400e">Payment</span>':'')+'</div><div style="font-size:12px;color:var(--text2)">'+(s.role||'Office Staff')+' &middot; PIN: &#9679;&#9679;&#9679;&#9679;</div></div><button type="button" class="btnsm" onclick="openStaffM(&quot;'+s.id+'&quot;)"><i class="ti ti-pencil"></i></button></div>').join('');
+    : staffList.map(s => '<div class="dcard"><div class="dav">'+initials(s.name)+'</div><div style="flex:1"><div style="font-size:14px;font-weight:600">'+s.name+(s.salesAccess?'<span class="badge bactive" style="margin-left:6px;font-size:10px">Sales</span>':'')+(s.deleteAccess?'<span class="badge" style="margin-left:4px;font-size:10px;background:#FEE2E2;color:#DC2626">Delete</span>':'')+(s.paymentAccess?'<span class="badge" style="margin-left:4px;font-size:10px;background:#fef3c7;color:#92400e">Payment</span>':'')+(s.isDriver?'<span class="badge" style="margin-left:4px;font-size:10px;background:#dbeafe;color:#0284c7">🚚 Driver</span>':'')+'</div><div style="font-size:12px;color:var(--text2)">'+(s.role||'Office Staff')+(s.isDriver&&(s.phone||s.vehicle)?' &middot; '+[s.phone,s.vehicle].filter(Boolean).join(' · '):'')+' &middot; PIN: &#9679;&#9679;&#9679;&#9679;</div></div><button type="button" class="btnsm" onclick="openStaffM(&quot;'+s.id+'&quot;)"><i class="ti ti-pencil"></i></button></div>').join('');
 }
 var STAFF_PALETTE = [
   {bg:'#7c3aed',light:'rgba(124,58,237,0.12)',text:'#7c3aed'},
@@ -8107,6 +8130,17 @@ function calcViz() {
   <label class="fl" style="margin-top:0">Name / ชื่อ</label><input type="text" id="staffm-name" placeholder="e.g. Nong, Som">
   <label class="fl">PIN (4 digits) / รหัส 4 หลัก</label><input type="number" id="staffm-pin" placeholder="e.g. 1234" maxlength="4" oninput="if(this.value.length>4)this.value=this.value.slice(0,4)">
   <label class="fl">Role / ตำแหน่ง <span style="font-size:11px;color:var(--text2)">(optional)</span></label><input type="text" id="staffm-role" placeholder="e.g. Sales, Admin">
+  <div class="g2" style="margin-top:8px">
+    <div><label class="fl" style="margin-top:0">📞 Phone / โทร <span style="font-size:11px;color:var(--text2)">(driver)</span></label><input type="text" id="staffm-phone" placeholder="08x-xxx-xxxx"></div>
+    <div><label class="fl" style="margin-top:0">🚚 Vehicle / รถ <span style="font-size:11px;color:var(--text2)">(driver)</span></label><input type="text" id="staffm-vehicle" placeholder="e.g. Isuzu"></div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:rgba(2,132,199,0.08);border-radius:var(--rs);border:1px solid rgba(2,132,199,0.3)">
+    <input type="checkbox" id="staffm-driver" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">🚚 Is driver / เป็นคนขับ</div>
+      <div style="font-size:11px;color:var(--text2)">Appears in driver login & tour assignment</div>
+    </div>
+  </div>
   <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-top:14px">Login access / สิทธิ์เข้าใช้</div>
   <div style="display:flex;align-items:center;gap:10px;margin-top:6px;padding:10px;background:rgba(22,163,74,0.08);border-radius:var(--rs);border:1px solid rgba(22,163,74,0.3)">
     <input type="checkbox" id="staffm-office" style="width:18px;height:18px;cursor:pointer">
