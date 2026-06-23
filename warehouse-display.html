@@ -50,8 +50,8 @@
 
   @keyframes blink { 0%,100%{box-shadow:0 0 0 0 #fdcb6e00} 50%{box-shadow:0 0 16px 3px #fdcb6e44} }
 
-  .card.change { border-color: #ea580c !important; outline: 3px solid #ea580c; outline-offset: 2px; animation: changeBlink 1s infinite; }
-  @keyframes changeBlink { 0%,100%{box-shadow:0 0 0 0 #ea580c00} 50%{box-shadow:0 0 20px 4px #ea580c66} }
+  .card.change { border-color: #ea580c !important; outline: 4px solid #ea580c; outline-offset: 2px; animation: changeBlink 0.7s infinite; }
+  @keyframes changeBlink { 0%,100%{box-shadow:0 0 0 0 #ea580c00; outline-color:#ea580c} 50%{box-shadow:0 0 30px 9px #ea580ccc; outline-color:#ffd700} }
   .change-banner { background: #ea580c; color: #fff; font-size: 18px; font-weight: 900; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; line-height: 1.5; }
 
   .card.prio { outline: 3px solid #ffd700; outline-offset: 2px; }
@@ -240,28 +240,31 @@ function buildItems(o, cls) {
 var knownNew=null, knownChange=null;
 
 function render(orders) {
-  var nw=[], pk=[], rd=[];
+  var nw=[], pk=[], rd=[], changeOrders=[];
   var newSet=new Set(), changeSet=new Set();
   Object.values(orders||{}).forEach(function(o) {
     if(!o||!o.id) return;
-    if(o.changeReq && o.changeReq.status==='pending') changeSet.add(o.id);
+    if(o.changeReq && o.changeReq.status==='pending') { changeSet.add(o.id); changeOrders.push(o); return; }
     if(o.status==='new') { nw.push(o); newSet.add(o.id); }
     else if(o.status==='packing') pk.push(o);
     else if(o.status==='ready') rd.push(o);
   });
+  // Pin change-requests to the TOP of the NEW column so they can't be missed
+  nw = changeOrders.concat(nw);
 
-  if(knownNew!==null) {
-    var hasNew=false;
-    newSet.forEach(function(id){ if(!knownNew.has(id)) hasNew=true; });
-    if(hasNew) startAlert();
-  }
-  if(knownChange!==null) {
-    var hasChange=false;
-    changeSet.forEach(function(id){ if(!knownChange.has(id)) hasChange=true; });
-    if(hasChange) startAlert('🔄 แก้ไขออเดอร์! / ORDER CHANGED','กรุณายืนยันผ่านมือถือ / confirm on phone', playChangeSound);
-  }
-  if(newSet.size===0 && changeSet.size===0) stopAlert();
+  var hasNew=false, hasChange=false;
+  if(knownNew!==null) newSet.forEach(function(id){ if(!knownNew.has(id)) hasNew=true; });
+  if(knownChange!==null) changeSet.forEach(function(id){ if(!knownChange.has(id)) hasChange=true; });
   knownNew=newSet; knownChange=changeSet;
+
+  // Changes ring continuously until confirmed (even after reload); new orders ring on arrival.
+  if(changeSet.size>0){
+    if(!alertOn || hasChange) startAlert('🔄 แก้ไขออเดอร์! / ORDER CHANGED','กรุณายืนยันผ่านมือถือ / confirm on phone', playChangeSound);
+  } else if(newSet.size>0){
+    if(hasNew) startAlert();
+  } else {
+    stopAlert();
+  }
 
   document.getElementById('cnt-new').textContent=nw.length;
   document.getElementById('cnt-packing').textContent=pk.length;
