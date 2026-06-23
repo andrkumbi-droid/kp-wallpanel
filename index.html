@@ -500,6 +500,7 @@ textarea{resize:none}
         try{sheetsAutoSyncInit();}catch(e){} // start mirror auto-sync once orders are loaded
         try{updatePackingAlert();}catch(e){}
         try{if(document.getElementById('whv-packing')&&document.getElementById('whv-packing').classList.contains('active'))whRenderPacking();}catch(e){}
+        try{if(document.getElementById('s-warehouse')&&document.getElementById('s-warehouse').classList.contains('active'))whRender();}catch(e){}
       });
       db.ref('wOrders').on('value', function(snap) {
         wOrders = snap.val() ? Object.values(snap.val()) : [];
@@ -1841,6 +1842,17 @@ textarea{resize:none}
   <button type="button" class="abtn" onclick="emAddLine()"><i class="ti ti-plus"></i> Add line / เพิ่มสินค้า</button>
   <div id="em-total" style="font-size:13px;font-weight:700;margin-top:8px;text-align:right;color:var(--text)"></div>
   <button type="button" class="btn btng" style="margin-top:14px" onclick="saveEM()"><i class="ti ti-check"></i> Save / บันทึก</button>
+</div></div>
+
+<div class="modal-overlay" id="change-modal"><div class="modal">
+  <div class="mhdr"><span class="mtit">🔄 Change order / แก้ออเดอร์ <span id="co-id"></span></span><button type="button" class="mclose" onclick="closeCO()"><i class="ti ti-x"></i></button></div>
+  <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Adjust qty, set 0 to remove, or add new lines. Warehouse must confirm. / ปรับจำนวน ใส่ 0 เพื่อลบ หรือเพิ่มรายการใหม่ — คลังต้องยืนยัน</div>
+  <div class="colh"><span>Code</span><span>฿/pc</span><span>Qty</span><span></span></div>
+  <div id="co-lines"></div>
+  <button type="button" class="abtn" onclick="coAddLine()"><i class="ti ti-plus"></i> Add line / เพิ่มสินค้า</button>
+  <label class="fl">Note for warehouse / หมายเหตุถึงคลัง</label><input type="text" id="co-note" placeholder="optional">
+  <div id="co-total" style="font-size:13px;font-weight:700;margin-top:8px;text-align:right;color:var(--text)"></div>
+  <button type="button" class="btn" style="margin-top:14px;background:#ea580c;color:#fff;border:none" onclick="submitCO()"><i class="ti ti-send"></i> Send change to warehouse / ส่งให้คลัง</button>
 </div></div>
 
 <div class="modal-overlay" id="sm-modal"><div class="modal">
@@ -3724,6 +3736,7 @@ function ofOrderCard(o){
   s += '<div class="card '+(o.status==='cancelled'?'card-cancel':'')+'" data-oid="'+o.id+'"'+(cardStyle?' style="'+cardStyle+'"':'')+'>';
   if(o.priority) s += '<div style="background:#f3e8ff;color:#7c3aed;border-radius:var(--rs);padding:5px 9px;font-size:11px;font-weight:800;margin-bottom:6px">⭐ PRIORITY / สำคัญมาก'+(o.priorityReason?' — <span style="font-weight:600">'+o.priorityReason+'</span>':'')+'</div>';
   if(o.cantFinish) s += '<div style="background:#fee2e2;color:#dc2626;border-radius:var(--rs);padding:5px 9px;font-size:11px;font-weight:800;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:6px"><span>⚠ CAN\'T FINISH'+(o.cantFinishReason?' — <span style="font-weight:600">'+o.cantFinishReason+'</span>':'')+'</span><button type="button" onclick="resolveCantFinish(\''+o.id+'\')" style="background:#dc2626;color:#fff;border:none;border-radius:10px;padding:2px 8px;font-size:10px;cursor:pointer;flex-shrink:0;font-weight:700">Resolve</button></div>';
+  if(o.changeReq && o.changeReq.status==='pending') s += '<div style="background:#fff7ed;color:#ea580c;border:1.5px solid #fed7aa;border-radius:var(--rs);padding:5px 9px;font-size:11px;font-weight:800;margin-bottom:6px">🔄 CHANGE REQUESTED / รอคลังยืนยัน — <span style="font-weight:600">'+coDiffText(o.changeReq)+'</span></div>';
   var _drvTour = (o.status==='loaded'||o.status==='ready') ? activeTours.find(function(t){return t.orders && t.orders.indexOf(o.id)>=0;}) : null;
   s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:15px;font-weight:700">'+(o.priority?'⭐ ':'')+o.id+'</span><div style="display:flex;align-items:center;gap:6px">'+(_drvTour?'<span style="font-size:11px;color:#1d4ed8;font-weight:700"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> '+_drvTour.driverName+'</span>':'')+'<span class="badge '+BC[o.status]+'">'+SL[o.status]+'</span></div></div>';
   s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-user" style="font-size:12px;vertical-align:-1px"></i> '+o.customer+zoneBadge(o.zone)+'</div>';
@@ -3741,6 +3754,7 @@ function ofOrderCard(o){
   s += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">'+quickBtns+'</div>';
   s += '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">';
   s += '<button type="button" class="btnsm" onclick="openEM(this)" data-id="'+o.id+'"><i class="ti ti-pencil"></i> Edit</button>';
+  s += '<button type="button" class="btnsm" style="background:#fff7ed;color:#ea580c;border-color:#fed7aa" onclick="openCO(this)" data-id="'+o.id+'"><i class="ti ti-replace"></i> Change order</button>';
   s += '<button type="button" class="btnsm" style="'+(o.priority?'background:#7c3aed;color:#fff;border-color:#7c3aed':'background:#f3e8ff;color:#7c3aed;border-color:#e9d5ff')+'" onclick="togglePriority(\''+o.id+'\')"><i class="ti ti-star"></i> '+(o.priority?'Priority ✓':'Priority')+'</button>';
   s += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
   if(window.canDeleteOrders) {
@@ -4343,16 +4357,116 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   o.total=emItems.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0).toLocaleString()+' ฿';
   try{ deductOrderStock(o); }catch(e){}if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9.]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}try{sheetsUpdateMaster(o);}catch(e){console.error('Master update failed (non-blocking):',e);}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
 
+// CHANGE ORDER (customer adds/removes items; warehouse confirms)
+var coId=null;
+function coDiffText(cr){
+  if(!cr||!cr.diff)return'';
+  return cr.diff.map(function(d){
+    if((d.old||0)===0)return'➕ '+d.code+' ×'+d['new'];
+    if((d['new']||0)===0)return'➖ '+d.code+' (remove)';
+    return '✏️ '+d.code+' '+d.old+'→'+d['new'];
+  }).join(', ');
+}
+function openCO(btn){
+  var id=typeof btn==='string'?btn:btn.getAttribute('data-id');
+  var o=orders.find(function(x){return x.id===id;}); if(!o)return; coId=id;
+  document.getElementById('co-id').textContent=id;
+  document.getElementById('co-note').value=(o.changeReq&&o.changeReq.note)||'';
+  var wrap=document.getElementById('co-lines'); wrap.innerHTML='';
+  var COPROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  (o.lineItems||[]).forEach(function(li){ if(COPROD[li.type]) coAddLine(li.code, li.unitPrice, li.qty); });
+  if(!wrap.children.length) coAddLine();
+  coCalc();
+  document.getElementById('change-modal').classList.add('open');
+}
+function closeCO(){document.getElementById('change-modal').classList.remove('open');coId=null;}
+function coAddLine(code,price,qty){
+  var wrap=document.getElementById('co-lines'); if(!wrap)return;
+  var div=document.createElement('div'); div.className='pline';
+  div.innerHTML='<input type="text" placeholder="KP009" value="'+(code||'')+'" oninput="this.value=this.value.toUpperCase();coCalc()">'
+    +'<input type="number" min="0" placeholder="179" value="'+(price!=null&&price!==''?price:'')+'" oninput="coCalc()">'
+    +'<input type="number" min="0" placeholder="0" value="'+(qty!=null&&qty!==''?qty:'')+'" oninput="coCalc()">'
+    +'<button type="button" class="xbtn" onclick="this.parentNode.remove();coCalc()"><i class="ti ti-x"></i></button>';
+  wrap.appendChild(div);
+}
+function coCalc(){
+  var sum=0;
+  document.querySelectorAll('#co-lines .pline').forEach(function(l){
+    var i=l.querySelectorAll('input'); sum+=(parseFloat(i[1].value)||0)*(parseInt(i[2].value)||0);
+  });
+  var o=orders.find(function(x){return x.id===coId;}),extra=0;
+  if(o&&o.lineItems)o.lineItems.forEach(function(li){if(li.type==='delivery'||li.type==='discount')extra+=parseFloat(li.amount)||0;});
+  var el=document.getElementById('co-total'); if(el)el.textContent='New total / รวมใหม่: '+(sum+extra).toLocaleString()+' ฿';
+}
+function submitCO(){
+  var o=orders.find(function(x){return x.id===coId;}); if(!o)return;
+  var newItems=[], tq=0;
+  document.querySelectorAll('#co-lines .pline').forEach(function(l){
+    var i=l.querySelectorAll('input');
+    var code=i[0].value.trim().toUpperCase(), price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0;
+    if(!code||!qty)return;
+    var t=mirrorClassify(code); if(t==='clip')t='clips';
+    newItems.push({type:t,code:code,qty:qty,unitPrice:price,amount:price*qty});
+    if(t==='panel')tq+=qty;
+  });
+  (o.lineItems||[]).forEach(function(li){
+    if(li.type==='delivery'||li.type==='discount'||li.type==='clips'||li.type==='free-gift-clips') newItems.push(li);
+  });
+  if(tq>0)newItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)',qty:tq*10,unitPrice:0,amount:0});
+  // diff panels + edges only
+  var PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  var oldMap={},newMap={};
+  (o.lineItems||[]).forEach(function(li){if(PROD[li.type])oldMap[li.code]=(oldMap[li.code]||0)+(parseInt(li.qty)||0);});
+  newItems.forEach(function(li){if(PROD[li.type])newMap[li.code]=(newMap[li.code]||0)+(parseInt(li.qty)||0);});
+  var codes={};Object.keys(oldMap).forEach(function(c){codes[c]=1;});Object.keys(newMap).forEach(function(c){codes[c]=1;});
+  var diff=[];Object.keys(codes).forEach(function(c){var ov=oldMap[c]||0,nv=newMap[c]||0;if(ov!==nv)diff.push({code:c,old:ov,'new':nv});});
+  if(!diff.length){alert('No changes / ไม่มีการเปลี่ยนแปลง');return;}
+  var who=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+  o.changeReq={status:'pending',by:who,ts:Date.now(),diff:diff,note:document.getElementById('co-note').value||'',newItems:newItems,newTotal:newItems.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0)};
+  try{auditAdd({type:'change-request',orderId:o.id,by:who,detail:coDiffText(o.changeReq)});}catch(e){}
+  closeCO();
+  syncOrders();ofRenderOrders();
+  try{if(document.getElementById('s-warehouse').classList.contains('active'))whRender();}catch(e){}
+  alert('Change sent to warehouse / ส่งให้คลังแล้ว ✓');
+}
+function whConfirmChange(id){
+  var o=orders.find(function(x){return x.id===id;}); if(!o||!o.changeReq)return;
+  if(!confirm('Confirm change / ยืนยันการแก้ไข?\n'+coDiffText(o.changeReq)))return;
+  try{ if(o._stockDeducted){ addOrderStock(o); o._stockDeducted=false; } }catch(e){}
+  var items=o.changeReq.newItems||[]; var pa=[],la=[],tq=0,freeGift=0;
+  items.forEach(function(li){
+    if(li.type==='panel'){pa.push(li.code+' × '+li.qty);tq+=parseInt(li.qty)||0;}
+    else if(li.type==='lcorner'||li.type==='tedge'||li.type==='uedge'){la.push(li.code+' × '+li.qty);}
+    else if(li.type==='free-gift-clips')freeGift+=parseInt(li.qty)||0;
+  });
+  o.lineItems=items;
+  o.panels=pa.length?pa.join(' · '):'—';
+  o.lcorner=la.length?la.join(' · '):'—';
+  o.clips=tq*10+freeGift;
+  o.boxes=Math.max(1,Math.ceil(tq/10));
+  o.total=items.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0).toLocaleString()+' ฿';
+  try{ deductOrderStock(o); }catch(e){}
+  var who=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Warehouse';
+  try{auditAdd({type:'change-confirmed',orderId:o.id,by:who,detail:coDiffText(o.changeReq)});}catch(e){}
+  o.changeReq=null;
+  // Status stays as-is — the change card showed only the delta (add/remove),
+  // so the worker handles just that, no full re-pack.
+  o._editTs=Date.now();
+  try{sheetsUpdateMaster(o);}catch(e){}
+  syncOrders();ofRenderOrders();whRender();try{mgRender();}catch(e){}
+}
+
 // WAREHOUSE
 
 function whRender() {
   // TO PACK: orders with status new or packing that need warehouse action
-  var toPack = orders.filter(function(o){ return o.status==='new'; });
+  var pendingChanges = orders.filter(function(o){ return o.changeReq && o.changeReq.status==='pending'; });
+  var toPack = orders.filter(function(o){ return o.status==='new' && !(o.changeReq && o.changeReq.status==='pending'); });
   var packed = orders.filter(function(o){ return o.status==='ready' || o.status==='loaded' || o.status==='delivered'; });
 
   // Update count
   var tpEl = document.getElementById('wh-tp');
-  if(tpEl) tpEl.textContent = toPack.length;
+  if(tpEl) tpEl.textContent = toPack.length + pendingChanges.length;
   var pkEl = document.getElementById('wh-pk');
   if(pkEl) pkEl.textContent = packed.length;
 
@@ -4364,15 +4478,30 @@ function whRender() {
   // Apply search filter
   var whQ = (document.getElementById('wh-search')||{}).value||'';
   whQ = whQ.trim().toLowerCase();
-  if(whQ) toPack = toPack.filter(function(o){ return (o.id||'').toLowerCase().indexOf(whQ)>=0||(o.customer||'').toLowerCase().indexOf(whQ)>=0||(o.zone||'').toLowerCase().indexOf(whQ)>=0||(o.panels||'').toLowerCase().indexOf(whQ)>=0; });
+  if(whQ){ toPack = toPack.filter(function(o){ return (o.id||'').toLowerCase().indexOf(whQ)>=0||(o.customer||'').toLowerCase().indexOf(whQ)>=0||(o.zone||'').toLowerCase().indexOf(whQ)>=0||(o.panels||'').toLowerCase().indexOf(whQ)>=0; });
+    pendingChanges = pendingChanges.filter(function(o){ return (o.id||'').toLowerCase().indexOf(whQ)>=0||(o.customer||'').toLowerCase().indexOf(whQ)>=0; }); }
+
+  // Change-request cards (highlighted, need warehouse confirmation)
+  var changeHTML = pendingChanges.map(function(o){
+    return '<div class="card" style="background:#fff7ed;border:2px solid #ea580c">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
+      '<span style="font-size:18px;font-weight:700">'+o.id+'</span>'+
+      '<span class="badge" style="background:#ea580c;color:#fff">🔄 CHANGE / แก้ไข</span></div>'+
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:6px">'+o.customer+' '+zoneBadge(o.zone)+'</div>'+
+      '<div style="background:#fff;border-radius:var(--rs);padding:8px;font-size:14px;font-weight:700;color:#ea580c;line-height:1.8">'+coDiffText(o.changeReq).split(', ').join('<br>')+'</div>'+
+      (o.changeReq.note?'<div style="font-size:12px;color:var(--text2);margin-top:6px">📝 '+o.changeReq.note+'</div>':'')+
+      '<div style="font-size:11px;color:var(--text2);margin-top:4px">Requested by '+(o.changeReq.by||'Office')+'</div>'+
+      '<button type="button" class="btn" style="background:#16a34a;color:#fff;border:none;margin-top:10px;width:100%;min-height:48px;font-size:15px;font-weight:700;-webkit-tap-highlight-color:transparent;touch-action:manipulation" onclick="whConfirmChange(\''+o.id+'\')"><i class="ti ti-check"></i> Confirm change / ยืนยันการแก้ไข</button>'+
+      '</div>';
+  }).join('');
 
   // Render To Pack list
   var tpList = document.getElementById('wh-tplist');
   if(tpList) {
-    if(toPack.length === 0) {
+    if(toPack.length === 0 && !changeHTML) {
       tpList.innerHTML = '<div class="empty"><i class="ti ti-checks" style="font-size:40px;display:block;margin-bottom:8px;color:var(--green)"></i>All packed! / แพ็คครบแล้ว 🎉</div>';
     } else {
-      tpList.innerHTML = toPack.map(function(o) {
+      tpList.innerHTML = changeHTML + toPack.map(function(o) {
         var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
         var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
         var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
