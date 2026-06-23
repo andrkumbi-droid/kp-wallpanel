@@ -50,6 +50,10 @@
 
   @keyframes blink { 0%,100%{box-shadow:0 0 0 0 #fdcb6e00} 50%{box-shadow:0 0 16px 3px #fdcb6e44} }
 
+  .card.change { border-color: #ea580c !important; outline: 3px solid #ea580c; outline-offset: 2px; animation: changeBlink 1s infinite; }
+  @keyframes changeBlink { 0%,100%{box-shadow:0 0 0 0 #ea580c00} 50%{box-shadow:0 0 20px 4px #ea580c66} }
+  .change-banner { background: #ea580c; color: #fff; font-size: 18px; font-weight: 900; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; line-height: 1.5; }
+
   .card.prio { outline: 3px solid #ffd700; outline-offset: 2px; }
   .prio-badge { display: inline-block; background: #ffd700; color: #1a1d27; font-size: 14px; font-weight: 900; padding: 3px 10px; border-radius: 6px; margin-bottom: 8px; letter-spacing: 0.04em; }
 
@@ -165,14 +169,29 @@ document.addEventListener('click', function(){ getAudioCtx(); }, {once:true});
 document.addEventListener('touchstart', function(){ getAudioCtx(); }, {once:true});
 
 var alertOn=false, alertTimer=null;
-function startAlert() {
+function startAlert(title, sub) {
+  var ax=document.getElementById('ax');
+  ax.innerHTML = (title||'🔔 ออเดอร์ใหม่เข้า!')+'<div class="alert-sub">'+(sub||'กรุณารับออเดอร์ผ่านมือถือ')+'</div>';
   if(alertOn) return;
   alertOn=true;
   document.getElementById('ab').classList.add('show');
-  document.getElementById('ax').classList.add('show');
+  ax.classList.add('show');
   playSound();
   alertTimer=setInterval(playSound,3000);
 }
+function coDiffText(cr){
+  if(!cr||!cr.diff)return'';
+  return cr.diff.map(function(d){
+    if((d.old||0)===0)return'➕ '+d.code+' ×'+d['new'];
+    if((d['new']||0)===0)return'➖ '+d.code+' (เอาออก)';
+    return '✏️ '+d.code+' '+d.old+'→'+d['new'];
+  }).join(', ');
+}
+function changeBanner(o){
+  if(!o.changeReq||o.changeReq.status!=='pending')return'';
+  return '<div class="change-banner">🔄 แก้ไขออเดอร์ / CHANGE<br>'+coDiffText(o.changeReq).split(', ').join('<br>')+(o.changeReq.note?'<br>📝 '+o.changeReq.note:'')+'<div style="font-size:13px;font-weight:400;margin-top:4px">รอยืนยันผ่านมือถือ / confirm on phone</div></div>';
+}
+function ccls(o){ return (o.changeReq&&o.changeReq.status==='pending')?' change':''; }
 function stopAlert() {
   alertOn=false;
   clearInterval(alertTimer);
@@ -198,13 +217,14 @@ function buildItems(o, cls) {
   return html;
 }
 
-var knownNew=null;
+var knownNew=null, knownChange=null;
 
 function render(orders) {
   var nw=[], pk=[], rd=[];
-  var newSet=new Set();
+  var newSet=new Set(), changeSet=new Set();
   Object.values(orders||{}).forEach(function(o) {
     if(!o||!o.id) return;
+    if(o.changeReq && o.changeReq.status==='pending') changeSet.add(o.id);
     if(o.status==='new') { nw.push(o); newSet.add(o.id); }
     else if(o.status==='packing') pk.push(o);
     else if(o.status==='ready') rd.push(o);
@@ -215,8 +235,13 @@ function render(orders) {
     newSet.forEach(function(id){ if(!knownNew.has(id)) hasNew=true; });
     if(hasNew) startAlert();
   }
-  if(newSet.size===0) stopAlert();
-  knownNew=newSet;
+  if(knownChange!==null) {
+    var hasChange=false;
+    changeSet.forEach(function(id){ if(!knownChange.has(id)) hasChange=true; });
+    if(hasChange) startAlert('🔄 แก้ไขออเดอร์! / ORDER CHANGED','กรุณายืนยันผ่านมือถือ / confirm on phone');
+  }
+  if(newSet.size===0 && changeSet.size===0) stopAlert();
+  knownNew=newSet; knownChange=changeSet;
 
   document.getElementById('cnt-new').textContent=nw.length;
   document.getElementById('cnt-packing').textContent=pk.length;
@@ -226,9 +251,10 @@ function render(orders) {
   document.getElementById('col-new').innerHTML = nw.length===0
     ? '<div class="empty"><div class="empty-icon">😴</div>ไม่มีออเดอร์ใหม่</div>'
     : nw.map(function(o){
-        return '<div class="card new'+(o.priority?' prio':'')+'">'+
+        return '<div class="card new'+(o.priority?' prio':'')+ccls(o)+'">'+
           (o.priority?'<div class="prio-badge">⭐ ด่วน / PRIORITY</div>':'')+
           '<div class="order-id">'+o.id+'</div>'+
+          changeBanner(o)+
           buildItems(o,'new')+
           '<div class="phone-hint">📱 รับผ่านมือถือ</div>'+
           '<div class="order-time">'+(o.date||'')+'</div>'+
@@ -239,9 +265,10 @@ function render(orders) {
   document.getElementById('col-packing').innerHTML = pk.length===0
     ? '<div class="empty"><div class="empty-icon">💤</div>ไม่มีออเดอร์</div>'
     : pk.map(function(o){
-        return '<div class="card packing'+(o.priority?' prio':'')+'">'+
+        return '<div class="card packing'+(o.priority?' prio':'')+ccls(o)+'">'+
           (o.priority?'<div class="prio-badge">⭐ ด่วน / PRIORITY</div>':'')+
           '<div class="order-id">'+o.id+'</div>'+
+          changeBanner(o)+
           buildItems(o,'packing')+
           '<div class="order-time">'+(o.date||'')+'</div>'+
           '</div>';
@@ -251,10 +278,11 @@ function render(orders) {
   document.getElementById('col-ready').innerHTML = rd.length===0
     ? '<div class="empty"><div class="empty-icon">🕐</div>รอ Driver รับ</div>'
     : rd.map(function(o){
-        return '<div class="card ready'+(o.priority?' prio':'')+'">'+
+        return '<div class="card ready'+(o.priority?' prio':'')+ccls(o)+'">'+
           (o.priority?'<div class="prio-badge">⭐ ด่วน / PRIORITY</div>':'')+
           '<div class="order-id">'+o.id+'</div>'+
           '<div class="order-zone">📍 '+(o.zone||'')+'</div>'+
+          changeBanner(o)+
           buildItems(o,'ready')+
           '<div class="order-time">'+(o.date||'')+'</div>'+
           '</div>';
