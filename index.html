@@ -3739,7 +3739,7 @@ function ofOrderCard(o){
   if(o.changeReq && o.changeReq.status==='pending') s += '<div style="background:#fff7ed;color:#ea580c;border:1.5px solid #fed7aa;border-radius:var(--rs);padding:6px 9px;font-size:11px;margin-bottom:6px">'
     +'<div style="font-weight:800;margin-bottom:3px">🔄 CHANGE REQUESTED / รอคลังยืนยัน</div>'
     +'<div style="font-weight:700">'+coDiffText(o.changeReq)+'</div>'
-    +'<div style="margin-top:4px;color:#888"><s>เดิม / Original: '+coProdText(o.lineItems)+'</s></div>'
+    +'<div style="margin-top:4px;color:#888"><s>เดิม / Original: '+coProdText(o.changeReq.oldItems)+'</s></div>'
     +'<div style="font-weight:700;color:#16a34a">ใหม่ / New: '+coProdText(o.changeReq.newItems)+'</div>'
     +'</div>';
   var _drvTour = (o.status==='loaded'||o.status==='ready') ? activeTours.find(function(t){return t.orders && t.orders.indexOf(o.id)>=0;}) : null;
@@ -4413,7 +4413,7 @@ function coCalc(){
 }
 function submitCO(){
   var o=orders.find(function(x){return x.id===coId;}); if(!o)return;
-  var newItems=[], tq=0;
+  var newItems=[], tq=0, freeGift=0;
   document.querySelectorAll('#co-lines .pline').forEach(function(l){
     var i=l.querySelectorAll('input');
     var code=i[0].value.trim().toUpperCase(), price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0;
@@ -4423,7 +4423,7 @@ function submitCO(){
     if(t==='panel')tq+=qty;
   });
   (o.lineItems||[]).forEach(function(li){
-    if(li.type==='delivery'||li.type==='discount'||li.type==='clips'||li.type==='free-gift-clips') newItems.push(li);
+    if(li.type==='delivery'||li.type==='discount'||li.type==='clips'||li.type==='free-gift-clips'){newItems.push(li);if(li.type==='free-gift-clips')freeGift+=parseInt(li.qty)||0;}
   });
   if(tq>0)newItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)',qty:tq*10,unitPrice:0,amount:0});
   // diff panels + edges only
@@ -4435,37 +4435,41 @@ function submitCO(){
   var diff=[];Object.keys(codes).forEach(function(c){var ov=oldMap[c]||0,nv=newMap[c]||0;if(ov!==nv)diff.push({code:c,old:ov,'new':nv});});
   if(!diff.length){alert('No changes / ไม่มีการเปลี่ยนแปลง');return;}
   var who=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
-  o.changeReq={status:'pending',by:who,ts:Date.now(),diff:diff,note:document.getElementById('co-note').value||'',newItems:newItems,newTotal:newItems.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0)};
-  try{auditAdd({type:'change-request',orderId:o.id,by:who,detail:coDiffText(o.changeReq)});}catch(e){}
-  closeCO();
-  syncOrders();ofRenderOrders();
-  try{if(document.getElementById('s-warehouse').classList.contains('active'))whRender();}catch(e){}
-  alert('Change sent to warehouse / ส่งให้คลังแล้ว ✓');
-}
-function whConfirmChange(id){
-  var o=orders.find(function(x){return x.id===id;}); if(!o||!o.changeReq)return;
-  if(!confirm('Confirm change / ยืนยันการแก้ไข?\n'+coDiffText(o.changeReq)))return;
+  // snapshot original BEFORE applying (for the warehouse before/after view)
+  var oldItems=(o.lineItems||[]).map(function(li){return li;});
+  var oldTotal=o.total;
+  // APPLY the change to the order now: items, qty AND price/total
   try{ if(o._stockDeducted){ addOrderStock(o); o._stockDeducted=false; } }catch(e){}
-  var items=o.changeReq.newItems||[]; var pa=[],la=[],tq=0,freeGift=0;
-  items.forEach(function(li){
-    if(li.type==='panel'){pa.push(li.code+' × '+li.qty);tq+=parseInt(li.qty)||0;}
-    else if(li.type==='lcorner'||li.type==='tedge'||li.type==='uedge'){la.push(li.code+' × '+li.qty);}
-    else if(li.type==='free-gift-clips')freeGift+=parseInt(li.qty)||0;
+  var pa=[],la=[];
+  newItems.forEach(function(li){
+    if(li.type==='panel')pa.push(li.code+' × '+li.qty);
+    else if(li.type==='lcorner'||li.type==='tedge'||li.type==='uedge')la.push(li.code+' × '+li.qty);
   });
-  o.lineItems=items;
+  o.lineItems=newItems;
   o.panels=pa.length?pa.join(' · '):'—';
   o.lcorner=la.length?la.join(' · '):'—';
   o.clips=tq*10+freeGift;
   o.boxes=Math.max(1,Math.ceil(tq/10));
-  o.total=items.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0).toLocaleString()+' ฿';
+  o.total=newItems.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0).toLocaleString()+' ฿';
   try{ deductOrderStock(o); }catch(e){}
+  o.editedBy=who; o._editTs=Date.now();
+  // changeReq = a confirmation task for the warehouse (the order is already updated)
+  o.changeReq={status:'pending',by:who,ts:Date.now(),diff:diff,note:document.getElementById('co-note').value||'',oldItems:oldItems,oldTotal:oldTotal,newItems:newItems,newTotal:o.total};
+  try{auditAdd({type:'change-request',orderId:o.id,by:who,detail:coDiffText(o.changeReq)});}catch(e){}
+  try{sheetsUpdateMaster(o);}catch(e){}
+  closeCO();
+  syncOrders();ofRenderOrders();
+  try{if(document.getElementById('s-warehouse').classList.contains('active'))whRender();}catch(e){}
+  alert('Order updated & sent to warehouse / อัปเดตออเดอร์และส่งให้คลังแล้ว ✓');
+}
+function whConfirmChange(id){
+  // Order is already updated; this just acknowledges the warehouse re-packed the delta.
+  var o=orders.find(function(x){return x.id===id;}); if(!o||!o.changeReq)return;
+  if(!confirm('Confirm done / ยืนยันว่าแก้ของแล้ว?\n'+coDiffText(o.changeReq)))return;
   var who=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Warehouse';
   try{auditAdd({type:'change-confirmed',orderId:o.id,by:who,detail:coDiffText(o.changeReq)});}catch(e){}
   o.changeReq=null;
-  // Status stays as-is — the change card showed only the delta (add/remove),
-  // so the worker handles just that, no full re-pack.
   o._editTs=Date.now();
-  try{sheetsUpdateMaster(o);}catch(e){}
   syncOrders();ofRenderOrders();whRender();try{mgRender();}catch(e){}
 }
 
