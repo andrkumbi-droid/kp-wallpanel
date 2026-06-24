@@ -613,6 +613,10 @@ textarea{resize:none}
         soldOut = snap.val() || {};
         try{ var s=document.getElementById('qt-suggestions'); if(s&&s.innerHTML) qtRefreshSoldOut(); }catch(e){}
       });
+      db.ref('catalog').on('value', function(snap) {
+        qtCatalog = snap.val() || {};
+        try{ qtRebuildProducts(); }catch(e){}
+      });
       db.ref('orderCounters').on('value', function(snap) {
         if(snap.val()) Object.assign(orderCounters, snap.val());
         // Ensure counters are never below the defined minimums
@@ -710,6 +714,7 @@ textarea{resize:none}
         <button type="button" onclick="qtFilterCat('PVC')" id="qtf-PVC" style="padding:8px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2);line-height:1.4">🔲 PVC<div id="qtf-PVC-count" style="font-size:10px;font-weight:400;opacity:0.6"></div></button>
         <button type="button" onclick="qtFilterCat('ACC')" id="qtf-ACC" style="padding:8px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2);line-height:1.4">🔧 Accessories<div id="qtf-ACC-count" style="font-size:10px;font-weight:400;opacity:0.6"></div></button>
       </div>
+      <button type="button" onclick="qtOpenAddProduct()" style="width:100%;margin-top:8px;padding:9px 16px;border-radius:var(--rs);border:1.5px dashed var(--green,#16a34a);background:var(--green-bg,#dcfce7);color:var(--green,#16a34a);font-size:13px;font-weight:700;cursor:pointer">➕ Add product / เพิ่มสินค้าใหม่</button>
       <div id="qt-profile-bar" style="display:none;margin-top:8px"></div>
       <div id="qt-suggestions" style="margin-top:8px"></div>
     </div>
@@ -1855,6 +1860,27 @@ textarea{resize:none}
   <button type="button" class="btn" style="margin-top:14px;background:#ea580c;color:#fff;border:none" onclick="submitCO()"><i class="ti ti-send"></i> Send change to warehouse / ส่งให้คลัง</button>
 </div></div>
 
+<div class="modal-overlay" id="qtprod-modal"><div class="modal">
+  <div class="mhdr"><span class="mtit">➕ Add product / เพิ่มสินค้า</span><button type="button" class="mclose" onclick="document.getElementById('qtprod-modal').classList.remove('open')"><i class="ti ti-x"></i></button></div>
+  <label class="fl" style="margin-top:0">Code / รหัส <span style="color:#dc2626">*</span></label>
+  <input type="text" id="qtp-code" placeholder="z.B. KP066 / K-PVC-09" oninput="this.value=this.value.toUpperCase()">
+  <label class="fl">Category / หมวด</label>
+  <select id="qtp-mat"><option value="WPC">WPC</option><option value="PVC">PVC</option><option value="ACC">Accessory / อุปกรณ์</option></select>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><label class="fl">Color TH / สี (ไทย)</label><input type="text" id="qtp-name" placeholder="สีไม้โอ๊ค"></div>
+    <div><label class="fl">Color EN (website)</label><input type="text" id="qtp-nameen" placeholder="Oak Wood"></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><label class="fl">Price ฿ / แผ่น</label><input type="number" id="qtp-price" min="0" placeholder="199"></div>
+    <div><label class="fl">Width cm / กว้าง</label><input type="number" id="qtp-w" min="0" step="0.1" placeholder="20"></div>
+  </div>
+  <label class="fl">Spec (website, optional)</label>
+  <input type="text" id="qtp-spec" placeholder="z.B. 20 × 1 × 290 cm · 2 Grooves">
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;font-size:11px;color:var(--text2);margin-top:10px">🖼 Bild: Datei <b><span id="qtp-imghint">CODE</span>.jpg</b> in <code>img/products/</code> legen &amp; pushen.</div>
+  <button type="button" class="btn btng" style="margin-top:14px" onclick="qtSaveProduct()"><i class="ti ti-check"></i> Save / บันทึก</button>
+  <button type="button" class="btn btnr" id="qtp-del" style="display:none;margin-top:6px" onclick="qtDeleteProduct()"><i class="ti ti-trash"></i> Remove product / ลบสินค้า</button>
+</div></div>
+
 <div class="modal-overlay" id="sm-modal"><div class="modal">
   <div class="mhdr"><span class="mtit" id="sm-title">Add stock / เพิ่มสต็อก</span><button type="button" class="mclose" onclick="closeSM()"><i class="ti ti-x"></i></button></div>
   <label class="fl" style="margin-top:0">Code / รหัส</label><input type="text" id="sm-code" placeholder="KP009 / L001" oninput="this.value=this.value.toUpperCase()">
@@ -2234,6 +2260,7 @@ function updateDarkBtn(){
 
 let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[],claims=[];
 var soldOut={};
+var qtCatalog={}; // extra products added via the in-app "Add product" form (Firebase 'catalog')
 var recentlyDeleted={}; // orderId(sanitized) -> ts; blocks mirror re-adding a just-deleted order
 var lateLog=[];
 var attStaff=[]; // separate employee list for attendance (+ payroll settings)
@@ -7155,6 +7182,61 @@ var QT_PRODUCTS = [
     QT_PRODUCTS.push({code:'L-P-'+n, name:'L-Corner PVC', price:0, w:0, mat:'ACC', profile:'LP'});
   });
 })();
+
+// Base = hardcoded + auto-generated accessories. Extra products come from Firebase 'catalog'.
+var QT_BASE = QT_PRODUCTS.slice();
+function qtRebuildProducts(){
+  var have={}; QT_BASE.forEach(function(p){ have[p.code]=1; });
+  var extra = Object.keys(qtCatalog||{}).map(function(k){
+    var p=qtCatalog[k]||{};
+    return {code:p.code, name:p.name||p.nameEN||p.code, price:+p.price||0, w:+p.w||0, mat:(p.mat||'WPC'), profile:p.profile||'', nameEN:p.nameEN||'', spec:p.spec||'', _custom:true};
+  }).filter(function(p){ return p.code && !have[p.code]; });
+  QT_PRODUCTS = QT_BASE.concat(extra);
+  // Refresh the product list if the quote screen is open and no quote is in progress (don't wipe a started cart)
+  try{ if(document.getElementById('s-quote') && document.getElementById('s-quote').classList.contains('active') && (!window.qtItems || !qtItems.length)){ qtShowProducts(QT_PRODUCTS, null); if(typeof qtInitCounts==='function') qtInitCounts(); } }catch(e){}
+}
+function qtCodeKey(c){ return (c||'').trim().toUpperCase(); }
+function qtOpenAddProduct(code){
+  var existing = code ? qtCatalog[qtCodeKey(code)] : null;
+  document.getElementById('qtp-code').value = existing ? existing.code : '';
+  document.getElementById('qtp-mat').value = existing ? (existing.mat||'WPC') : 'WPC';
+  document.getElementById('qtp-name').value = existing ? (existing.name||'') : '';
+  document.getElementById('qtp-nameen').value = existing ? (existing.nameEN||'') : '';
+  document.getElementById('qtp-price').value = existing ? (existing.price||'') : '';
+  document.getElementById('qtp-w').value = existing ? (existing.w||'') : '';
+  document.getElementById('qtp-spec').value = existing ? (existing.spec||'') : '';
+  document.getElementById('qtp-imghint').textContent = existing ? existing.code : 'CODE';
+  document.getElementById('qtp-del').style.display = existing ? 'block' : 'none';
+  document.getElementById('qtprod-modal').classList.add('open');
+  setTimeout(function(){ try{ document.getElementById('qtp-code').focus(); }catch(e){} }, 50);
+}
+function qtSaveProduct(){
+  var code = qtCodeKey(document.getElementById('qtp-code').value);
+  if(!code){ alert('Code required / ใส่รหัส'); return; }
+  if(QT_BASE.some(function(p){return p.code===code;})){ alert('Dieser Code existiert bereits fest in der App / รหัสนี้มีอยู่แล้ว'); return; }
+  var obj = {
+    code: code,
+    mat: document.getElementById('qtp-mat').value || 'WPC',
+    name: document.getElementById('qtp-name').value.trim(),
+    nameEN: document.getElementById('qtp-nameen').value.trim(),
+    price: parseFloat(document.getElementById('qtp-price').value)||0,
+    w: parseFloat(document.getElementById('qtp-w').value)||0,
+    spec: document.getElementById('qtp-spec').value.trim(),
+    ts: Date.now()
+  };
+  if(window.fbDB) window.fbDB.ref('catalog/'+code).set(obj);
+  qtCatalog[code]=obj; qtRebuildProducts();
+  document.getElementById('qtprod-modal').classList.remove('open');
+  try{ alert('Saved ✓ — Bild '+code+'.jpg in img/products/ legen & pushen'); }catch(e){}
+}
+function qtDeleteProduct(){
+  var code = qtCodeKey(document.getElementById('qtp-code').value);
+  if(!code || !qtCatalog[code]) return;
+  if(!confirm('Remove '+code+'? / ลบสินค้านี้?')) return;
+  if(window.fbDB) window.fbDB.ref('catalog/'+code).remove();
+  delete qtCatalog[code]; qtRebuildProducts();
+  document.getElementById('qtprod-modal').classList.remove('open');
+}
 
 // Profile display labels
 var QT_PROFILES = {
