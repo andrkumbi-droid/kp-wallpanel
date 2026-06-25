@@ -4107,6 +4107,7 @@ function ofRenderTour(){
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;cursor:pointer" onclick="openTourDetail('+ti+')">'+
       '<div style="font-size:15px;font-weight:600"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+'</div>'+
       '<div style="display:flex;align-items:center;gap:6px">'+
+      '<button type="button" onclick="event.stopPropagation();ofOptimizeTour(\''+t.id+'\')" title="Optimal route order / จัดลำดับเส้นทาง" style="font-size:11px;padding:3px 8px;border:none;background:#7c3aed;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">↕ Route</button>'+
       '<button type="button" onclick="event.stopPropagation();printTourReceipts('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#1D4ED8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600"><i class="ti ti-printer"></i> All Print</button>'+
       (!t.driving?'<button type="button" onclick="event.stopPropagation();ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 Departed</button>':'<span style="font-size:11px;color:var(--green);font-weight:600">🚚 Driving ('+t.departedAt+')</span>')+
       '<span class="badge bactive">'+t.orders.length+' orders</span><i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2)"></i></div>'+
@@ -4328,10 +4329,11 @@ function ofCreateTour(){
       existingTour.status[id]='ready';
       var _o=orders.find(x=>x.id===id); if(_o && _o.status!=='ready'){ _o.status='ready'; addStatusLog(_o,'ready','Office'); }
     });
+    existingTour.orders=optimizeTourOrder(existingTour.orders); // keep tour in optimal sequence
     res.style.background=GL;res.style.color=GT;res.textContent='✓ '+ofSelOrders.length+' orders added to '+d.name+"'s tour!";
   } else {
-    // Driver is driving (or no tour) — create a new tour
-    const now=new Date();activeTours.push({id:'t'+Date.now(),driverId:ofSelDriver,driverName:d.name,orders:[...ofSelOrders],status,checks:{},created:now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')});
+    // Driver is driving (or no tour) — create a new tour, orders pre-sorted into an optimal route
+    const now=new Date();activeTours.push({id:'t'+Date.now(),driverId:ofSelDriver,driverName:d.name,orders:optimizeTourOrder([...ofSelOrders]),status,checks:{},created:now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')});
     res.style.background=GL;res.style.color=GT;res.textContent='✓ New tour sent to '+d.name+'! '+ofSelOrders.length+' orders';
     try{pushSend('driver_'+ofSelDriver,'🚚 New Tour Ready!',ofSelOrders.length+' order'+(ofSelOrders.length!==1?'s':'')+' assigned to you',{tag:'tour'});}catch(e){}
   }
@@ -5045,6 +5047,79 @@ function orderNavUrl(o){
   if(g) return 'https://www.google.com/maps/dir/?api=1&destination='+g.lat+','+g.lng;
   var lnk=(o.location||'').trim();
   return /^https?:\/\//i.test(lnk) ? lnk : '';
+}
+
+// ════════════════════════════════════════════════════════════
+//  ROUTE OPTIMIZER (free, in-browser) — sorts a tour's orders into a
+//  sensible delivery sequence by straight-line distance. No API/key/cost.
+//  Coordinates come from: (1) the saved customer GPS pin, else (2) lat/lng
+//  parsed out of the pasted Google-Maps link. Orders with no usable coords
+//  keep their original order and go to the end (driver sorts the rest by
+//  LINE/phone). Good enough since drivers contact the customer on arrival.
+// ════════════════════════════════════════════════════════════
+// Pull {lat,lng} for an order: pin first, then parse the pasted maps link.
+function orderLatLng(o){
+  if(!o) return null;
+  var g=custGeoGet(o.phone);
+  if(g && geoSane(g.lat,g.lng)) return {lat:g.lat,lng:g.lng};
+  var s=(o.location||'').trim(); if(!s) return null;
+  var m = s.match(/[?&](?:q|query|destination)=(-?\d{1,3}\.\d+),\s*(-?\d{1,3}\.\d+)/i)
+       || s.match(/@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/)
+       || s.match(/!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/)
+       || s.match(/^\s*(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/);
+  if(m){ var la=parseFloat(m[1]), ln=parseFloat(m[2]); if(geoSane(la,ln)) return {lat:la,lng:ln}; }
+  return null;
+}
+// Squared planar distance (good enough at city scale; longitude scaled by cos lat).
+function _routeD2(a,b){
+  var k=Math.cos((a.lat+b.lat)/2*Math.PI/180);
+  var dx=(a.lng-b.lng)*k, dy=(a.lat-b.lat);
+  return dx*dx+dy*dy;
+}
+function _pathLen(pts){ var s=0; for(var i=0;i<pts.length-1;i++) s+=Math.sqrt(_routeD2(pts[i],pts[i+1])); return s; }
+// Reorder an array of order-IDs into a near-optimal open delivery path.
+function optimizeTourOrder(ids){
+  if(!Array.isArray(ids)||ids.length<3) return ids?ids.slice():[];
+  var withC=[], without=[];
+  ids.forEach(function(id){
+    var o=orders.find(function(x){return x.id===id;});
+    var c=orderLatLng(o);
+    if(c){ c.id=id; withC.push(c); } else { without.push(id); }
+  });
+  if(withC.length<3) return ids.slice(); // not enough pins to bother — leave as-is
+  // Nearest-neighbour from every start, keep the shortest open path.
+  var best=null, bestLen=Infinity;
+  for(var s=0;s<withC.length;s++){
+    var used=new Array(withC.length).fill(false), path=[withC[s]]; used[s]=true;
+    for(var k2=1;k2<withC.length;k2++){
+      var last=path[path.length-1], bi=-1, bd=Infinity;
+      for(var j=0;j<withC.length;j++){ if(used[j]){continue;} var d=_routeD2(last,withC[j]); if(d<bd){bd=d;bi=j;} }
+      used[bi]=true; path.push(withC[bi]);
+    }
+    var L=_pathLen(path); if(L<bestLen){ bestLen=L; best=path; }
+  }
+  // 2-opt: reverse segments while it shortens the total path.
+  var improved=true;
+  while(improved){
+    improved=false;
+    for(var i=0;i<best.length-1;i++){
+      for(var j2=i+1;j2<best.length;j2++){
+        var a=best.slice(0,i), mid=best.slice(i,j2+1).reverse(), z=best.slice(j2+1);
+        var cand=a.concat(mid,z);
+        if(_pathLen(cand)+1e-12<_pathLen(best)){ best=cand; improved=true; }
+      }
+    }
+  }
+  return best.map(function(p){return p.id;}).concat(without);
+}
+// Office button: re-sort an existing tour into the optimal sequence.
+function ofOptimizeTour(tourId){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t||!t.orders) return;
+  var sorted=optimizeTourOrder(t.orders);
+  var pinned=t.orders.length-(t.orders.filter(function(id){var o=orders.find(function(x){return x.id===id;});return !orderLatLng(o);}).length);
+  t.orders=sorted;
+  ofRenderTour(); syncTours();
+  if(pinned<2){ alert('Zu wenige Stops mit Pin/Maps-Link ('+pinned+'). Reihenfolge unverändert — bitte Pins setzen.'); }
 }
 
 // Refresh the delivery-modal location button based on whether this
