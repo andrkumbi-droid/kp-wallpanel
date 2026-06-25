@@ -40,11 +40,15 @@ function _extractCoords(s) {
   var dec = s;
   try { dec = decodeURIComponent(s); } catch (err) {}
   var hay = s + ' ' + dec; // search both raw and decoded (consent pages hide the real url in ?continue=)
+  // Separator between lat,lng can be "," "+" " " or "%20" (Google writes
+  // /maps/search/13.95,+100.74). SEP allows comma plus any of those after it.
+  var SEP = '\\s*,[\\s+]*';
+  var LAT = '(-?\\d{1,3}\\.\\d{3,})';
   // Order matters: !3d!4d is the actual map marker (precise), @lat,lng is only the
   // viewport centre — prefer the marker, fall back to the viewport.
   var m = hay.match(/!3d(-?\d{1,3}\.\d{3,})!4d(-?\d{1,3}\.\d{3,})/)
-       || hay.match(/[?&](?:q|query|destination|ll|sll)=(-?\d{1,3}\.\d{3,}),(-?\d{1,3}\.\d{3,})/)
-       || hay.match(/\/search\/(-?\d{1,3}\.\d{3,}),\s*(-?\d{1,3}\.\d{3,})/)
+       || hay.match(new RegExp('[?&](?:q|query|destination|ll|sll|daddr)=' + LAT + SEP + LAT))
+       || hay.match(new RegExp('/(?:search|place|dir)/' + LAT + SEP + LAT))
        || hay.match(/@(-?\d{1,3}\.\d{3,}),(-?\d{1,3}\.\d{3,})/);
   if (!m) return null;
   var lat = parseFloat(m[1]), lng = parseFloat(m[2]);
@@ -54,6 +58,9 @@ function _extractCoords(s) {
 
 function resolveMapLink(url) {
   if (!url) return { error: 'no url' };
+  // Strip junk that customers sometimes paste onto the end of a link (a stray
+  // backslash, quote, whitespace, bracket) — those make UrlFetchApp throw.
+  url = url.replace(/[\\"'<>()\s]+$/g, '').trim();
   if (!_isAllowedHost(url)) return { error: 'host not allowed' };
 
   // Maybe coords are already in the given URL (long link) — cheapest case.
@@ -87,13 +94,12 @@ function resolveMapLink(url) {
       continue;
     }
 
-    // 200 (or other) — coords may be in the final URL or the page body.
-    var fin = _extractCoords(resp.getHeaders()['Location'] || cur);
+    // 200 (or other) — coords must be in the final URL. We deliberately do NOT
+    // parse the page body: Google embeds a decoy centre (52.5,13.4 Berlin) in the
+    // HTML chrome, and returning a wrong coordinate is worse than returning none
+    // (a no-coord stop just goes to the end of the list for the driver to handle).
+    var fin = _extractCoords(cur);
     if (fin) return fin;
-    var body = '';
-    try { body = resp.getContentText(); } catch (err2) {}
-    var hitBody = _extractCoords(body);
-    if (hitBody) return hitBody;
     return { error: 'no coords found (code ' + code + ')' };
   }
   return { error: 'too many redirects' };
