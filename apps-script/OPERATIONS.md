@@ -11,6 +11,7 @@ Quick reference for the Google Sheets ↔ app integration. **These `.gs` files d
 | `auto-extend.gs` | **Master** sheet | Keeps a buffer of pre-formatted blank rows so the sheet never "runs out" at the bottom. |
 | `extract-columns.gs` | Master sheet | One-time manual splitter (older, stricter; skips dash-format phones). Superseded by the KP Tools menu. |
 | `line-bot.gs` | LINE bot project | LINE webhook + AI customer-parse. **Holds the secret keys.** |
+| `resolve-link.gs` | **Own** project (any) | Web app that turns a `maps.app.goo.gl` short link → `{lat,lng}` for route sorting. Deploy as Web app (Execute as Me, Anyone), paste `/exec` URL into `index.html` `KP_RESOLVER_URL`. No keys. |
 
 > **Secrets:** `LINE_TOKEN`, `ANTHROPIC_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON` live **only** inside Apps Script — never in this repo or client code.
 
