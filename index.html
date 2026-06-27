@@ -4690,6 +4690,10 @@ function drReady(){
   // Show ONLY the orders assigned to THIS driver via an office tour (sent to me)
   // that are still 'ready'. Loaded ones move to "Loaded on truck" below.
   const allReady = tour ? orders.filter(function(o){ return o.status==='ready' && tour.orders.indexOf(o.id)>=0; }) : [];
+  // Ready-to-Load is shown in REVERSE of the My-Tour delivery order (dTour):
+  // the last delivery is loaded first (deepest in the truck), the first delivery
+  // last (nearest the door). Reordering My Tour auto-flips this list.
+  allReady.sort(function(a,b){ return dTour.indexOf(b.id) - dTour.indexOf(a.id); });
   document.getElementById('dr-r-cnt').textContent = allReady.length;
 
   if(allReady.length===0){
@@ -4774,7 +4778,7 @@ function drReady(){
   }
 }
 function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();syncOrders();syncTours();}
-function drUnload(id){dStatus[id]='ready';dTour=dTour.filter(x=>x!==id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord)ord.status='ready';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='ready';drReady();syncOrders();syncTours();}
+function drUnload(id){dStatus[id]='ready';if(!dTour.includes(id))dTour.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord)ord.status='ready';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='ready';drTour();drReady();syncOrders();syncTours();}
 
 function drRenderStatusBar(){
   var bar=document.getElementById('dr-status-bar');
@@ -4831,13 +4835,14 @@ function drTour(){
     document.getElementById('dr-tlist').innerHTML=myTour.map((id,idx)=>{
       const o=dAllOrders.find(x=>x.id===id);if(!o)return '';
       const c=dChecks[id]||{p:false,l:false,c:false};
+      const loaded=dStatus[id]==='loaded'; // faded until the driver loads it on the truck
       const _locUrl=orderLocUrl(o);
       const _navUrl=orderNavUrl(o);
       const murl=_locUrl||('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(o.address));
       const ck=(f,v)=>'<div class="chkrow" onclick="drChkBtn(this)" data-id="'+id+'" data-field="'+f+'"><div class="chkbox '+(v?'on':'')+'">'+( v?'<i class="ti ti-check" style="font-size:12px;color:var(--green)"></i>':''  )+'</div>';
-      return '<div class="tcard">'+
+      return '<div class="tcard"'+(loaded?'':' style="opacity:0.45"')+'>'+
         '<div class="ttop">'+
-        '<div class="thdr"><span class="tnum">'+(idx+1)+'. '+o.id+(_locUrl?' <a href="'+_locUrl+'" target="_blank" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+'</span><div class="mvbtns"><button type="button" class="mvbtn" onclick="drUp('+idx+')" '+(idx===0?'disabled':'')+'>↑</button><button type="button" class="mvbtn" onclick="drDn('+idx+')" '+(idx===myTour.length-1?'disabled':'')+'>↓</button><input type="number" min="1" max="'+myTour.length+'" value="'+(idx+1)+'" onchange="drMoveTo(this,'+idx+')" style="width:42px;padding:3px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;text-align:center;background:var(--bg);color:var(--text)"></div></div>'+
+        '<div class="thdr"><span class="tnum">'+(idx+1)+'. '+o.id+(_locUrl?' <a href="'+_locUrl+'" target="_blank" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(loaded?'':' <span style="font-size:10px;font-weight:700;color:#6b7280;background:rgba(0,0,0,0.06);border-radius:8px;padding:1px 6px;white-space:nowrap">⬜ ยังไม่ขึ้นรถ</span>')+'</span><div class="mvbtns"><button type="button" class="mvbtn" onclick="drUp('+idx+')" '+(idx===0?'disabled':'')+'>↑</button><button type="button" class="mvbtn" onclick="drDn('+idx+')" '+(idx===myTour.length-1?'disabled':'')+'>↓</button><input type="number" min="1" max="'+myTour.length+'" value="'+(idx+1)+'" onchange="drMoveTo(this,'+idx+')" style="width:42px;padding:3px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;text-align:center;background:var(--bg);color:var(--text)"></div></div>'+
         '<div style="font-size:13px;margin-bottom:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' &middot; '+o.lcorner:'')+(o.ctn?' &middot; <span style="color:var(--green);font-weight:700">📦 '+o.ctn+' CTN</span>':'')+(o.bundle?' &middot; <span style="color:#ea580c;font-weight:700">🧶 '+o.bundle+' มัด</span>':'')+'</div>'+
         '<div class="crow"><i class="ti ti-user" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.customer+'</span></div>'+
         '<div class="crow"><i class="ti ti-phone" style="font-size:13px;color:var(--text2)"></i><a class="clink" href="tel:'+o.phone+'">'+o.phone+'</a></div>'+
@@ -4939,6 +4944,21 @@ function openDeliveryModal(id){
   _deliveryTotal = parseFloat(String(full.total||'').replace(/[^0-9.]/g,''))||0;
   document.getElementById('delivery-modal-order').textContent = id;
   document.getElementById('delivery-modal-cust').textContent = o ? (o.customer||'') : '';
+  // What to hand over: products + CTN + bundle, so the driver double-checks the load.
+  var _itemsEl = document.getElementById('delivery-modal-items');
+  if(_itemsEl){
+    var _src = o || full || {};
+    var _row = function(lbl,val,color){ return '<div style="display:flex;justify-content:space-between;gap:12px"><span style="color:var(--text2)">'+lbl+'</span><span style="font-weight:700;text-align:right'+(color?';color:'+color:'')+'">'+val+'</span></div>'; };
+    var _rows = '';
+    if(_src.panels && _src.panels!=='—')   _rows += _row('📦 Panels / แผ่น', _src.panels);
+    if(_src.lcorner && _src.lcorner!=='—') _rows += _row('L / T / U · เส้น', _src.lcorner);
+    if(_src.clips)  _rows += _row('📎 Clips', (_src.clips).toLocaleString());
+    if(_src.ctn)    _rows += _row('📦 CTN / ลัง', _src.ctn+' ลัง', 'var(--green)');
+    if(_src.bundle) _rows += _row('🧶 Bundle / มัด', _src.bundle+' มัด', '#ea580c');
+    _itemsEl.innerHTML = _rows
+      ? '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;font-size:13px;display:flex;flex-direction:column;gap:5px"><div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;margin-bottom:2px">ส่งมอบ / To deliver</div>'+_rows+'</div>'
+      : '';
+  }
   document.getElementById('delivery-photo-preview').style.display = 'none';
   document.getElementById('delivery-photo-upload').style.display = 'block';
   document.getElementById('delivery-photo-input').value = '';
@@ -8847,7 +8867,8 @@ function calcViz() {
       <button type="button" class="mclose" onclick="closeDeliveryModal()"><i class="ti ti-x"></i></button>
     </div>
     <div id="delivery-modal-order" style="font-size:18px;font-weight:700;margin-bottom:4px"></div>
-    <div id="delivery-modal-cust" style="font-size:13px;color:var(--text2);margin-bottom:16px"></div>
+    <div id="delivery-modal-cust" style="font-size:13px;color:var(--text2);margin-bottom:10px"></div>
+    <div id="delivery-modal-items" style="margin-bottom:16px"></div>
 
     <!-- Photo upload -->
     <div style="margin-bottom:14px">
