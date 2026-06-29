@@ -986,6 +986,16 @@ textarea{resize:none}
       <button type="button" class="fbtn" onclick="auditFilt('claim',this)">Claims</button>
     </div>
     <div id="audit-list"></div>
+
+    <!-- DANGER ZONE — monthly / new-master-sheet order reset -->
+    <div class="sec" style="margin-top:18px;border:1px solid var(--red,#ef4444);border-radius:var(--rs);padding:12px;background:var(--bg2)">
+      <div class="stit" style="color:var(--red,#ef4444);margin-bottom:6px"><i class="ti ti-alert-triangle"></i> Danger Zone — Reset</div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+        Löscht <b>ALLE Orders + Bilder + Touren + Claims + Payroll + Bills</b> aus Firebase und setzt die Order-Nummern zurück auf <b>#001 / 1-001 / 2-001 / 3-001 / 4-001</b>.<br>
+        <b>Bleibt erhalten:</b> Staff, Kunden, Pins, Produkte/Lager. Master-Sheet wird NICHT angefasst. Nicht umkehrbar.
+      </div>
+      <button type="button" onclick="mgMonthReset()" style="padding:9px 14px;border-radius:var(--rs);border:1px solid var(--red,#ef4444);background:var(--red,#ef4444);color:#fff;font-size:13px;font-weight:700;cursor:pointer"><i class="ti ti-trash"></i> Alle Orders zurücksetzen</button>
+    </div>
   </div></div>
 
 </div></div>
@@ -1934,20 +1944,22 @@ textarea{resize:none}
 // ── GLOBAL VARIABLES ──
 var managerPin = "1705";
 var orderCounters = {
-  "bangkok": 702,
-  "northern": 261,
-  "northeastern": 379,
-  "eastern": 170,
-  "southern": 493,
+  "bangkok": 0,
+  "northern": 0,
+  "northeastern": 0,
+  "eastern": 0,
+  "southern": 0,
   "instore": 0
 };
-// Minimum counter values — Firebase will be updated if it's behind these
+// Minimum counter values — Firebase will be updated if it's behind these.
+// Reset to 0 for the continuous new master sheet (numbering restarts at 001:
+// #001 / 1-001 / 2-001 / 3-001 / 4-001 / 5-001). Rolls over to 1 again after 999.
 var ORDER_COUNTER_MIN = {
-  "bangkok": 702,
-  "northern": 261,
-  "northeastern": 379,
-  "eastern": 170,
-  "southern": 493,
+  "bangkok": 0,
+  "northern": 0,
+  "northeastern": 0,
+  "eastern": 0,
+  "southern": 0,
   "instore": 0
 };
 var mgrPinEntry = "";
@@ -5705,8 +5717,14 @@ function poConvert(id){
 // ════════════════════════════════════════════════════════════
 //  GOOGLE SHEETS SYNC  (via Apps Script Web App — no secret key)
 // ════════════════════════════════════════════════════════════
-// Paste your deployed Apps Script /exec URL here:
-var SHEETS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbzHXHst0_FVowtPmCn3VDWKnQUGjiTfzN0TZJT9BCcTigpv1iCIn62DAWpkAX0w2-i5/exec';
+// Paste your deployed Apps Script /exec URL here.
+// ⚠️ CONNECTION TO OLD MASTER SHEET CUT (month switch). The app no longer
+// writes to / reads from any sheet while this is empty, so the old master
+// sheet's data stays frozen and safe. When the NEW continuous master sheet
+// is created + Code.gs deployed, paste its /exec URL here to reconnect.
+// Old (test month) sheet, kept for reference only — do NOT reconnect to it:
+//   https://script.google.com/macros/s/AKfycbzHXHst0_FVowtPmCn3VDWKnQUGjiTfzN0TZJT9BCcTigpv1iCIn62DAWpkAX0w2-i5/exec
+var SHEETS_WEBAPP_URL = '';
 // Must match TOKEN in apps-script/Code.gs:
 var SHEETS_TOKEN = 'kp-7h3x9q2';
 var SHEETS_CUTOFF = '2026-06-01'; // backfill: orders on/after this date
@@ -9902,6 +9920,49 @@ function auditClearAll() {
     auditLog = [];
     _auditRenderNow();
   });
+}
+
+// ── MONTHLY / NEW-MASTER-SHEET ORDER RESET ──────────────────────
+// Wipes all order-flavoured month data from Firebase and resets the per-zone
+// counters to 0 so numbering restarts at 001. Does NOT touch staff, customers,
+// pins, products/stock, or any Google Sheet (the wipe is a direct Firebase
+// remove — it never calls the sheet-sync functions). Manager-PIN + typed
+// "RESET" confirmation required. Irreversible.
+function mgMonthReset() {
+  if(!window.fbDB) { alert('Not connected'); return; }
+  var pin = prompt('Manager-PIN, um ALLE Orders zurückzusetzen:');
+  if(pin === null) return;
+  if(String(pin).trim() !== String(managerPin)) { alert('Falsche PIN — abgebrochen.'); return; }
+  var ok = prompt(
+    'ALLE Orders + Bilder + Touren + Claims + Payroll + Bills werden GELÖSCHT.\n' +
+    'Order-Nummern starten danach wieder bei 001.\n\n' +
+    'Bleibt erhalten: Staff, Kunden, Pins, Produkte/Lager.\n' +
+    'Master-Sheet wird NICHT angefasst.\n\n' +
+    'NICHT umkehrbar. Tippe RESET zum Bestätigen:'
+  );
+  if(ok === null) return;
+  if(String(ok).trim().toUpperCase() !== 'RESET') { alert('Abgebrochen.'); return; }
+
+  var wipe = ['orders','wOrders','orderPhotos','photoIndex','recentlyDeleted',
+              'revOrders','preOrders','activeTours','claims','payLog','bills','costFixed'];
+  var zeros = { bangkok:0, northern:0, northeastern:0, eastern:0, southern:0, instore:0 };
+  var total = wipe.length + 1, done = 0, errs = [];
+  function fin(node, err) {
+    if(err) errs.push(node + ': ' + err.message);
+    if(++done >= total) {
+      if(errs.length) alert('Reset mit Fehlern:\n' + errs.join('\n'));
+      else alert('✅ Reset fertig.\nOrder-Nummern starten wieder bei 001.\nBitte die App neu laden.');
+    }
+  }
+  wipe.forEach(function(n) { window.fbDB.ref(n).remove(function(e) { fin(n, e); }); });
+  window.fbDB.ref('orderCounters').set(zeros, function(e) { fin('orderCounters', e); });
+  try { Object.keys(orderCounters).forEach(function(k) { orderCounters[k] = 0; }); } catch(e) {}
+  try {
+    window.fbDB.ref('auditLog').push({
+      ts: Date.now(), type: 'reset', action: 'Monthly order reset (orders/photos/tours/claims/payroll/bills wiped, counters→0)',
+      by: (typeof currentStaffName !== 'undefined' && currentStaffName) || 'Manager'
+    });
+  } catch(e) {}
 }
 
 // ── CLAIMS ─────────────────────────────────
