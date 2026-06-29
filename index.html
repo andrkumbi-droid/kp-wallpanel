@@ -372,7 +372,18 @@ textarea{resize:none}
     };
 
     const app = firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
+    // ── SEASON ROOT ─────────────────────────────────────────────
+    // New billing month / new master sheet = fresh data under 'v2/'.
+    // Every db.ref('x') / fbDB.ref('x') below is auto-scoped to v2/x, so
+    // order numbers restart at 001 and the old June data stays untouched at
+    // the root. The 24/7 driver apps keep running on the old root until they
+    // reload — no wipe, no coordination needed. Shared data (staff, customers,
+    // products, stock, configs) was copied root → v2/ once via REST.
+    // To start the NEXT fresh season later, bump this to 'v3' (and re-copy
+    // the shared nodes). Same Firebase project/DB — only the path changes.
+    const SEASON = 'v2';
+    const _rootDb = firebase.database();
+    const db = { ref: function(p){ return _rootDb.ref(SEASON + '/' + (p == null ? '' : p)); } };
 
     // ── PUSH NOTIFICATIONS / FCM ──
     const VAPID_KEY = 'BI2FDWmGhzUsT0Qe58Bi-u9fINShcRx5ogPSsrMVAHU6xT47Kz8nPX-yE-EbP8vcUzlyAJcsSBAVB62PweaBsZ4';
@@ -986,16 +997,6 @@ textarea{resize:none}
       <button type="button" class="fbtn" onclick="auditFilt('claim',this)">Claims</button>
     </div>
     <div id="audit-list"></div>
-
-    <!-- DANGER ZONE — monthly / new-master-sheet order reset -->
-    <div class="sec" style="margin-top:18px;border:1px solid var(--red,#ef4444);border-radius:var(--rs);padding:12px;background:var(--bg2)">
-      <div class="stit" style="color:var(--red,#ef4444);margin-bottom:6px"><i class="ti ti-alert-triangle"></i> Danger Zone — Reset</div>
-      <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-bottom:10px">
-        Löscht <b>ALLE Orders + Bilder + Touren + Claims + Payroll + Bills</b> aus Firebase und setzt die Order-Nummern zurück auf <b>#001 / 1-001 / 2-001 / 3-001 / 4-001</b>.<br>
-        <b>Bleibt erhalten:</b> Staff, Kunden, Pins, Produkte/Lager. Master-Sheet wird NICHT angefasst. Nicht umkehrbar.
-      </div>
-      <button type="button" onclick="mgMonthReset()" style="padding:9px 14px;border-radius:var(--rs);border:1px solid var(--red,#ef4444);background:var(--red,#ef4444);color:#fff;font-size:13px;font-weight:700;cursor:pointer"><i class="ti ti-trash"></i> Alle Orders zurücksetzen</button>
-    </div>
   </div></div>
 
 </div></div>
@@ -9920,49 +9921,6 @@ function auditClearAll() {
     auditLog = [];
     _auditRenderNow();
   });
-}
-
-// ── MONTHLY / NEW-MASTER-SHEET ORDER RESET ──────────────────────
-// Wipes all order-flavoured month data from Firebase and resets the per-zone
-// counters to 0 so numbering restarts at 001. Does NOT touch staff, customers,
-// pins, products/stock, or any Google Sheet (the wipe is a direct Firebase
-// remove — it never calls the sheet-sync functions). Manager-PIN + typed
-// "RESET" confirmation required. Irreversible.
-function mgMonthReset() {
-  if(!window.fbDB) { alert('Not connected'); return; }
-  var pin = prompt('Manager-PIN, um ALLE Orders zurückzusetzen:');
-  if(pin === null) return;
-  if(String(pin).trim() !== String(managerPin)) { alert('Falsche PIN — abgebrochen.'); return; }
-  var ok = prompt(
-    'ALLE Orders + Bilder + Touren + Claims + Payroll + Bills werden GELÖSCHT.\n' +
-    'Order-Nummern starten danach wieder bei 001.\n\n' +
-    'Bleibt erhalten: Staff, Kunden, Pins, Produkte/Lager.\n' +
-    'Master-Sheet wird NICHT angefasst.\n\n' +
-    'NICHT umkehrbar. Tippe RESET zum Bestätigen:'
-  );
-  if(ok === null) return;
-  if(String(ok).trim().toUpperCase() !== 'RESET') { alert('Abgebrochen.'); return; }
-
-  var wipe = ['orders','wOrders','orderPhotos','photoIndex','recentlyDeleted',
-              'revOrders','preOrders','activeTours','claims','payLog','bills','costFixed'];
-  var zeros = { bangkok:0, northern:0, northeastern:0, eastern:0, southern:0, instore:0 };
-  var total = wipe.length + 1, done = 0, errs = [];
-  function fin(node, err) {
-    if(err) errs.push(node + ': ' + err.message);
-    if(++done >= total) {
-      if(errs.length) alert('Reset mit Fehlern:\n' + errs.join('\n'));
-      else alert('✅ Reset fertig.\nOrder-Nummern starten wieder bei 001.\nBitte die App neu laden.');
-    }
-  }
-  wipe.forEach(function(n) { window.fbDB.ref(n).remove(function(e) { fin(n, e); }); });
-  window.fbDB.ref('orderCounters').set(zeros, function(e) { fin('orderCounters', e); });
-  try { Object.keys(orderCounters).forEach(function(k) { orderCounters[k] = 0; }); } catch(e) {}
-  try {
-    window.fbDB.ref('auditLog').push({
-      ts: Date.now(), type: 'reset', action: 'Monthly order reset (orders/photos/tours/claims/payroll/bills wiped, counters→0)',
-      by: (typeof currentStaffName !== 'undefined' && currentStaffName) || 'Manager'
-    });
-  } catch(e) {}
 }
 
 // ── CLAIMS ─────────────────────────────────
