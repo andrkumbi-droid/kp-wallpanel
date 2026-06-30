@@ -49,12 +49,13 @@ function kpBuildMaster() {
   KP_ZONES.forEach(function(z){ kpBuildZone_(ss, z); });
   kpBuildLines_(ss);
   kpBuildProducts_(ss);
+  kpBuildReport_(ss);
   kpBuildSummary_(ss);
   ['Sheet1','Tabelle1','Blatt1','ชีต1','Sheet'].forEach(function(n){
     var sh = ss.getSheetByName(n);
     if (sh && sh.getLastRow() === 0) { try { ss.deleteSheet(sh); } catch(e) {} }
   });
-  ss.toast('KP Master built ✓', 'KP Wallpanel Order', 5);
+  ss.toast('KP Master built', 'KP Wallpanel Order', 5);
 }
 
 function kpBuildZone_(ss, name) {
@@ -87,7 +88,7 @@ function kpBuildZone_(ss, name) {
   sh.getRange('B2:B').setNumberFormat('yyyy-mm-dd');   // Date
   sh.getRange('S2:S').setNumberFormat('yyyy-mm-dd');   // Paid on
   sh.getRange('AB2:AB').setNumberFormat('yyyy-mm-dd');  // Delivered on
-  sh.getRange('D2:D').setHorizontalAlignment('center'); // Priority ⭐
+  sh.getRange('D2:D').setHorizontalAlignment('center'); // Priority
 
   // Total column highlight that survives conditional row-colours: bold + gold border
   sh.getRange('O2:O').setFontWeight('bold');
@@ -119,55 +120,63 @@ function kpBuildZone_(ss, name) {
 function kpBuildSummary_(ss) {
   var sh = ss.getSheetByName('Summary') || ss.insertSheet('Summary');
   sh.clear();
-  sh.setFrozenRows(1);
+  sh.setFrozenRows(2);                               // header + grand-total row stay visible
   sh.getRange(1, 1, 1, KP_SUM_HEADERS.length).setValues([KP_SUM_HEADERS])
     .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937').setWrap(true);
 
-  // 36 month rows from 2026-07 (new months count from 0 automatically)
-  var n = 36, start = new Date(2026, 6, 1), months = [];
+  // Row 2 = grand total (all months). Months go in rows 3..(n+2).
+  var n = 36, start = new Date(2026, 5, 1), months = [];   // from 2026-06 (season start)
   for (var i = 0; i < n; i++) months.push([new Date(start.getFullYear(), start.getMonth() + i, 1)]);
-  sh.getRange(2, 1, n, 1).setValues(months).setNumberFormat('yyyy-mm');
+  sh.getRange(3, 1, n, 1).setValues(months).setNumberFormat('yyyy-mm');
+  var last = n + 2;                                  // last month row
 
   var Z = KP_ZONES;
-  // SUMIFS of a column across all zones, month = $A2, only non-cancelled
+  // SUMIFS of a column across all zones, month = $A3, only non-cancelled
   function sumNC(col) {
     return Z.map(function(z){
-      return "SUMIFS('"+z+"'!"+col+":"+col+",'"+z+"'!$B:$B,\">=\"&$A2,'"+z+"'!$B:$B,\"<\"&EDATE($A2,1),'"+z+"'!$C:$C,\"<>Cancelled\")";
+      return "SUMIFS('"+z+"'!"+col+":"+col+",'"+z+"'!$B:$B,\">=\"&$A3,'"+z+"'!$B:$B,\"<\"&EDATE($A3,1),'"+z+"'!$C:$C,\"<>Cancelled\")";
     }).join('+');
   }
   function countWith(crit) {
     return Z.map(function(z){
-      return "COUNTIFS('"+z+"'!$B:$B,\">=\"&$A2,'"+z+"'!$B:$B,\"<\"&EDATE($A2,1)"+(crit||'')+")";
+      return "COUNTIFS('"+z+"'!$B:$B,\">=\"&$A3,'"+z+"'!$B:$B,\"<\"&EDATE($A3,1)"+(crit||'')+")";
     }).join('+');
   }
   function put(a1, expr) { sh.getRange(a1).setFormula('=IFERROR(' + expr + ',0)'); }
 
-  put('B2', countWith(''));                          // Orders (all)
-  put('C2', sumNC('$O'));                             // Revenue (Total col O)
-  put('D2', sumNC('$P'));                             // Paid (Paid amount col P)
-  sh.getRange('E2').setFormula('=C2-D2');             // Outstanding
-  put('F2', sumNC('$F'));                             // Panels A
-  put('G2', sumNC('$G'));                             // Panels B
-  put('H2', sumNC('$H'));                             // L-Corner
-  put('I2', sumNC('$I'));                             // U-Trim
-  put('J2', sumNC('$J'));                             // T-Trim
-  put('K2', sumNC('$K'));                             // Extra Clips
-  put('L2', Z.map(function(z){
-      return "COUNTIFS('"+z+"'!$B:$B,\">=\"&$A2,'"+z+"'!$B:$B,\"<\"&EDATE($A2,1),'"+z+"'!$C:$C,\"Cancelled\")";
+  put('B3', countWith(''));                          // Orders (all)
+  put('C3', sumNC('$O'));                             // Revenue (Total col O)
+  put('D3', sumNC('$P'));                             // Paid (Paid amount col P)
+  sh.getRange('E3').setFormula('=C3-D3');             // Outstanding
+  put('F3', sumNC('$F'));                             // Panels A
+  put('G3', sumNC('$G'));                             // Panels B
+  put('H3', sumNC('$H'));                             // L-Corner
+  put('I3', sumNC('$I'));                             // U-Trim
+  put('J3', sumNC('$J'));                             // T-Trim
+  put('K3', sumNC('$K'));                             // Extra Clips
+  put('L3', Z.map(function(z){
+      return "COUNTIFS('"+z+"'!$B:$B,\">=\"&$A3,'"+z+"'!$B:$B,\"<\"&EDATE($A3,1),'"+z+"'!$C:$C,\"Cancelled\")";
     }).join('+'));                                    // Cancelled
 
-  // copy row-2 formulas down (relative refs adjust)
-  sh.getRange('B2:L2').copyTo(sh.getRange('B3:L' + (n + 1)));
+  // copy first month-row formulas down (relative refs adjust)
+  sh.getRange('B3:L3').copyTo(sh.getRange('B4:L' + last));
 
-  sh.getRange('B2:B' + (n + 1)).setNumberFormat('0');
-  sh.getRange('C2:E' + (n + 1)).setNumberFormat('#,##0');
-  sh.getRange('F2:L' + (n + 1)).setNumberFormat('#,##0');
+  // grand-total row (row 2) = sum of all month rows
+  sh.getRange('A2').setValue('TOTAL / รวมทั้งหมด');
+  sh.getRange('B2').setFormula('=SUM(B3:B' + last + ')');
+  sh.getRange('B2').copyTo(sh.getRange('C2:L2'));     // relative refs → each column sums its own
+  sh.getRange('A2:L2').setFontWeight('bold').setBackground('#fde9c8')
+    .setBorder(true, null, true, null, false, false, '#9a3412', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+  sh.getRange('B2:B' + last).setNumberFormat('0');
+  sh.getRange('C2:E' + last).setNumberFormat('#,##0');
+  sh.getRange('F2:L' + last).setNumberFormat('#,##0');
 
   // highlight current month
   var rule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=TEXT($A2,"yyyy-mm")=TEXT(TODAY(),"yyyy-mm")')
+    .whenFormulaSatisfied('=TEXT($A3,"yyyy-mm")=TEXT(TODAY(),"yyyy-mm")')
     .setBackground('#fff7cc').setBold(true)
-    .setRanges([sh.getRange('A2:L' + (n + 1))]).build();
+    .setRanges([sh.getRange('A3:L' + last)]).build();
   sh.setConditionalFormatRules([rule]);
   sh.setColumnWidth(1, 90);
 }
@@ -197,4 +206,51 @@ function kpBuildProducts_(ss) {
     '=IFERROR(QUERY(\'Line Items\'!A2:H, "select E, F, sum(G) where E is not null group by E, F pivot A label E \'Code\', F \'Grade\'", 0), "—")');
   sh.setColumnWidth(1, 160);
   sh.setColumnWidth(7, 160);
+}
+
+// Monthly product report: pick a month from the dropdown → every product sold
+// that month with quantity + revenue (sorted by revenue) and a month total.
+// Reads the "Line Items" tab (filled by order-sync.gs per order line).
+function kpBuildReport_(ss) {
+  var sh = ss.getSheetByName('Monthly Report') || ss.insertSheet('Monthly Report');
+  sh.clear();
+  sh.setFrozenRows(4);
+  sh.getRange('A1').setValue('Monthly Product Report / รายงานสินค้าต่อเดือน')
+    .setFontWeight('bold').setFontSize(13);
+  sh.getRange('A2').setValue('Month / เดือน:').setFontWeight('bold').setHorizontalAlignment('right');
+
+  // month dropdown (plain-text yyyy-MM), default = current month
+  var tz = ss.getSpreadsheetTimeZone(), months = [];
+  for (var i = 0; i < 36; i++)
+    months.push(Utilities.formatDate(new Date(2026, 5 + i, 1), tz, 'yyyy-MM'));
+  var rule = SpreadsheetApp.newDataValidation().requireValueInList(months, true).build();
+  sh.getRange('B2').setNumberFormat('@')            // keep as text, not auto-date
+    .setDataValidation(rule).setValue(Utilities.formatDate(new Date(), tz, 'yyyy-MM'))
+    .setFontWeight('bold').setBackground('#fff7cc').setHorizontalAlignment('center');
+
+  // helper: first day of the chosen month (robust to text or date in B2)
+  sh.getRange('F1').setFormula('=IFERROR(DATEVALUE($B$2&"-01"),DATE(YEAR($B$2),MONTH($B$2),1))')
+    .setNumberFormat('yyyy-mm-dd').setFontColor('#bbbbbb');
+
+  // month revenue total (independent of the table length)
+  sh.getRange('D2').setFormula(
+    '=IFERROR("Total ฿: "&TEXT(SUMIFS(\'Line Items\'!H:H,'
+    + '\'Line Items\'!B:B,">="&$F$1,\'Line Items\'!B:B,"<"&EDATE($F$1,1)),"#,##0"),"")')
+    .setFontWeight('bold').setFontColor('#9a3412');
+
+  // product breakdown for the chosen month (filtered on the real Date col B)
+  sh.getRange('A4').setFormula(
+    '=IFERROR(QUERY(\'Line Items\'!A2:H,'
+    + ' "select E, F, sum(G), sum(H)'
+    + ' where B >= date \'"&TEXT($F$1,"yyyy-MM-dd")&"\''
+    + ' and B < date \'"&TEXT(EDATE($F$1,1),"yyyy-MM-dd")&"\''
+    + ' group by E, F order by sum(H) desc'
+    + ' label E \'Code / รหัส\', F \'Grade\', sum(G) \'Qty / จำนวน\', sum(H) \'Revenue ฿ / ยอด\'",0),'
+    + ' "No sales this month / ไม่มีข้อมูลเดือนนี้")');
+
+  sh.getRange('A4:D4').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  sh.getRange('C5:D').setNumberFormat('#,##0');
+  sh.setColumnWidth(1, 150);
+  sh.setColumnWidth(3, 110);
+  sh.setColumnWidth(4, 130);
 }
