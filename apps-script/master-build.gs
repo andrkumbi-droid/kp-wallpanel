@@ -88,12 +88,11 @@ function kpBuildMaster() {
   ss.setSpreadsheetLocale('en_US');            // <- formulas use commas
   KP_ZONES.forEach(function(z){ kpBuildZone_(ss, z); });
   kpBuildLines_(ss);
-  kpBuildProducts_(ss);
   kpBuildReport_(ss);
   kpBuildPreOrders_(ss);
   kpBuildCustomers_(ss);
-  // Summary tab is merged into the Monthly Report now → remove it if present
-  var _sum = ss.getSheetByName('Summary'); if (_sum) { try { ss.deleteSheet(_sum); } catch(e) {} }
+  // Merged-away tabs → remove if present (Summary+Products → Report, Blocklist → Customers)
+  ['Summary','Products','Blocklist'].forEach(function(n){ var s=ss.getSheetByName(n); if(s){ try{ ss.deleteSheet(s); }catch(e){} } });
   ['Sheet1','Tabelle1','Blatt1','ชีต1','Sheet'].forEach(function(n){
     var sh = ss.getSheetByName(n);
     if (sh && sh.getLastRow() === 0) { try { ss.deleteSheet(sh); } catch(e) {} }
@@ -355,6 +354,16 @@ function kpBuildReport_(ss) {
     .setRanges([sh.getRange('N6:R' + oLast)]).build();
   sh.setConditionalFormatRules([curM]);
 
+  // ── Total per product (all time) — merged from the old Products tab (cols H–K) ──
+  sh.getRange('H38').setValue('Total per product (all time) / รวมต่อสินค้า')
+    .setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange('H39').setFormula(
+    '=IFERROR(QUERY(' + LI + 'A2:I, "select E, G, sum(H), sum(I) where E is not null'
+    + ' group by E, G order by sum(H) desc'
+    + ' label E \'Code / รหัส\', G \'Grade\', sum(H) \'Total Stk\', sum(I) \'Total ฿\'",0),"—")');
+  sh.getRange('H39:K39').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  sh.getRange('J40:K').setNumberFormat('#,##0');
+
   sh.setColumnWidth(1, 175);
   sh.setColumnWidth(2, 100);
   sh.setColumnWidth(3, 120);
@@ -435,25 +444,22 @@ function kpBuildCustomers_(ss) {
   var H = ['Phone / เบอร์', 'Name / ชื่อ', 'Address / ที่อยู่', 'Note / โน้ต',
            'Blocked? / บล็อก', 'Block reason / เหตุผล', 'Maps / Geo'];
   kpHeader_(cs, H);
-  var rows = [], blk = [];
+  var rows = [];
   Object.keys(cm).forEach(function(k){
     var m = cm[k] || {};
     var geo = (m.geo && typeof m.geo.lat === 'number') ? (m.geo.lat + ',' + m.geo.lng) : (m.loc || '');
     rows.push([k, m.name || '', m.address || '', m.note || '', m.blocked ? 'YES' : '', m.blockReason || '', geo]);
-    if (m.blocked) blk.push([k, m.name || '', m.blockReason || '']);
   });
-  rows.sort(function(a, b){ return String(a[1]).localeCompare(String(b[1])); });
+  // blocked customers first (the in-sheet blocklist), then by name
+  rows.sort(function(a, b){
+    var ba = a[4] === 'YES' ? 0 : 1, bb = b[4] === 'YES' ? 0 : 1;
+    if (ba !== bb) return ba - bb;
+    return String(a[1]).localeCompare(String(b[1]));
+  });
   kpFill_(cs, rows, H.length);
   cs.setColumnWidth(2, 160); cs.setColumnWidth(3, 240);
   var redRule = SpreadsheetApp.newConditionalFormatRule()
     .whenFormulaSatisfied('=$E2="YES"').setBackground('#fde7e9')
     .setRanges([cs.getRange('A2:G2000')]).build();
   cs.setConditionalFormatRules([redRule]);
-
-  var bs = ss.getSheetByName('Blocklist') || ss.insertSheet('Blocklist');
-  var BH = ['Phone / เบอร์', 'Name / ชื่อ', 'Block reason / เหตุผล'];
-  kpHeader_(bs, BH);
-  blk.sort(function(a, b){ return String(a[1]).localeCompare(String(b[1])); });
-  kpFill_(bs, blk, BH.length);
-  bs.setColumnWidth(2, 160); bs.setColumnWidth(3, 260);
 }

@@ -44,6 +44,7 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('KP')
     .addItem('Build / Update master', 'kpBuildMaster')
     .addItem('Refresh Pre-Orders + Customers', 'kpRefreshData')
+    .addItem('Delete checked customers', 'kpDeleteCheckedCustomers')
     .addToUi();
 }
 
@@ -88,12 +89,11 @@ function kpBuildMaster() {
   ss.setSpreadsheetLocale('en_US');            // <- formulas use commas
   KP_ZONES.forEach(function(z){ kpBuildZone_(ss, z); });
   kpBuildLines_(ss);
-  kpBuildProducts_(ss);
   kpBuildReport_(ss);
   kpBuildPreOrders_(ss);
   kpBuildCustomers_(ss);
-  // Summary tab is merged into the Monthly Report now \u2192 remove it if present
-  var _sum = ss.getSheetByName('Summary'); if (_sum) { try { ss.deleteSheet(_sum); } catch(e) {} }
+  // Merged-away tabs \u2192 remove if present (Summary+Products \u2192 Report, Blocklist \u2192 Customers)
+  ['Summary','Products','Blocklist'].forEach(function(n){ var s=ss.getSheetByName(n); if(s){ try{ ss.deleteSheet(s); }catch(e){} } });
   ['Sheet1','Tabelle1','Blatt1','\u0e0a\u0e35\u0e151','Sheet'].forEach(function(n){
     var sh = ss.getSheetByName(n);
     if (sh && sh.getLastRow() === 0) { try { ss.deleteSheet(sh); } catch(e) {} }
@@ -355,6 +355,16 @@ function kpBuildReport_(ss) {
     .setRanges([sh.getRange('N6:R' + oLast)]).build();
   sh.setConditionalFormatRules([curM]);
 
+  // \u2500\u2500 Total per product (all time) \u2014 merged from the old Products tab (cols H\u2013K) \u2500\u2500
+  sh.getRange('H38').setValue('Total per product (all time) / \u0e23\u0e27\u0e21\u0e15\u0e48\u0e2d\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32')
+    .setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange('H39').setFormula(
+    '=IFERROR(QUERY(' + LI + 'A2:I, "select E, G, sum(H), sum(I) where E is not null'
+    + ' group by E, G order by sum(H) desc'
+    + ' label E \'Code / \u0e23\u0e2b\u0e31\u0e2a\', G \'Grade\', sum(H) \'Total Stk\', sum(I) \'Total \u0e3f\'",0),"\u2014")');
+  sh.getRange('H39:K39').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  sh.getRange('J40:K').setNumberFormat('#,##0');
+
   sh.setColumnWidth(1, 175);
   sh.setColumnWidth(2, 100);
   sh.setColumnWidth(3, 120);
@@ -433,29 +443,57 @@ function kpBuildCustomers_(ss) {
   var cm = kpFetchFb_('customerMeta');
   var cs = ss.getSheetByName('Customers') || ss.insertSheet('Customers');
   var H = ['Phone / \u0e40\u0e1a\u0e2d\u0e23\u0e4c', 'Name / \u0e0a\u0e37\u0e48\u0e2d', 'Address / \u0e17\u0e35\u0e48\u0e2d\u0e22\u0e39\u0e48', 'Note / \u0e42\u0e19\u0e49\u0e15',
-           'Blocked? / \u0e1a\u0e25\u0e47\u0e2d\u0e01', 'Block reason / \u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25', 'Maps / Geo'];
+           'Blocked? / \u0e1a\u0e25\u0e47\u0e2d\u0e01', 'Block reason / \u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25', 'Maps / Geo', 'Delete? / \u0e25\u0e1a'];
   kpHeader_(cs, H);
-  var rows = [], blk = [];
+  var rows = [];
   Object.keys(cm).forEach(function(k){
     var m = cm[k] || {};
     var geo = (m.geo && typeof m.geo.lat === 'number') ? (m.geo.lat + ',' + m.geo.lng) : (m.loc || '');
     rows.push([k, m.name || '', m.address || '', m.note || '', m.blocked ? 'YES' : '', m.blockReason || '', geo]);
-    if (m.blocked) blk.push([k, m.name || '', m.blockReason || '']);
   });
-  rows.sort(function(a, b){ return String(a[1]).localeCompare(String(b[1])); });
-  kpFill_(cs, rows, H.length);
-  cs.setColumnWidth(2, 160); cs.setColumnWidth(3, 240);
+  // blocked customers first (the in-sheet blocklist), then by name
+  rows.sort(function(a, b){
+    var ba = a[4] === 'YES' ? 0 : 1, bb = b[4] === 'YES' ? 0 : 1;
+    if (ba !== bb) return ba - bb;
+    return String(a[1]).localeCompare(String(b[1]));
+  });
+  kpFill_(cs, rows, 7);                          // write A\u2013G (data); H is the checkbox
+  cs.getRange('H2:H').clearDataValidations();    // drop old checkboxes before re-adding
+  if (rows.length) cs.getRange(2, 8, rows.length, 1).insertCheckboxes();
+  cs.setColumnWidth(2, 160); cs.setColumnWidth(3, 240); cs.setColumnWidth(8, 70);
   var redRule = SpreadsheetApp.newConditionalFormatRule()
     .whenFormulaSatisfied('=$E2="YES"').setBackground('#fde7e9')
-    .setRanges([cs.getRange('A2:G2000')]).build();
+    .setRanges([cs.getRange('A2:H2000')]).build();
   cs.setConditionalFormatRules([redRule]);
+}
 
-  var bs = ss.getSheetByName('Blocklist') || ss.insertSheet('Blocklist');
-  var BH = ['Phone / \u0e40\u0e1a\u0e2d\u0e23\u0e4c', 'Name / \u0e0a\u0e37\u0e48\u0e2d', 'Block reason / \u0e40\u0e2b\u0e15\u0e38\u0e1c\u0e25'];
-  kpHeader_(bs, BH);
-  blk.sort(function(a, b){ return String(a[1]).localeCompare(String(b[1])); });
-  kpFill_(bs, blk, BH.length);
-  bs.setColumnWidth(2, 160); bs.setColumnWidth(3, 260);
+// Delete the customers whose "Delete?" checkbox (col H) is ticked \u2014 removes
+// customerMeta/<phone> from Firebase, then refreshes the tab. Order history is
+// NOT touched (that lives in the order data, not customerMeta).
+function kpDeleteCheckedCustomers() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ui = SpreadsheetApp.getUi();
+  var sh = ss.getSheetByName('Customers');
+  if (!sh || sh.getLastRow() < 2) { ss.toast('No customers', 'KP', 4); return; }
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 8).getValues();
+  var toDel = [];
+  for (var i = 0; i < vals.length; i++) {
+    if (vals[i][7] === true && String(vals[i][0]).trim()) toDel.push(String(vals[i][0]).trim());
+  }
+  if (!toDel.length) { ss.toast('Tick the "Delete?" box on the rows to remove first.', 'KP', 5); return; }
+  if (ui.alert('Delete ' + toDel.length + ' customer(s)?',
+      toDel.join('\n') + '\n\n(Order history is kept \u2014 only the saved customer entry is removed.)',
+      ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+  var ok = 0;
+  toDel.forEach(function(phone){
+    try {
+      var r = UrlFetchApp.fetch(KP_FB + 'customerMeta/' + encodeURIComponent(phone) + '.json',
+        { method: 'delete', muteHttpExceptions: true });
+      if (r.getResponseCode() === 200) ok++;
+    } catch (e) {}
+  });
+  kpBuildCustomers_(ss);
+  ss.toast('Deleted ' + ok + ' / ' + toDel.length + ' customer(s)', 'KP', 6);
 }
 
 
