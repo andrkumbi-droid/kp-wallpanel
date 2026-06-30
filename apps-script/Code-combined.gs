@@ -22,10 +22,10 @@ var KP_ZONES = ['Bangkok','Northern','Northeastern','Eastern','Southern','Instor
 // EN (line 1) / TH (line 2) headers — order matches KP_COLS in order-sync.gs.
 // 38 columns A–AL. Detail piece columns (Panels A..T-Trim) are hidden by build.
 var KP_HEADERS = [
-  'Order No\nเลขที่ออเดอร์','Date\nวันที่','Status\nสถานะ','Priority\nสำคัญ','Products\nสินค้า',
+  'Order No\nเลขที่ออเดอร์','Date\nวันที่','Status\nสถานะ','Paid?\nชำระเงิน','Priority\nสำคัญ','Products\nสินค้า',
   'Panels A\nแผ่น A','Panels B\nแผ่น B','L-Corner\nมุม L','U-Trim\nคิ้ว U','T-Trim\nคิ้ว T',
   'Extra Clips\nคลิปเพิ่ม','Free Clips\nคลิปฟรี','Shipping\nค่าส่ง','Discount\nส่วนลด',
-  'Total\nยอดรวม','Paid amount\nชำระแล้ว','Outstanding\nค้างชำระ','Paid?\nชำระเงิน','Pay method\nวิธีชำระ',
+  'Total\nยอดรวม','Paid amount\nชำระแล้ว','Outstanding\nค้างชำระ','Pay method\nวิธีชำระ',
   'Paid on\nชำระวันที่','Payment by\nรับเงินโดย','Receipt No\nเลขใบเสร็จ','Customer\nชื่อลูกค้า',
   'Phone\nเบอร์โทร','Contact\nช่องทาง','Address\nที่อยู่','Maps link\nลิงก์แผนที่',
   'Delivered by\nส่งโดย','Delivered on\nส่งวันที่','Time\nเวลา','Delivery round\nรอบส่ง',
@@ -68,35 +68,35 @@ function kpBuildZone_(ss, name) {
   // section colour bands (1-based column → group colour)
   var bg = [];
   for (var c = 1; c <= N; c++) {
-    bg.push(c <= 5  ? '#1f2937'    // Order   (No/Date/Status/Priority/Products)
-          : c <= 12 ? '#0f766e'    // Pieces  (Panels..Free Clips)
-          : c <= 17 ? '#9a3412'    // Money   (Shipping..Outstanding)
-          : c <= 22 ? '#3730a3'    // Payment (Paid?..Receipt No)
+    bg.push(c <= 6  ? '#1f2937'    // Order   (No/Date/Status/Paid?/Priority/Products)
+          : c <= 13 ? '#0f766e'    // Pieces  (Panels..Free Clips)
+          : c <= 18 ? '#9a3412'    // Money   (Shipping..Outstanding)
+          : c <= 22 ? '#3730a3'    // Payment (Pay method..Receipt No)
           : c <= 27 ? '#155e75'    // Customer(Customer..Maps)
           : c <= 34 ? '#6b21a8'    // Delivery(Delivered by..CTN/Bundle)
-          :           '#475569');  // Meta    (Taken/Edited/Cancel)
+          :           '#475569');  // Meta    (Taken/Edited/Cancel/Notes)
   }
   sh.getRange(1, 1, 1, N).setBackgrounds([bg]);
-  sh.getRange('O1').setBackground('#ca8a04'); // Total header gold accent
+  sh.getRange('P1').setBackground('#ca8a04'); // Total header gold accent
   sh.setRowHeight(1, 46);
   sh.setFrozenRows(1);
   sh.setFrozenColumns(1);
 
   // number formats
-  sh.getRange('F2:L').setNumberFormat('0');      // piece counts (Panels A..Free Clips)
-  sh.getRange('M2:Q').setNumberFormat('#,##0');  // money (Shipping..Outstanding)
+  sh.getRange('G2:M').setNumberFormat('0');      // piece counts (Panels A..Free Clips)
+  sh.getRange('N2:R').setNumberFormat('#,##0');  // money (Shipping..Outstanding)
   sh.getRange('B2:B').setNumberFormat('yyyy-mm-dd');   // Date
   sh.getRange('T2:T').setNumberFormat('yyyy-mm-dd');   // Paid on
   sh.getRange('AC2:AC').setNumberFormat('yyyy-mm-dd');  // Delivered on
-  sh.getRange('D2:D').setHorizontalAlignment('center'); // Priority
+  sh.getRange('E2:E').setHorizontalAlignment('center'); // Priority
 
   // Total column highlight that survives conditional row-colours: bold + gold border
-  sh.getRange('O2:O').setFontWeight('bold');
-  sh.getRange('O1:O1000').setBorder(null, true, null, true, null, null,
+  sh.getRange('P2:P').setFontWeight('bold');
+  sh.getRange('P1:P1000').setBorder(null, true, null, true, null, null,
     '#ca8a04', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
 
-  // hide detail piece columns (Panels A..T-Trim = cols 6–10)
-  sh.hideColumns(6, 5);
+  // hide detail piece columns (Panels A..T-Trim = cols 7–11)
+  sh.hideColumns(7, 5);
 
   // row colour rules: grey = Cancelled, green = Delivered & fully paid, red = open balance
   var rng = sh.getRange('A2:AL2000');
@@ -104,17 +104,17 @@ function kpBuildZone_(ss, name) {
     .whenFormulaSatisfied('=$C2="Cancelled"')
     .setBackground('#eceff1').setRanges([rng]).build();
   var green = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND($C2="Delivered",$Q2<=0)')
+    .whenFormulaSatisfied('=AND($C2="Delivered",$R2<=0)')
     .setBackground('#e6f4ea').setRanges([rng]).build();
   var red = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND($C2<>"Cancelled",$Q2>0)')
+    .whenFormulaSatisfied('=AND($C2<>"Cancelled",$R2>0)')
     .setBackground('#fde7e9').setRanges([rng]).build();
   sh.setConditionalFormatRules([cancelled, green, red]);
 
   sh.setColumnWidth(1, 90);    // Order No
-  sh.setColumnWidth(5, 240);   // Products
-  sh.setColumnWidth(25, 240);  // Address
-  sh.setColumnWidth(26, 180);  // Maps
+  sh.setColumnWidth(6, 240);   // Products
+  sh.setColumnWidth(26, 240);  // Address
+  sh.setColumnWidth(27, 180);  // Maps
 }
 
 function kpBuildSummary_(ss) {
@@ -145,15 +145,15 @@ function kpBuildSummary_(ss) {
   function put(a1, expr) { sh.getRange(a1).setFormula('=IFERROR(' + expr + ',0)'); }
 
   put('B3', countWith(''));                          // Orders (all)
-  put('C3', sumNC('$O'));                             // Revenue (Total col O)
-  put('D3', sumNC('$P'));                             // Paid (Paid amount col P)
+  put('C3', sumNC('$P'));                             // Revenue (Total col P)
+  put('D3', sumNC('$Q'));                             // Paid (Paid amount col Q)
   sh.getRange('E3').setFormula('=C3-D3');             // Outstanding
-  put('F3', sumNC('$F'));                             // Panels A
-  put('G3', sumNC('$G'));                             // Panels B
-  put('H3', sumNC('$H'));                             // L-Corner
-  put('I3', sumNC('$I'));                             // U-Trim
-  put('J3', sumNC('$J'));                             // T-Trim
-  put('K3', sumNC('$K'));                             // Extra Clips
+  put('F3', sumNC('$G'));                             // Panels A
+  put('G3', sumNC('$H'));                             // Panels B
+  put('H3', sumNC('$I'));                             // L-Corner
+  put('I3', sumNC('$J'));                             // U-Trim
+  put('J3', sumNC('$K'));                             // T-Trim
+  put('K3', sumNC('$L'));                             // Extra Clips
   put('L3', Z.map(function(z){
       return "COUNTIFS('"+z+"'!$B:$B,\">=\"&$A3,'"+z+"'!$B:$B,\"<\"&EDATE($A3,1),'"+z+"'!$C:$C,\"Cancelled\")";
     }).join('+'));                                    // Cancelled
@@ -276,9 +276,9 @@ var TOKEN = 'kp-7h3x9q2'; // must equal SHEETS_TOKEN in index.html
 
 // Column order (index = column − 1). 38 columns A–AL. MUST match KP_HEADERS
 // order in master-build.gs.
-var KP_COLS = ['orderNo','date','status','prio','products','panelsA','panelsB','lcorner',
+var KP_COLS = ['orderNo','date','status','paid','prio','products','panelsA','panelsB','lcorner',
   'utrim','ttrim','extraClips','freeClips','shipping','discount','total','paidAmount',
-  'outstanding','paid','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
+  'outstanding','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
   'address','maps','deliveredBy','deliveredOn','time','deliveryRound','carrier','tracking',
   'ctnBundle','takenBy','editedBy','cancelReason','notes'];
 
