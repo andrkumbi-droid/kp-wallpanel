@@ -46,6 +46,8 @@ function kpBuildMaster() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.setSpreadsheetLocale('en_US');            // <- formulas use commas
   KP_ZONES.forEach(function(z){ kpBuildZone_(ss, z); });
+  kpBuildLines_(ss);
+  kpBuildProducts_(ss);
   kpBuildSummary_(ss);
   ['Sheet1','Tabelle1','Blatt1','ชีต1','Sheet'].forEach(function(n){
     var sh = ss.getSheetByName(n);
@@ -145,4 +147,31 @@ function kpBuildSummary_(ss) {
     .setRanges([sh.getRange('A2:L' + (n + 1))]).build();
   sh.setConditionalFormatRules([rule]);
   sh.setColumnWidth(1, 90);
+}
+
+// Raw per-product-line ledger (the app fills it; one row per product line).
+function kpBuildLines_(ss) {
+  var sh = ss.getSheetByName('Line Items') || ss.insertSheet('Line Items');
+  var H = ['Month / เดือน','Date / วันที่','Zone / โซน','Order No / เลขที่','Code / รหัส',
+           'Grade / เกรด','Qty / จำนวน','Amount ฿ / ยอด'];
+  sh.getRange(1, 1, 1, H.length).setValues([H])
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937').setWrap(true);
+  sh.setFrozenRows(1);
+  sh.getRange('B2:B').setNumberFormat('yyyy-mm-dd');
+  sh.getRange('G2:H').setNumberFormat('#,##0');
+}
+
+// Per-product report (auto from Line Items): total per product + per month.
+function kpBuildProducts_(ss) {
+  var sh = ss.getSheetByName('Products') || ss.insertSheet('Products');
+  sh.clear();
+  sh.setFrozenRows(1);
+  sh.getRange('A1').setValue('Total pro Produkt / รวมต่อสินค้า').setFontWeight('bold');
+  sh.getRange('A2').setFormula(
+    '=IFERROR(QUERY(\'Line Items\'!A2:H, "select E, F, sum(G), sum(H) where E is not null group by E, F order by sum(G) desc label E \'Code\', F \'Grade\', sum(G) \'Total Stk\', sum(H) \'Total ฿\'", 0), "—")');
+  sh.getRange('G1').setValue('Pro Monat (Stück) / ต่อเดือน').setFontWeight('bold');
+  sh.getRange('G2').setFormula(
+    '=IFERROR(QUERY(\'Line Items\'!A2:H, "select E, F, sum(G) where E is not null group by E, F pivot A label E \'Code\', F \'Grade\'", 0), "—")');
+  sh.setColumnWidth(1, 160);
+  sh.setColumnWidth(7, 160);
 }

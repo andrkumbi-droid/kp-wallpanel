@@ -46,7 +46,35 @@ function kpUpsert(order) {
   var vals = [];
   for (var c = 1; c <= 38; c++) vals.push(kpCell(order, KP_COLS[c - 1]));
   sh.getRange(target, 1, 1, 38).setValues([vals]);
+  kpSyncLines(ss, order);
   return { ok: true, action: row > 0 ? 'updated' : 'appended', row: target, tab: order.tab, orderNo: order.orderNo };
+}
+
+// ── Line Items (one row per product line, for the Products report) ──
+var LINES_SHEET = 'Line Items';
+
+function kpClearLines(ss, orderNo) {
+  var sh = ss.getSheetByName(LINES_SHEET); if (!sh) return;
+  var last = sh.getLastRow(); if (last < 2) return;
+  var d = sh.getRange(2, 4, last - 1, 1).getValues(); // col D = Order No
+  var on = String(orderNo).trim();
+  for (var i = d.length - 1; i >= 0; i--) {            // bottom-up so indices stay valid
+    if (String(d[i][0]).trim() === on) sh.deleteRow(i + 2);
+  }
+}
+
+function kpSyncLines(ss, order) {
+  var sh = ss.getSheetByName(LINES_SHEET); if (!sh) return;
+  kpClearLines(ss, order.orderNo);
+  var lines = order.lines || [];
+  if (!lines.length) return;
+  var month = String(order.date || '').slice(0, 7);
+  var dateVal = kpCell(order, 'date');
+  var rows = lines.map(function (l) {
+    return [month, dateVal, order.tab, order.orderNo, String(l.code || ''),
+            l.grade || '', parseInt(l.qty) || 0, Number(l.amount) || 0];
+  });
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, 8).setValues(rows);
 }
 
 // Last row that actually has an order (column A non-empty). Robust against
@@ -66,6 +94,7 @@ function kpDelete(order) {
   var sh = ss.getSheetByName(order.tab);
   if (!sh) return { error: 'tab not found: ' + order.tab };
   var row = kpFindRow(sh, order.orderNo, sh.getLastRow());
+  kpClearLines(ss, order.orderNo);
   if (row < 0) return { ok: true, note: 'not found', orderNo: order.orderNo };
   sh.deleteRow(row);
   return { ok: true, action: 'deleted', row: row, orderNo: order.orderNo };
