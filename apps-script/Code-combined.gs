@@ -257,10 +257,11 @@ function kpBuildReport_(ss) {
     ['U-Trim',             q('U'),                b('U')],
     ['>> Total L + T + U', '=B8+B9+B10',          '=C8+C9+C10'],
     ['Clips sold (packs)',      q('Clip sold'),        b('Clip sold')],
-    ['Clips sold (pcs x95)',    '=B12*95',             null],
+    ['  = sold pcs (x95)',      '=B12*95',             null],
     ['Clips free /panel (pcs)', q('Clip free/panel'),  null],
     ['Clips free gift (pcs)',   q('Clip free gift'),   null],
-    ['>> Total clips (pcs)',    '=B13+B14+B15',        null]
+    ['>> Given away (pcs)',     '=B14+B15',            null],
+    ['>> Total used (pcs)',     '=B13+B16',            null]
   ];
   for (var r = 0; r < rows.length; r++) {
     var rr = 5 + r;
@@ -268,12 +269,12 @@ function kpBuildReport_(ss) {
     sh.getRange(rr, 2).setFormula(rows[r][1]);
     if (rows[r][2]) sh.getRange(rr, 3).setFormula(rows[r][2]);
   }
-  sh.getRange('B5:C16').setNumberFormat('#,##0');
-  [7, 11, 16].forEach(function(rr){ sh.getRange(rr, 1, 1, 3).setFontWeight('bold').setBackground('#eef2ff'); });
+  sh.getRange('B5:C17').setNumberFormat('#,##0');
+  [7, 11, 16, 17].forEach(function(rr){ sh.getRange(rr, 1, 1, 3).setFontWeight('bold').setBackground('#eef2ff'); });
 
   // ── Detailed per-product table for the month ──
-  sh.getRange('A18').setValue('Per product / ต่อสินค้า').setFontWeight('bold');
-  sh.getRange('A19').setFormula(
+  sh.getRange('A19').setValue('Per product / ต่อสินค้า').setFontWeight('bold');
+  sh.getRange('A20').setFormula(
     '=IFERROR(QUERY(' + LI + 'A2:I,'
     + ' "select E, G, sum(H), sum(I)'
     + ' where B >= date \'"&TEXT($F$1,"yyyy-MM-dd")&"\''
@@ -281,8 +282,8 @@ function kpBuildReport_(ss) {
     + ' group by E, G order by sum(I) desc'
     + ' label E \'Code / รหัส\', G \'Grade\', sum(H) \'Qty / จำนวน\', sum(I) \'Revenue ฿ / ยอด\'",0),'
     + ' "No sales this month / ไม่มีข้อมูลเดือนนี้")');
-  sh.getRange('A19:D19').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
-  sh.getRange('C20:D').setNumberFormat('#,##0');
+  sh.getRange('A20:D20').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  sh.getRange('C21:D').setNumberFormat('#,##0');
 
   sh.setColumnWidth(1, 175);
   sh.setColumnWidth(2, 100);
