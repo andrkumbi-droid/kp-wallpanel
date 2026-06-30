@@ -185,12 +185,12 @@ function kpBuildSummary_(ss) {
 function kpBuildLines_(ss) {
   var sh = ss.getSheetByName('Line Items') || ss.insertSheet('Line Items');
   var H = ['Month / เดือน','Date / วันที่','Zone / โซน','Order No / เลขที่','Code / รหัส',
-           'Grade / เกรด','Qty / จำนวน','Amount ฿ / ยอด'];
+           'Category / หมวด','Grade / เกรด','Qty / จำนวน','Amount ฿ / ยอด'];
   sh.getRange(1, 1, 1, H.length).setValues([H])
     .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937').setWrap(true);
   sh.setFrozenRows(1);
   sh.getRange('B2:B').setNumberFormat('yyyy-mm-dd');
-  sh.getRange('G2:H').setNumberFormat('#,##0');
+  sh.getRange('H2:I').setNumberFormat('#,##0');
 }
 
 // Per-product report (auto from Line Items): total per product + per month.
@@ -200,22 +200,22 @@ function kpBuildProducts_(ss) {
   sh.setFrozenRows(1);
   sh.getRange('A1').setValue('Total pro Produkt / รวมต่อสินค้า').setFontWeight('bold');
   sh.getRange('A2').setFormula(
-    '=IFERROR(QUERY(\'Line Items\'!A2:H, "select E, F, sum(G), sum(H) where E is not null group by E, F order by sum(G) desc label E \'Code\', F \'Grade\', sum(G) \'Total Stk\', sum(H) \'Total ฿\'", 0), "—")');
+    '=IFERROR(QUERY(\'Line Items\'!A2:I, "select E, G, sum(H), sum(I) where E is not null group by E, G order by sum(H) desc label E \'Code\', G \'Grade\', sum(H) \'Total Stk\', sum(I) \'Total ฿\'", 0), "—")');
   sh.getRange('G1').setValue('Pro Monat (Stück) / ต่อเดือน').setFontWeight('bold');
   sh.getRange('G2').setFormula(
-    '=IFERROR(QUERY(\'Line Items\'!A2:H, "select E, F, sum(G) where E is not null group by E, F pivot A label E \'Code\', F \'Grade\'", 0), "—")');
+    '=IFERROR(QUERY(\'Line Items\'!A2:I, "select E, G, sum(H) where E is not null group by E, G pivot A label E \'Code\', G \'Grade\'", 0), "—")');
   sh.setColumnWidth(1, 160);
   sh.setColumnWidth(7, 160);
 }
 
-// Monthly product report: pick a month from the dropdown → every product sold
-// that month with quantity + revenue (sorted by revenue) and a month total.
-// Reads the "Line Items" tab (filled by order-sync.gs per order line).
+// Monthly report: pick a month from the dropdown → category summary
+// (KP/K-PVC panels, L/T/U, clips sold+free+packs) plus a per-product table.
+// Reads the "Line Items" tab (Category col F, Qty col H, Amount col I).
 function kpBuildReport_(ss) {
   var sh = ss.getSheetByName('Monthly Report') || ss.insertSheet('Monthly Report');
   sh.clear();
-  sh.setFrozenRows(4);
-  sh.getRange('A1').setValue('Monthly Product Report / รายงานสินค้าต่อเดือน')
+  sh.setFrozenRows(3);
+  sh.getRange('A1').setValue('Monthly Report / รายงานต่อเดือน')
     .setFontWeight('bold').setFontSize(13);
   sh.getRange('A2').setValue('Month / เดือน:').setFontWeight('bold').setHorizontalAlignment('right');
 
@@ -228,30 +228,66 @@ function kpBuildReport_(ss) {
     .setDataValidation(rule).setValue(Utilities.formatDate(new Date(), tz, 'yyyy-MM'))
     .setFontWeight('bold').setBackground('#fff7cc').setHorizontalAlignment('center');
 
-  // helper: first day of the chosen month (robust to text or date in B2)
+  // helper (col F): first day of the chosen month, robust to text or date in B2
   sh.getRange('F1').setFormula('=IFERROR(DATEVALUE($B$2&"-01"),DATE(YEAR($B$2),MONTH($B$2),1))')
     .setNumberFormat('yyyy-mm-dd').setFontColor('#bbbbbb');
 
-  // month revenue total (independent of the table length)
+  // month revenue total
   sh.getRange('D2').setFormula(
-    '=IFERROR("Total ฿: "&TEXT(SUMIFS(\'Line Items\'!H:H,'
-    + '\'Line Items\'!B:B,">="&$F$1,\'Line Items\'!B:B,"<"&EDATE($F$1,1)),"#,##0"),"")')
+    '=IFERROR("Month total ฿: "&TEXT(SUMIFS(\'Line Items\'!$I:$I,'
+    + '\'Line Items\'!$B:$B,">="&$F$1,\'Line Items\'!$B:$B,"<"&EDATE($F$1,1)),"#,##0"),"")')
     .setFontWeight('bold').setFontColor('#9a3412');
 
-  // product breakdown for the chosen month (filtered on the real Date col B)
-  sh.getRange('A4').setFormula(
-    '=IFERROR(QUERY(\'Line Items\'!A2:H,'
-    + ' "select E, F, sum(G), sum(H)'
+  // ── Category summary (SUMIFS by Category col F, month on Date col B) ──
+  var LI = "'Line Items'!";
+  function q(cat){ return '=SUMIFS(' + LI + '$H:$H,' + LI + '$F:$F,"' + cat + '",' + LI + '$B:$B,">="&$F$1,' + LI + '$B:$B,"<"&EDATE($F$1,1))'; }
+  function b(cat){ return '=SUMIFS(' + LI + '$I:$I,' + LI + '$F:$F,"' + cat + '",' + LI + '$B:$B,">="&$F$1,' + LI + '$B:$B,"<"&EDATE($F$1,1))'; }
+
+  sh.getRange('A4').setValue('Category / หมวด').setFontWeight('bold');
+  sh.getRange('B4').setValue('Qty / จำนวน').setFontWeight('bold');
+  sh.getRange('C4').setValue('Baht ฿').setFontWeight('bold');
+  sh.getRange('A4:C4').setFontColor('#ffffff').setBackground('#1f2937');
+
+  var rows = [
+    ['KP (panels)',        q('KP'),               b('KP')],
+    ['K-PVC (panels)',     q('K-PVC'),            b('K-PVC')],
+    ['>> Total panels',    '=B5+B6',              '=C5+C6'],
+    ['L-Corner',           q('L'),                b('L')],
+    ['T-Trim',             q('T'),                b('T')],
+    ['U-Trim',             q('U'),                b('U')],
+    ['>> Total L + T + U', '=B8+B9+B10',          '=C8+C9+C10'],
+    ['Clips sold',         q('Clip sold'),        b('Clip sold')],
+    ['Clips free /panel',  q('Clip free/panel'),  null],
+    ['Clips free gift',    q('Clip free gift'),   null],
+    ['>> Total clips',     '=B12+B13+B14',        null],
+    ['   Clip packs (/95)','=ROUND(B15/95,1)',    null]
+  ];
+  for (var r = 0; r < rows.length; r++) {
+    var rr = 5 + r;
+    sh.getRange(rr, 1).setValue(rows[r][0]);
+    sh.getRange(rr, 2).setFormula(rows[r][1]);
+    if (rows[r][2]) sh.getRange(rr, 3).setFormula(rows[r][2]);
+  }
+  sh.getRange('B5:C16').setNumberFormat('#,##0');
+  sh.getRange('B16').setNumberFormat('0.0');                // packs (1 decimal)
+  [7, 11, 15].forEach(function(rr){ sh.getRange(rr, 1, 1, 3).setFontWeight('bold').setBackground('#eef2ff'); });
+
+  // ── Detailed per-product table for the month ──
+  sh.getRange('A18').setValue('Per product / ต่อสินค้า').setFontWeight('bold');
+  sh.getRange('A19').setFormula(
+    '=IFERROR(QUERY(' + LI + 'A2:I,'
+    + ' "select E, G, sum(H), sum(I)'
     + ' where B >= date \'"&TEXT($F$1,"yyyy-MM-dd")&"\''
     + ' and B < date \'"&TEXT(EDATE($F$1,1),"yyyy-MM-dd")&"\''
-    + ' group by E, F order by sum(H) desc'
-    + ' label E \'Code / รหัส\', F \'Grade\', sum(G) \'Qty / จำนวน\', sum(H) \'Revenue ฿ / ยอด\'",0),'
+    + ' group by E, G order by sum(I) desc'
+    + ' label E \'Code / รหัส\', G \'Grade\', sum(H) \'Qty / จำนวน\', sum(I) \'Revenue ฿ / ยอด\'",0),'
     + ' "No sales this month / ไม่มีข้อมูลเดือนนี้")');
+  sh.getRange('A19:D19').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  sh.getRange('C20:D').setNumberFormat('#,##0');
 
-  sh.getRange('A4:D4').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
-  sh.getRange('C5:D').setNumberFormat('#,##0');
-  sh.setColumnWidth(1, 150);
-  sh.setColumnWidth(3, 110);
+  sh.setColumnWidth(1, 175);
+  sh.setColumnWidth(2, 100);
+  sh.setColumnWidth(3, 120);
   sh.setColumnWidth(4, 130);
 }
 
@@ -334,9 +370,9 @@ function kpSyncLines(ss, order) {
   var dateVal = kpCell(order, 'date');
   var rows = lines.map(function (l) {
     return [month, dateVal, order.tab, order.orderNo, String(l.code || ''),
-            l.grade || '', parseInt(l.qty) || 0, Number(l.amount) || 0];
+            l.cat || '', l.grade || '', parseInt(l.qty) || 0, Number(l.amount) || 0];
   });
-  sh.getRange(sh.getLastRow() + 1, 1, rows.length, 8).setValues(rows);
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, 9).setValues(rows);
 }
 
 // Last row that actually has an order (column A non-empty). Robust against

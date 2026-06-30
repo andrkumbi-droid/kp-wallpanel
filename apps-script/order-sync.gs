@@ -74,9 +74,9 @@ function kpSyncLines(ss, order) {
   var dateVal = kpCell(order, 'date');
   var rows = lines.map(function (l) {
     return [month, dateVal, order.tab, order.orderNo, String(l.code || ''),
-            l.grade || '', parseInt(l.qty) || 0, Number(l.amount) || 0];
+            l.cat || '', l.grade || '', parseInt(l.qty) || 0, Number(l.amount) || 0];
   });
-  sh.getRange(sh.getLastRow() + 1, 1, rows.length, 8).setValues(rows);
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, 9).setValues(rows);
 }
 
 // Last row that actually has an order (column A non-empty). Robust against
