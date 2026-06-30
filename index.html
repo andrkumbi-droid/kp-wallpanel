@@ -5753,7 +5753,7 @@ function poConvert(id){
 // is created + Code.gs deployed, paste its /exec URL here to reconnect.
 // Old (test month) sheet, kept for reference only — do NOT reconnect to it:
 //   https://script.google.com/macros/s/AKfycbzHXHst0_FVowtPmCn3VDWKnQUGjiTfzN0TZJT9BCcTigpv1iCIn62DAWpkAX0w2-i5/exec
-var SHEETS_WEBAPP_URL = '';
+var SHEETS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbzpz7kWZ-2DfKe8Du9rSkEZm12GThH4PPxftz1nSn-VcT7pZIKPrQzj9_uJzr_WZ53ddA/exec';
 // Must match TOKEN in apps-script/Code.gs:
 var SHEETS_TOKEN = 'kp-7h3x9q2';
 var SHEETS_CUTOFF = '2026-06-01'; // backfill: orders on/after this date
@@ -5838,17 +5838,75 @@ function sheetsPost(items, dryRun){
 }
 
 // Non-blocking single-order sync, fired when an order is delivered.
-function sheetsSyncOrder(o){
+// ════════════════════════════════════════════════════════════
+//  NEW MASTER SHEET ("KP Wallpanel Order") — flat 1-row-per-order
+//  sync. One zone tab per zone; Code.gs (order-sync.gs) upserts by
+//  order number. See apps-script/order-sync.gs + master-build.gs.
+// ════════════════════════════════════════════════════════════
+function kpZoneTab(id){
+  id=String(id||'');
+  if(id.charAt(0)==='#') return 'Bangkok';
+  if(id.indexOf('1-')===0) return 'Northern';
+  if(id.indexOf('2-')===0) return 'Northeastern';
+  if(id.indexOf('3-')===0) return 'Eastern';
+  if(id.indexOf('4-')===0) return 'Southern';
+  if(id.indexOf('5-')===0) return 'Instore';
+  return '';
+}
+function kpStatusEN(s){
+  return ({'new':'New',packing:'Packing',ready:'Ready',loaded:'Loaded',delivered:'Delivered',cancelled:'Cancelled'})[s]||(s||'New');
+}
+function kpDeliveredInfo(o){
+  var d='',t='',by='';
+  (o.statusLog||[]).forEach(function(e){ if(e && e.status==='delivered'){ d=e.date||d; t=e.time||t; by=e.by||by; } });
+  return {date:d,time:t,by:by};
+}
+// Build the flat per-order object the new sheet expects (named fields).
+function kpFlatOrder(o){
+  var li=o.lineItems||[];
+  function sq(pred){ return li.reduce(function(s,x){ return s+(pred(x)?(parseInt(x.qty)||0):0); },0); }
+  var discount=Math.abs(li.filter(function(x){return x.type==='discount';}).reduce(function(s,x){return s+sheetsNum(x.amount);},0));
+  var shipping=li.filter(function(x){return x.type==='delivery';}).reduce(function(s,x){return s+sheetsNum(x.amount);},0);
+  var products=[(o.panels&&o.panels!=='—')?o.panels:'', (o.lcorner&&o.lcorner!=='—')?o.lcorner:''].filter(Boolean).join(' · ')||'—';
+  var total=sheetsNum(o.total), paid=!!o.payMethod, del=kpDeliveredInfo(o);
+  var ctnB=[]; if(o.ctn>0)ctnB.push(o.ctn+' CTN'); if(o.bundle>0)ctnB.push(o.bundle+' มัด');
+  return {
+    tab:kpZoneTab(o.id), orderNo:o.id, date:o.date||'',
+    status:(o.status==='cancelled')?'Cancelled':kpStatusEN(o.status),
+    paid:paid?'Paid':'Unpaid', prio:o.priority?'⭐':'',
+    panelsA:sq(function(x){return x.type==='panel'&&x.grade!=='B';}),
+    panelsB:sq(function(x){return x.type==='panel'&&x.grade==='B';}),
+    lcorner:sq(function(x){return x.type==='lcorner';}),
+    utrim:sq(function(x){return x.type==='utrim'||x.type==='uedge';}),
+    ttrim:sq(function(x){return x.type==='ttrim'||x.type==='tedge';}),
+    extraClips:sq(function(x){return x.type==='clips';}),
+    freeClips:sq(function(x){return x.type==='free-clips'||x.type==='free-gift-clips';}),
+    products:products, shipping:shipping, discount:discount, total:total,
+    paidAmount:paid?total:0, outstanding:paid?0:total,
+    payMethod:o.payMethod||'', paidOn:o.payDate||'', paymentBy:o.paidBy||'',
+    deliveredOn:del.date, time:del.time, deliveredBy:del.by,
+    carrier:o.shipper||'', tracking:(o.shippingBill!=null?o.shippingBill:''), ctnBundle:ctnB.join(' · '),
+    customer:(o.customer&&o.customer!=='—')?o.customer:'', phone:(o.phone&&o.phone!=='—')?o.phone:'',
+    contact:o.contact||'', address:(o.address&&o.address!=='—')?o.address:'', maps:o.location||'',
+    deliveryRound:o.deliveryRound||'', takenBy:o.createdBy||'', editedBy:o.editedBy||'',
+    receiptNo:o.receiptNum||'', cancelReason:o.cancelReason||o.cancelledReason||'', notes:o.notes||''
+  };
+}
+function kpSheetSend(action, o){
   try{
     if(!SHEETS_WEBAPP_URL || !o) return;
-    if(o._importedFromMirror) return; // came from the mirror — never write back
-    var item = sheetsBuildItem(o);
-    if(!item) return;
-    sheetsPost([item], false)
-      .then(function(res){ console.log('Sheets sync:', res); })
-      .catch(function(err){ console.error('Sheets sync failed (non-blocking):', err); });
-  }catch(err){ console.error('Sheets sync failed (non-blocking):', err); }
+    if(o._importedFromMirror && action!=='delete') return;
+    var order=kpFlatOrder(o);
+    if(!order.tab) return;
+    fetch(SHEETS_WEBAPP_URL,{
+      method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ token:SHEETS_TOKEN, action:action, order:order })
+    }).then(function(r){return r.json();})
+      .then(function(res){ console.log('Sheet '+action+':', res); })
+      .catch(function(err){ console.error('Sheet sync failed (non-blocking):', err); });
+  }catch(err){ console.error('Sheet sync failed (non-blocking):', err); }
 }
+function sheetsSyncOrder(o){ kpSheetSend('upsert', o); }
 
 // ── APP → MASTER SHEET (write new orders into the master's Thai tabs) ──
 // Routes by order-id prefix to a zone key; Code.gs resolves the actual
@@ -5904,49 +5962,12 @@ function sheetsBuildMasterItem(o){
 }
 // Fire-and-forget: write a newly created app order into the master sheet.
 // Append-only + server-side dedup on order number → safe to call repeatedly.
-function sheetsSyncToMaster(o){
-  try{
-    if(!SHEETS_WEBAPP_URL || !o) return;
-    if(o._importedFromMirror) return; // came from the sheet — never write back
-    var item = sheetsBuildMasterItem(o);
-    if(!item) return;
-    fetch(SHEETS_WEBAPP_URL, {
-      method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({ token:SHEETS_TOKEN, target:'master', items:[item] })
-    }).then(function(r){return r.json();})
-      .then(function(res){ console.log('Master sync:', res); })
-      .catch(function(err){ console.error('Master sync failed (non-blocking):', err); });
-  }catch(err){ console.error('Master sync failed (non-blocking):', err); }
-}
+function sheetsSyncToMaster(o){ kpSheetSend('upsert', o); }
 // Fire-and-forget: clear an order's row in the master (delete → empty pre-numbered row).
-function sheetsClearMaster(o){
-  try{
-    if(!SHEETS_WEBAPP_URL || !o || !o.id) return;
-    var zone = sheetsRouteMasterZone(o.id);
-    if(!zone) return;
-    fetch(SHEETS_WEBAPP_URL, {
-      method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({ token:SHEETS_TOKEN, target:'masterClear', items:[{ zone:zone, orderNumber:o.id }] })
-    }).then(function(r){return r.json();})
-      .then(function(res){ console.log('Master clear:', res); })
-      .catch(function(err){ console.error('Master clear failed (non-blocking):', err); });
-  }catch(err){ console.error('Master clear failed (non-blocking):', err); }
-}
+function sheetsClearMaster(o){ kpSheetSend('delete', o); }
 // Fire-and-forget: push an EDITED order's new content into its master row.
 // Works for app-created and mirror-imported orders (edit in app → master).
-function sheetsUpdateMaster(o){
-  try{
-    if(!SHEETS_WEBAPP_URL || !o) return;
-    var item = sheetsBuildMasterItem(o);
-    if(!item) return;
-    fetch(SHEETS_WEBAPP_URL, {
-      method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({ token:SHEETS_TOKEN, target:'masterUpdate', items:[item] })
-    }).then(function(r){return r.json();})
-      .then(function(res){ console.log('Master update:', res); })
-      .catch(function(err){ console.error('Master update failed (non-blocking):', err); });
-  }catch(err){ console.error('Master update failed (non-blocking):', err); }
-}
+function sheetsUpdateMaster(o){ kpSheetSend('upsert', o); }
 
 // Column A–V headers (for the local preview)
 var SHEETS_COLS = ['A Status','B Order#','C Date','D Code','E Qty','F Price','G Subtotal',
@@ -7324,6 +7345,7 @@ function paySetMethod(id, method) {
   o.paidAt = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   o.paidBy = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
   syncOrders();
+  try{ sheetsSyncOrder(o); }catch(e){}
   _payRenderNow();
   try{ofRenderRevenue();}catch(e){}
   try{mgRevenue();}catch(e){}
@@ -7335,6 +7357,7 @@ function payClear(id) {
   if(!o) return;
   delete o.payMethod; delete o.paidAt; delete o.paidBy; delete o.payDate;
   syncOrders();
+  try{ sheetsSyncOrder(o); }catch(e){}
   _payRenderNow();
   try{ofRenderRevenue();}catch(e){}
   try{mgRevenue();}catch(e){}
@@ -7352,6 +7375,7 @@ function payDateChange(id, dateVal) {
   if(!o) return;
   o.payDate = dateVal;
   syncOrders();
+  try{ sheetsSyncOrder(o); }catch(e){}
   try{ofRenderRevenue();}catch(e){}
   try{mgRevenue();}catch(e){}
 }

@@ -63,8 +63,10 @@ function kpBuildZone_(ss, name) {
   sh.setFrozenRows(1);
   sh.setFrozenColumns(1);
 
-  // Outstanding (col R) = Total (P) − Paid amount (Q), auto for every row
-  sh.getRange('R2').setFormula('=ARRAYFORMULA(IF($A2:$A="","",$P2:$P-$Q2:$Q))');
+  // Outstanding (col R) = Total − Paid; the app sends it as a value per order.
+  // Remove any old array-formula spill (it would inflate getLastRow), but keep
+  // existing per-order values on a rebuild.
+  if (sh.getRange('R2').getFormula()) sh.getRange('R2:R').clearContent();
 
   // number formats
   sh.getRange('F2:L').setNumberFormat('0');            // piece counts
