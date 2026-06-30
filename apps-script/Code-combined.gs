@@ -256,11 +256,11 @@ function kpBuildReport_(ss) {
     ['T-Trim',             q('T'),                b('T')],
     ['U-Trim',             q('U'),                b('U')],
     ['>> Total L + T + U', '=B8+B9+B10',          '=C8+C9+C10'],
-    ['Clips sold',         q('Clip sold'),        b('Clip sold')],
-    ['Clips free /panel',  q('Clip free/panel'),  null],
-    ['Clips free gift',    q('Clip free gift'),   null],
-    ['>> Total clips',     '=B12+B13+B14',        null],
-    ['   Clip packs (/95)','=ROUND(B15/95,1)',    null]
+    ['Clips sold (packs)',      q('Clip sold'),        b('Clip sold')],
+    ['Clips sold (pcs x95)',    '=B12*95',             null],
+    ['Clips free /panel (pcs)', q('Clip free/panel'),  null],
+    ['Clips free gift (pcs)',   q('Clip free gift'),   null],
+    ['>> Total clips (pcs)',    '=B13+B14+B15',        null]
   ];
   for (var r = 0; r < rows.length; r++) {
     var rr = 5 + r;
@@ -269,8 +269,7 @@ function kpBuildReport_(ss) {
     if (rows[r][2]) sh.getRange(rr, 3).setFormula(rows[r][2]);
   }
   sh.getRange('B5:C16').setNumberFormat('#,##0');
-  sh.getRange('B16').setNumberFormat('0.0');                // packs (1 decimal)
-  [7, 11, 15].forEach(function(rr){ sh.getRange(rr, 1, 1, 3).setFontWeight('bold').setBackground('#eef2ff'); });
+  [7, 11, 16].forEach(function(rr){ sh.getRange(rr, 1, 1, 3).setFontWeight('bold').setBackground('#eef2ff'); });
 
   // ── Detailed per-product table for the month ──
   sh.getRange('A18').setValue('Per product / ต่อสินค้า').setFontWeight('bold');
