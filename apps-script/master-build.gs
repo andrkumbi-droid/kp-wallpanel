@@ -19,17 +19,18 @@
 
 var KP_ZONES = ['Bangkok','Northern','Northeastern','Eastern','Southern','Instore'];
 
-// EN / TH headers
+// EN (line 1) / TH (line 2) headers — order matches KP_COLS in order-sync.gs.
+// 36 columns A–AJ. Detail piece columns (Panels A..T-Trim) are hidden by build.
 var KP_HEADERS = [
-  'Order No / เลขที่ออเดอร์','Date / วันที่','Status / สถานะ','Paid? / ชำระเงิน','⭐',
-  'Panels A / แผ่น A','Panels B / แผ่น B','L-Corner / มุม L','U-Trim / คิ้ว U','T-Trim / คิ้ว T',
-  'Extra Clips / คลิปเพิ่ม','Free Clips / คลิปฟรี','Products / สินค้า','Shipping / ค่าส่ง',
-  'Discount / ส่วนลด','Total / ยอดรวม','Paid amount / ชำระแล้ว','Outstanding / ค้างชำระ',
-  'Pay method / วิธีชำระ','Paid on / ชำระวันที่','Payment by / รับเงินโดย','Delivered on / ส่งวันที่',
-  'Time / เวลา','Delivered by / ส่งโดย','Carrier / ขนส่ง','Tracking / เลขพัสดุ',
-  'CTN/Bundle / กล่อง·มัด','Customer / ชื่อลูกค้า','Phone / เบอร์โทร','Contact / ช่องทาง',
-  'Address / ที่อยู่','Maps link / ลิงก์แผนที่','Delivery round / รอบส่ง','Taken by / รับออเดอร์โดย',
-  'Edited by / แก้ไขโดย','Receipt No / เลขใบเสร็จ','Cancel reason / เหตุยกเลิก','Notes / หมายเหตุ'];
+  'Order No\nเลขที่ออเดอร์','Date\nวันที่','Status\nสถานะ','Priority\nสำคัญ','Products\nสินค้า',
+  'Panels A\nแผ่น A','Panels B\nแผ่น B','L-Corner\nมุม L','U-Trim\nคิ้ว U','T-Trim\nคิ้ว T',
+  'Extra Clips\nคลิปเพิ่ม','Free Clips\nคลิปฟรี','Shipping\nค่าส่ง','Discount\nส่วนลด',
+  'Total\nยอดรวม','Paid amount\nชำระแล้ว','Outstanding\nค้างชำระ','Pay method\nวิธีชำระ',
+  'Paid on\nชำระวันที่','Payment by\nรับเงินโดย','Receipt No\nเลขใบเสร็จ','Customer\nชื่อลูกค้า',
+  'Phone\nเบอร์โทร','Contact\nช่องทาง','Address\nที่อยู่','Maps link\nลิงก์แผนที่',
+  'Delivered by\nส่งโดย','Delivered on\nส่งวันที่','Time\nเวลา','Delivery round\nรอบส่ง',
+  'Carrier\nขนส่ง','Tracking\nเลขพัสดุ','CTN/Bundle\nกล่อง·มัด','Taken by\nรับออเดอร์โดย',
+  'Edited by\nแก้ไขโดย','Cancel reason\nเหตุยกเลิก','Notes\nหมายเหตุ'];
 
 var KP_SUM_HEADERS = [
   'Month / เดือน','Orders / ออเดอร์','Revenue / รายได้','Paid / ชำระแล้ว','Outstanding / ค้างชำระ',
@@ -58,39 +59,61 @@ function kpBuildMaster() {
 
 function kpBuildZone_(ss, name) {
   var sh = ss.getSheetByName(name) || ss.insertSheet(name);
-  var H = KP_HEADERS;
-  sh.getRange(1, 1, 1, H.length).setValues([H])
-    .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937')
-    .setVerticalAlignment('middle').setWrap(true);
+  var H = KP_HEADERS, N = H.length;            // 36 columns (A–AJ)
+  sh.getRange(1, 1, 1, N).setValues([H])
+    .setFontWeight('bold').setFontColor('#ffffff')
+    .setVerticalAlignment('middle').setHorizontalAlignment('center').setWrap(true);
+
+  // section colour bands (1-based column → group colour)
+  var bg = [];
+  for (var c = 1; c <= N; c++) {
+    bg.push(c <= 5  ? '#1f2937'    // Order   (No/Date/Status/Priority/Products)
+          : c <= 12 ? '#0f766e'    // Pieces  (Panels..Free Clips)
+          : c <= 17 ? '#9a3412'    // Money   (Shipping..Outstanding)
+          : c <= 21 ? '#3730a3'    // Payment (Method..Receipt No)
+          : c <= 26 ? '#155e75'    // Customer(Customer..Maps)
+          : c <= 33 ? '#6b21a8'    // Delivery(Delivered by..CTN/Bundle)
+          :           '#475569');  // Meta    (Taken/Edited/Cancel)
+  }
+  sh.getRange(1, 1, 1, N).setBackgrounds([bg]);
+  sh.getRange('O1').setBackground('#ca8a04'); // Total header gold accent
+  sh.setRowHeight(1, 46);
   sh.setFrozenRows(1);
   sh.setFrozenColumns(1);
 
-  // Outstanding (col R) = Total − Paid; the app sends it as a value per order.
-  // Remove any old array-formula spill (it would inflate getLastRow), but keep
-  // existing per-order values on a rebuild.
-  if (sh.getRange('R2').getFormula()) sh.getRange('R2:R').clearContent();
-
   // number formats
-  sh.getRange('F2:L').setNumberFormat('0');            // piece counts
-  sh.getRange('N2:R').setNumberFormat('#,##0');        // money
-  sh.getRange('B2:B').setNumberFormat('yyyy-mm-dd');
-  sh.getRange('T2:T').setNumberFormat('yyyy-mm-dd');
-  sh.getRange('V2:V').setNumberFormat('yyyy-mm-dd');
+  sh.getRange('F2:L').setNumberFormat('0');      // piece counts (Panels A..Free Clips)
+  sh.getRange('M2:Q').setNumberFormat('#,##0');  // money (Shipping..Outstanding)
+  sh.getRange('B2:B').setNumberFormat('yyyy-mm-dd');   // Date
+  sh.getRange('S2:S').setNumberFormat('yyyy-mm-dd');   // Paid on
+  sh.getRange('AB2:AB').setNumberFormat('yyyy-mm-dd');  // Delivered on
+  sh.getRange('D2:D').setHorizontalAlignment('center'); // Priority ⭐
 
-  // colour rules: green = Delivered+Paid, red = Unpaid
-  var rng = sh.getRange('A2:AL2000');
+  // Total column highlight that survives conditional row-colours: bold + gold border
+  sh.getRange('O2:O').setFontWeight('bold');
+  sh.getRange('O1:O1000').setBorder(null, true, null, true, null, null,
+    '#ca8a04', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+
+  // hide detail piece columns (Panels A..T-Trim = cols 6–10)
+  sh.hideColumns(6, 5);
+
+  // row colour rules: grey = Cancelled, green = Delivered & fully paid, red = open balance
+  var rng = sh.getRange('A2:AK2000');
+  var cancelled = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$C2="Cancelled"')
+    .setBackground('#eceff1').setRanges([rng]).build();
   var green = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND($C2="Delivered",$D2="Paid")')
+    .whenFormulaSatisfied('=AND($C2="Delivered",$Q2<=0)')
     .setBackground('#e6f4ea').setRanges([rng]).build();
   var red = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$D2="Unpaid"')
+    .whenFormulaSatisfied('=AND($C2<>"Cancelled",$Q2>0)')
     .setBackground('#fde7e9').setRanges([rng]).build();
-  sh.setConditionalFormatRules([green, red]);
+  sh.setConditionalFormatRules([cancelled, green, red]);
 
   sh.setColumnWidth(1, 90);    // Order No
-  sh.setColumnWidth(13, 240);  // Products
-  sh.setColumnWidth(31, 240);  // Address
-  sh.setColumnWidth(32, 180);  // Maps
+  sh.setColumnWidth(5, 240);   // Products
+  sh.setColumnWidth(25, 240);  // Address
+  sh.setColumnWidth(26, 180);  // Maps
 }
 
 function kpBuildSummary_(ss) {
@@ -120,8 +143,8 @@ function kpBuildSummary_(ss) {
   function put(a1, expr) { sh.getRange(a1).setFormula('=IFERROR(' + expr + ',0)'); }
 
   put('B2', countWith(''));                          // Orders (all)
-  put('C2', sumNC('$P'));                             // Revenue
-  put('D2', sumNC('$Q'));                             // Paid
+  put('C2', sumNC('$O'));                             // Revenue (Total col O)
+  put('D2', sumNC('$P'));                             // Paid (Paid amount col P)
   sh.getRange('E2').setFormula('=C2-D2');             // Outstanding
   put('F2', sumNC('$F'));                             // Panels A
   put('G2', sumNC('$G'));                             // Panels B

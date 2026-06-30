@@ -8,18 +8,19 @@
  *   paste it into index.html  var SHEETS_WEBAPP_URL = '...'
  *
  * One row per order, upserted by Order No (col A) into the order's
- * zone tab. Writes A–Q and S–AL; column R (Outstanding) is left to
- * its ARRAYFORMULA. Status/Paid values must match master-build.gs.
+ * zone tab. Writes all 37 columns A–AK (Outstanding col Q is a value,
+ * not a formula). Column order/headers must match master-build.gs.
  */
 
 var TOKEN = 'kp-7h3x9q2'; // must equal SHEETS_TOKEN in index.html
 
-// Column order (index = column − 1). 38 columns A–AL.
-var KP_COLS = ['orderNo','date','status','paid','prio','panelsA','panelsB','lcorner',
-  'utrim','ttrim','extraClips','freeClips','products','shipping','discount','total',
-  'paidAmount','outstanding','payMethod','paidOn','paymentBy','deliveredOn','time','deliveredBy',
-  'carrier','tracking','ctnBundle','customer','phone','contact','address','maps',
-  'deliveryRound','takenBy','editedBy','receiptNo','cancelReason','notes'];
+// Column order (index = column − 1). 37 columns A–AK. MUST match KP_HEADERS
+// order in master-build.gs. Unmapped app fields (paid) are ignored.
+var KP_COLS = ['orderNo','date','status','prio','products','panelsA','panelsB','lcorner',
+  'utrim','ttrim','extraClips','freeClips','shipping','discount','total','paidAmount',
+  'outstanding','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
+  'address','maps','deliveredBy','deliveredOn','time','deliveryRound','carrier','tracking',
+  'ctnBundle','takenBy','editedBy','cancelReason','notes'];
 
 function doGet() { return _json({ ok: true, service: 'KP Wallpanel Order sync' }); }
 
@@ -43,9 +44,10 @@ function kpUpsert(order) {
   var row = kpFindRow(sh, order.orderNo, sh.getLastRow());
   var target = row > 0 ? row : kpLastDataRow(sh) + 1;
 
+  var N = KP_COLS.length;
   var vals = [];
-  for (var c = 1; c <= 38; c++) vals.push(kpCell(order, KP_COLS[c - 1]));
-  sh.getRange(target, 1, 1, 38).setValues([vals]);
+  for (var c = 1; c <= N; c++) vals.push(kpCell(order, KP_COLS[c - 1]));
+  sh.getRange(target, 1, 1, N).setValues([vals]);
   kpSyncLines(ss, order);
   return { ok: true, action: row > 0 ? 'updated' : 'appended', row: target, tab: order.tab, orderNo: order.orderNo };
 }
