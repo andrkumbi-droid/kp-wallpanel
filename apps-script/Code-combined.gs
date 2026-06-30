@@ -50,7 +50,8 @@ function kpBuildMaster() {
   kpBuildLines_(ss);
   kpBuildProducts_(ss);
   kpBuildReport_(ss);
-  kpBuildSummary_(ss);
+  // Summary tab is merged into the Monthly Report now → remove it if present
+  var _sum = ss.getSheetByName('Summary'); if (_sum) { try { ss.deleteSheet(_sum); } catch(e) {} }
   ['Sheet1','Tabelle1','Blatt1','ชีต1','Sheet'].forEach(function(n){
     var sh = ss.getSheetByName(n);
     if (sh && sh.getLastRow() === 0) { try { ss.deleteSheet(sh); } catch(e) {} }
@@ -285,10 +286,39 @@ function kpBuildReport_(ss) {
   sh.getRange('A20:D20').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
   sh.getRange('C21:D').setNumberFormat('#,##0');
 
+  // ── All-months money overview (right side; replaces the old Summary tab) ──
+  var Z = KP_ZONES, nM = 36, oLast = 5 + nM;     // months in rows 6..41
+  function sumNC(col, m){ return Z.map(function(z){ return "SUMIFS('"+z+"'!"+col+":"+col+",'"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
+  function cnt(m){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1))"; }).join('+'); }
+  sh.getRange('H3').setValue('All months / ทุกเดือน').setFontWeight('bold');
+  sh.getRange(4, 8, 1, 5).setValues([['Month / เดือน','Orders','Revenue ฿','Paid ฿','Outstanding ฿']])
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  var mrows = [];
+  for (var k = 0; k < nM; k++) mrows.push([new Date(2026, 5 + k, 1)]);
+  sh.getRange(6, 8, nM, 1).setValues(mrows).setNumberFormat('yyyy-mm');
+  sh.getRange('I6').setFormula('=IFERROR(' + cnt('$H6') + ',0)');
+  sh.getRange('J6').setFormula('=IFERROR(' + sumNC('$P', '$H6') + ',0)');   // Revenue = Total col P
+  sh.getRange('K6').setFormula('=IFERROR(' + sumNC('$Q', '$H6') + ',0)');   // Paid = Paid amount col Q
+  sh.getRange('L6').setFormula('=J6-K6');                                   // Outstanding
+  sh.getRange('I6:L6').copyTo(sh.getRange('I7:L' + oLast));
+  sh.getRange('H5').setValue('TOTAL');
+  sh.getRange('I5').setFormula('=SUM(I6:I' + oLast + ')');
+  sh.getRange('I5').copyTo(sh.getRange('J5:L5'));
+  sh.getRange('H5:L5').setFontWeight('bold').setBackground('#fde9c8');
+  sh.getRange('I5:L' + oLast).setNumberFormat('#,##0');
+  sh.getRange('I5:I' + oLast).setNumberFormat('0');
+  var curM = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=TEXT($H6,"yyyy-mm")=TEXT(TODAY(),"yyyy-mm")')
+    .setBackground('#fff7cc').setBold(true)
+    .setRanges([sh.getRange('H6:L' + oLast)]).build();
+  sh.setConditionalFormatRules([curM]);
+
   sh.setColumnWidth(1, 175);
   sh.setColumnWidth(2, 100);
   sh.setColumnWidth(3, 120);
   sh.setColumnWidth(4, 130);
+  sh.setColumnWidth(8, 80);
+  sh.setColumnWidth(9, 70);
 }
 
 
