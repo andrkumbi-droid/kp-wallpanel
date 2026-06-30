@@ -37,10 +37,50 @@ var KP_SUM_HEADERS = [
   'Panels A / แผ่น A','Panels B / แผ่น B','L-Corner / มุม L','U-Trim / คิ้ว U','T-Trim / คิ้ว T',
   'Extra Clips / คลิปเพิ่ม','Cancelled / ยกเลิก'];
 
+// Firebase season root (bump to v3/... when a new season starts).
+var KP_FB = 'https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app/v2/';
+
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('KP')
     .addItem('Build / Update master', 'kpBuildMaster')
+    .addItem('Refresh Pre-Orders + Customers', 'kpRefreshData')
     .addToUi();
+}
+
+// Pull a node from the Firebase REST API (open read rules). Returns object or {}.
+function kpFetchFb_(node) {
+  try {
+    var res = UrlFetchApp.fetch(KP_FB + node + '.json', { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return {};
+    return JSON.parse(res.getContentText()) || {};
+  } catch (e) { return {}; }
+}
+
+// Manual refresh of the Firebase-pulled tabs (menu).
+function kpRefreshData() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  kpBuildPreOrders_(ss);
+  kpBuildCustomers_(ss);
+  ss.toast('Pre-Orders + Customers refreshed', 'KP', 5);
+}
+
+// Shared: dark header row + freeze.
+function kpHeader_(sh, H) {
+  sh.getRange(1, 1, 1, H.length).setValues([H])
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937').setWrap(true);
+  sh.setFrozenRows(1);
+}
+// Shared: clear old data rows, write new ones.
+function kpFill_(sh, rows, ncol) {
+  var last = sh.getLastRow();
+  if (last > 1) sh.getRange(2, 1, last - 1, Math.max(ncol, sh.getLastColumn())).clearContent();
+  if (rows.length) sh.getRange(2, 1, rows.length, ncol).setValues(rows);
+}
+// Shared: product lines → "KP009 x 10 · L009 x 5"
+function kpLiStr_(li) {
+  if (!li || !li.length) return '';
+  return li.filter(function(x){ return {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1,clips:1}[x.type]; })
+    .map(function(x){ return (x.code || '') + ' x ' + (x.qty || 0); }).join(' · ');
 }
 
 function kpBuildMaster() {
@@ -50,6 +90,8 @@ function kpBuildMaster() {
   kpBuildLines_(ss);
   kpBuildProducts_(ss);
   kpBuildReport_(ss);
+  kpBuildPreOrders_(ss);
+  kpBuildCustomers_(ss);
   // Summary tab is merged into the Monthly Report now → remove it if present
   var _sum = ss.getSheetByName('Summary'); if (_sum) { try { ss.deleteSheet(_sum); } catch(e) {} }
   ['Sheet1','Tabelle1','Blatt1','ชีต1','Sheet'].forEach(function(n){
@@ -213,112 +255,207 @@ function kpBuildProducts_(ss) {
 // (KP/K-PVC panels, L/T/U, clips sold+free+packs) plus a per-product table.
 // Reads the "Line Items" tab (Category col F, Qty col H, Amount col I).
 function kpBuildReport_(ss) {
-  var sh = ss.getSheetByName('Monthly Report') || ss.insertSheet('Monthly Report');
+  var sh = ss.getSheetByName('Report');
+  if (!sh) { sh = ss.getSheetByName('Monthly Report'); if (sh) sh.setName('Report'); else sh = ss.insertSheet('Report'); }
   sh.clear();
-  sh.setFrozenRows(3);
-  sh.getRange('A1').setValue('Monthly Report / รายงานต่อเดือน')
-    .setFontWeight('bold').setFontSize(13);
-  sh.getRange('A2').setValue('Month / เดือน:').setFontWeight('bold').setHorizontalAlignment('right');
+  sh.setFrozenRows(2);
+  sh.getRange('A1').setValue('Report / รายงาน').setFontWeight('bold').setFontSize(13);
 
-  // month dropdown (plain-text yyyy-MM), default = current month
-  var tz = ss.getSpreadsheetTimeZone(), months = [];
-  for (var i = 0; i < 36; i++)
-    months.push(Utilities.formatDate(new Date(2026, 5 + i, 1), tz, 'yyyy-MM'));
-  var rule = SpreadsheetApp.newDataValidation().requireValueInList(months, true).build();
-  sh.getRange('B2').setNumberFormat('@')            // keep as text, not auto-date
-    .setDataValidation(rule).setValue(Utilities.formatDate(new Date(), tz, 'yyyy-MM'))
-    .setFontWeight('bold').setBackground('#fff7cc').setHorizontalAlignment('center');
-
-  // helper (col F): first day of the chosen month, robust to text or date in B2
-  sh.getRange('F1').setFormula('=IFERROR(DATEVALUE($B$2&"-01"),DATE(YEAR($B$2),MONTH($B$2),1))')
-    .setNumberFormat('yyyy-mm-dd').setFontColor('#bbbbbb');
-
-  // month revenue total
-  sh.getRange('D2').setFormula(
-    '=IFERROR("Month total ฿: "&TEXT(SUMIFS(\'Line Items\'!$I:$I,'
-    + '\'Line Items\'!$B:$B,">="&$F$1,\'Line Items\'!$B:$B,"<"&EDATE($F$1,1)),"#,##0"),"")')
-    .setFontWeight('bold').setFontColor('#9a3412');
-
-  // ── Category summary (SUMIFS by Category col F, month on Date col B) ──
+  var tz = ss.getSpreadsheetTimeZone();
   var LI = "'Line Items'!";
-  function q(cat){ return '=SUMIFS(' + LI + '$H:$H,' + LI + '$F:$F,"' + cat + '",' + LI + '$B:$B,">="&$F$1,' + LI + '$B:$B,"<"&EDATE($F$1,1))'; }
-  function b(cat){ return '=SUMIFS(' + LI + '$I:$I,' + LI + '$F:$F,"' + cat + '",' + LI + '$B:$B,">="&$F$1,' + LI + '$B:$B,"<"&EDATE($F$1,1))'; }
 
-  sh.getRange('A4').setValue('Category / หมวด').setFontWeight('bold');
-  sh.getRange('B4').setValue('Qty / จำนวน').setFontWeight('bold');
-  sh.getRange('C4').setValue('Baht ฿').setFontWeight('bold');
-  sh.getRange('A4:C4').setFontColor('#ffffff').setBackground('#1f2937');
+  // helper (col G): chosen day with time stripped (for the daily block)
+  sh.getRange('G1').setFormula('=INT($C$3)').setNumberFormat('yyyy-mm-dd').setFontColor('#bbbbbb');
 
-  var rows = [
-    ['KP (panels)',        q('KP'),               b('KP')],
-    ['K-PVC (panels)',     q('K-PVC'),            b('K-PVC')],
-    ['>> Total panels',    '=B5+B6',              '=C5+C6'],
-    ['L-Corner',           q('L'),                b('L')],
-    ['T-Trim',             q('T'),                b('T')],
-    ['U-Trim',             q('U'),                b('U')],
-    ['>> Total L + T + U', '=B8+B9+B10',          '=C8+C9+C10'],
-    ['Clips sold (packs)',      q('Clip sold'),        b('Clip sold')],
-    ['  = sold pcs (x95)',      '=B12*95',             null],
-    ['Clips free /panel (pcs)', q('Clip free/panel'),  null],
-    ['Clips free gift (pcs)',   q('Clip free gift'),   null],
-    ['>> Given away (pcs)',     '=B14+B15',            null],
-    ['>> Total used (pcs)',     '=B13+B16',            null]
-  ];
-  for (var r = 0; r < rows.length; r++) {
-    var rr = 5 + r;
-    sh.getRange(rr, 1).setValue(rows[r][0]);
-    sh.getRange(rr, 2).setFormula(rows[r][1]);
-    if (rows[r][2]) sh.getRange(rr, 3).setFormula(rows[r][2]);
-  }
-  sh.getRange('B5:C17').setNumberFormat('#,##0');
-  [7, 11, 16, 17].forEach(function(rr){ sh.getRange(rr, 1, 1, 3).setFontWeight('bold').setBackground('#eef2ff'); });
+  // ── DAILY ──  pick a date in C3
+  sh.getRange('A3').setValue('DAILY / รายวัน').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange('B3').setValue('Day / วัน:').setFontWeight('bold').setHorizontalAlignment('right');
+  var today_ = new Date(); today_.setHours(0, 0, 0, 0);
+  sh.getRange('C3').setValue(today_).setNumberFormat('yyyy-mm-dd')   // dropdown set after the day list is built
+    .setFontWeight('bold').setBackground('#fff7cc').setHorizontalAlignment('center');
+  sh.getRange('D3').setFormula('=IFERROR("Day total ฿: "&TEXT(SUMIFS(' + LI + '$I:$I,' + LI + '$B:$B,">="&$G$1,' + LI + '$B:$B,"<"&($G$1+1)),"#,##0"),"")')
+    .setFontWeight('bold').setFontColor('#9a3412');
+  kpCatBlock_(sh, 4, '$G$1', '($G$1+1)', LI);          // daily: header row 4, data 5..17
 
-  // ── Detailed per-product table for the month ──
-  sh.getRange('A19').setValue('Per product / ต่อสินค้า').setFontWeight('bold');
-  sh.getRange('A20').setFormula(
+  // ── MONTHLY ──  pick a month in C19
+  var months = [];
+  for (var i = 0; i < 36; i++) months.push(Utilities.formatDate(new Date(2026, 5 + i, 1), tz, 'yyyy-MM'));
+  sh.getRange('A19').setValue('MONTHLY / รายเดือน').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange('B19').setValue('Month / เดือน:').setFontWeight('bold').setHorizontalAlignment('right');
+  sh.getRange('C19').setNumberFormat('@')
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(months, true).build())
+    .setValue(Utilities.formatDate(new Date(), tz, 'yyyy-MM'))
+    .setFontWeight('bold').setBackground('#fff7cc').setHorizontalAlignment('center');
+  sh.getRange('F1').setFormula('=IFERROR(DATEVALUE($C$19&"-01"),DATE(YEAR($C$19),MONTH($C$19),1))')
+    .setNumberFormat('yyyy-mm-dd').setFontColor('#bbbbbb');
+  sh.getRange('D19').setFormula('=IFERROR("Month total ฿: "&TEXT(SUMIFS(' + LI + '$I:$I,' + LI + '$B:$B,">="&$F$1,' + LI + '$B:$B,"<"&EDATE($F$1,1)),"#,##0"),"")')
+    .setFontWeight('bold').setFontColor('#9a3412');
+  kpCatBlock_(sh, 20, '$F$1', 'EDATE($F$1,1)', LI);    // monthly: header row 20, data 21..33
+
+  // ── Detailed per-product table for the chosen MONTH (spills at the bottom) ──
+  sh.getRange('A35').setValue('Per product (month) / ต่อสินค้า').setFontWeight('bold');
+  sh.getRange('A36').setFormula(
     '=IFERROR(QUERY(' + LI + 'A2:I,'
     + ' "select E, G, sum(H), sum(I)'
     + ' where B >= date \'"&TEXT($F$1,"yyyy-MM-dd")&"\''
     + ' and B < date \'"&TEXT(EDATE($F$1,1),"yyyy-MM-dd")&"\''
     + ' group by E, G order by sum(I) desc'
     + ' label E \'Code / รหัส\', G \'Grade\', sum(H) \'Qty / จำนวน\', sum(I) \'Revenue ฿ / ยอด\'",0),'
-    + ' "No sales this month / ไม่มีข้อมูลเดือนนี้")');
-  sh.getRange('A20:D20').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
-  sh.getRange('C21:D').setNumberFormat('#,##0');
+    + ' "No sales / ไม่มีข้อมูล")');
+  sh.getRange('A36:D36').setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  sh.getRange('C37:D').setNumberFormat('#,##0');
 
-  // ── All-months money overview (right side; replaces the old Summary tab) ──
-  var Z = KP_ZONES, nM = 36, oLast = 5 + nM;     // months in rows 6..41
+  // ── DAILY summary: each day of the chosen month + its revenue (cols H–J) ──
+  var Z = KP_ZONES, nM = 36, oLast = 5 + nM;
+  function sumDay(col, d){ return Z.map(function(z){ return "SUMIFS('"+z+"'!"+col+":"+col+",'"+z+"'!$B:$B,\">=\"&"+d+",'"+z+"'!$B:$B,\"<\"&("+d+"+1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
+  function cntDay(d){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+d+",'"+z+"'!$B:$B,\"<\"&("+d+"+1))"; }).join('+'); }
+  sh.getRange('H3').setValue('Days of month / รายวัน').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange(4, 8, 1, 3).setValues([['Day / วัน','Revenue ฿','Orders']])
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  var darr = [];
+  for (var d = 0; d < 31; d++) {
+    var rw = 5 + d;
+    darr.push([
+      '=IF($F$1+' + d + '<EDATE($F$1,1),$F$1+' + d + ',"")',
+      '=IF($H' + rw + '="","",' + sumDay('$P', '$H' + rw) + ')',
+      '=IF($H' + rw + '="","",' + cntDay('$H' + rw) + ')'
+    ]);
+  }
+  sh.getRange(5, 8, 31, 3).setFormulas(darr);
+  sh.getRange('H5:H35').setNumberFormat('dd.mm');
+  sh.getRange('I5:I35').setNumberFormat('#,##0');
+  sh.getRange('J5:J35').setNumberFormat('0');
+  // day dropdown (C3) = the days of the chosen month (from the list above)
+  sh.getRange('C3').setDataValidation(
+    SpreadsheetApp.newDataValidation().requireValueInRange(sh.getRange('H5:H35'), true).build());
+
+  // ── YEARLY: all-months money overview (cols N–R) ──
   function sumNC(col, m){ return Z.map(function(z){ return "SUMIFS('"+z+"'!"+col+":"+col+",'"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
   function cnt(m){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1))"; }).join('+'); }
-  sh.getRange('H3').setValue('All months / ทุกเดือน').setFontWeight('bold');
-  sh.getRange(4, 8, 1, 5).setValues([['Month / เดือน','Orders','Revenue ฿','Paid ฿','Outstanding ฿']])
+  sh.getRange('N3').setValue('YEARLY (all months) / รายปี').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange(4, 14, 1, 5).setValues([['Month / เดือน','Orders','Revenue ฿','Paid ฿','Outstanding ฿']])
     .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
   var mrows = [];
   for (var k = 0; k < nM; k++) mrows.push([new Date(2026, 5 + k, 1)]);
-  sh.getRange(6, 8, nM, 1).setValues(mrows).setNumberFormat('yyyy-mm');
-  sh.getRange('I6').setFormula('=IFERROR(' + cnt('$H6') + ',0)');
-  sh.getRange('J6').setFormula('=IFERROR(' + sumNC('$P', '$H6') + ',0)');   // Revenue = Total col P
-  sh.getRange('K6').setFormula('=IFERROR(' + sumNC('$Q', '$H6') + ',0)');   // Paid = Paid amount col Q
-  sh.getRange('L6').setFormula('=J6-K6');                                   // Outstanding
-  sh.getRange('I6:L6').copyTo(sh.getRange('I7:L' + oLast));
-  sh.getRange('H5').setValue('TOTAL');
-  sh.getRange('I5').setFormula('=SUM(I6:I' + oLast + ')');
-  sh.getRange('I5').copyTo(sh.getRange('J5:L5'));
-  sh.getRange('H5:L5').setFontWeight('bold').setBackground('#fde9c8');
-  sh.getRange('I5:L' + oLast).setNumberFormat('#,##0');
-  sh.getRange('I5:I' + oLast).setNumberFormat('0');
+  sh.getRange(6, 14, nM, 1).setValues(mrows).setNumberFormat('yyyy-mm');
+  sh.getRange('O6').setFormula('=IFERROR(' + cnt('$N6') + ',0)');
+  sh.getRange('P6').setFormula('=IFERROR(' + sumNC('$P', '$N6') + ',0)');   // Revenue = Total col P
+  sh.getRange('Q6').setFormula('=IFERROR(' + sumNC('$Q', '$N6') + ',0)');   // Paid = Paid amount col Q
+  sh.getRange('R6').setFormula('=P6-Q6');                                   // Outstanding
+  sh.getRange('O6:R6').copyTo(sh.getRange('O7:R' + oLast));
+  sh.getRange('N5').setValue('TOTAL');
+  sh.getRange('O5').setFormula('=SUM(O6:O' + oLast + ')');
+  sh.getRange('O5').copyTo(sh.getRange('P5:R5'));
+  sh.getRange('N5:R5').setFontWeight('bold').setBackground('#fde9c8');
+  sh.getRange('O5:R' + oLast).setNumberFormat('#,##0');
+  sh.getRange('O5:O' + oLast).setNumberFormat('0');
   var curM = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=TEXT($H6,"yyyy-mm")=TEXT(TODAY(),"yyyy-mm")')
+    .whenFormulaSatisfied('=TEXT($N6,"yyyy-mm")=TEXT(TODAY(),"yyyy-mm")')
     .setBackground('#fff7cc').setBold(true)
-    .setRanges([sh.getRange('H6:L' + oLast)]).build();
+    .setRanges([sh.getRange('N6:R' + oLast)]).build();
   sh.setConditionalFormatRules([curM]);
 
   sh.setColumnWidth(1, 175);
   sh.setColumnWidth(2, 100);
   sh.setColumnWidth(3, 120);
   sh.setColumnWidth(4, 130);
-  sh.setColumnWidth(8, 80);
-  sh.setColumnWidth(9, 70);
+  sh.setColumnWidth(8, 70);    // Days: Day
+  sh.setColumnWidth(9, 95);    // Days: Revenue
+  sh.setColumnWidth(10, 60);   // Days: Orders
+  sh.setColumnWidth(14, 80);   // Yearly: Month
+  sh.setColumnWidth(15, 70);   // Yearly: Orders
+}
+
+// Category summary block (KP/K-PVC panels, L/T/U, clips) for a date range.
+// hr = header row; dS/dE = start/end date refs (cell or expression strings).
+function kpCatBlock_(sh, hr, dS, dE, LI) {
+  var dr = hr + 1;   // first data row
+  function q(cat){ return '=SUMIFS(' + LI + '$H:$H,' + LI + '$F:$F,"' + cat + '",' + LI + '$B:$B,">="&' + dS + ',' + LI + '$B:$B,"<"&' + dE + ')'; }
+  function b(cat){ return '=SUMIFS(' + LI + '$I:$I,' + LI + '$F:$F,"' + cat + '",' + LI + '$B:$B,">="&' + dS + ',' + LI + '$B:$B,"<"&' + dE + ')'; }
+  sh.getRange(hr, 1).setValue('Category / หมวด').setFontWeight('bold');
+  sh.getRange(hr, 2).setValue('Qty / จำนวน').setFontWeight('bold');
+  sh.getRange(hr, 3).setValue('Baht ฿').setFontWeight('bold');
+  sh.getRange(hr, 1, 1, 3).setFontColor('#ffffff').setBackground('#1f2937');
+  var rKP=dr, rKPVC=dr+1, rL=dr+3, rT=dr+4, rU=dr+5, rCS=dr+7, rCSp=dr+8, rFP=dr+9, rFG=dr+10, rGA=dr+11;
+  var data = [
+    ['KP (panels)',             q('KP'),                  b('KP')],
+    ['K-PVC (panels)',          q('K-PVC'),               b('K-PVC')],
+    ['>> Total panels',         '=B'+rKP+'+B'+rKPVC,      '=C'+rKP+'+C'+rKPVC],
+    ['L-Corner',                q('L'),                   b('L')],
+    ['T-Trim',                  q('T'),                   b('T')],
+    ['U-Trim',                  q('U'),                   b('U')],
+    ['>> Total L + T + U',      '=B'+rL+'+B'+rT+'+B'+rU,  '=C'+rL+'+C'+rT+'+C'+rU],
+    ['Clips sold (packs)',      q('Clip sold'),           b('Clip sold')],
+    ['  = sold pcs (x95)',      '=B'+rCS+'*95',           null],
+    ['Clips free /panel (pcs)', q('Clip free/panel'),     null],
+    ['Clips free gift (pcs)',   q('Clip free gift'),      null],
+    ['>> Given away (pcs)',     '=B'+rFP+'+B'+rFG,        null],
+    ['>> Total used (pcs)',     '=B'+rCSp+'+B'+rGA,       null]
+  ];
+  for (var i = 0; i < data.length; i++) {
+    var rr = dr + i;
+    sh.getRange(rr, 1).setValue(data[i][0]);
+    sh.getRange(rr, 2).setFormula(data[i][1]);
+    if (data[i][2]) sh.getRange(rr, 3).setFormula(data[i][2]);
+  }
+  sh.getRange(dr, 2, 13, 2).setNumberFormat('#,##0');
+  [dr+2, dr+6, dr+11, dr+12].forEach(function(rr){ sh.getRange(rr, 1, 1, 3).setFontWeight('bold').setBackground('#eef2ff'); });
+}
+
+// Pre-Orders tab — snapshot of the app's preOrders node (pulled from Firebase).
+function kpBuildPreOrders_(ss) {
+  var sh = ss.getSheetByName('Pre Orders') || ss.insertSheet('Pre Orders');
+  var H = ['Pre-ID', 'Status', 'Zone / โซน', 'Customer / ลูกค้า', 'Phone / เบอร์',
+           'Contact / ช่องทาง', 'Address / ที่อยู่', 'Maps', 'Products / สินค้า',
+           'Notes / โน้ต', 'Created by / โดย', 'Created / สร้างเมื่อ', 'Converted to', 'Cancel reason'];
+  kpHeader_(sh, H);
+  var po = kpFetchFb_('preOrders');
+  var rows = Object.keys(po).map(function(id){
+    var p = po[id] || {};
+    return [p.id || id, p.status || '', p.zone || '', p.customer || '', p.phone || '',
+            p.contact || '', p.address || '', p.location || '', kpLiStr_(p.lineItems),
+            p.notes || '', p.createdBy || '', p.createdAt ? new Date(p.createdAt) : '',
+            p.convertedId || '', p.cancelReason || ''];
+  });
+  rows.sort(function(a, b){ return (b[11] ? b[11].getTime() : 0) - (a[11] ? a[11].getTime() : 0); });
+  kpFill_(sh, rows, H.length);
+  sh.getRange('L2:L').setNumberFormat('yyyy-mm-dd hh:mm');
+  sh.setColumnWidth(4, 160); sh.setColumnWidth(7, 220); sh.setColumnWidth(9, 220);
+  // red tint for cancelled pre-orders
+  var rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$B2="cancelled"').setBackground('#fde7e9')
+    .setRanges([sh.getRange('A2:N2000')]).build();
+  sh.setConditionalFormatRules([rule]);
+}
+
+// Customers tab + Blocklist tab — snapshot of customerMeta (pulled from Firebase).
+function kpBuildCustomers_(ss) {
+  var cm = kpFetchFb_('customerMeta');
+  var cs = ss.getSheetByName('Customers') || ss.insertSheet('Customers');
+  var H = ['Phone / เบอร์', 'Name / ชื่อ', 'Address / ที่อยู่', 'Note / โน้ต',
+           'Blocked? / บล็อก', 'Block reason / เหตุผล', 'Maps / Geo'];
+  kpHeader_(cs, H);
+  var rows = [], blk = [];
+  Object.keys(cm).forEach(function(k){
+    var m = cm[k] || {};
+    var geo = (m.geo && typeof m.geo.lat === 'number') ? (m.geo.lat + ',' + m.geo.lng) : (m.loc || '');
+    rows.push([k, m.name || '', m.address || '', m.note || '', m.blocked ? 'YES' : '', m.blockReason || '', geo]);
+    if (m.blocked) blk.push([k, m.name || '', m.blockReason || '']);
+  });
+  rows.sort(function(a, b){ return String(a[1]).localeCompare(String(b[1])); });
+  kpFill_(cs, rows, H.length);
+  cs.setColumnWidth(2, 160); cs.setColumnWidth(3, 240);
+  var redRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$E2="YES"').setBackground('#fde7e9')
+    .setRanges([cs.getRange('A2:G2000')]).build();
+  cs.setConditionalFormatRules([redRule]);
+
+  var bs = ss.getSheetByName('Blocklist') || ss.insertSheet('Blocklist');
+  var BH = ['Phone / เบอร์', 'Name / ชื่อ', 'Block reason / เหตุผล'];
+  kpHeader_(bs, BH);
+  blk.sort(function(a, b){ return String(a[1]).localeCompare(String(b[1])); });
+  kpFill_(bs, blk, BH.length);
+  bs.setColumnWidth(2, 160); bs.setColumnWidth(3, 260);
 }
 
 
