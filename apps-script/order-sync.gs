@@ -8,17 +8,17 @@
  *   paste it into index.html  var SHEETS_WEBAPP_URL = '...'
  *
  * One row per order, upserted by Order No (col A) into the order's
- * zone tab. Writes all 37 columns A–AK (Outstanding col Q is a value,
+ * zone tab. Writes all 38 columns A–AL (Outstanding col Q is a value,
  * not a formula). Column order/headers must match master-build.gs.
  */
 
 var TOKEN = 'kp-7h3x9q2'; // must equal SHEETS_TOKEN in index.html
 
-// Column order (index = column − 1). 37 columns A–AK. MUST match KP_HEADERS
-// order in master-build.gs. Unmapped app fields (paid) are ignored.
+// Column order (index = column − 1). 38 columns A–AL. MUST match KP_HEADERS
+// order in master-build.gs.
 var KP_COLS = ['orderNo','date','status','prio','products','panelsA','panelsB','lcorner',
   'utrim','ttrim','extraClips','freeClips','shipping','discount','total','paidAmount',
-  'outstanding','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
+  'outstanding','paid','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
   'address','maps','deliveredBy','deliveredOn','time','deliveryRound','carrier','tracking',
   'ctnBundle','takenBy','editedBy','cancelReason','notes'];
 
