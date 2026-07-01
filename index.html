@@ -1328,6 +1328,14 @@ textarea{resize:none}
       <div class="mbox"><div class="mbox-l">Total Clips / คลิปรวม</div><div class="mbox-v" id="of-sales-clips">0</div><div class="mbox-s">pcs / ชิ้น</div></div>
       <div class="mbox"><div class="mbox-l">Total Orders / ออเดอร์</div><div class="mbox-v" id="of-sales-orders">0</div><div class="mbox-s">this month</div></div>
     </div>
+    <!-- Sales by zone toggle -->
+    <button type="button" onclick="toggleSalesDetail('zone')" style="display:flex;align-items:center;justify-content:space-between;width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;cursor:pointer;margin-bottom:8px">
+      <span style="font-size:13px;font-weight:600;color:var(--text)"><i class="ti ti-map-pin" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--green)"></i>Sales by zone / แยกตามโซน</span>
+      <i class="ti ti-chevron-down" id="of-zone-chevron" style="font-size:16px;color:var(--text2);transition:transform 0.2s"></i>
+    </button>
+    <div id="of-sales-zone-detail" style="display:none;margin-bottom:8px">
+      <div id="of-sales-zone-list"><div class="empty" style="padding:1rem;font-size:13px">No data yet</div></div>
+    </div>
     <!-- Panel breakdown toggle -->
     <button type="button" onclick="toggleSalesDetail('panel')" style="display:flex;align-items:center;justify-content:space-between;width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;cursor:pointer;margin-bottom:8px">
       <span style="font-size:13px;font-weight:600;color:var(--text)"><i class="ti ti-layout-grid" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>Panels by code / แยกตามรหัส</span>
@@ -2968,6 +2976,45 @@ function ofRenderSales() {
   var monthRevenue = filteredAll.reduce(function(a,o){ return a+(parseFloat((o.total||'0').toString().replace(/[^0-9.]/g,''))||0); },0);
   renderRoadTracker(monthRevenue);
 
+  // ── Sales by zone (grouped by order-id prefix, same as Sheets routing) ──
+  const ZONE_DEFS = [
+    {key:'Bangkok',   label:'Bangkok / กรุงเทพ',  emoji:'🏙️', test:function(id){return id.charAt(0)==='#';}},
+    {key:'North',     label:'North / เหนือ',       emoji:'⛰️', test:function(id){return id.indexOf('1-')===0;}},
+    {key:'Northeast', label:'Northeast / อีสาน',   emoji:'🌾', test:function(id){return id.indexOf('2-')===0;}},
+    {key:'East',      label:'East / ตะวันออก',     emoji:'🌊', test:function(id){return id.indexOf('3-')===0;}},
+    {key:'South',     label:'South / ใต้',         emoji:'🏝️', test:function(id){return id.indexOf('4-')===0;}},
+    {key:'Instore',   label:'Instore / หน้าร้าน',  emoji:'🏬', test:function(id){return id.indexOf('5-')===0;}}
+  ];
+  const zoneAgg = {};
+  ZONE_DEFS.forEach(function(z){ zoneAgg[z.key]={panels:0,baht:0,orders:0}; });
+  filteredAll.forEach(function(o){
+    var id=String(o.id||'').trim();
+    var def=ZONE_DEFS.find(function(z){return z.test(id);});
+    if(!def) return;
+    var a=zoneAgg[def.key];
+    a.orders++;
+    a.baht += parseFloat((o.total||'0').toString().replace(/[^0-9.]/g,''))||0;
+    if(o.panels && o.panels!=='—'){
+      o.panels.split('·').forEach(function(p){
+        var m=p.trim().match(/^([A-Z0-9\-]+)\s*[×x]\s*(\d+)/i);
+        if(m){ var code=m[1].toUpperCase(); if(/^CL/.test(code)) return; a.panels+=parseInt(m[2]); }
+      });
+    }
+  });
+  document.getElementById('of-sales-zone-list').innerHTML = ZONE_DEFS.map(function(z,i){
+    var a=zoneAgg[z.key];
+    return '<div style="border:1px solid var(--border);border-radius:var(--r);margin-bottom:6px;overflow:hidden">'
+      +'<button type="button" onclick="ofToggleZone('+i+')" style="display:flex;align-items:center;justify-content:space-between;width:100%;background:var(--bg);border:none;padding:11px 14px;cursor:pointer">'
+        +'<span style="font-size:13px;font-weight:600;color:var(--text)">'+z.emoji+' '+z.label+'</span>'
+        +'<span style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:var(--text2)">'+a.orders+' orders</span><i class="ti ti-chevron-down" id="of-zone-chev-'+i+'" style="font-size:15px;color:var(--text2);transition:transform 0.2s"></i></span>'
+      +'</button>'
+      +'<div id="of-zone-body-'+i+'" style="display:none;padding:10px 14px;background:var(--bg2)">'
+        +'<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span style="color:var(--text2)">Total Panels / แผ่นรวม</span><span style="font-weight:700;color:var(--text)">'+a.panels.toLocaleString()+' pcs</span></div>'
+        +'<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text2)">Total Sales / ยอดขาย</span><span style="font-weight:700;color:var(--green)">'+a.baht.toLocaleString()+' ฿</span></div>'
+      +'</div>'
+    +'</div>';
+  }).join('');
+
   // All-time totals per code
   const allTimePanels = {}, allTimeLcorner = {};
   orders.filter(o=>o.status==='delivered').forEach(o => {
@@ -3348,6 +3395,13 @@ function toggleSalesDetail(type) {
   const isOpen = detail.style.display !== 'none';
   detail.style.display = isOpen ? 'none' : 'block';
   if(chevron) chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+function ofToggleZone(i) {
+  var b=document.getElementById('of-zone-body-'+i), c=document.getElementById('of-zone-chev-'+i);
+  if(!b) return;
+  var open=b.style.display!=='none';
+  b.style.display=open?'none':'block';
+  if(c) c.style.transform=open?'':'rotate(180deg)';
 }
 
 
