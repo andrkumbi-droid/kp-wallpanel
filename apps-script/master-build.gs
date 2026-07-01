@@ -307,7 +307,7 @@ function kpBuildReport_(ss) {
   // ── DAILY summary: each day of the chosen month + its revenue (cols H–J) ──
   var Z = KP_ZONES, nM = 36, oLast = 5 + nM;
   function sumDay(col, d){ return Z.map(function(z){ return "SUMIFS('"+z+"'!"+col+":"+col+",'"+z+"'!$B:$B,\">=\"&"+d+",'"+z+"'!$B:$B,\"<\"&("+d+"+1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
-  function cntDay(d){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+d+",'"+z+"'!$B:$B,\"<\"&("+d+"+1))"; }).join('+'); }
+  function cntDay(d){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+d+",'"+z+"'!$B:$B,\"<\"&("+d+"+1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
   sh.getRange('H3').setValue('Days of month / รายวัน').setFontWeight('bold').setFontColor('#1d4ed8');
   sh.getRange(4, 8, 1, 3).setValues([['Day / วัน','Revenue ฿','Orders']])
     .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
@@ -330,7 +330,7 @@ function kpBuildReport_(ss) {
 
   // ── YEARLY: all-months money overview (cols N–R) ──
   function sumNC(col, m){ return Z.map(function(z){ return "SUMIFS('"+z+"'!"+col+":"+col+",'"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
-  function cnt(m){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1))"; }).join('+'); }
+  function cnt(m){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
   sh.getRange('N3').setValue('YEARLY (all months) / รายปี').setFontWeight('bold').setFontColor('#1d4ed8');
   sh.getRange(4, 14, 1, 5).setValues([['Month / เดือน','Orders','Revenue ฿','Paid ฿','Outstanding ฿']])
     .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
@@ -366,7 +366,7 @@ function kpBuildReport_(ss) {
     .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
   var dzArr = Z.map(function(z){
     return [ z,
-      '=COUNTIFS(\'' + z + '\'!$B:$B,">="&$V$3,\'' + z + '\'!$B:$B,"<"&($V$3+1))',
+      '=COUNTIFS(\'' + z + '\'!$B:$B,">="&$V$3,\'' + z + '\'!$B:$B,"<"&($V$3+1),\'' + z + '\'!$C:$C,"<>Cancelled")',
       '=SUMIFS(\'' + z + '\'!$P:$P,\'' + z + '\'!$B:$B,">="&$V$3,\'' + z + '\'!$B:$B,"<"&($V$3+1),\'' + z + '\'!$C:$C,"<>Cancelled")' ];
   });
   sh.getRange(5, DZ, Z.length, 3).setValues(dzArr);
@@ -386,7 +386,7 @@ function kpBuildReport_(ss) {
   var mStart = 'DATEVALUE($Z$3&"-01")';
   var mzArr = Z.map(function(z){
     return [ z,
-      '=COUNTIFS(\'' + z + '\'!$B:$B,">="&' + mStart + ',\'' + z + '\'!$B:$B,"<"&EDATE(' + mStart + ',1))',
+      '=COUNTIFS(\'' + z + '\'!$B:$B,">="&' + mStart + ',\'' + z + '\'!$B:$B,"<"&EDATE(' + mStart + ',1),\'' + z + '\'!$C:$C,"<>Cancelled")',
       '=SUMIFS(\'' + z + '\'!$P:$P,\'' + z + '\'!$B:$B,">="&' + mStart + ',\'' + z + '\'!$B:$B,"<"&EDATE(' + mStart + ',1),\'' + z + '\'!$C:$C,"<>Cancelled")' ];
   });
   sh.getRange(5, YZ, Z.length, 3).setValues(mzArr);

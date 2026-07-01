@@ -255,6 +255,7 @@ textarea{resize:none}
 .wh-new-badge{background:var(--red);color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:20px;margin-left:6px;animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
 @keyframes blink{0%,100%{box-shadow:0 0 0 0 rgba(124,58,237,0)}50%{box-shadow:0 0 14px 2px rgba(124,58,237,0.55)}}
+@keyframes glowGold{0%,100%{box-shadow:0 0 0 0 rgba(202,138,4,0)}50%{box-shadow:0 0 16px 3px rgba(202,138,4,0.75)}}
 #pay-breakdown summary{list-style:none;outline:none}
 #pay-breakdown summary::-webkit-details-marker{display:none}
 @keyframes kpFloat{0%{transform:translateY(0) scale(1);opacity:1}100%{transform:translateY(-160px) scale(1.3);opacity:0}}
@@ -510,6 +511,7 @@ textarea{resize:none}
         try{if(document.getElementById('mgv-stock').classList.contains('active'))mgRevenue();}catch(e){}
         try{if(document.getElementById('ofv-sales').classList.contains('active'))ofRenderRevenue();}catch(e){}
         try{var _ac=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _el=document.getElementById('of-cnt');_el.textContent=_ac.length;_el.style.display=_ac.length>0?'':'none';ofUpdPrioCnt();}catch(e){}
+        try{ofUpdTourDot();}catch(e){}
         try{payUpdateBadge();}catch(e){}
         try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
         try{if(document.getElementById('ofv-sales')&&document.getElementById('ofv-sales').classList.contains('active'))ofDailyRender();}catch(e){}
@@ -1031,7 +1033,7 @@ textarea{resize:none}
       <button type="button" class="tab active" onclick="oft('home')" id="oft-home" style="flex-shrink:0"><i class="ti ti-home" style="font-size:14px"></i></button>
       <button type="button" class="tab" onclick="oft('new')" id="oft-new" style="flex-shrink:0">New Order</button>
       <button type="button" class="tab" onclick="oft('orders')" id="oft-orders" style="flex-shrink:0">Orders <span class="tc tcw" id="of-cnt">0</span><span id="of-prio-cnt" style="display:none;background:#7c3aed;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:3px">0</span><span id="of-alert-dot" class="alert-dot" title="Packing problem / แพ็คไม่ได้"></span></button>
-      <button type="button" class="tab" onclick="oft('tour')" id="oft-tour" style="flex-shrink:0">Tour</button>
+      <button type="button" class="tab" onclick="oft('tour')" id="oft-tour" style="flex-shrink:0">Tour<span id="oft-tour-dot" class="alert-dot" style="background:#ca8a04" title="Zone ready for tour / โซนพร้อมจัดทัวร์"></span></button>
       <button type="button" class="tab" onclick="oft('pics')" id="oft-pics" style="flex-shrink:0">Pictures</button>
       <button type="button" class="tab" onclick="oft('preorder')" id="oft-preorder" style="display:none;flex-shrink:0">Pre-Orders <span class="tc" id="oft-po-cnt" style="background:#fef3c7;color:#92400e;display:none"></span></button>
       <button type="button" class="tab" onclick="oft('stock')" id="oft-stock" style="flex-shrink:0">Stock</button>
@@ -4298,7 +4300,15 @@ function ofIncCard(c) {
   return html;
 }
 
+// Blinking dot on the Tour tab when a zone has >100k ฿ of READY orders (tour can start).
+function ofUpdTourDot(){
+  var byZone={};
+  (orders||[]).forEach(function(o){ if(o.status==='ready'){ var z=o.zone||'?'; byZone[z]=(byZone[z]||0)+ofOrderTotalNum(o); } });
+  var hot=Object.keys(byZone).some(function(z){ return byZone[z]>100000; });
+  var el=document.getElementById('oft-tour-dot'); if(el){ if(hot) el.classList.add('on'); else el.classList.remove('on'); }
+}
 function ofRenderTour(){
+  ofUpdTourDot();
   // OVERVIEW: all ready + loaded orders with driver assignment
   var overviewEl = document.getElementById('of-tour-overview');
   if(overviewEl) {
@@ -4312,7 +4322,7 @@ function ofRenderTour(){
       var zones = {};
       waitingOrders.forEach(function(o) {
         var z = o.zone||'Unknown';
-        if(!zones[z]) zones[z] = {orders:0, panels:0, ctn:0, bundle:0};
+        if(!zones[z]) zones[z] = {orders:0, panels:0, ctn:0, bundle:0, readyBaht:0};
         zones[z].orders++;
         // Count panels from lineItems
         var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';})
@@ -4321,6 +4331,8 @@ function ofRenderTour(){
         zones[z].panels += panels;
         zones[z].ctn += parseInt(o.ctn)||0;
         zones[z].bundle += parseInt(o.bundle)||0;
+        // Ready-to-tour amount: only 'ready' orders count → drops once sent (loaded).
+        if(o.status==='ready') zones[z].readyBaht += ofOrderTotalNum(o);
       });
       var zoneColors = {
         'Bangkok':'var(--blue)','Northern':'#8b5cf6','Northeastern':'#f59e0b',
@@ -4333,10 +4345,16 @@ function ofRenderTour(){
         +Object.keys(zones).map(function(z){
           var d = zones[z];
           var c = zoneColors[z]||'var(--text2)';
-          return '<div style="background:var(--bg);border:1.5px solid var(--border);border-left:4px solid '+c+';border-radius:var(--rs);padding:8px 10px">'
+          // Ready-amount thresholds: ≥80k = yellow, >100k = gold + glow (tour can start).
+          var bg='var(--bg)', style='';
+          if(d.readyBaht>100000){ bg='#fde047'; style='animation:glowGold 1s infinite;'; }
+          else if(d.readyBaht>=80000){ bg='#fef9c3'; }
+          var amtCol = d.readyBaht>=80000 ? '#854d0e' : 'var(--text2)';
+          return '<div style="background:'+bg+';border:1.5px solid var(--border);border-left:4px solid '+c+';border-radius:var(--rs);padding:8px 10px;'+style+'">'
             +'<div style="font-size:11px;font-weight:700;color:'+c+'">'+z+'</div>'
             +'<div style="font-size:13px;font-weight:700;margin-top:2px">'+d.orders+' order'+(d.orders!==1?'s':'')+'</div>'
             +'<div style="font-size:11px;color:var(--text2)">'+d.panels.toLocaleString()+' panels'+(d.ctn>0?' · <span style="color:#16A34A;font-weight:600">'+d.ctn+' CTN</span>':'')+(d.bundle>0?' · <span style="color:#ea580c;font-weight:600">'+d.bundle+' มัด</span>':'')+'</div>'
+            +'<div style="font-size:12px;font-weight:700;margin-top:2px;color:'+amtCol+'">💰 '+d.readyBaht.toLocaleString()+' ฿ <span style="font-size:10px;font-weight:500;color:var(--text2)">ready</span></div>'
             +'</div>';
         }).join('')
         +'</div></div>';
@@ -6167,7 +6185,8 @@ function kpFlatOrder(o){
     deliveryRound:o.deliveryRound||'', takenBy:o.createdBy||'', editedBy:o.editedBy||'',
     receiptNo:o.receiptNum||'', cancelReason:o.cancelReason||o.cancelledReason||'', notes:o.notes||'',
     // per-product lines for the "Line Items" / Products report (panels, corners, trims, clips incl. free)
-    lines:(li||[]).filter(function(x){return {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1,clips:1,'free-clips':1,'free-gift-clips':1}[x.type];}).map(function(x){
+    // Cancelled orders send NO line items → excluded from category/per-product report totals.
+    lines:cancelled?[]:(li||[]).filter(function(x){return {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1,clips:1,'free-clips':1,'free-gift-clips':1}[x.type];}).map(function(x){
       var t=x.type, code=String(x.code||'').toUpperCase();
       var cat = t==='panel' ? (code.indexOf('K-PVC')===0?'K-PVC':'KP')
         : t==='lcorner' ? 'L'
