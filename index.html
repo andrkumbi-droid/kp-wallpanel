@@ -9264,6 +9264,9 @@ function calcViz() {
       <span style="font-size:12px;font-weight:700">📦 Products / สินค้าในตู้</span>
       <button type="button" onclick="clAddLine()" style="background:var(--blue);color:#fff;border:none;border-radius:var(--rs);padding:5px 10px;font-size:12px;cursor:pointer"><i class="ti ti-plus"></i> Add</button>
     </div>
+    <div style="display:grid;grid-template-columns:1.3fr 1fr 0.8fr 0.9fr 28px;gap:5px;margin-bottom:3px;font-size:10px;color:var(--text2);font-weight:700">
+      <span>Code</span><span>Qty (pcs)</span><span>CTN</span><span>pcs/CTN</span><span></span>
+    </div>
     <div id="clog-lines"></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 6px">
       <span style="font-size:12px;font-weight:700">🧑‍🤝‍🧑 Unload helpers / คนขนของ <span style="font-size:11px;color:var(--text2);font-weight:400">(per container / ต่อตู้)</span></span>
@@ -9847,12 +9850,15 @@ function clFmtD(d) {
   if(isNaN(dt)) return d;
   return dt.getDate().toString().padStart(2,'0')+'/'+(dt.getMonth()+1).toString().padStart(2,'0')+'/'+dt.getFullYear();
 }
-function clAddLine(code, qty) {
+function clAddLine(code, qty, ctn, pcsPerCtn) {
   var d = document.createElement('div');
-  d.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 32px;gap:6px;margin-bottom:6px;align-items:center';
-  d.innerHTML = '<input type="text" placeholder="Code (KP009, L001...)" oninput="this.value=this.value.toUpperCase()" value="'+(code||'')+'" style="padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px">'
-    +'<input type="number" placeholder="Qty (pcs)" min="0" value="'+(qty||'')+'" style="padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px">'
-    +'<button type="button" onclick="this.parentElement.remove()" style="width:32px;height:36px;border:1px solid #FEE2E2;background:#FEE2E2;border-radius:var(--rs);cursor:pointer;color:#DC2626;font-size:16px">×</button>';
+  d.style.cssText = 'display:grid;grid-template-columns:1.3fr 1fr 0.8fr 0.9fr 28px;gap:5px;margin-bottom:6px;align-items:center';
+  var inp='padding:8px 6px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;min-width:0';
+  d.innerHTML = '<input type="text" placeholder="Code" oninput="this.value=this.value.toUpperCase()" value="'+(code||'')+'" style="'+inp+'">'
+    +'<input type="number" placeholder="Qty (pcs)" min="0" value="'+(qty||'')+'" style="'+inp+'">'
+    +'<input type="number" placeholder="CTN" min="0" value="'+(ctn!=null&&ctn!==''?ctn:'')+'" style="'+inp+'">'
+    +'<input type="number" placeholder="pcs/CTN" min="0" value="'+(pcsPerCtn!=null&&pcsPerCtn!==''?pcsPerCtn:'')+'" style="'+inp+'">'
+    +'<button type="button" onclick="this.parentElement.remove()" style="width:28px;height:36px;border:1px solid #FEE2E2;background:#FEE2E2;border-radius:var(--rs);cursor:pointer;color:#DC2626;font-size:16px">×</button>';
   document.getElementById('clog-lines').appendChild(d);
 }
 
@@ -10064,16 +10070,19 @@ function clCard(c, isPending) {
   if(items.length) {
     var dropId = 'cl-drop-'+c.id;
     var totalPcs = items.reduce(function(a,i){return a+(parseInt(i.qty)||0);},0);
+    var totalCtn = items.reduce(function(a,i){return a+(parseInt(i.ctn)||0);},0);
     html += '<details style="margin-bottom:8px" id="'+dropId+'">'
       +'<summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--blue);background:var(--blue-bg);border-radius:var(--rs);padding:6px 10px;list-style:none;display:flex;justify-content:space-between;align-items:center">'
       +'<span>📦 '+items.length+' product'+(items.length>1?'s':'')+' / สินค้า</span>'
-      +'<span style="font-weight:400;color:var(--text2)">'+totalPcs.toLocaleString()+' pcs total ▾</span>'
+      +'<span style="font-weight:400;color:var(--text2)">'+totalPcs.toLocaleString()+' pcs'+(totalCtn>0?' · '+totalCtn.toLocaleString()+' CTN':'')+' ▾</span>'
       +'</summary>'
       +'<div style="background:var(--bg2);border-radius:0 0 var(--rs) var(--rs);padding:6px 10px">'
       + items.map(function(i){
+          var ctnN=parseInt(i.ctn)||0, perN=parseInt(i.pcsPerCtn)||0;
+          var ctnTxt = ctnN>0 ? ' <span style="color:#16A34A;font-weight:600">· '+ctnN+' CTN'+(perN>0?' ×'+perN:'')+'</span>' : '';
           return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)">'
             +'<span style="font-weight:600">'+i.code+'</span>'
-            +'<span style="color:var(--green);font-weight:700">'+parseInt(i.qty).toLocaleString()+' pcs</span></div>';
+            +'<span style="color:var(--green);font-weight:700">'+parseInt(i.qty).toLocaleString()+' pcs'+ctnTxt+'</span></div>';
         }).join('')
       +'</div></details>';
   }
@@ -10195,7 +10204,7 @@ function openCL(id) {
   // Product lines
   document.getElementById('clog-lines').innerHTML = '';
   if(c && c.items && c.items.length) {
-    c.items.forEach(function(i){ clAddLine(i.code, i.qty); });
+    c.items.forEach(function(i){ clAddLine(i.code, i.qty, i.ctn, i.pcsPerCtn); });
   } else {
     clAddLine();
   }
@@ -10254,7 +10263,9 @@ function saveCL() {
     var inputs = row.querySelectorAll('input');
     var code = (inputs[0]&&inputs[0].value||'').trim().toUpperCase();
     var qty = parseInt(inputs[1]&&inputs[1].value||0)||0;
-    if(code && qty) items.push({code:code, qty:qty});
+    var ctn = parseInt(inputs[2]&&inputs[2].value||0)||0;
+    var pcsPerCtn = parseInt(inputs[3]&&inputs[3].value||0)||0;
+    if(code && qty) items.push({code:code, qty:qty, ctn:ctn, pcsPerCtn:pcsPerCtn});
   });
   // Unload helpers: one or more groups (group · persons × per-person)
   var helperGroups = [];
