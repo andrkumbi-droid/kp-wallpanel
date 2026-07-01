@@ -3763,7 +3763,8 @@ function ofCreate(){
   let no = document.getElementById('of-no').value.trim();
   if(!no){alert('Please generate an order number first / กดปุ่มสีเขียวเพื่อสร้างเลข');return;}
   // Required customer fields — name, address, phone, contact channel.
-  var _req=[
+  // Instore / หน้าร้าน sales are walk-ins: no customer details needed.
+  var _req = (zoneVal==='Instore') ? [] : [
     {el:'of-cust',    label:'Name / ชื่อ'},
     {el:'of-phone',   label:'Phone / เบอร์โทร'},
     {el:'of-addr',    label:'Address / ที่อยู่'},
@@ -3945,7 +3946,10 @@ function ofOrderCard(o){
   s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> '+o.address+'</div>';
   if(o.contact) s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-message-circle" style="font-size:12px;vertical-align:-1px"></i> '+o.contact+'</div>';
   if(o.deliveryRound) s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-calendar" style="font-size:12px;vertical-align:-1px"></i> '+o.deliveryRound+'</div>';
-  s += '<div style="font-size:13px;margin-top:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+(o.bundle&&o.bundle>0?' <span style="background:#fff7ed;color:#ea580c;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">🧶 '+o.bundle+' มัด</span>':'')+'</div>';
+  s += '<div style="display:flex;align-items:flex-start;gap:8px;margin-top:4px">'
+    +'<div style="font-size:13px;flex:1;min-width:0">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+(o.bundle&&o.bundle>0?' <span style="background:#fff7ed;color:#ea580c;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">🧶 '+o.bundle+' มัด</span>':'')+'</div>'
+    +'<button type="button" class="btnsm" onclick="ofCopyPack(\''+o.id+'\',this)" title="Copy pack list / คัดลอก" style="flex-shrink:0;padding:4px 8px"><i class="ti ti-copy"></i></button>'
+    +'</div>';
   s += noteHTML;
   s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span style="font-size:14px;font-weight:700">'+o.total+'</span><span style="font-size:11px;color:#888">'+fmtD(o.date)+'</span></div>';
   var _depN=parseFloat(o.deposit)||0;
@@ -4003,6 +4007,40 @@ function ofPaidAmt(id, val){
 function ofPaidToggle(id, checked){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
   ofPaidAmt(id, checked ? ofOrderTotalNum(o) : 0);
+}
+// Copy the pack list (order no + products + total clips), no emoji:
+//   @All <id>
+//   <code> - <qty>
+//   CL - <total clips>
+function ofCopyPack(id, btn){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  var lines=['@All '+o.id];
+  var PRIO={panel:0,lcorner:1,ttrim:2,tedge:2,utrim:3,uedge:3};
+  var items=(o.lineItems||[]).filter(function(li){return PRIO[li.type]!=null && (parseInt(li.qty)||0)>0;});
+  if(items.length){
+    items.slice().sort(function(a,b){return PRIO[a.type]-PRIO[b.type];}).forEach(function(li){
+      lines.push(String(li.code||'').toUpperCase()+' - '+(parseInt(li.qty)||0));
+    });
+  } else {
+    // Fallback for orders without lineItems: parse the panels + lcorner strings.
+    [o.panels,o.lcorner].forEach(function(str){
+      if(!str||str==='—') return;
+      str.split('·').forEach(function(p){
+        var m=p.trim().match(/^(.+?)\s*[×x]\s*(\d+)/);
+        if(m) lines.push(m[1].trim().toUpperCase()+' - '+parseInt(m[2]));
+      });
+    });
+  }
+  var clips=parseInt(o.clips)||0;
+  if(clips>0) lines.push('CL - '+clips);
+  var text=lines.join('\n');
+  function done(){ if(btn){ var old=btn.innerHTML; btn.innerHTML='<i class="ti ti-check"></i>'; setTimeout(function(){ btn.innerHTML=old; },1500); } }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(function(){ _ofCopyFallback(text); done(); });
+  } else { _ofCopyFallback(text); done(); }
+}
+function _ofCopyFallback(text){
+  try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }catch(e){}
 }
 function ofPayMethodSel(id, m){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
