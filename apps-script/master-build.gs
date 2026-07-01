@@ -262,6 +262,11 @@ function kpBuildReport_(ss) {
 
   var tz = ss.getSpreadsheetTimeZone();
   var LI = "'Line Items'!";
+  // Grand-total (col P) sums per zone — same basis as the app + Days/Yearly columns
+  // (incl. shipping, after discount, excl. cancelled). Used for Day/Month total.
+  var _Zp = KP_ZONES;
+  var _sumPday = _Zp.map(function(z){ return "SUMIFS('"+z+"'!$P:$P,'"+z+"'!$B:$B,\">=\"&$G$1,'"+z+"'!$B:$B,\"<\"&($G$1+1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+');
+  var _sumPmonth = _Zp.map(function(z){ return "SUMIFS('"+z+"'!$P:$P,'"+z+"'!$B:$B,\">=\"&$F$1,'"+z+"'!$B:$B,\"<\"&EDATE($F$1,1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+');
 
   // helper (col G): chosen day with time stripped (for the daily block)
   sh.getRange('G1').setFormula('=INT($C$3)').setNumberFormat('yyyy-mm-dd').setFontColor('#bbbbbb');
@@ -272,7 +277,7 @@ function kpBuildReport_(ss) {
   var today_ = new Date(); today_.setHours(0, 0, 0, 0);
   sh.getRange('C3').setValue(today_).setNumberFormat('yyyy-mm-dd')   // dropdown set after the day list is built
     .setFontWeight('bold').setBackground('#fff7cc').setHorizontalAlignment('center');
-  sh.getRange('D3').setFormula('=IFERROR("Day total ฿: "&TEXT(SUMIFS(' + LI + '$I:$I,' + LI + '$B:$B,">="&$G$1,' + LI + '$B:$B,"<"&($G$1+1)),"#,##0"),"")')
+  sh.getRange('D3').setFormula('=IFERROR("Day total ฿: "&TEXT(' + _sumPday + ',"#,##0"),"")')
     .setFontWeight('bold').setFontColor('#9a3412');
   kpCatBlock_(sh, 4, '$G$1', '($G$1+1)', LI);          // daily: header row 4, data 5..17
 
@@ -287,7 +292,7 @@ function kpBuildReport_(ss) {
     .setFontWeight('bold').setBackground('#fff7cc').setHorizontalAlignment('center');
   sh.getRange('F1').setFormula('=IFERROR(DATEVALUE($C$19&"-01"),DATE(YEAR($C$19),MONTH($C$19),1))')
     .setNumberFormat('yyyy-mm-dd').setFontColor('#bbbbbb');
-  sh.getRange('D19').setFormula('=IFERROR("Month total ฿: "&TEXT(SUMIFS(' + LI + '$I:$I,' + LI + '$B:$B,">="&$F$1,' + LI + '$B:$B,"<"&EDATE($F$1,1)),"#,##0"),"")')
+  sh.getRange('D19').setFormula('=IFERROR("Month total ฿: "&TEXT(' + _sumPmonth + ',"#,##0"),"")')
     .setFontWeight('bold').setFontColor('#9a3412');
   kpCatBlock_(sh, 20, '$F$1', 'EDATE($F$1,1)', LI);    // monthly: header row 20, data 21..33
 
@@ -442,16 +447,19 @@ function kpCatBlock_(sh, hr, dS, dE, LI) {
     ['Clips free /panel (pcs)', q('Clip free/panel'),     null],
     ['Clips free gift (pcs)',   q('Clip free gift'),      null],
     ['>> Given away (pcs)',     '=B'+rFP+'+B'+rFG,        null],
-    ['>> Total used (pcs)',     '=B'+rCSp+'+B'+rGA,       null]
+    ['>> Total used (pcs)',     '=B'+rCSp+'+B'+rGA,       null],
+    ['รวมมูลค่าสินค้า (ไม่รวมค่าส่ง/ส่วนลด) · Goods value only', null, '=C'+(dr+2)+'+C'+(dr+6)]
   ];
   for (var i = 0; i < data.length; i++) {
     var rr = dr + i;
     sh.getRange(rr, 1).setValue(data[i][0]);
-    sh.getRange(rr, 2).setFormula(data[i][1]);
+    if (data[i][1]) sh.getRange(rr, 2).setFormula(data[i][1]);
     if (data[i][2]) sh.getRange(rr, 3).setFormula(data[i][2]);
   }
-  sh.getRange(dr, 2, 13, 2).setNumberFormat('#,##0');
+  sh.getRange(dr, 2, 14, 2).setNumberFormat('#,##0');
   [dr+2, dr+6, dr+11, dr+12].forEach(function(rr){ sh.getRange(rr, 1, 1, 3).setFontWeight('bold').setBackground('#eef2ff'); });
+  // Goods-value total (product value only, excl. shipping/discount)
+  sh.getRange(dr+13, 1, 1, 3).setFontWeight('bold').setBackground('#fde68a').setFontColor('#92400e');
 }
 
 // Pre-Orders tab — snapshot of the app's preOrders node (pulled from Firebase).
