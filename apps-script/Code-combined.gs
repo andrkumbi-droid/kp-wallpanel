@@ -355,6 +355,43 @@ function kpBuildReport_(ss) {
     .setRanges([sh.getRange('N6:R' + oLast)]).build();
   sh.setConditionalFormatRules([curM]);
 
+  // ── DAILY by zone & YEARLY by zone (orders + sales per zone) ──
+  var ZLAB = {'Bangkok':'BKK','Northern':'North','Northeastern':'NE','Eastern':'East','Southern':'South','Instore':'Store'};
+  var zHead = []; Z.forEach(function(z){ zHead.push(ZLAB[z] + ' Ord', ZLAB[z] + ' ฿'); });
+
+  // Daily by zone — cols T.. (20), aligned with the daily days rows (H5:H35)
+  var DZ = 20;
+  sh.getRange(3, DZ).setValue('Days by zone / รายวันแยกโซน').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange(4, DZ, 1, Z.length * 2).setValues([zHead]).setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  var dzArr = [];
+  for (var dz = 0; dz < 31; dz++) {
+    var rwd = 5 + dz, rowd = [];
+    Z.forEach(function(z){
+      rowd.push('=IF($H' + rwd + '="","",COUNTIFS(\'' + z + '\'!$B:$B,">="&$H' + rwd + ',\'' + z + '\'!$B:$B,"<"&($H' + rwd + '+1)))');
+      rowd.push('=IF($H' + rwd + '="","",SUMIFS(\'' + z + '\'!$P:$P,\'' + z + '\'!$B:$B,">="&$H' + rwd + ',\'' + z + '\'!$B:$B,"<"&($H' + rwd + '+1),\'' + z + '\'!$C:$C,"<>Cancelled"))');
+    });
+    dzArr.push(rowd);
+  }
+  sh.getRange(5, DZ, 31, Z.length * 2).setFormulas(dzArr).setNumberFormat('#,##0');
+
+  // Yearly by zone — cols after a one-column gap, aligned with the yearly month rows (N6:N<oLast>)
+  var YZ = DZ + Z.length * 2 + 1;
+  sh.getRange(3, YZ).setValue('Yearly by zone / รายปีแยกโซน').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange(4, YZ, 1, Z.length * 2).setValues([zHead]).setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  var yzArr = [];
+  for (var yz = 0; yz < nM; yz++) {
+    var rwy = 6 + yz, rowy = [];
+    Z.forEach(function(z){
+      rowy.push('=IFERROR(COUNTIFS(\'' + z + '\'!$B:$B,">="&$N' + rwy + ',\'' + z + '\'!$B:$B,"<"&EDATE($N' + rwy + ',1)),0)');
+      rowy.push('=IFERROR(SUMIFS(\'' + z + '\'!$P:$P,\'' + z + '\'!$B:$B,">="&$N' + rwy + ',\'' + z + '\'!$B:$B,"<"&EDATE($N' + rwy + ',1),\'' + z + '\'!$C:$C,"<>Cancelled"),0)');
+    });
+    yzArr.push(rowy);
+  }
+  sh.getRange(6, YZ, nM, Z.length * 2).setFormulas(yzArr).setNumberFormat('#,##0');
+
+  // Compact widths for the zone breakdown columns
+  for (var cw = DZ; cw < YZ + Z.length * 2; cw++) sh.setColumnWidth(cw, 58);
+
   // ── Total per product (all time) — merged from the old Products tab (cols H–K) ──
   sh.getRange('H38').setValue('Total per product (all time) / รวมต่อสินค้า')
     .setFontWeight('bold').setFontColor('#1d4ed8');
