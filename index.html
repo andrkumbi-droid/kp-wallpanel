@@ -5207,6 +5207,9 @@ function dlPhotoRefresh(){
   if(!prev) return;
   if(!_deliveryId || !window.fbDB){ prev.style.display='none'; prev.innerHTML=''; return; }
   var sid = safeOrderId(_deliveryId);
+  // Photos can be removed (e.g. blurry) only BEFORE the order is delivered.
+  var _ord = (typeof orders!=='undefined' ? orders.find(function(x){return x.id===_deliveryId;}) : null) || {};
+  var locked = _ord.status==='delivered' || (typeof dStatus!=='undefined' && dStatus[_deliveryId]==='delivered');
   window.fbDB.ref('orderPhotos/delivery/'+sid).once('value', function(snap){
     var data = snap.val()||{};
     var keys = Object.keys(data).sort(function(a,b){ return (data[a].ts||0)-(data[b].ts||0); });
@@ -5218,10 +5221,28 @@ function dlPhotoRefresh(){
         var when = p.ts ? new Date(p.ts).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
         return '<div style="position:relative">'+
           '<img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid var(--border)">'+
+          (locked?'':'<button type="button" onclick="dlDeletePhoto(\''+sid+'\',\''+k+'\')" title="Delete / ลบ" style="position:absolute;top:3px;right:3px;width:22px;height:22px;border-radius:50%;border:none;background:rgba(220,38,38,0.92);color:#fff;font-size:12px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center">✕</button>')+
           (when?'<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);color:#fff;font-size:9px;padding:2px 4px;border-radius:0 0 6px 6px;text-align:center">'+when+(p.by?' · '+p.by:'')+'</div>':'')+
         '</div>';
       }).join('')+
     '</div>';
+  });
+}
+// Driver removes a delivery photo (e.g. blurry) — allowed only before the order
+// is delivered. Targets the 'delivery' node directly (not the global picsTab).
+function dlDeletePhoto(sid, key){
+  if(!window.fbDB || !_deliveryId) return;
+  var _ord = (typeof orders!=='undefined' ? orders.find(function(x){return x.id===_deliveryId;}) : null) || {};
+  var locked = _ord.status==='delivered' || (typeof dStatus!=='undefined' && dStatus[_deliveryId]==='delivered');
+  if(locked){ alert('Already delivered — photos are locked.\nส่งแล้ว ลบรูปไม่ได้'); return; }
+  if(!confirm('Delete this photo? / ลบรูปนี้?')) return;
+  window.fbDB.ref('orderPhotos/delivery/'+sid+'/'+key).remove(function(){
+    window.fbDB.ref('photoIndex/delivery/'+sid).transaction(function(cur){
+      if(!cur) return cur;
+      cur.n = Math.max(0, (parseInt(cur.n)||0) - 1);
+      if(cur.n<=0) return null;
+      return cur;
+    }, function(){ dlPhotoRefresh(); });
   });
 }
 function clearDeliveryPhoto(){}
