@@ -354,42 +354,48 @@ function kpBuildReport_(ss) {
     .setRanges([sh.getRange('N6:R' + oLast)]).build();
   sh.setConditionalFormatRules([curM]);
 
-  // ── DAILY by zone & YEARLY by zone (orders + sales per zone) ──
-  var ZLAB = {'Bangkok':'BKK','Northern':'North','Northeastern':'NE','Eastern':'East','Southern':'South','Instore':'Store'};
-  var zHead = []; Z.forEach(function(z){ zHead.push(ZLAB[z] + ' Ord', ZLAB[z] + ' ฿'); });
-
-  // Daily by zone — cols T.. (20), aligned with the daily days rows (H5:H35)
+  // ── Zone breakdown — each has its OWN day / month picker (view any past date) ──
+  // Day by zone (cols T:V = 20-22) — own date picker in V3 (calendar)
   var DZ = 20;
-  sh.getRange(3, DZ).setValue('Days by zone / รายวันแยกโซน').setFontWeight('bold').setFontColor('#1d4ed8');
-  sh.getRange(4, DZ, 1, Z.length * 2).setValues([zHead]).setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
-  var dzArr = [];
-  for (var dz = 0; dz < 31; dz++) {
-    var rwd = 5 + dz, rowd = [];
-    Z.forEach(function(z){
-      rowd.push('=IF($H' + rwd + '="","",COUNTIFS(\'' + z + '\'!$B:$B,">="&$H' + rwd + ',\'' + z + '\'!$B:$B,"<"&($H' + rwd + '+1)))');
-      rowd.push('=IF($H' + rwd + '="","",SUMIFS(\'' + z + '\'!$P:$P,\'' + z + '\'!$B:$B,">="&$H' + rwd + ',\'' + z + '\'!$B:$B,"<"&($H' + rwd + '+1),\'' + z + '\'!$C:$C,"<>Cancelled"))');
-    });
-    dzArr.push(rowd);
-  }
-  sh.getRange(5, DZ, 31, Z.length * 2).setFormulas(dzArr).setNumberFormat('#,##0');
+  sh.getRange(3, DZ, 1, 3).setBackground('#fff7cc');
+  sh.getRange(3, DZ).setValue('📅 Day by zone').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange(3, DZ + 2).setValue(today_).setNumberFormat('yyyy-mm-dd')
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireDate().build())
+    .setFontWeight('bold').setHorizontalAlignment('center');
+  sh.getRange(4, DZ, 1, 3).setValues([['Zone / โซน', 'Orders', 'Sales ฿']])
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  var dzArr = Z.map(function(z){
+    return [ z,
+      '=COUNTIFS(\'' + z + '\'!$B:$B,">="&$V$3,\'' + z + '\'!$B:$B,"<"&($V$3+1))',
+      '=SUMIFS(\'' + z + '\'!$P:$P,\'' + z + '\'!$B:$B,">="&$V$3,\'' + z + '\'!$B:$B,"<"&($V$3+1),\'' + z + '\'!$C:$C,"<>Cancelled")' ];
+  });
+  sh.getRange(5, DZ, Z.length, 3).setValues(dzArr);
+  sh.getRange(5, DZ + 1, Z.length, 1).setNumberFormat('0');
+  sh.getRange(5, DZ + 2, Z.length, 1).setNumberFormat('#,##0');
 
-  // Yearly by zone — cols after a one-column gap, aligned with the yearly month rows (N6:N<oLast>)
-  var YZ = DZ + Z.length * 2 + 1;
-  sh.getRange(3, YZ).setValue('Yearly by zone / รายปีแยกโซน').setFontWeight('bold').setFontColor('#1d4ed8');
-  sh.getRange(4, YZ, 1, Z.length * 2).setValues([zHead]).setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
-  var yzArr = [];
-  for (var yz = 0; yz < nM; yz++) {
-    var rwy = 6 + yz, rowy = [];
-    Z.forEach(function(z){
-      rowy.push('=IFERROR(COUNTIFS(\'' + z + '\'!$B:$B,">="&$N' + rwy + ',\'' + z + '\'!$B:$B,"<"&EDATE($N' + rwy + ',1)),0)');
-      rowy.push('=IFERROR(SUMIFS(\'' + z + '\'!$P:$P,\'' + z + '\'!$B:$B,">="&$N' + rwy + ',\'' + z + '\'!$B:$B,"<"&EDATE($N' + rwy + ',1),\'' + z + '\'!$C:$C,"<>Cancelled"),0)');
-    });
-    yzArr.push(rowy);
-  }
-  sh.getRange(6, YZ, nM, Z.length * 2).setFormulas(yzArr).setNumberFormat('#,##0');
+  // Month by zone (cols X:Z = 24-26) — own month picker in Z3 (dropdown)
+  var YZ = 24;
+  sh.getRange(3, YZ, 1, 3).setBackground('#fde9c8');
+  sh.getRange(3, YZ).setValue('🗓 Month by zone').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange(3, YZ + 2).setNumberFormat('@')
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(months, true).build())
+    .setValue(Utilities.formatDate(new Date(), tz, 'yyyy-MM'))
+    .setFontWeight('bold').setHorizontalAlignment('center');
+  sh.getRange(4, YZ, 1, 3).setValues([['Zone / โซน', 'Orders', 'Sales ฿']])
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  var mStart = 'DATEVALUE($Z$3&"-01")';
+  var mzArr = Z.map(function(z){
+    return [ z,
+      '=COUNTIFS(\'' + z + '\'!$B:$B,">="&' + mStart + ',\'' + z + '\'!$B:$B,"<"&EDATE(' + mStart + ',1))',
+      '=SUMIFS(\'' + z + '\'!$P:$P,\'' + z + '\'!$B:$B,">="&' + mStart + ',\'' + z + '\'!$B:$B,"<"&EDATE(' + mStart + ',1),\'' + z + '\'!$C:$C,"<>Cancelled")' ];
+  });
+  sh.getRange(5, YZ, Z.length, 3).setValues(mzArr);
+  sh.getRange(5, YZ + 1, Z.length, 1).setNumberFormat('0');
+  sh.getRange(5, YZ + 2, Z.length, 1).setNumberFormat('#,##0');
 
-  // Compact widths for the zone breakdown columns
-  for (var cw = DZ; cw < YZ + Z.length * 2; cw++) sh.setColumnWidth(cw, 58);
+  // Widths for the compact zone tables
+  sh.setColumnWidth(DZ, 95);  sh.setColumnWidth(DZ + 1, 62); sh.setColumnWidth(DZ + 2, 95);
+  sh.setColumnWidth(YZ, 95);  sh.setColumnWidth(YZ + 1, 62); sh.setColumnWidth(YZ + 2, 95);
 
   // ── Total per product (all time) — merged from the old Products tab (cols H–K) ──
   sh.getRange('H38').setValue('Total per product (all time) / รวมต่อสินค้า')
