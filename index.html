@@ -2415,26 +2415,44 @@ function mgRender(){mgStock();mgIncoming();mgDrivers();mgRenderStaff();mgRevenue
 
 function mgStock(){
   const TRIM_TYPES=['lcorner','utrim','ttrim','pvc'];
+  // Incoming per code from containers still on the way (not yet at warehouse): pcs + CTN.
+  const _incoming={}, _incCtn={}, _incPer={};
+  (containerLog||[]).filter(function(c){return !c.arrivedWh;}).forEach(function(c){
+    (c.items||[]).forEach(function(it){ var code=(it.code||'').toUpperCase(); if(!code) return;
+      _incoming[code]=(_incoming[code]||0)+(parseInt(it.qty)||0);
+      _incCtn[code]=(_incCtn[code]||0)+(parseInt(it.ctn)||0);
+      if(parseInt(it.pcsPerCtn)>0) _incPer[code]=parseInt(it.pcsPerCtn);
+    });
+  });
+  // Codes that are incoming but NOT yet in stock → shown inline (blue preview rows).
+  var _stkCodes={}; stockItems.forEach(function(s){ _stkCodes[(s.code||'').toUpperCase()]=1; });
+  var _virt=Object.keys(_incoming).filter(function(code){return !_stkCodes[code];}).map(function(code){
+    return {code:code, type:smGuessType(code), qty:_incoming[code], damaged:0, notes:'', pcsPerCtn:_incPer[code]||0, _incomingOnly:true};
+  });
+  function _withVirt(type){ return stockItems.filter(function(s){return s.type===type;}).concat(_virt.filter(function(v){return v.type===type;})); }
   const _shdr='<div style="display:flex;align-items:center;gap:8px;padding:2px 0;border-bottom:1px solid var(--border)"><div style="flex:1"></div><div style="width:78px;text-align:right;font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--text2)">GRADE A</div><div style="width:64px;text-align:right;font-size:10px;font-weight:700;letter-spacing:.04em;color:var(--orange)">GRADE B</div><div style="width:34px"></div></div>';
-  const rl=(items,lowOverride)=>items.length===0?'<div class="empty" style="padding:1rem;font-size:13px">None yet</div>':_shdr+items.map(s=>{const threshold=lowOverride||(TRIM_TYPES.includes(s.type)?50:LOW);const b=parseInt(s.damaged)||0;const lowA=s.qty<threshold;return `<div class="srow"><div style="flex:1"><div style="display:flex;align-items:center;gap:6px;margin-bottom:2px"><span class="scode">${s.code}</span><span class="badge ${lowA?'blow':'bok'}">${lowA?'Low':'OK'}</span></div>${s.notes?`<div style="font-size:11px;color:var(--text2)">${s.notes}</div>`:''}</div><div style="width:78px;text-align:right;font-size:14px;font-weight:600;color:${lowA?'var(--red,#ef4444)':'var(--text)'}">${s.qty.toLocaleString()}</div><div style="width:64px;text-align:right;font-size:14px;font-weight:600;color:${b>0?'var(--orange)':'var(--text2)'}">${b.toLocaleString()}</div><button type="button" class="btnsm" onclick="openSM('${s.code}')"><i class="ti ti-pencil"></i></button></div>`;}).join('');
-  document.getElementById('mg-panels').innerHTML=rl(stockItems.filter(s=>s.type==='panel'));
-  document.getElementById('mg-lcorner').innerHTML=rl(stockItems.filter(s=>s.type==='lcorner'));
-  if(document.getElementById('mg-utrim')) document.getElementById('mg-utrim').innerHTML=rl(stockItems.filter(s=>s.type==='utrim'));
-  if(document.getElementById('mg-ttrim')) document.getElementById('mg-ttrim').innerHTML=rl(stockItems.filter(s=>s.type==='ttrim'));
-  if(document.getElementById('mg-pvc2')) document.getElementById('mg-pvc2').innerHTML=rl(stockItems.filter(s=>s.type==='pvc'));
-  // Show/hide section titles based on content
-  // Show PVC ceiling above panels too
-  var hasPvc = stockItems.some(function(s){return s.type==='pvc';});
+  const rl=(items,lowOverride)=>items.length===0?'<div class="empty" style="padding:1rem;font-size:13px">None yet</div>':_shdr+items.map(s=>{
+    if(s._incomingOnly){
+      return `<div class="srow" style="background:#eff6ff"><div style="flex:1"><div style="display:flex;align-items:center;gap:6px;margin-bottom:2px"><span class="scode">${s.code}</span><span class="badge" style="background:#dbeafe;color:#1d4ed8">🚢 Incoming</span></div><div style="font-size:11px;color:var(--text2)">auto-added on arrival${_incCtn[s.code]>0?' · '+_incCtn[s.code]+' CTN':''}</div></div><div style="width:78px;text-align:right;font-size:14px;font-weight:600;color:var(--blue)">+${s.qty.toLocaleString()}</div><div style="width:64px;text-align:right;font-size:14px;font-weight:600;color:var(--text2)">0</div><button type="button" class="btnsm" onclick="openSM('${s.code}')" title="Add now / เพิ่มตอนนี้"><i class="ti ti-plus"></i></button></div>`;
+    }
+    const threshold=lowOverride||(TRIM_TYPES.includes(s.type)?50:LOW);const b=parseInt(s.damaged)||0;const lowA=s.qty<threshold;return `<div class="srow"><div style="flex:1"><div style="display:flex;align-items:center;gap:6px;margin-bottom:2px"><span class="scode">${s.code}</span><span class="badge ${lowA?'blow':'bok'}">${lowA?'Low':'OK'}</span>${_incoming[s.code]>0?`<span class="badge" style="background:#dbeafe;color:#1d4ed8" title="Incoming / กำลังมา">🚢 +${_incoming[s.code].toLocaleString()}${_incCtn[s.code]>0?' · '+_incCtn[s.code]+' CTN':''}</span>`:''}</div>${s.notes?`<div style="font-size:11px;color:var(--text2)">${s.notes}</div>`:''}</div><div style="width:78px;text-align:right;font-size:14px;font-weight:600;color:${lowA?'var(--red,#ef4444)':'var(--text)'}">${s.qty.toLocaleString()}</div><div style="width:64px;text-align:right;font-size:14px;font-weight:600;color:${b>0?'var(--orange)':'var(--text2)'}">${b.toLocaleString()}</div><button type="button" class="btnsm" onclick="openSM('${s.code}')"><i class="ti ti-pencil"></i></button></div>`;}).join('');
+  document.getElementById('mg-panels').innerHTML=rl(_withVirt('panel'));
+  document.getElementById('mg-lcorner').innerHTML=rl(_withVirt('lcorner'));
+  if(document.getElementById('mg-utrim')) document.getElementById('mg-utrim').innerHTML=rl(_withVirt('utrim'));
+  if(document.getElementById('mg-ttrim')) document.getElementById('mg-ttrim').innerHTML=rl(_withVirt('ttrim'));
+  if(document.getElementById('mg-pvc2')) document.getElementById('mg-pvc2').innerHTML=rl(_withVirt('pvc'));
+  // Show/hide section titles based on content (incl. incoming preview rows)
+  var hasPvc = _withVirt('pvc').length>0;
   var pvc2El = document.getElementById('mg-pvc2');
   var pvc2Title = document.getElementById('mg-title-pvc2');
   if(pvc2El) pvc2El.style.display = hasPvc ? 'block' : 'none';
   if(pvc2Title) pvc2Title.style.display = hasPvc ? 'block' : 'none';
-  if(pvc2El && hasPvc) pvc2El.innerHTML = rl(stockItems.filter(function(s){return s.type==='pvc';}));
+  if(pvc2El && hasPvc) pvc2El.innerHTML = rl(_withVirt('pvc'));
   ['utrim','ttrim'].forEach(function(t) {
     var el = document.getElementById('mg-'+t);
     var titleEl = document.getElementById('mg-title-'+t);
     if(el && titleEl) {
-      var hasItems = stockItems.some(function(s){return s.type===t;});
+      var hasItems = _withVirt(t).length>0;
       titleEl.style.display = hasItems ? 'block' : 'none';
       el.style.display = hasItems ? 'block' : 'none';
     }
@@ -2554,7 +2572,8 @@ function mgRevenue(){
 }
 function selM(m){selMonth=m;mgRevenue();}
 
-function openSM(code){editSM=code;document.getElementById('sm-title').textContent=code?'Edit stock':'Add stock';document.getElementById('sm-del').style.display=code?'flex':'none';if(code){const s=stockItems.find(x=>x.code===code);document.getElementById('sm-code').value=s.code;document.getElementById('sm-code').disabled=true;document.getElementById('sm-type').value=s.type||((s.code==='T07'||s.code==='T08')?'ttrim':'panel');document.getElementById('sm-qty').value=s.qty;document.getElementById('sm-dmg').value=s.damaged;document.getElementById('sm-notes').value=s.notes||'';document.getElementById('sm-ctn-per').value=(s.pcsPerCtn||'');}else{document.getElementById('sm-code').value='';document.getElementById('sm-code').disabled=false;document.getElementById('sm-type').value='panel';['sm-qty','sm-dmg','sm-notes','sm-ctn-per'].forEach(x=>document.getElementById(x).value='');}document.getElementById('sm-ctn').value='';var _cr=document.getElementById('sm-ctn-res');if(_cr)_cr.textContent='0';document.getElementById('sm-move').value='';document.getElementById('sm-move-row').style.display=code?'flex':'none';document.getElementById('sm-modal').classList.add('open');}
+function smGuessType(code){code=(code||'').toUpperCase();if(code.indexOf('K-PVC')===0)return 'pvc';if(code.indexOf('KP')===0)return 'panel';if(code.indexOf('L-P')===0)return 'lcorner';if(code.charAt(0)==='T')return 'ttrim';if(code.charAt(0)==='U')return 'utrim';if(code.charAt(0)==='L')return 'lcorner';return 'panel';}
+function openSM(code){const s=code?stockItems.find(x=>x.code===code):null;editSM=s?code:null;document.getElementById('sm-title').textContent=s?'Edit stock':'Add stock';document.getElementById('sm-del').style.display=s?'flex':'none';if(s){document.getElementById('sm-code').value=s.code;document.getElementById('sm-code').disabled=true;document.getElementById('sm-type').value=s.type||((s.code==='T07'||s.code==='T08')?'ttrim':'panel');document.getElementById('sm-qty').value=s.qty;document.getElementById('sm-dmg').value=s.damaged;document.getElementById('sm-notes').value=s.notes||'';document.getElementById('sm-ctn-per').value=(s.pcsPerCtn||'');}else{document.getElementById('sm-code').value=(code||'');document.getElementById('sm-code').disabled=false;document.getElementById('sm-type').value=smGuessType(code);['sm-qty','sm-dmg','sm-notes','sm-ctn-per'].forEach(x=>document.getElementById(x).value='');}document.getElementById('sm-ctn').value='';var _cr=document.getElementById('sm-ctn-res');if(_cr)_cr.textContent='0';document.getElementById('sm-move').value='';document.getElementById('sm-move-row').style.display=s?'flex':'none';document.getElementById('sm-modal').classList.add('open');}
 // Count by CTN → auto-fill Grade A (pcs = CTN × pcs/CTN). pcs/CTN is remembered per product.
 function smCtnCalc(){
   var ctn=parseFloat((document.getElementById('sm-ctn')||{}).value)||0;
@@ -10148,17 +10167,18 @@ function clArrived(id) {
     if(!item.code || !item.qty) return;
     var code = item.code.toUpperCase();
     var qty = parseInt(item.qty)||0;
-    // Determine type
-    var type = 'panel';
-    if(/^L\d/.test(code)||code.startsWith('L0')) type='lcorner';
-    else if(code.startsWith('K-PVC')||code.startsWith('K-P-')) type='utrim';
-    else if(code.startsWith('T0')) type='ttrim';
+    // Type from code (K-PVC→pvc, KP→panel, L/L-P→lcorner, T→ttrim, U→utrim)
+    var type = smGuessType(code);
+    var per = parseInt(item.pcsPerCtn)||0;
     var existing = stockItems.find(function(s){return s.code===code;});
     if(existing) {
-      existing.qty += qty;
+      existing.qty += qty;                 // incoming is always Grade A
+      if(per>0) existing.pcsPerCtn = per;
       addLog(code+' +'+qty.toLocaleString()+' pcs (Container '+c.supplier+')','+');
     } else {
-      stockItems.push({code:code, type:type, qty:qty, damaged:0, notes:c.supplier});
+      var _ni={code:code, type:type, qty:qty, damaged:0, notes:c.supplier};
+      if(per>0) _ni.pcsPerCtn=per;
+      stockItems.push(_ni);
       addLog(code+' added '+qty.toLocaleString()+' pcs (Container '+c.supplier+')','+');
     }
   });
