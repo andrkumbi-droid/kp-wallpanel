@@ -3996,10 +3996,12 @@ function ofOrderCard(o){
   var _payTot=parseFloat(String(o.total||'').replace(/[^0-9.]/g,''))||0;
   var _paidAmt=(o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):(o.payMethod?_payTot:0);
   var _payFull=_payTot>0&&_paidAmt>=_payTot, _payPart=_paidAmt>0&&_paidAmt<_payTot, _payOut=Math.max(0,_payTot-_paidAmt);
+  var _pmVal=_payFull?(o.payMethod||'cash'):(o.payMethodPartial||'cash');
+  var _pmFn=_payFull?'ofPayMethodSel':'ofPayMethodPartialSel';
   s += '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:7px 9px;border-radius:var(--rs);background:'+(_payFull?'#dcfce7':_payPart?'#fef9c3':'#fee2e2')+'">'
     +'<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:'+(_payFull?'#166534':_payPart?'#854d0e':'#991b1b')+';cursor:pointer;white-space:nowrap"><input type="checkbox" onchange="ofPaidToggle(\''+o.id+'\',this.checked)" '+(_payFull?'checked':'')+' style="width:16px;height:16px;cursor:pointer"> Paid / ชำระ</label>'
     +'<input type="number" min="0" value="'+(_paidAmt||'')+'" placeholder="฿ paid" onchange="ofPaidAmt(\''+o.id+'\',this.value)" style="width:88px;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
-    +(_payFull?'<select onchange="ofPayMethodSel(\''+o.id+'\',this.value)" style="padding:4px 6px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text);cursor:pointer"><option value="cash"'+((o.payMethod||'cash')!=='online'?' selected':'')+'>💵 Cash</option><option value="online"'+(o.payMethod==='online'?' selected':'')+'>🏦 Online</option></select>':'')
+    +((_payFull||_payPart)?'<select onchange="'+_pmFn+'(\''+o.id+'\',this.value)" style="padding:4px 6px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text);cursor:pointer"><option value="cash"'+(_pmVal!=='online'?' selected':'')+'>💵 Cash</option><option value="online"'+(_pmVal==='online'?' selected':'')+'>🏦 Online</option></select>':'')
     +'<span style="font-size:11px;font-weight:700;margin-left:auto;white-space:nowrap;color:'+(_payFull?'#166534':_payPart?'#854d0e':'#991b1b')+'">'+(_payFull?'✓ Fully paid':_payPart?('ค้าง '+_payOut.toLocaleString()+' ฿'):'Unpaid')+'</span>'
     +'</div>';
   s += createdHTML;
@@ -4028,13 +4030,14 @@ function ofPaidAmt(id, val){
     :(typeof currentDriverId!=='undefined'?((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Office'):'Office');
   o.paidAmount=amt;
   if(total>0 && amt>=total){          // fully paid → mark paid (keeps Pay tab / revenue in sync)
-    if(!o.payMethod) o.payMethod='cash';
+    if(!o.payMethod) o.payMethod=o.payMethodPartial||'cash';  // carry over the deposit method
     if(!o.payDate) o.payDate=today;
     if(!o.paidBy) o.paidBy=who;
   } else if(amt<=0){                   // nothing paid
-    o.paidAmount=0; o.payMethod=''; o.paidCash=0; o.paidOnline=0;
-  } else {                            // partial → still "unpaid" in the binary sense, amount recorded
+    o.paidAmount=0; o.payMethod=''; o.payMethodPartial=''; o.paidCash=0; o.paidOnline=0;
+  } else {                            // partial → still "unpaid" in the binary sense; keep deposit method
     o.payMethod='';
+    if(!o.payMethodPartial) o.payMethodPartial='cash';
   }
   try{ syncOrders(); }catch(e){}
   try{ sheetsSyncOrder(o); }catch(e){}
@@ -4094,6 +4097,15 @@ function ofPayMethodSel(id, m){
   try{ sheetsSyncOrder(o); }catch(e){}
   try{ ofRenderOrders(); }catch(e){}
   try{ payUpdateBadge(); }catch(e){}
+  try{ if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow(); }catch(e){}
+}
+// Deposit / partial-payment method (cash/online) — stored separately so it does
+// NOT flip the order to "fully paid".
+function ofPayMethodPartialSel(id, m){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  o.payMethodPartial=m;
+  try{ syncOrders(); }catch(e){}
+  try{ sheetsSyncOrder(o); }catch(e){}
   try{ if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow(); }catch(e){}
 }
 
@@ -6212,7 +6224,7 @@ function kpFlatOrder(o){
     freeClips:cancelled?0:sq(function(x){return x.type==='free-clips'||x.type==='free-gift-clips';}),
     products:products, shipping:cancelled?0:shipping, discount:cancelled?0:discount, total:cancelled?0:total,
     paidAmount:cancelled?0:paidAmt, outstanding:cancelled?0:outstanding,
-    payMethod:o.payMethod||'', paidOn:o.payDate||'', paymentBy:o.paidBy||'',
+    payMethod:cancelled?'':(o.payMethod||o.payMethodPartial||''), paidOn:o.payDate||'', paymentBy:o.paidBy||'',
     deliveredOn:del.date, time:del.time, deliveredBy:o.deliveredBy||del.by,
     carrier:o.shipper||'', tracking:(o.shippingBill!=null?o.shippingBill:''), ctnBundle:ctnB.join(' · '),
     customer:(o.customer&&o.customer!=='—')?o.customer:'', phone:(o.phone&&o.phone!=='—')?o.phone:'',
