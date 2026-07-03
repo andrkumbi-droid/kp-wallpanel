@@ -574,7 +574,7 @@ var KP_COLS = ['orderNo','date','status','paid','prio','products','panelsA','pan
   'address','maps','deliveredBy','deliveredOn','time','deliveryRound','carrier','tracking',
   'ctnBundle','takenBy','editedBy','cancelReason','notes','extraLabel'];
 
-function doGet() { return _json({ ok: true, service: 'KP Wallpanel Order sync' }); }
+function doGet() { return _json({ ok: true, service: 'KP Wallpanel Order sync', layout: 'extra-at-N', columns: KP_COLS.length, extraCol: KP_COLS.indexOf('extra') + 1 }); }
 
 function doPost(e) {
   try {
