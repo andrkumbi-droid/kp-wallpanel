@@ -17,10 +17,10 @@ var TOKEN = 'kp-7h3x9q2'; // must equal SHEETS_TOKEN in index.html
 // Column order (index = column − 1). 38 columns A–AL. MUST match KP_HEADERS
 // order in master-build.gs.
 var KP_COLS = ['orderNo','date','status','paid','prio','products','panelsA','panelsB','lcorner',
-  'utrim','ttrim','extraClips','freeClips','shipping','discount','total','paidAmount',
+  'utrim','ttrim','extraClips','freeClips','extra','shipping','discount','total','paidAmount',
   'outstanding','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
   'address','maps','deliveredBy','deliveredOn','time','deliveryRound','carrier','tracking',
-  'ctnBundle','takenBy','editedBy','cancelReason','notes','extra','extraLabel'];
+  'ctnBundle','takenBy','editedBy','cancelReason','notes','extraLabel'];
 
 function doGet() { return _json({ ok: true, service: 'KP Wallpanel Order sync' }); }
 

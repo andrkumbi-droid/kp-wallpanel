@@ -24,14 +24,13 @@ var KP_ZONES = ['Bangkok','Northern','Northeastern','Eastern','Southern','Instor
 var KP_HEADERS = [
   'Order No\n\u0e40\u0e25\u0e02\u0e17\u0e35\u0e48\u0e2d\u0e2d\u0e40\u0e14\u0e2d\u0e23\u0e4c','Date\n\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48','Status\n\u0e2a\u0e16\u0e32\u0e19\u0e30','Paid?\n\u0e0a\u0e33\u0e23\u0e30\u0e40\u0e07\u0e34\u0e19','Priority\n\u0e2a\u0e33\u0e04\u0e31\u0e0d','Products\n\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32',
   'Panels A\n\u0e41\u0e1c\u0e48\u0e19 A','Panels B\n\u0e41\u0e1c\u0e48\u0e19 B','L-Corner\n\u0e21\u0e38\u0e21 L','U-Trim\n\u0e04\u0e34\u0e49\u0e27 U','T-Trim\n\u0e04\u0e34\u0e49\u0e27 T',
-  'Extra Clips\n\u0e04\u0e25\u0e34\u0e1b\u0e40\u0e1e\u0e34\u0e48\u0e21','Free Clips\n\u0e04\u0e25\u0e34\u0e1b\u0e1f\u0e23\u0e35','Shipping\n\u0e04\u0e48\u0e32\u0e2a\u0e48\u0e07','Discount\n\u0e2a\u0e48\u0e27\u0e19\u0e25\u0e14',
+  'Extra Clips\n\u0e04\u0e25\u0e34\u0e1b\u0e40\u0e1e\u0e34\u0e48\u0e21','Free Clips\n\u0e04\u0e25\u0e34\u0e1b\u0e1f\u0e23\u0e35','Extra \u0e3f\n\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21 (\u0e3f)','Shipping\n\u0e04\u0e48\u0e32\u0e2a\u0e48\u0e07','Discount\n\u0e2a\u0e48\u0e27\u0e19\u0e25\u0e14',
   'Total\n\u0e22\u0e2d\u0e14\u0e23\u0e27\u0e21','Paid amount\n\u0e0a\u0e33\u0e23\u0e30\u0e41\u0e25\u0e49\u0e27','Outstanding\n\u0e04\u0e49\u0e32\u0e07\u0e0a\u0e33\u0e23\u0e30','Pay method\n\u0e27\u0e34\u0e18\u0e35\u0e0a\u0e33\u0e23\u0e30',
   'Paid on\n\u0e0a\u0e33\u0e23\u0e30\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48','Payment by\n\u0e23\u0e31\u0e1a\u0e40\u0e07\u0e34\u0e19\u0e42\u0e14\u0e22','Receipt No\n\u0e40\u0e25\u0e02\u0e43\u0e1a\u0e40\u0e2a\u0e23\u0e47\u0e08','Customer\n\u0e0a\u0e37\u0e48\u0e2d\u0e25\u0e39\u0e01\u0e04\u0e49\u0e32',
   'Phone\n\u0e40\u0e1a\u0e2d\u0e23\u0e4c\u0e42\u0e17\u0e23','Contact\n\u0e0a\u0e48\u0e2d\u0e07\u0e17\u0e32\u0e07','Address\n\u0e17\u0e35\u0e48\u0e2d\u0e22\u0e39\u0e48','Maps link\n\u0e25\u0e34\u0e07\u0e01\u0e4c\u0e41\u0e1c\u0e19\u0e17\u0e35\u0e48',
   'Delivered by\n\u0e2a\u0e48\u0e07\u0e42\u0e14\u0e22','Delivered on\n\u0e2a\u0e48\u0e07\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48','Time\n\u0e40\u0e27\u0e25\u0e32','Delivery round\n\u0e23\u0e2d\u0e1a\u0e2a\u0e48\u0e07',
   'Carrier\n\u0e02\u0e19\u0e2a\u0e48\u0e07','Tracking\n\u0e40\u0e25\u0e02\u0e1e\u0e31\u0e2a\u0e14\u0e38','CTN/Bundle\n\u0e01\u0e25\u0e48\u0e2d\u0e07\u00b7\u0e21\u0e31\u0e14','Taken by\n\u0e23\u0e31\u0e1a\u0e2d\u0e2d\u0e40\u0e14\u0e2d\u0e23\u0e4c\u0e42\u0e14\u0e22',
-  'Edited by\n\u0e41\u0e01\u0e49\u0e44\u0e02\u0e42\u0e14\u0e22','Cancel reason\n\u0e40\u0e2b\u0e15\u0e38\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01','Notes\n\u0e2b\u0e21\u0e32\u0e22\u0e40\u0e2b\u0e15\u0e38',
-  'Extra \u0e3f\n\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21 (\u0e3f)','Extra note\n\u0e23\u0e32\u0e22\u0e25\u0e30\u0e40\u0e2d\u0e35\u0e22\u0e14\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21'];
+  'Edited by\n\u0e41\u0e01\u0e49\u0e44\u0e02\u0e42\u0e14\u0e22','Cancel reason\n\u0e40\u0e2b\u0e15\u0e38\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01','Notes\n\u0e2b\u0e21\u0e32\u0e22\u0e40\u0e2b\u0e15\u0e38','Extra note\n\u0e23\u0e32\u0e22\u0e25\u0e30\u0e40\u0e2d\u0e35\u0e22\u0e14\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21'];
 
 var KP_SUM_HEADERS = [
   'Month / \u0e40\u0e14\u0e37\u0e2d\u0e19','Orders / \u0e2d\u0e2d\u0e40\u0e14\u0e2d\u0e23\u0e4c','Revenue / \u0e23\u0e32\u0e22\u0e44\u0e14\u0e49','Paid / \u0e0a\u0e33\u0e23\u0e30\u0e41\u0e25\u0e49\u0e27','Outstanding / \u0e04\u0e49\u0e32\u0e07\u0e0a\u0e33\u0e23\u0e30',
@@ -114,52 +113,51 @@ function kpBuildZone_(ss, name) {
   for (var c = 1; c <= N; c++) {
     bg.push(c <= 6  ? '#1f2937'    // Order   (No/Date/Status/Paid?/Priority/Products)
           : c <= 13 ? '#0f766e'    // Pieces  (Panels..Free Clips)
-          : c <= 18 ? '#9a3412'    // Money   (Shipping..Outstanding)
-          : c <= 22 ? '#3730a3'    // Payment (Pay method..Receipt No)
-          : c <= 27 ? '#155e75'    // Customer(Customer..Maps)
-          : c <= 34 ? '#6b21a8'    // Delivery(Delivered by..CTN/Bundle)
+          : c <= 19 ? '#9a3412'    // Money   (Shipping..Outstanding)
+          : c <= 23 ? '#3730a3'    // Payment (Pay method..Receipt No)
+          : c <= 28 ? '#155e75'    // Customer(Customer..Maps)
+          : c <= 35 ? '#6b21a8'    // Delivery(Delivered by..CTN/Bundle)
           :           '#475569');  // Meta    (Taken/Edited/Cancel/Notes)
   }
   sh.getRange(1, 1, 1, N).setBackgrounds([bg]);
-  sh.getRange('P1').setBackground('#ca8a04'); // Total header gold accent
+  sh.getRange('Q1').setBackground('#ca8a04'); // Total header gold accent
   sh.setRowHeight(1, 46);
   sh.setFrozenRows(1);
   sh.setFrozenColumns(1);
 
   // number formats
   sh.getRange('G2:M').setNumberFormat('0');      // piece counts (Panels A..Free Clips)
-  sh.getRange('N2:R').setNumberFormat('#,##0');  // money (Shipping..Outstanding)
+  sh.getRange('N2:S').setNumberFormat('#,##0');  // money (Shipping..Outstanding)
   sh.getRange('B2:B').setNumberFormat('yyyy-mm-dd');   // Date
-  sh.getRange('T2:T').setNumberFormat('yyyy-mm-dd');   // Paid on
-  sh.getRange('AC2:AC').setNumberFormat('yyyy-mm-dd');  // Delivered on
-  sh.getRange('AM2:AM').setNumberFormat('#,##0');       // Extra (amount)
+  sh.getRange('U2:U').setNumberFormat('yyyy-mm-dd');   // Paid on
+  sh.getRange('AD2:AD').setNumberFormat('yyyy-mm-dd');  // Delivered on
   sh.getRange('E2:E').setHorizontalAlignment('center'); // Priority
 
   // Total column highlight that survives conditional row-colours: bold + gold border
-  sh.getRange('P2:P').setFontWeight('bold');
-  sh.getRange('P1:P1000').setBorder(null, true, null, true, null, null,
+  sh.getRange('Q2:Q').setFontWeight('bold');
+  sh.getRange('Q1:Q1000').setBorder(null, true, null, true, null, null,
     '#ca8a04', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
 
   // hide detail piece columns (Panels A..T-Trim = cols 7\u201311)
   sh.hideColumns(7, 5);
 
   // row colour rules: grey = Cancelled, green = Delivered & fully paid, red = open balance
-  var rng = sh.getRange('A2:AL2000');
+  var rng = sh.getRange('A2:AN2000');
   var cancelled = SpreadsheetApp.newConditionalFormatRule()
     .whenFormulaSatisfied('=$C2="Cancelled"')
     .setBackground('#eceff1').setRanges([rng]).build();
   var green = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND($C2="Delivered",$R2<=0)')
+    .whenFormulaSatisfied('=AND($C2="Delivered",$S2<=0)')
     .setBackground('#e6f4ea').setRanges([rng]).build();
   var red = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=AND($C2<>"Cancelled",$R2>0)')
+    .whenFormulaSatisfied('=AND($C2<>"Cancelled",$S2>0)')
     .setBackground('#fde7e9').setRanges([rng]).build();
   sh.setConditionalFormatRules([cancelled, green, red]);
 
   sh.setColumnWidth(1, 90);    // Order No
   sh.setColumnWidth(6, 240);   // Products
-  sh.setColumnWidth(26, 240);  // Address
-  sh.setColumnWidth(27, 180);  // Maps
+  sh.setColumnWidth(27, 240);  // Address
+  sh.setColumnWidth(28, 180);  // Maps
 }
 
 function kpBuildSummary_(ss) {
@@ -190,8 +188,8 @@ function kpBuildSummary_(ss) {
   function put(a1, expr) { sh.getRange(a1).setFormula('=IFERROR(' + expr + ',0)'); }
 
   put('B3', countWith(''));                          // Orders (all)
-  put('C3', sumNC('$P'));                             // Revenue (Total col P)
-  put('D3', sumNC('$Q'));                             // Paid (Paid amount col Q)
+  put('C3', sumNC('$Q'));                             // Revenue (Total col P)
+  put('D3', sumNC('$R'));                             // Paid (Paid amount col Q)
   sh.getRange('E3').setFormula('=C3-D3');             // Outstanding
   put('F3', sumNC('$G'));                             // Panels A
   put('G3', sumNC('$H'));                             // Panels B
@@ -265,6 +263,11 @@ function kpBuildReport_(ss) {
 
   var tz = ss.getSpreadsheetTimeZone();
   var LI = "'Line Items'!";
+  // Grand-total (col P) sums per zone \u2014 same basis as the app + Days/Yearly columns
+  // (incl. shipping, after discount, excl. cancelled). Used for Day/Month total.
+  var _Zp = KP_ZONES;
+  var _sumPday = _Zp.map(function(z){ return "SUMIFS('"+z+"'!$Q:$Q,'"+z+"'!$B:$B,\">=\"&$G$1,'"+z+"'!$B:$B,\"<\"&($G$1+1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+');
+  var _sumPmonth = _Zp.map(function(z){ return "SUMIFS('"+z+"'!$Q:$Q,'"+z+"'!$B:$B,\">=\"&$F$1,'"+z+"'!$B:$B,\"<\"&EDATE($F$1,1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+');
 
   // helper (col G): chosen day with time stripped (for the daily block)
   sh.getRange('G1').setFormula('=INT($C$3)').setNumberFormat('yyyy-mm-dd').setFontColor('#bbbbbb');
@@ -275,7 +278,7 @@ function kpBuildReport_(ss) {
   var today_ = new Date(); today_.setHours(0, 0, 0, 0);
   sh.getRange('C3').setValue(today_).setNumberFormat('yyyy-mm-dd')   // dropdown set after the day list is built
     .setFontWeight('bold').setBackground('#fff7cc').setHorizontalAlignment('center');
-  sh.getRange('D3').setFormula('=IFERROR("Day total \u0e3f: "&TEXT(SUMIFS(' + LI + '$I:$I,' + LI + '$B:$B,">="&$G$1,' + LI + '$B:$B,"<"&($G$1+1)),"#,##0"),"")')
+  sh.getRange('D3').setFormula('=IFERROR("Day total \u0e3f: "&TEXT(' + _sumPday + ',"#,##0"),"")')
     .setFontWeight('bold').setFontColor('#9a3412');
   kpCatBlock_(sh, 4, '$G$1', '($G$1+1)', LI);          // daily: header row 4, data 5..17
 
@@ -290,7 +293,7 @@ function kpBuildReport_(ss) {
     .setFontWeight('bold').setBackground('#fff7cc').setHorizontalAlignment('center');
   sh.getRange('F1').setFormula('=IFERROR(DATEVALUE($C$19&"-01"),DATE(YEAR($C$19),MONTH($C$19),1))')
     .setNumberFormat('yyyy-mm-dd').setFontColor('#bbbbbb');
-  sh.getRange('D19').setFormula('=IFERROR("Month total \u0e3f: "&TEXT(SUMIFS(' + LI + '$I:$I,' + LI + '$B:$B,">="&$F$1,' + LI + '$B:$B,"<"&EDATE($F$1,1)),"#,##0"),"")')
+  sh.getRange('D19').setFormula('=IFERROR("Month total \u0e3f: "&TEXT(' + _sumPmonth + ',"#,##0"),"")')
     .setFontWeight('bold').setFontColor('#9a3412');
   kpCatBlock_(sh, 20, '$F$1', 'EDATE($F$1,1)', LI);    // monthly: header row 20, data 21..33
 
@@ -310,7 +313,7 @@ function kpBuildReport_(ss) {
   // \u2500\u2500 DAILY summary: each day of the chosen month + its revenue (cols H\u2013J) \u2500\u2500
   var Z = KP_ZONES, nM = 36, oLast = 5 + nM;
   function sumDay(col, d){ return Z.map(function(z){ return "SUMIFS('"+z+"'!"+col+":"+col+",'"+z+"'!$B:$B,\">=\"&"+d+",'"+z+"'!$B:$B,\"<\"&("+d+"+1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
-  function cntDay(d){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+d+",'"+z+"'!$B:$B,\"<\"&("+d+"+1))"; }).join('+'); }
+  function cntDay(d){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+d+",'"+z+"'!$B:$B,\"<\"&("+d+"+1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
   sh.getRange('H3').setValue('Days of month / \u0e23\u0e32\u0e22\u0e27\u0e31\u0e19').setFontWeight('bold').setFontColor('#1d4ed8');
   sh.getRange(4, 8, 1, 3).setValues([['Day / \u0e27\u0e31\u0e19','Revenue \u0e3f','Orders']])
     .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
@@ -319,7 +322,7 @@ function kpBuildReport_(ss) {
     var rw = 5 + d;
     darr.push([
       '=IF($F$1+' + d + '<EDATE($F$1,1),$F$1+' + d + ',"")',
-      '=IF($H' + rw + '="","",' + sumDay('$P', '$H' + rw) + ')',
+      '=IF($H' + rw + '="","",' + sumDay('$Q', '$H' + rw) + ')',
       '=IF($H' + rw + '="","",' + cntDay('$H' + rw) + ')'
     ]);
   }
@@ -333,7 +336,7 @@ function kpBuildReport_(ss) {
 
   // \u2500\u2500 YEARLY: all-months money overview (cols N\u2013R) \u2500\u2500
   function sumNC(col, m){ return Z.map(function(z){ return "SUMIFS('"+z+"'!"+col+":"+col+",'"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
-  function cnt(m){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1))"; }).join('+'); }
+  function cnt(m){ return Z.map(function(z){ return "COUNTIFS('"+z+"'!$B:$B,\">=\"&"+m+",'"+z+"'!$B:$B,\"<\"&EDATE("+m+",1),'"+z+"'!$C:$C,\"<>Cancelled\")"; }).join('+'); }
   sh.getRange('N3').setValue('YEARLY (all months) / \u0e23\u0e32\u0e22\u0e1b\u0e35').setFontWeight('bold').setFontColor('#1d4ed8');
   sh.getRange(4, 14, 1, 5).setValues([['Month / \u0e40\u0e14\u0e37\u0e2d\u0e19','Orders','Revenue \u0e3f','Paid \u0e3f','Outstanding \u0e3f']])
     .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
@@ -341,8 +344,8 @@ function kpBuildReport_(ss) {
   for (var k = 0; k < nM; k++) mrows.push([new Date(2026, 5 + k, 1)]);
   sh.getRange(6, 14, nM, 1).setValues(mrows).setNumberFormat('yyyy-mm');
   sh.getRange('O6').setFormula('=IFERROR(' + cnt('$N6') + ',0)');
-  sh.getRange('P6').setFormula('=IFERROR(' + sumNC('$P', '$N6') + ',0)');   // Revenue = Total col P
-  sh.getRange('Q6').setFormula('=IFERROR(' + sumNC('$Q', '$N6') + ',0)');   // Paid = Paid amount col Q
+  sh.getRange('P6').setFormula('=IFERROR(' + sumNC('$Q', '$N6') + ',0)');   // Revenue = Total col P
+  sh.getRange('Q6').setFormula('=IFERROR(' + sumNC('$R', '$N6') + ',0)');   // Paid = Paid amount col Q
   sh.getRange('R6').setFormula('=P6-Q6');                                   // Outstanding
   sh.getRange('O6:R6').copyTo(sh.getRange('O7:R' + oLast));
   sh.getRange('N5').setValue('TOTAL');
@@ -356,6 +359,49 @@ function kpBuildReport_(ss) {
     .setBackground('#fff7cc').setBold(true)
     .setRanges([sh.getRange('N6:R' + oLast)]).build();
   sh.setConditionalFormatRules([curM]);
+
+  // \u2500\u2500 Zone breakdown \u2014 each has its OWN day / month picker (view any past date) \u2500\u2500
+  // Day by zone (cols T:V = 20-22) \u2014 own date picker in V3 (calendar)
+  var DZ = 20;
+  sh.getRange(3, DZ, 1, 3).setBackground('#fff7cc');
+  sh.getRange(3, DZ).setValue('\ud83d\udcc5 Day by zone').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange(3, DZ + 2).setValue(today_).setNumberFormat('yyyy-mm-dd')
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireDate().build())
+    .setFontWeight('bold').setHorizontalAlignment('center');
+  sh.getRange(4, DZ, 1, 3).setValues([['Zone / \u0e42\u0e0b\u0e19', 'Orders', 'Sales \u0e3f']])
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  var dzArr = Z.map(function(z){
+    return [ z,
+      '=COUNTIFS(\'' + z + '\'!$B:$B,">="&$V$3,\'' + z + '\'!$B:$B,"<"&($V$3+1),\'' + z + '\'!$C:$C,"<>Cancelled")',
+      '=SUMIFS(\'' + z + '\'!$Q:$Q,\'' + z + '\'!$B:$B,">="&$V$3,\'' + z + '\'!$B:$B,"<"&($V$3+1),\'' + z + '\'!$C:$C,"<>Cancelled")' ];
+  });
+  sh.getRange(5, DZ, Z.length, 3).setValues(dzArr);
+  sh.getRange(5, DZ + 1, Z.length, 1).setNumberFormat('0');
+  sh.getRange(5, DZ + 2, Z.length, 1).setNumberFormat('#,##0');
+
+  // Month by zone (cols X:Z = 24-26) \u2014 own month picker in Z3 (dropdown)
+  var YZ = 24;
+  sh.getRange(3, YZ, 1, 3).setBackground('#fde9c8');
+  sh.getRange(3, YZ).setValue('\ud83d\uddd3 Month by zone').setFontWeight('bold').setFontColor('#1d4ed8');
+  sh.getRange(3, YZ + 2).setNumberFormat('@')
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(months, true).build())
+    .setValue(Utilities.formatDate(new Date(), tz, 'yyyy-MM'))
+    .setFontWeight('bold').setHorizontalAlignment('center');
+  sh.getRange(4, YZ, 1, 3).setValues([['Zone / \u0e42\u0e0b\u0e19', 'Orders', 'Sales \u0e3f']])
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground('#1f2937');
+  var mStart = 'DATEVALUE($Z$3&"-01")';
+  var mzArr = Z.map(function(z){
+    return [ z,
+      '=COUNTIFS(\'' + z + '\'!$B:$B,">="&' + mStart + ',\'' + z + '\'!$B:$B,"<"&EDATE(' + mStart + ',1),\'' + z + '\'!$C:$C,"<>Cancelled")',
+      '=SUMIFS(\'' + z + '\'!$Q:$Q,\'' + z + '\'!$B:$B,">="&' + mStart + ',\'' + z + '\'!$B:$B,"<"&EDATE(' + mStart + ',1),\'' + z + '\'!$C:$C,"<>Cancelled")' ];
+  });
+  sh.getRange(5, YZ, Z.length, 3).setValues(mzArr);
+  sh.getRange(5, YZ + 1, Z.length, 1).setNumberFormat('0');
+  sh.getRange(5, YZ + 2, Z.length, 1).setNumberFormat('#,##0');
+
+  // Widths for the compact zone tables
+  sh.setColumnWidth(DZ, 95);  sh.setColumnWidth(DZ + 1, 62); sh.setColumnWidth(DZ + 2, 95);
+  sh.setColumnWidth(YZ, 95);  sh.setColumnWidth(YZ + 1, 62); sh.setColumnWidth(YZ + 2, 95);
 
   // \u2500\u2500 Total per product (all time) \u2014 merged from the old Products tab (cols H\u2013K) \u2500\u2500
   sh.getRange('H38').setValue('Total per product (all time) / \u0e23\u0e27\u0e21\u0e15\u0e48\u0e2d\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32')
@@ -402,16 +448,19 @@ function kpCatBlock_(sh, hr, dS, dE, LI) {
     ['Clips free /panel (pcs)', q('Clip free/panel'),     null],
     ['Clips free gift (pcs)',   q('Clip free gift'),      null],
     ['>> Given away (pcs)',     '=B'+rFP+'+B'+rFG,        null],
-    ['>> Total used (pcs)',     '=B'+rCSp+'+B'+rGA,       null]
+    ['>> Total used (pcs)',     '=B'+rCSp+'+B'+rGA,       null],
+    ['\u0e23\u0e27\u0e21\u0e21\u0e39\u0e25\u0e04\u0e48\u0e32\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32 (\u0e44\u0e21\u0e48\u0e23\u0e27\u0e21\u0e04\u0e48\u0e32\u0e2a\u0e48\u0e07/\u0e2a\u0e48\u0e27\u0e19\u0e25\u0e14) \u00b7 Goods value only', null, '=C'+(dr+2)+'+C'+(dr+6)]
   ];
   for (var i = 0; i < data.length; i++) {
     var rr = dr + i;
     sh.getRange(rr, 1).setValue(data[i][0]);
-    sh.getRange(rr, 2).setFormula(data[i][1]);
+    if (data[i][1]) sh.getRange(rr, 2).setFormula(data[i][1]);
     if (data[i][2]) sh.getRange(rr, 3).setFormula(data[i][2]);
   }
-  sh.getRange(dr, 2, 13, 2).setNumberFormat('#,##0');
+  sh.getRange(dr, 2, 14, 2).setNumberFormat('#,##0');
   [dr+2, dr+6, dr+11, dr+12].forEach(function(rr){ sh.getRange(rr, 1, 1, 3).setFontWeight('bold').setBackground('#eef2ff'); });
+  // Goods-value total (product value only, excl. shipping/discount)
+  sh.getRange(dr+13, 1, 1, 3).setFontWeight('bold').setBackground('#fde68a').setFontColor('#92400e');
 }
 
 // Pre-Orders tab \u2014 snapshot of the app's preOrders node (pulled from Firebase).
@@ -520,10 +569,10 @@ var TOKEN = 'kp-7h3x9q2'; // must equal SHEETS_TOKEN in index.html
 // Column order (index = column \u2212 1). 38 columns A\u2013AL. MUST match KP_HEADERS
 // order in master-build.gs.
 var KP_COLS = ['orderNo','date','status','paid','prio','products','panelsA','panelsB','lcorner',
-  'utrim','ttrim','extraClips','freeClips','shipping','discount','total','paidAmount',
+  'utrim','ttrim','extraClips','freeClips','extra','shipping','discount','total','paidAmount',
   'outstanding','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
   'address','maps','deliveredBy','deliveredOn','time','deliveryRound','carrier','tracking',
-  'ctnBundle','takenBy','editedBy','cancelReason','notes','extra','extraLabel'];
+  'ctnBundle','takenBy','editedBy','cancelReason','notes','extraLabel'];
 
 function doGet() { return _json({ ok: true, service: 'KP Wallpanel Order sync' }); }
 
@@ -630,4 +679,3 @@ function _json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
-
