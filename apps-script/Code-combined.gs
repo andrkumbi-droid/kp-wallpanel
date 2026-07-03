@@ -30,7 +30,8 @@ var KP_HEADERS = [
   'Phone\nเบอร์โทร','Contact\nช่องทาง','Address\nที่อยู่','Maps link\nลิงก์แผนที่',
   'Delivered by\nส่งโดย','Delivered on\nส่งวันที่','Time\nเวลา','Delivery round\nรอบส่ง',
   'Carrier\nขนส่ง','Tracking\nเลขพัสดุ','CTN/Bundle\nกล่อง·มัด','Taken by\nรับออเดอร์โดย',
-  'Edited by\nแก้ไขโดย','Cancel reason\nเหตุยกเลิก','Notes\nหมายเหตุ'];
+  'Edited by\nแก้ไขโดย','Cancel reason\nเหตุยกเลิก','Notes\nหมายเหตุ',
+  'Extra ฿\nเพิ่มเติม (฿)','Extra note\nรายละเอียดเพิ่มเติม'];
 
 var KP_SUM_HEADERS = [
   'Month / เดือน','Orders / ออเดอร์','Revenue / รายได้','Paid / ชำระแล้ว','Outstanding / ค้างชำระ',
@@ -131,6 +132,7 @@ function kpBuildZone_(ss, name) {
   sh.getRange('B2:B').setNumberFormat('yyyy-mm-dd');   // Date
   sh.getRange('T2:T').setNumberFormat('yyyy-mm-dd');   // Paid on
   sh.getRange('AC2:AC').setNumberFormat('yyyy-mm-dd');  // Delivered on
+  sh.getRange('AM2:AM').setNumberFormat('#,##0');       // Extra ฿ (amount)
   sh.getRange('E2:E').setHorizontalAlignment('center'); // Priority
 
   // Total column highlight that survives conditional row-colours: bold + gold border
@@ -572,7 +574,7 @@ var KP_COLS = ['orderNo','date','status','paid','prio','products','panelsA','pan
   'utrim','ttrim','extraClips','freeClips','shipping','discount','total','paidAmount',
   'outstanding','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
   'address','maps','deliveredBy','deliveredOn','time','deliveryRound','carrier','tracking',
-  'ctnBundle','takenBy','editedBy','cancelReason','notes'];
+  'ctnBundle','takenBy','editedBy','cancelReason','notes','extra','extraLabel'];
 
 function doGet() { return _json({ ok: true, service: 'KP Wallpanel Order sync' }); }
 

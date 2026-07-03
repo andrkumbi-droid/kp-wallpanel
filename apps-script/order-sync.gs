@@ -20,7 +20,7 @@ var KP_COLS = ['orderNo','date','status','paid','prio','products','panelsA','pan
   'utrim','ttrim','extraClips','freeClips','shipping','discount','total','paidAmount',
   'outstanding','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
   'address','maps','deliveredBy','deliveredOn','time','deliveryRound','carrier','tracking',
-  'ctnBundle','takenBy','editedBy','cancelReason','notes'];
+  'ctnBundle','takenBy','editedBy','cancelReason','notes','extra','extraLabel'];
 
 function doGet() { return _json({ ok: true, service: 'KP Wallpanel Order sync' }); }
 

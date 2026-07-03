@@ -30,7 +30,8 @@ var KP_HEADERS = [
   'Phone\n\u0e40\u0e1a\u0e2d\u0e23\u0e4c\u0e42\u0e17\u0e23','Contact\n\u0e0a\u0e48\u0e2d\u0e07\u0e17\u0e32\u0e07','Address\n\u0e17\u0e35\u0e48\u0e2d\u0e22\u0e39\u0e48','Maps link\n\u0e25\u0e34\u0e07\u0e01\u0e4c\u0e41\u0e1c\u0e19\u0e17\u0e35\u0e48',
   'Delivered by\n\u0e2a\u0e48\u0e07\u0e42\u0e14\u0e22','Delivered on\n\u0e2a\u0e48\u0e07\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48','Time\n\u0e40\u0e27\u0e25\u0e32','Delivery round\n\u0e23\u0e2d\u0e1a\u0e2a\u0e48\u0e07',
   'Carrier\n\u0e02\u0e19\u0e2a\u0e48\u0e07','Tracking\n\u0e40\u0e25\u0e02\u0e1e\u0e31\u0e2a\u0e14\u0e38','CTN/Bundle\n\u0e01\u0e25\u0e48\u0e2d\u0e07\u00b7\u0e21\u0e31\u0e14','Taken by\n\u0e23\u0e31\u0e1a\u0e2d\u0e2d\u0e40\u0e14\u0e2d\u0e23\u0e4c\u0e42\u0e14\u0e22',
-  'Edited by\n\u0e41\u0e01\u0e49\u0e44\u0e02\u0e42\u0e14\u0e22','Cancel reason\n\u0e40\u0e2b\u0e15\u0e38\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01','Notes\n\u0e2b\u0e21\u0e32\u0e22\u0e40\u0e2b\u0e15\u0e38'];
+  'Edited by\n\u0e41\u0e01\u0e49\u0e44\u0e02\u0e42\u0e14\u0e22','Cancel reason\n\u0e40\u0e2b\u0e15\u0e38\u0e22\u0e01\u0e40\u0e25\u0e34\u0e01','Notes\n\u0e2b\u0e21\u0e32\u0e22\u0e40\u0e2b\u0e15\u0e38',
+  'Extra \u0e3f\n\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21 (\u0e3f)','Extra note\n\u0e23\u0e32\u0e22\u0e25\u0e30\u0e40\u0e2d\u0e35\u0e22\u0e14\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21'];
 
 var KP_SUM_HEADERS = [
   'Month / \u0e40\u0e14\u0e37\u0e2d\u0e19','Orders / \u0e2d\u0e2d\u0e40\u0e14\u0e2d\u0e23\u0e4c','Revenue / \u0e23\u0e32\u0e22\u0e44\u0e14\u0e49','Paid / \u0e0a\u0e33\u0e23\u0e30\u0e41\u0e25\u0e49\u0e27','Outstanding / \u0e04\u0e49\u0e32\u0e07\u0e0a\u0e33\u0e23\u0e30',
@@ -131,6 +132,7 @@ function kpBuildZone_(ss, name) {
   sh.getRange('B2:B').setNumberFormat('yyyy-mm-dd');   // Date
   sh.getRange('T2:T').setNumberFormat('yyyy-mm-dd');   // Paid on
   sh.getRange('AC2:AC').setNumberFormat('yyyy-mm-dd');  // Delivered on
+  sh.getRange('AM2:AM').setNumberFormat('#,##0');       // Extra (amount)
   sh.getRange('E2:E').setHorizontalAlignment('center'); // Priority
 
   // Total column highlight that survives conditional row-colours: bold + gold border
@@ -521,7 +523,7 @@ var KP_COLS = ['orderNo','date','status','paid','prio','products','panelsA','pan
   'utrim','ttrim','extraClips','freeClips','shipping','discount','total','paidAmount',
   'outstanding','payMethod','paidOn','paymentBy','receiptNo','customer','phone','contact',
   'address','maps','deliveredBy','deliveredOn','time','deliveryRound','carrier','tracking',
-  'ctnBundle','takenBy','editedBy','cancelReason','notes'];
+  'ctnBundle','takenBy','editedBy','cancelReason','notes','extra','extraLabel'];
 
 function doGet() { return _json({ ok: true, service: 'KP Wallpanel Order sync' }); }
 
