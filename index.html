@@ -2190,7 +2190,14 @@ function ofSelectStaff(id) {
 function syncStockItems() { if(window.fbDB) { const obj = {}; stockItems.forEach((s,i) => obj[s.code] = s); window.fbDB.ref('stockItems').set(obj); } }
 function syncIncoming() { if(window.fbDB) { const obj = {}; incomingItems.forEach((s,i) => obj[s.id] = s); window.fbDB.ref('incomingItems').set(obj); } }
 function syncDrivers() { if(window.fbDB) { const obj = {}; drivers.forEach((d,i) => obj[d.id] = d); window.fbDB.ref('drivers').set(obj); } }
-function syncOrders() { if(window.fbDB) { const obj = {}; orders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('orders').set(obj); } }
+// Per-order UPDATE (not a wholesale .set of the whole node). A wholesale set
+// meant any client with a stale/offline orders list would delete every order it
+// didn't know about — that's how app-created orders (e.g. 2-013/2-014) vanished
+// from Firebase while surviving in the sheet. update() only overwrites the keys
+// this client actually has; deletions are handled explicitly in deleteOrder().
+function syncOrders() { if(window.fbDB) { const obj = {}; orders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('orders').update(obj); } }
+// Explicitly remove one order key from Firebase (deletion no longer implicit).
+function fbRemoveOrder(id){ try{ if(window.fbDB) window.fbDB.ref('orders/'+String(id).replace(/[^a-zA-Z0-9]/g,'_')).remove(); }catch(e){} }
 function syncWOrders() { if(window.fbDB) { const obj = {}; wOrders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('wOrders').set(obj); } }
 // Firebase keys can't contain . # $ / [ ]. Order ids can (e.g. Bangkok "#832"),
 // so tour.status/checks (keyed by order id) must use a sanitised key — otherwise
@@ -7280,7 +7287,9 @@ function deleteOrder(btn) {
   });
   // Remove from revOrders
   revOrders = revOrders.filter(function(o) { return o.id !== id; });
-  // Sync all
+  // Sync all — syncOrders() now only UPDATEs known orders, so the deleted order
+  // must be removed from Firebase explicitly (was previously implicit via .set).
+  fbRemoveOrder(id);
   syncOrders();
   syncWOrders();
   syncTours();
