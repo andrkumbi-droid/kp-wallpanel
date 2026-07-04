@@ -3622,10 +3622,26 @@ function closeTourDetail() {
   currentTourDetailIdx = null;
 }
 
+// Security gate for destructive actions (delete order / end tour): the person
+// must enter a valid staff PIN before the action proceeds. Accepts any active
+// staff member's PIN and returns the authorizing staff name (or null if
+// cancelled / wrong PIN). Uses a native prompt to match the app's confirm()s.
+function requireStaffPin(actionLabel){
+  var entered = prompt('🔒 ' + (actionLabel||'') + '\n\nEnter your PIN to confirm / ใส่รหัส PIN เพื่อยืนยัน:');
+  if(entered === null) return null;                 // cancelled
+  entered = String(entered).trim();
+  var s = (staffList||[]).find(function(x){ return x && x.pin != null && String(x.pin) === entered; });
+  if(!s){ alert('❌ Wrong PIN / รหัสไม่ถูกต้อง'); return null; }
+  return s.name || 'Staff';
+}
+
 function ofEndTourFromDetail() {
   if(currentTourDetailIdx === null) return;
   const t = activeTours[currentTourDetailIdx];
   if(!confirm('End ' + t.driverName + "'s tour?"+(parseFloat(t.driverPay)>0?'\nTour pay '+(parseFloat(t.driverPay)||0).toLocaleString()+' ฿ → payroll':''))) return;
+  var _pinBy = requireStaffPin('End tour / จบทัวร์ · ' + t.driverName);
+  if(!_pinBy) return;
+  try{ addLog('Tour '+(t.driverName||'')+' ended (PIN: '+_pinBy+')','-'); }catch(e){}
   try{ endTourPayroll(t); }catch(e){}
   var _rid = t && t.id;
   activeTours.splice(currentTourDetailIdx, 1);
@@ -7385,6 +7401,8 @@ function whLoginBack(){
 function deleteOrder(btn) {
   var id = btn.getAttribute('data-id');
   if(!confirm('Delete order ' + id + '?\nThis CANNOT be undone! / ลบออเดอร์?')) return;
+  var _pinBy = requireStaffPin('Delete order / ลบออเดอร์ · ' + id);
+  if(!_pinBy) return;
   var _delOrd = orders.find(function(o){ return o.id===id; }); // capture for master clear
   // Remove from orders array
   orders = orders.filter(function(o) { return o.id !== id; });
@@ -7406,7 +7424,7 @@ function deleteOrder(btn) {
   syncRevOrders();
   ofRenderOrders();
   mgRender();
-  addLog('Order '+id+' deleted', '-');
+  addLog('Order '+id+' deleted (PIN: '+_pinBy+')', '-');
   try{var byN2=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';auditAdd({type:'delete',orderId:id,by:byN2});}catch(e){}
   try{ sheetsClearMaster(_delOrd||{id:id}); }catch(e){ console.error('Master clear failed (non-blocking):', e); }
   // Tombstone: stop the mirror auto-sync from re-adding this order before the
