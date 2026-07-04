@@ -4451,8 +4451,27 @@ function ofUpdTourDot(){
   var hot=Object.keys(byZone).some(function(z){ return byZone[z]>100000; });
   var el=document.getElementById('oft-tour-dot'); if(el){ if(hot) el.classList.add('on'); else el.classList.remove('on'); }
 }
+// Self-heal: stamp the tour's driver into "Delivered by" (sheet col AC) for any
+// order already assigned to an active tour but still missing a driver (e.g. tours
+// created before this feature existed). Only touches orders that need it, then
+// syncs once — so repeated renders don't spam the sheet.
+function ofBackfillTourDrivers(){
+  var changed=false;
+  (activeTours||[]).forEach(function(t){
+    if(!t.driverName) return;
+    (t.orders||[]).forEach(function(id){
+      var o=orders.find(function(x){return x.id===id;});
+      if(o && !o.deliveredBy && o.status!=='cancelled'){
+        o.deliveredBy=t.driverName; changed=true;
+        try{ sheetsSyncOrder(o); }catch(e){}
+      }
+    });
+  });
+  if(changed){ try{ syncOrders(); }catch(e){} }
+}
 function ofRenderTour(){
   ofUpdTourDot();
+  try{ ofBackfillTourDrivers(); }catch(e){}
   // OVERVIEW: all ready + loaded orders with driver assignment
   var overviewEl = document.getElementById('of-tour-overview');
   if(overviewEl) {
@@ -6348,6 +6367,11 @@ function kpDeliveredInfo(o){
   (o.statusLog||[]).forEach(function(e){ if(e && e.status==='delivered'){ d=e.date||d; t=e.time||t; by=e.by||by; } });
   return {date:d,time:t,by:by};
 }
+// Driver of the active tour that currently holds this order (for "Delivered by"
+// col before the order is actually delivered). Empty string if not in a tour.
+function kpTourDriver(id){
+  try{ if(typeof activeTours==='undefined'||!activeTours) return ''; var t=activeTours.find(function(x){return (x.orders||[]).indexOf(id)>=0;}); return t?(t.driverName||''):''; }catch(e){ return ''; }
+}
 // Build the flat per-order object the new sheet expects (named fields).
 function kpFlatOrder(o){
   var li=o.lineItems||[];
@@ -6378,7 +6402,7 @@ function kpFlatOrder(o){
     products:products, shipping:cancelled?0:shipping, discount:cancelled?0:discount, extra:cancelled?0:extra, extraLabel:cancelled?'':extraLabel, total:cancelled?0:total,
     paidAmount:cancelled?0:paidAmt, outstanding:cancelled?0:outstanding,
     payMethod:cancelled?'':(o.payMethod||o.payMethodPartial||''), paidOn:o.payDate||'', paymentBy:o.paidBy||'',
-    deliveredOn:del.date, time:del.time, deliveredBy:o.deliveredBy||del.by,
+    deliveredOn:del.date, time:del.time, deliveredBy:o.deliveredBy||del.by||kpTourDriver(o.id),
     carrier:o.shipper||'', tracking:(o.shippingBill!=null?o.shippingBill:''), ctnBundle:ctnB.join(' · '),
     customer:(o.customer&&o.customer!=='—')?o.customer:'', phone:(o.phone&&o.phone!=='—')?o.phone:'',
     contact:o.contact||'', address:(o.address&&o.address!=='—')?o.address:'', maps:o.location||'',
