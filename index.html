@@ -1189,7 +1189,7 @@ textarea{resize:none}
     <div class="sumbox" id="of-sum-dummy" style="display:none">
     </div>
     <button type="button" id="of-priority-btn" onclick="ofTogglePriorityNew()" style="width:100%;margin-top:8px;padding:11px;border-radius:var(--rs);border:1.5px dashed #c084fc;background:#faf5ff;color:#7c3aed;font-size:14px;font-weight:700;cursor:pointer"><i class="ti ti-star"></i> Mark as Priority / ตั้งเป็นสำคัญมาก</button>
-    <button type="button" id="of-directsold-btn" onclick="ofToggleDirectSold()" style="display:none;width:100%;margin-top:8px;padding:11px;border-radius:var(--rs);border:1.5px dashed #16a34a;background:#f0fdf4;color:#15803d;font-size:14px;font-weight:700;cursor:pointer"><i class="ti ti-cash"></i> Direct sale — paid & delivered / ขายหน้าร้าน (จ่ายแล้ว-ส่งแล้ว)</button>
+    <button type="button" id="of-directsold-btn" onclick="ofDirectSale()" style="display:none;width:100%;margin-top:8px;padding:13px;border-radius:var(--rs);border:none;background:#16a34a;color:#fff;font-size:14px;font-weight:700;cursor:pointer"><i class="ti ti-cash"></i> ✓ Direct sale — create now / ขายหน้าร้าน (จ่ายแล้ว-ส่งแล้ว)</button>
     <div class="btn-row">
       <button type="button" class="btn" onclick="ofCheck()" style="border-color:var(--blue-l);color:var(--blue)"><i class="ti ti-search"></i> Check stock / เช็คสต็อก</button>
       <button type="button" class="btn btng" onclick="ofCreate()"><i class="ti ti-circle-check"></i> Create order / สร้างออเดอร์</button>
@@ -3840,14 +3840,17 @@ function ofUpdatePriorityBtn(){
   if(_ofPriority){ btn.style.background='#7c3aed'; btn.style.color='#fff'; btn.style.borderStyle='solid'; btn.innerHTML='<i class="ti ti-star"></i> ⭐ Priority ON'+(_ofPriorityReason?' — '+_ofPriorityReason:''); }
   else { btn.style.background='#faf5ff'; btn.style.color='#7c3aed'; btn.style.borderStyle='dashed'; btn.innerHTML='<i class="ti ti-star"></i> Mark as Priority / ตั้งเป็นสำคัญมาก'; }
 }
-// Instore direct sale: order is created already delivered + fully paid.
+// Instore direct sale: ONE click creates the order already delivered + fully
+// paid — no separate "Create order" press needed.
 var _ofDirectSold=false;
-function ofToggleDirectSold(){ _ofDirectSold=!_ofDirectSold; ofUpdateDirectSoldBtn(); }
-function ofUpdateDirectSoldBtn(){
-  var btn=document.getElementById('of-directsold-btn'); if(!btn) return;
-  if(_ofDirectSold){ btn.style.background='#16a34a'; btn.style.color='#fff'; btn.style.borderStyle='solid'; btn.innerHTML='<i class="ti ti-cash"></i> ✓ Direct sale ON — จ่ายแล้ว-ส่งแล้ว'; }
-  else { btn.style.background='#f0fdf4'; btn.style.color='#15803d'; btn.style.borderStyle='dashed'; btn.innerHTML='<i class="ti ti-cash"></i> Direct sale — paid & delivered / ขายหน้าร้าน (จ่ายแล้ว-ส่งแล้ว)'; }
+function ofDirectSale(){
+  var zone=(document.getElementById('of-zone')||{}).value;
+  if(zone!=='Instore'){ alert('Direct sale is for Instore only / เฉพาะขายหน้าร้าน'); return; }
+  if(!confirm('Create direct sale now — PAID + DELIVERED? / สร้างขายหน้าร้าน (จ่ายแล้ว-ส่งแล้ว)?')) return;
+  _ofDirectSold=true;
+  ofCreate();   // reads _ofDirectSold → delivered+paid, then resets the flag
 }
+function ofUpdateDirectSoldBtn(){ /* button is a one-click action, no toggle state to render */ }
 function ofCreate(){
   const zoneVal = document.getElementById('of-zone').value;
   let no = document.getElementById('of-no').value.trim();
@@ -4442,7 +4445,7 @@ function ofRenderTour(){
       var zones = {};
       waitingOrders.forEach(function(o) {
         var z = o.zone||'Unknown';
-        if(!zones[z]) zones[z] = {orders:0, panels:0, ctn:0, bundle:0, readyBaht:0, items:[]};
+        if(!zones[z]) zones[z] = {orders:0, panels:0, ctn:0, bundle:0, readyBaht:0, loadedBaht:0, items:[]};
         zones[z].orders++;
         zones[z].items.push(o);
         // Count panels from lineItems
@@ -4452,8 +4455,22 @@ function ofRenderTour(){
         zones[z].panels += panels;
         zones[z].ctn += parseInt(o.ctn)||0;
         zones[z].bundle += parseInt(o.bundle)||0;
-        // Amount: count every order still shown here (new/packing/ready/loaded) until it's delivered.
-        zones[z].readyBaht += ofOrderTotalNum(o);
+        // Split the amount: loaded = already assigned to a driver; ready = still
+        // waiting (new/packing/ready). Only the READY amount drives the glow.
+        if(o.status==='loaded') zones[z].loadedBaht += ofOrderTotalNum(o);
+        else zones[z].readyBaht += ofOrderTotalNum(o);
+      });
+      // Full active-tour value per zone = loaded + already-delivered (excl. cancelled),
+      // so the "assigned" line can show the whole tour total in parentheses.
+      var tourTotalByZone = {};
+      (activeTours||[]).forEach(function(t){
+        if(!t||!t.orders) return;
+        t.orders.forEach(function(id){
+          if(((t.status||{})[id]||'loaded')==='cancelled') return;
+          var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+          var z=o.zone||'Unknown';
+          tourTotalByZone[z]=(tourTotalByZone[z]||0)+ofOrderTotalNum(o);
+        });
       });
       var zoneColors = {
         'Bangkok':'var(--blue)','Northern':'#8b5cf6','Northeastern':'#f59e0b',
@@ -4504,7 +4521,8 @@ function ofRenderTour(){
             +'<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:11px;font-weight:700;color:'+c+'">'+z+'</span><span style="font-size:10px;color:var(--text2)">▾</span></div>'
             +'<div style="font-size:13px;font-weight:700;margin-top:2px">'+d.orders+' order'+(d.orders!==1?'s':'')+'</div>'
             +'<div style="font-size:11px;color:var(--text2)">'+d.panels.toLocaleString()+' panels'+(d.ctn>0?' · <span style="color:#16A34A;font-weight:600">'+d.ctn+' CTN</span>':'')+(d.bundle>0?' · <span style="color:#ea580c;font-weight:600">'+d.bundle+' มัด</span>':'')+'</div>'
-            +'<div style="font-size:12px;font-weight:700;margin-top:2px;color:'+amtCol+'">💰 '+d.readyBaht.toLocaleString()+' ฿ <span style="font-size:10px;font-weight:500;color:var(--text2)">รอส่ง</span></div>'
+            +'<div style="font-size:12px;font-weight:700;margin-top:2px;color:'+amtCol+'">💰 '+d.readyBaht.toLocaleString()+' ฿ <span style="font-size:10px;font-weight:500;color:var(--text2)">รอส่ง / ready</span></div>'
+            +(d.loadedBaht>0?'<div style="font-size:11px;font-weight:700;margin-top:1px;color:#6d28d9">🚚 '+d.loadedBaht.toLocaleString()+' ฿ <span style="font-size:10px;font-weight:500;color:var(--text2)">ขึ้นรถแล้ว / assigned</span>'+((tourTotalByZone[z]||0)>d.loadedBaht?' <span style="font-size:10px;font-weight:600;color:var(--text2)">(Tour: '+(tourTotalByZone[z]||0).toLocaleString()+' ฿)</span>':'')+'</div>':'')
             +'</summary>'
             +'<div style="padding:0 10px 8px">'+rows+'</div>'
             +'</details>';
