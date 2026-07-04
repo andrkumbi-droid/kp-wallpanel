@@ -6110,13 +6110,35 @@ function picsToggleOrder(sid){
         '</div>';
       }).join('')+
     '</div>'+
-    '<button type="button" onclick="deleteAllOrderPhotos(\''+sid+'\')" style="margin-top:8px;width:100%;padding:8px;border-radius:var(--rs);border:1px solid #dc2626;background:#fee2e2;color:#991b1b;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-trash"></i> Delete all photos / ลบรูปทั้งหมด</button>';
+    '<label style="margin-top:8px;display:flex;align-items:center;justify-content:center;gap:6px;width:100%;box-sizing:border-box;padding:8px;border-radius:var(--rs);border:1px solid var(--blue);background:var(--bg2);color:var(--blue);font-size:12px;font-weight:700;cursor:pointer">'+
+      '<input type="file" accept="image/*" style="display:none" onchange="picsAddPhoto(\''+sid+'\',this)">'+
+      '<i class="ti ti-camera"></i> Add photo / เพิ่มรูป'+
+    '</label>'+
+    '<button type="button" onclick="deleteAllOrderPhotos(\''+sid+'\')" style="margin-top:6px;width:100%;padding:8px;border-radius:var(--rs);border:1px solid #dc2626;background:#fee2e2;color:#991b1b;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-trash"></i> Delete all photos / ลบรูปทั้งหมด</button>';
+  });
+}
+// Office adds a photo to an existing order (into the current warehouse/delivery tab).
+function picsAddPhoto(sid, input){
+  var file = input && input.files && input.files[0];
+  if(!file){ return; }
+  var idxE = (getPhotoIndex()[picsTab]||{})[sid] || {};
+  var oid = idxE.id || ((typeof orders!=='undefined' ? (orders.find(function(x){return safeOrderId(x.id)===sid;})||{}) : {}).id) || sid;
+  var by = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name || 'Office';
+  input.value = '';
+  compressPhotoFile(file, function(dataUrl){
+    addOrderPhoto(oid, picsTab, dataUrl, by, function(ok){
+      if(!ok){ alert('❌ Upload failed / อัปโหลดไม่สำเร็จ'); return; }
+      try{ addLog('Photo added to '+oid+' ('+picsTab+', by '+by+')','+'); }catch(e){}
+      picsRender();
+      picsToggleOrder(sid); // reopen to show the new photo
+    });
   });
 }
 // Delete ALL photos of an order at once.
 function deleteAllOrderPhotos(sid){
   if(!window.fbDB) return;
   if(!confirm('Delete ALL photos of this order? / ลบรูปทั้งหมดของออเดอร์นี้?')) return;
+  if(!requireStaffPin('Delete ALL photos / ลบรูปทั้งหมด')) return;
   window.fbDB.ref('orderPhotos/'+picsTab+'/'+sid).remove(function(){
     window.fbDB.ref('photoIndex/'+picsTab+'/'+sid).remove(function(){ picsRender(); });
   });
@@ -6125,6 +6147,7 @@ function deleteAllOrderPhotos(sid){
 function deleteOrderPhoto(sid, key){
   if(!window.fbDB) return;
   if(!confirm('Delete this photo? / ลบรูปนี้?')) return;
+  if(!requireStaffPin('Delete photo / ลบรูป')) return;
   window.fbDB.ref('orderPhotos/'+picsTab+'/'+sid+'/'+key).remove(function(){
     var idxRef = window.fbDB.ref('photoIndex/'+picsTab+'/'+sid);
     idxRef.transaction(function(cur){
