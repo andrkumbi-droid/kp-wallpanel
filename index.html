@@ -1892,9 +1892,26 @@ textarea{resize:none}
 <div class="modal-overlay" id="change-modal"><div class="modal">
   <div class="mhdr"><span class="mtit">🔄 Change order / แก้ออเดอร์ <span id="co-id"></span></span><button type="button" class="mclose" onclick="closeCO()"><i class="ti ti-x"></i></button></div>
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Adjust qty, set 0 to remove, or add new lines. Warehouse must confirm. / ปรับจำนวน ใส่ 0 เพื่อลบ หรือเพิ่มรายการใหม่ — คลังต้องยืนยัน</div>
+  <div class="stit" style="font-size:12px;font-weight:700;color:var(--text2);margin:6px 0 4px">Panels / แผ่น</div>
   <div class="colh"><span>Code</span><span>฿/pc</span><span>Qty</span><span></span></div>
   <div id="co-lines"></div>
-  <button type="button" class="abtn" onclick="coAddLine()"><i class="ti ti-plus"></i> Add line / เพิ่มสินค้า</button>
+  <button type="button" class="abtn" onclick="coAddLine()"><i class="ti ti-plus"></i> Add panel / เพิ่มแผ่น</button>
+
+  <div class="stit" style="font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 4px">Edges / ขอบ — L-Corner · T-Trim · U-Trim</div>
+  <div class="colh-e"><span>Type</span><span>Code</span><span>฿/pc</span><span>Qty</span><span></span></div>
+  <div id="co-edges"></div>
+  <button type="button" class="abtn" onclick="coAddE()"><i class="ti ti-plus"></i> Add edge / เพิ่มขอบ</button>
+
+  <div class="stit" style="font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 4px">Clips / คลิป</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div><label class="fl" style="margin-top:0">Clip packs ×199 / แพ็ค</label><input type="number" id="co-clip-packs" min="0" placeholder="0" oninput="coCalc()"></div>
+    <div><label class="fl" style="margin-top:0">Free gift clips 🎁 / ฟรี (pcs)</label><input type="number" id="co-free-clips" min="0" placeholder="0" oninput="coCalc()"></div>
+  </div>
+
+  <div class="stit" style="font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 4px">Delivery / ค่าจัดส่ง (฿)</div>
+  <input type="number" id="co-delivery" min="0" placeholder="0" oninput="coShipEdit()">
+  <div style="font-size:10px;color:var(--text2);margin-top:2px">Auto: &lt;25 panels → 400 ฿ · free ≥25 / ฟรี ≥25 แผ่น · <a href="#" onclick="coShipReset();return false" style="color:var(--blue)">reset</a></div>
+
   <label class="fl">Note for warehouse / หมายเหตุถึงคลัง</label><input type="text" id="co-note" placeholder="optional">
   <div id="co-total" style="font-size:13px;font-weight:700;margin-top:8px;text-align:right;color:var(--text)"></div>
   <button type="button" class="btn" style="margin-top:14px;background:#ea580c;color:#fff;border:none" onclick="submitCO()"><i class="ti ti-send"></i> Send change to warehouse / ส่งให้คลัง</button>
@@ -4939,15 +4956,41 @@ function coProdText(items){
   });
   return pa.concat(la).join(' · ')||'—';
 }
+// Delivery-fee rule (matches the quote tool): under 25 panels → 400 ฿, ≥25 → free.
+var coShipManual=false;
+function coSuggestShip(){ return coPanelQty()>=25 ? 0 : 400; }
+function coPanelQty(){
+  var q=0;
+  document.querySelectorAll('#co-lines .pline').forEach(function(l){
+    var i=l.querySelectorAll('input'); q+=parseInt(i[2].value)||0;
+  });
+  return q;
+}
+function coShipEdit(){ coShipManual=true; coCalc(); }
+function coShipReset(){ coShipManual=false; coCalc(); }
 function openCO(btn){
   var id=typeof btn==='string'?btn:btn.getAttribute('data-id');
   var o=orders.find(function(x){return x.id===id;}); if(!o)return; coId=id;
   document.getElementById('co-id').textContent=id;
   document.getElementById('co-note').value=(o.changeReq&&o.changeReq.note)||'';
   var wrap=document.getElementById('co-lines'); wrap.innerHTML='';
-  var COPROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
-  (o.lineItems||[]).forEach(function(li){ if(COPROD[li.type]) coAddLine(li.code, li.unitPrice, li.qty, li.grade); });
+  var edges=document.getElementById('co-edges'); edges.innerHTML='';
+  var EDGE={lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  var clipPacks=0,giftClips=0,deliv=0;
+  (o.lineItems||[]).forEach(function(li){
+    if(li.type==='panel') coAddLine(li.code, li.unitPrice, li.qty, li.grade);
+    else if(EDGE[li.type]) coAddE(li.type, li.code, li.unitPrice, li.qty);
+    else if(li.type==='clips') clipPacks+=parseInt(li.qty)||0;
+    else if(li.type==='free-gift-clips') giftClips+=parseInt(li.qty)||0;
+    else if(li.type==='delivery') deliv+=parseFloat(li.amount)||0;
+  });
   if(!wrap.children.length) coAddLine();
+  document.getElementById('co-clip-packs').value=clipPacks||'';
+  document.getElementById('co-free-clips').value=giftClips||'';
+  // Delivery: keep a custom fee as manual; auto-track it when it matches the rule.
+  var sugg=coSuggestShip();
+  coShipManual=(deliv>0 && deliv!==sugg);
+  document.getElementById('co-delivery').value=(coShipManual?deliv:sugg)||(sugg?sugg:'');
   coCalc();
   document.getElementById('change-modal').classList.add('open');
 }
@@ -4962,14 +5005,37 @@ function coAddLine(code,price,qty,grade){
     +'<button type="button" class="xbtn" onclick="this.parentNode.remove();coCalc()"><i class="ti ti-x"></i></button>';
   wrap.appendChild(div);
 }
+function coAddE(etype,code,price,qty){
+  var wrap=document.getElementById('co-edges'); if(!wrap)return;
+  // Normalise the two edge-type conventions to the create-form select values.
+  var sel=(etype==='tedge'?'ttrim':etype==='uedge'?'utrim':(etype||'lcorner'));
+  var opt=function(v,l){return '<option value="'+v+'"'+(sel===v?' selected':'')+'>'+l+'</option>';};
+  var div=document.createElement('div'); div.className='eline';
+  div.innerHTML='<select style="padding:8px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:11px;background:var(--bg);color:var(--text);width:100%" onchange="coCalc()">'
+      +opt('lcorner','L-Corner')+opt('ttrim','T-Trim')+opt('utrim','U-Trim')+'</select>'
+    +'<input type="text" placeholder="Code" value="'+(code||'')+'" oninput="this.value=this.value.toUpperCase();coCalc()">'
+    +'<input type="number" min="0" placeholder="179" value="'+(price!=null&&price!==''?price:'')+'" oninput="coCalc()">'
+    +'<input type="number" min="0" placeholder="0" value="'+(qty!=null&&qty!==''?qty:'')+'" oninput="coCalc()">'
+    +'<button type="button" class="xbtn" onclick="this.parentNode.remove();coCalc()"><i class="ti ti-x"></i></button>';
+  wrap.appendChild(div);
+}
 function coCalc(){
   var sum=0;
   document.querySelectorAll('#co-lines .pline').forEach(function(l){
     var i=l.querySelectorAll('input'); sum+=(parseFloat(i[1].value)||0)*(parseInt(i[2].value)||0);
   });
+  document.querySelectorAll('#co-edges .eline').forEach(function(l){
+    var i=l.querySelectorAll('input'); sum+=(parseFloat(i[1].value)||0)*(parseInt(i[2].value)||0);
+  });
+  sum+=(parseInt((document.getElementById('co-clip-packs')||{}).value)||0)*199;
+  // Delivery: auto-suggest by panel qty unless the user overrode the field.
+  var shipEl=document.getElementById('co-delivery');
+  if(shipEl && !coShipManual){ var s=coSuggestShip(); shipEl.value=s?s:''; }
+  var ship=parseFloat(shipEl&&shipEl.value)||0;
+  // Carry over only discount/extra lines (no field for them).
   var o=orders.find(function(x){return x.id===coId;}),extra=0;
-  if(o&&o.lineItems)o.lineItems.forEach(function(li){if(li.type==='delivery'||li.type==='discount'||li.type==='extra')extra+=parseFloat(li.amount)||0;});
-  var el=document.getElementById('co-total'); if(el)el.textContent='New total / รวมใหม่: '+(sum+extra).toLocaleString()+' ฿';
+  if(o&&o.lineItems)o.lineItems.forEach(function(li){if(li.type==='discount'||li.type==='extra')extra+=parseFloat(li.amount)||0;});
+  var el=document.getElementById('co-total'); if(el)el.textContent='New total / รวมใหม่: '+(sum+ship+extra).toLocaleString()+' ฿';
 }
 function submitCO(){
   var o=orders.find(function(x){return x.id===coId;}); if(!o)return;
@@ -4983,10 +5049,26 @@ function submitCO(){
     if(t==='panel'){ item.grade=grade; tq+=qty; }
     newItems.push(item);
   });
-  (o.lineItems||[]).forEach(function(li){
-    if(li.type==='delivery'||li.type==='discount'||li.type==='clips'||li.type==='free-gift-clips'||li.type==='extra'){newItems.push(li);if(li.type==='free-gift-clips')freeGift+=parseInt(li.qty)||0;}
+  document.querySelectorAll('#co-edges .eline').forEach(function(l){
+    var sel=l.querySelector('select'), i=l.querySelectorAll('input');
+    var etype=sel?sel.value:'lcorner';
+    var code=i[0].value.trim().toUpperCase(), price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0;
+    if(!code||!qty)return;
+    newItems.push({type:etype,code:code,qty:qty,unitPrice:price,amount:price*qty});
   });
+  // Clips: paid packs (×199) + free gift clips — from the dedicated fields.
+  var clipPacks=parseInt((document.getElementById('co-clip-packs')||{}).value)||0;
+  freeGift=parseInt((document.getElementById('co-free-clips')||{}).value)||0;
+  if(clipPacks>0)newItems.push({type:'clips',code:'Clip Pack / คลิปแพ็ค',qty:clipPacks,unitPrice:199,amount:clipPacks*199});
+  if(freeGift>0)newItems.push({type:'free-gift-clips',code:'Free Clips 🎁 / ของขวัญ',qty:freeGift,unitPrice:0,amount:0});
   if(tq>0)newItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)',qty:tq*10,unitPrice:0,amount:0});
+  // Delivery: recomputed from the (auto-suggested/editable) field.
+  var deliv=parseFloat((document.getElementById('co-delivery')||{}).value)||0;
+  if(deliv>0)newItems.push({type:'delivery',code:'Delivery / ค่าจัดส่ง',qty:1,unitPrice:deliv,amount:deliv});
+  // Carry over discount/extra lines unchanged (no field for them).
+  (o.lineItems||[]).forEach(function(li){
+    if(li.type==='discount'||li.type==='extra')newItems.push(li);
+  });
   // diff panels + edges only
   var PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
   var oldMap={},newMap={};
@@ -4994,7 +5076,15 @@ function submitCO(){
   newItems.forEach(function(li){if(PROD[li.type])newMap[li.code]=(newMap[li.code]||0)+(parseInt(li.qty)||0);});
   var codes={};Object.keys(oldMap).forEach(function(c){codes[c]=1;});Object.keys(newMap).forEach(function(c){codes[c]=1;});
   var diff=[];Object.keys(codes).forEach(function(c){var ov=oldMap[c]||0,nv=newMap[c]||0;if(ov!==nv)diff.push({code:c,old:ov,'new':nv});});
-  if(!diff.length){alert('No changes / ไม่มีการเปลี่ยนแปลง');return;}
+  // A change can also be clips/gift/delivery/price-only (no panel/edge qty delta) — detect those too.
+  var sumBy=function(list,pred,f){return (list||[]).reduce(function(s,li){return pred(li)?s+(f(li)||0):s;},0);};
+  var oldClipPacks=sumBy(o.lineItems,function(li){return li.type==='clips';},function(li){return parseInt(li.qty)||0;});
+  var oldGift=sumBy(o.lineItems,function(li){return li.type==='free-gift-clips';},function(li){return parseInt(li.qty)||0;});
+  var oldDeliv=sumBy(o.lineItems,function(li){return li.type==='delivery';},function(li){return parseFloat(li.amount)||0;});
+  var oldTotalNum=sumBy(o.lineItems,function(){return true;},function(li){return parseFloat(li.amount)||0;});
+  var newTotalNum=sumBy(newItems,function(){return true;},function(li){return parseFloat(li.amount)||0;});
+  var otherChange=(clipPacks!==oldClipPacks)||(freeGift!==oldGift)||(deliv!==oldDeliv)||(Math.round(newTotalNum)!==Math.round(oldTotalNum));
+  if(!diff.length&&!otherChange){alert('No changes / ไม่มีการเปลี่ยนแปลง');return;}
   var who=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
   // snapshot original BEFORE applying (for the warehouse before/after view)
   var oldItems=(o.lineItems||[]).map(function(li){return li;});
@@ -5004,7 +5094,7 @@ function submitCO(){
   var pa=[],la=[];
   newItems.forEach(function(li){
     if(li.type==='panel')pa.push(li.code+' × '+li.qty+gradeTag(li.grade));
-    else if(li.type==='lcorner'||li.type==='tedge'||li.type==='uedge')la.push(li.code+' × '+li.qty);
+    else if(li.type==='lcorner'||li.type==='tedge'||li.type==='uedge'||li.type==='ttrim'||li.type==='utrim')la.push(li.code+' × '+li.qty);
   });
   o.lineItems=newItems;
   o.panels=pa.length?pa.join(' · '):'—';
