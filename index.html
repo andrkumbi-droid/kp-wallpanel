@@ -559,7 +559,12 @@ textarea{resize:none}
         try{if(document.getElementById('s-driver-tour').classList.contains('active'))drReady();}catch(e){}
       });
       db.ref('revOrders').on('value', function(snap) {
-        revOrders = snap.val() ? Object.values(snap.val()) : [];
+        // Dedup by order id on load — one revenue entry per delivered order. Guards
+        // against historical duplicates (an order delivered/re-delivered multiple
+        // times pushed several entries) that would double-count in the report.
+        var _rv = snap.val() ? Object.values(snap.val()) : [];
+        var _seenRid = {};
+        revOrders = _rv.filter(function(r){ if(!r||!r.id) return false; if(_seenRid[r.id]) return false; _seenRid[r.id]=1; return true; });
         try{if(document.getElementById('mgv-stock').classList.contains('active'))mgRevenue();}catch(e){}
         try{if(document.getElementById('ofv-sales').classList.contains('active'))ofRenderRevenue();}catch(e){}
       });
@@ -4011,7 +4016,7 @@ function quickStatus(btn) {
   // Revenue if delivered
   if(newStatus === 'delivered' && old !== 'delivered') {
     const amt = parseFloat((o.total||'').replace(/[^0-9]/g,''))||0;
-    if(amt>0) {
+    if(amt>0 && !revOrders.find(function(r){return r.id===o.id;})) {
       revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});
       addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');
     }
@@ -7067,7 +7072,7 @@ function drDoDeliver(id, photoUrl){
     // photo is stored in the separate orderPhotos node (see confirmDelivery),
     // not on the order object, to keep the orders payload small.
     const amt=parseFloat((ord.total+'').replace(/[^0-9]/g,''))||0;
-    if(amt>0){revOrders.push({rid:'r'+Date.now(),id:ord.id,cust:ord.customer,amt,date:new Date().toISOString().split('T')[0],zone:ord.zone,month:mkey(new Date().toISOString())});addLog('Order '+id+' delivered: '+amt.toLocaleString()+' ฿','+');}
+    if(amt>0 && !revOrders.find(function(r){return r.id===ord.id;})){revOrders.push({rid:'r'+Date.now(),id:ord.id,cust:ord.customer,amt,date:new Date().toISOString().split('T')[0],zone:ord.zone,month:mkey(new Date().toISOString())});addLog('Order '+id+' delivered: '+amt.toLocaleString()+' ฿','+');}
   }
   const tour=activeTours.find(t=>t.driverId===currentDriverId);
   if(tour)tour.status[id]='delivered';
