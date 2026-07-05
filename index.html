@@ -4678,6 +4678,7 @@ function ofRenderTour(){
       '<div style="display:flex;align-items:center;gap:6px">'+
       '<button type="button" onclick="event.stopPropagation();ofOptimizeTour(\''+t.id+'\')" title="Optimal route order / จัดลำดับเส้นทาง" style="font-size:11px;padding:3px 8px;border:none;background:#7c3aed;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">↕ Route</button>'+
       '<button type="button" onclick="event.stopPropagation();printTourReceipts('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#1D4ED8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600"><i class="ti ti-printer"></i> All Print</button>'+
+      '<button type="button" onclick="event.stopPropagation();ofAddOrderToTour(\''+t.id+'\')" title="Add a ready order to this tour / เพิ่มออเดอร์เข้าทัวร์" style="font-size:11px;padding:3px 8px;border:none;background:#0ea5e9;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">➕ Add</button>'+
       (!t.driving?'<button type="button" onclick="event.stopPropagation();ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 Departed</button>':'<span style="font-size:11px;color:var(--green);font-weight:600">🚚 Driving ('+t.departedAt+')</span>')+
       '<span class="badge bactive">'+t.orders.length+' orders</span><i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2)"></i></div>'+
       '</div>'+
@@ -4846,6 +4847,35 @@ function ofMoveOrder(fromTourId, orderId){
   // remove now-empty source tour
   if(from.orders.length===0){ activeTours=activeTours.filter(function(x){return x.id!==fromTourId;}); fbRemoveTour(fromTourId); }
   ofRenderTour(); syncTours();
+}
+
+// Add a ready order to an ALREADY-EXISTING tour (incl. one that already left) —
+// e.g. an order came in after the driver departed, driver returned and loaded it.
+function ofAddOrderToTour(tourId){
+  var t = activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var used = activeTours.reduce(function(acc,x){return acc.concat(x.orders||[]);},[]);
+  var avail = orders.filter(function(o){return o.status==='ready' && used.indexOf(o.id)<0;});
+  if(!avail.length){ alert('No ready orders available to add. / ไม่มีออเดอร์พร้อมส่งให้เพิ่ม'); return; }
+  var msg = 'Add which order to ' + t.driverName + "'s tour? / เพิ่มออเดอร์ไหนเข้าทัวร์?\n\n"
+    + avail.map(function(o,i){return (i+1)+') '+o.id+' — '+(o.customer||'')+' · '+(o.zone||'');}).join('\n')
+    + '\n\nEnter number / ใส่หมายเลข:';
+  var pick = prompt(msg, '1'); if(pick===null) return;
+  var idx = parseInt(pick,10)-1; if(isNaN(idx)||idx<0||idx>=avail.length){ alert('Invalid choice / เลือกไม่ถูกต้อง'); return; }
+  var o = avail[idx];
+  // Driver already out → the order is loaded onto the truck now; still loading → keep it ready.
+  var newSt = t.driving ? 'loaded' : 'ready';
+  if(t.orders.indexOf(o.id)<0) t.orders.push(o.id);
+  t.status = t.status||{}; t.status[o.id] = newSt;
+  if(o.status!==newSt){ o.status=newSt; try{ addStatusLog(o,newSt,'Office'); }catch(e){} }
+  // Make the driver app aware of the order (mirror what ofCreateTour does).
+  try{ if(!dAllOrders.find(function(x){return x.id===o.id;})){ dAllOrders.push({id:o.id,customer:o.customer,phone:o.phone,address:o.address,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:o.clips,ctn:o.ctn,bundle:o.bundle}); dAllOrders.sort(function(a,b){return reg(a.id).s-reg(b.id).s;}); } }catch(e){}
+  try{ dStatus[o.id]=newSt; }catch(e){}
+  var d = drivers.find(function(x){return x.id===t.driverId;});
+  if(d){ o.deliveredBy=d.name; }
+  try{ sheetsSyncOrder(o); }catch(e){}
+  try{ pushSend('driver_'+t.driverId,'➕ Order added to your tour / เพิ่มออเดอร์', o.id+' — '+(o.customer||''), {tag:'tour'}); }catch(e){}
+  try{ addLog('Order '+o.id+' added to '+t.driverName+"'s tour",'+'); }catch(e){}
+  ofRenderTour(); ofRenderOrders(); mgRender(); syncTours(); syncOrders();
 }
 
 // Mark/unmark an existing order as priority (with confirm + reason)
