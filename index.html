@@ -503,6 +503,17 @@ textarea{resize:none}
       });
       db.ref('orders').on('value', function(snap) {
         orders = snap.val() ? Object.values(snap.val()) : [];
+        // Safeguard: keep each order's stored total in sync with its line items.
+        // If total drifted (e.g. items removed without recalc), fix it from the
+        // items. Skips orders with no priced items so imported totals stay intact.
+        try{
+          var _tfix=0;
+          orders.forEach(function(o){
+            var c=ofCanonTotal(o); if(c===null) return;
+            if(Math.abs(c-ofOrderTotalNum(o))>=1){ o.total=c.toLocaleString()+' ฿'; _tfix++; }
+          });
+          if(_tfix>0){ try{addLog(_tfix+' order total(s) auto-corrected from items','~');}catch(e){} syncOrders(); }
+        }catch(e){}
         try{if(document.getElementById('s-office').classList.contains('active')){ofRenderOrders();if(document.getElementById('ofv-home').classList.contains('active'))ofRenderDashboard();}}catch(e){}
         try{syncCountersWithOrders();}catch(e){}
         try{if(document.getElementById('mgv-stock').classList.contains('active'))mgRevenue();}catch(e){}
@@ -4130,7 +4141,8 @@ function ofOrderCard(o){
     +'<button type="button" class="btnsm" onclick="ofCopyPack(\''+o.id+'\',this)" title="Copy pack list / คัดลอก" style="flex-shrink:0;padding:4px 8px"><i class="ti ti-copy"></i></button>'
     +'</div>';
   s += noteHTML;
-  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span style="font-size:14px;font-weight:700">'+o.total+'</span><span style="font-size:11px;color:#888">'+fmtD(o.date)+'</span></div>';
+  var _shownTotal=(ofCanonTotal(o)!=null?ofCanonTotal(o).toLocaleString()+' ฿':o.total);
+  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span style="font-size:14px;font-weight:700">'+_shownTotal+'</span><span style="font-size:11px;color:#888">'+fmtD(o.date)+'</span></div>';
   var _exLi=(o.lineItems||[]).filter(function(i){return i.type==='extra';});
   if(_exLi.length){ var _exTot=_exLi.reduce(function(a,i){return a+(parseFloat(i.amount)||0);},0); s += '<div style="font-size:12px;margin-top:2px;color:#15803d">➕ '+(_exLi[0].code||'Extra')+': <b>'+_exTot.toLocaleString()+' ฿</b></div>'; }
   var _depN=parseFloat(o.deposit)||0;
@@ -4164,6 +4176,15 @@ function ofOrderCard(o){
 
 // ── Quick payment on an order card (full via checkbox, partial via amount) ──
 function ofOrderTotalNum(o){ return parseInt(String((o&&o.total)||'').replace(/[^0-9]/g,''),10)||0; } // whole baht: strip all separators ('.'/',') so "3.333 ฿" → 3333, not 3.333
+// Canonical order total = sum of ALL lineItems amounts (the same way creation/saveEM
+// compute it). Returns null when there are no priced items — so imported/mirror orders
+// with an empty lineItems array keep their sheet-set total and are NEVER zeroed out.
+function ofCanonTotal(o){
+  if(!o || !Array.isArray(o.lineItems) || !o.lineItems.length) return null;
+  var s = o.lineItems.reduce(function(a,li){ return a + (parseFloat(li && li.amount)||0); }, 0);
+  if(!(s>0)) return null;
+  return Math.round(s);
+}
 function ofPaidAmt(id, val){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
   var total=ofOrderTotalNum(o);
