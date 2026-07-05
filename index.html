@@ -1043,6 +1043,21 @@ textarea{resize:none}
 
 <!-- OFFICE -->
 <div class="screen" id="s-office"><div class="pb">
+  <!-- TEAM CHAT (Stage 1: office-internal) -->
+  <button type="button" id="kpc-fab" onclick="kpcToggle()" title="Team chat / แชททีม" style="position:fixed;bottom:88px;right:18px;z-index:160;width:56px;height:56px;border-radius:50%;border:none;background:#7c3aed;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,0.28);cursor:pointer;font-size:24px;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent">💬<span id="kpc-dot" style="display:none;position:absolute;top:6px;right:6px;width:13px;height:13px;border-radius:50%;background:#ef4444;border:2px solid #fff"></span></button>
+  <div id="kpc-panel" style="display:none;position:fixed;inset:0;z-index:210;background:rgba(0,0,0,0.35)" onclick="if(event.target===this)kpcClose()">
+    <div style="position:absolute;bottom:0;left:0;right:0;max-width:520px;margin:0 auto;height:82vh;background:var(--bg);border-radius:16px 16px 0 0;display:flex;flex-direction:column;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)">
+        <div style="font-weight:700">💬 Office Team / ทีมออฟฟิศ</div>
+        <button type="button" onclick="kpcClose()" style="background:none;border:none;font-size:24px;cursor:pointer;color:var(--text2);line-height:1">×</button>
+      </div>
+      <div id="kpc-list" style="flex:1;overflow-y:auto;padding:12px 14px;background:var(--bg2)"></div>
+      <div style="display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--border)">
+        <input id="kpc-input" type="text" placeholder="Message / ข้อความ…" onkeydown="if(event.key==='Enter'){event.preventDefault();kpcSend();}" style="flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:22px;background:var(--bg);color:var(--text);font-size:14px">
+        <button type="button" onclick="kpcSend()" title="Send / ส่ง" style="border:none;background:var(--blue);color:#fff;border-radius:22px;padding:0 18px;font-size:16px;font-weight:700;cursor:pointer">➤</button>
+      </div>
+    </div>
+  </div>
   <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div style="flex:1"><div class="h-title">Office / Sales</div><div class="h-sub" id="of-logged-in-name">KP Wallpanel</div></div><button type="button" onclick="ofLogout()" style="background:none;border:0.5px solid var(--border);border-radius:var(--rs);padding:6px 10px;font-size:12px;font-weight:500;cursor:pointer;color:var(--text2);display:flex;align-items:center;gap:4px;flex-shrink:0"><i class="ti ti-logout" style="font-size:14px"></i> Logout</button></div>
   <div style="border-bottom:1px solid var(--border)">
     <div class="tabs" style="display:flex;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;border-bottom:1px solid var(--border);justify-content:center">
@@ -2209,6 +2224,7 @@ function checkPin() {
     ofRenderOrders();
     ofRenderInc();
     ofRenderStock();
+    try{ kpcInit(); }catch(e){}
   }
 }
 
@@ -4910,6 +4926,80 @@ function ofAddConfirm(){
   try{ addLog('Order '+o.id+' added to '+t.driverName+"'s tour",'+'); }catch(e){}
   closeTourAdd();
   ofRenderTour(); ofRenderOrders(); mgRender(); syncTours(); syncOrders();
+}
+
+// ─────────────────────────────────────────────────────────────
+// TEAM CHAT — Stage 1: office-internal channel (text, realtime).
+// Data: v2/chat/channels/<channel>/messages/<pushId> = {by,byName,role,text,ts}
+// ─────────────────────────────────────────────────────────────
+var kpcInited=false, kpcOpen=false, kpcChannel='office', kpcLastSeen=0, kpcMsgs=[];
+function kpcEsc(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
+function kpcMe(){
+  var s=(staffList||[]).find(function(x){return x.id===currentStaffId;});
+  return { id: currentStaffId||'?', name:(s&&s.name)||currentStaffName||'Office', role:'office' };
+}
+function kpcSetDot(on){ var d=document.getElementById('kpc-dot'); if(d) d.style.display=on?'block':'none'; }
+function kpcInit(){
+  if(kpcInited || !window.fbDB) return;
+  kpcInited=true;
+  try{ kpcLastSeen = parseInt(localStorage.getItem('kpc-seen-'+kpcChannel),10)||0; }catch(e){}
+  window.fbDB.ref('chat/channels/'+kpcChannel+'/messages').limitToLast(80).on('value', function(snap){
+    var v=snap.val()||{};
+    kpcMsgs = Object.keys(v).map(function(k){ var m=v[k]||{}; m._id=k; return m; }).sort(function(a,b){return (a.ts||0)-(b.ts||0);});
+    if(kpcOpen) kpcRender();
+    var last=kpcMsgs[kpcMsgs.length-1];
+    if(last && (last.ts||0) > kpcLastSeen){
+      if(kpcOpen){ kpcMarkSeen(); }
+      else if(last.by !== (currentStaffId||'?')){ kpcSetDot(true); try{ kpcToast(last); }catch(e){} }
+    }
+  });
+}
+function kpcToast(m){
+  var el=document.createElement('div');
+  el.style.cssText='position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:99999;background:var(--bg);border:1.5px solid var(--border);border-radius:12px;padding:10px 14px;box-shadow:0 4px 20px rgba(0,0,0,0.15);max-width:340px;width:88%;font-size:13px;cursor:pointer';
+  el.innerHTML='<b>💬 '+kpcEsc(m.byName||'Team')+'</b><div style="color:var(--text2);margin-top:2px">'+kpcEsc((m.text||'').slice(0,120))+'</div>';
+  el.onclick=function(){ this.remove(); kpcOpenPanel(); };
+  document.body.appendChild(el);
+  setTimeout(function(){ if(el.parentNode) el.remove(); }, 5000);
+}
+function kpcRender(){
+  var box=document.getElementById('kpc-list'); if(!box) return;
+  if(!kpcMsgs.length){ box.innerHTML='<div style="text-align:center;color:var(--text2);font-size:13px;padding:24px">No messages yet / ยังไม่มีข้อความ</div>'; return; }
+  var meId=currentStaffId||'?';
+  box.innerHTML = kpcMsgs.map(function(m){
+    var mine=(m.by===meId);
+    var t=m.ts?new Date(m.ts).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'';
+    return '<div style="display:flex;justify-content:'+(mine?'flex-end':'flex-start')+';margin-bottom:8px">'
+      +'<div style="max-width:78%;background:'+(mine?'var(--blue)':'var(--bg)')+';color:'+(mine?'#fff':'var(--text)')+';border:1px solid '+(mine?'transparent':'var(--border)')+';border-radius:14px;padding:7px 11px">'
+      +(mine?'':'<div style="font-size:11px;font-weight:700;color:var(--blue);margin-bottom:2px">'+kpcEsc(m.byName||'')+'</div>')
+      +'<div style="font-size:14px;white-space:pre-wrap;word-break:break-word">'+kpcEsc(m.text||'')+'</div>'
+      +'<div style="font-size:10px;opacity:.7;margin-top:2px;text-align:right">'+t+'</div>'
+      +'</div></div>';
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+function kpcToggle(){ if(kpcOpen) kpcClose(); else kpcOpenPanel(); }
+function kpcOpenPanel(){
+  kpcInit();
+  kpcOpen=true;
+  var p=document.getElementById('kpc-panel'); if(p) p.style.display='block';
+  kpcRender(); kpcMarkSeen();
+  setTimeout(function(){ var i=document.getElementById('kpc-input'); if(i) i.focus(); },60);
+}
+function kpcClose(){ kpcOpen=false; var p=document.getElementById('kpc-panel'); if(p) p.style.display='none'; }
+function kpcMarkSeen(){
+  var last=kpcMsgs[kpcMsgs.length-1];
+  kpcLastSeen = last?(last.ts||Date.now()):Date.now();
+  try{ localStorage.setItem('kpc-seen-'+kpcChannel, String(kpcLastSeen)); }catch(e){}
+  kpcSetDot(false);
+}
+function kpcSend(){
+  var i=document.getElementById('kpc-input'); if(!i) return;
+  var text=(i.value||'').trim(); if(!text) return;
+  if(!window.fbDB){ alert('Offline'); return; }
+  var me=kpcMe();
+  window.fbDB.ref('chat/channels/'+kpcChannel+'/messages').push({ by:me.id, byName:me.name, role:me.role, text:text, ts:Date.now() });
+  i.value=''; i.focus();
 }
 
 // Mark/unmark an existing order as priority (with confirm + reason)
