@@ -5118,6 +5118,31 @@ function kpcInit(){
   if(!window.fbDB) return;
   kpcInited=true;
   kpcSyncFab();
+  try{ setTimeout(kpcCleanupAll, 4000); }catch(e){}
+}
+// Stage 6: retention — keep the current month; during days 1–7 the previous month
+// stays too (overlap week); after the 7th the previous month is purged. Pinned
+// messages are NEVER auto-deleted. Runs at most once per day per device.
+function kpcCleanupAll(){
+  if(!window.fbDB) return;
+  try{ var _last=localStorage.getItem('kpc-cleanup'); var _today=new Date().toISOString().slice(0,10); if(_last===_today) return; localStorage.setItem('kpc-cleanup',_today); }catch(e){}
+  var now=new Date();
+  // <=7th → keep current + previous month (cut before 1st of previous month)
+  // else  → keep current month only (cut before 1st of current month)
+  var cutoff = (now.getDate()<=7) ? new Date(now.getFullYear(), now.getMonth()-1, 1) : new Date(now.getFullYear(), now.getMonth(), 1);
+  var cutoffTs = cutoff.getTime();
+  window.fbDB.ref('chat/channels').once('value', function(snap){
+    var chans = snap.val()||{}; var removed=0;
+    Object.keys(chans).forEach(function(ch){
+      var msgs = (chans[ch] && chans[ch].messages) || {};
+      Object.keys(msgs).forEach(function(mid){
+        var m = msgs[mid]||{};
+        if(m.pinned) return;                       // pinned stay until unpinned
+        if((m.ts||0) < cutoffTs){ window.fbDB.ref('chat/channels/'+ch+'/messages/'+mid).remove(); removed++; }
+      });
+    });
+    if(removed){ try{ console.log('Chat retention: removed '+removed+' old message(s) before '+cutoff.toISOString().slice(0,10)); }catch(e){} }
+  });
 }
 // (Re)subscribe the realtime listener to a channel.
 function kpcListen(ch){
