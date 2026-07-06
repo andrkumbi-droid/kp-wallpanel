@@ -4702,8 +4702,17 @@ function ofRenderTour(){
       var ord = orders.find(function(x){return x.id===id;});
       var st = t.status[id]||'loaded';
       var _opin = ord?orderLocUrl(ord):'';
-      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:13px">'+
-        '<span style="font-weight:600">'+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+'</span>'+
+      // Shipper per order: default = the tour driver (self); optionally a carrier company.
+      var shipVal = (ord && ord.shipper) ? ord.shipper : '';
+      var isCompany = shipVal && shipVal!=='ส่งเอง';
+      var shipBadge = isCompany ? ' <span style="font-size:10px;font-weight:700;color:#1d4ed8;background:#dbeafe;border-radius:8px;padding:1px 6px">🚚 '+shipVal+'</span>' : '';
+      var wrapId = 'tourship_'+t.id+'_'+safeOrderId(id);
+      var driverEsc = String(t.driverName||'').replace(/['\\]/g,'');
+      var shipOpts = '<option value="ส่งเอง"'+(!isCompany?' selected':'')+'>🧑 '+(t.driverName||'Driver')+' · ส่งเอง / self</option>'
+        + shippers.filter(function(s){return s!=='ส่งเอง';}).map(function(s){ return '<option value="'+s+'"'+(shipVal===s?' selected':'')+'>🚚 '+s+'</option>'; }).join('');
+      return '<div style="padding:4px 0">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">'+
+        '<span onclick="ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="font-weight:600;cursor:pointer">'+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+' <span style="color:var(--text2);font-size:10px">▾</span>'+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+'</span>'+
         '<div style="display:flex;align-items:center;gap:6px">'+
         '<span style="font-size:11px;color:var(--text2)">'+(ord?ord.zone:'')+'</span>'+
         (st==='loaded'||st==='ready'
@@ -4711,6 +4720,12 @@ function ofRenderTour(){
             +'<button type="button" onclick="ofTourDeliver(\''+t.id+'\',\''+id+'\')" style="font-size:11px;padding:2px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">✓ Delivered</button>'
             +'<button type="button" data-tid="'+t.id+'" data-oid="'+id+'" onclick="rmFromTour(this)" style="font-size:11px;padding:2px 8px;border:1px solid #dc2626;background:#fee2e2;color:#dc2626;border-radius:var(--rs);cursor:pointer">✕ ลบ</button>'
           : '<span class="badge" style="font-size:10px;background:var(--green-bg);color:var(--green)">'+st+'</span>')+
+        '</div>'+
+        '</div>'+
+        '<div id="'+wrapId+'" style="display:none;margin-top:5px">'+
+          '<select onchange="ofTourSetShipper(\''+String(id).replace(/['\\]/g,'')+'\',\''+driverEsc+'\',this.value)" style="width:100%;padding:6px 8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;cursor:pointer">'+
+            shipOpts+
+          '</select>'+
         '</div>'+
         '</div>';
     }).join('');
@@ -8415,6 +8430,20 @@ function paySetShipper(id, shipper) {
   o.shipper = shipper;
   syncOrders();
   try{ sheetsSyncOrder(o); }catch(e){}
+}
+// Active-tour shipper picker: toggle the per-order dropdown, and set the shipper.
+function ofTourShipToggle(wrapId){
+  var el=document.getElementById(wrapId); if(!el) return;
+  el.style.display = (!el.style.display || el.style.display==='none') ? 'block' : 'none';
+}
+function ofTourSetShipper(id, driverName, value){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  if(driverName) o.driver = driverName;   // record the tour driver (self-delivery)
+  o.shipper = value;                       // '' / 'ส่งเอง' = self · else carrier company → sheet Carrier + Pay tab
+  syncOrders();
+  try{ sheetsSyncOrder(o); }catch(e){}
+  try{ ofRenderTour(); }catch(e){}
+  try{ if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active')) payRender(); }catch(e){}
 }
 
 function payDateChange(id, dateVal) {
