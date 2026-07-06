@@ -4203,17 +4203,50 @@ function ofOrderCard(o){
     +'</div>';
   s += createdHTML;
   if(logHTML) s += '<div style="font-size:11px;color:#888;margin-top:5px;line-height:1.8"><i class="ti ti-clock" style="font-size:11px;vertical-align:-1px"></i> '+logHTML+'</div>';
-  s += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px">'+quickBtns+'</div>';
-  s += '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">';
+  // Visible row: Print receipt stays · "More" toggle opens the rest.
+  var _moreId='omore_'+safeOrderId(o.id);
+  s += '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">';
+  s += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
+  s += '<button type="button" class="btnsm" onclick="ofToggleMore(\''+_moreId+'\')" style="background:var(--bg2);color:var(--text)"><i class="ti ti-dots"></i> Mehr / จัดการ ⌄</button>';
+  s += '</div>';
+  s += '<div id="'+_moreId+'" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">';
+  s += '<div style="font-size:11px;color:var(--text2);margin-bottom:4px">Status:</div>';
+  s += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">'+quickBtns+'</div>';
+  s += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
   s += '<button type="button" class="btnsm" onclick="openEM(this)" data-id="'+o.id+'"><i class="ti ti-pencil"></i> Edit</button>';
   s += '<button type="button" class="btnsm" style="background:#fff7ed;color:#ea580c;border-color:#fed7aa" onclick="openCO(this)" data-id="'+o.id+'"><i class="ti ti-replace"></i> Change order</button>';
   s += '<button type="button" class="btnsm" style="'+(o.priority?'background:#7c3aed;color:#fff;border-color:#7c3aed':'background:#f3e8ff;color:#7c3aed;border-color:#e9d5ff')+'" onclick="togglePriority(\''+o.id+'\')"><i class="ti ti-star"></i> '+(o.priority?'Priority ✓':'Priority')+'</button>';
-  s += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
+  s += '<input type="file" id="ofphoto_'+safeOrderId(o.id)+'" accept="image/*" style="display:none" onchange="ofUploadOrderPhoto(this)">';
+  s += '<button type="button" class="btnsm" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe" onclick="ofPickOrderPhoto(\''+o.id+'\',\'delivery\')" title="Add delivery photo / เพิ่มรูปส่ง">📷 Delivery</button>';
+  s += '<button type="button" class="btnsm" style="background:#f0fdf4;color:#16a34a;border-color:#bbf7d0" onclick="ofPickOrderPhoto(\''+o.id+'\',\'warehouse\')" title="Add warehouse photo / เพิ่มรูปคลัง">📦 Warehouse</button>';
   if(window.canDeleteOrders) {
     s += '<button type="button" class="btnsm" style="background:#FEE2E2;color:#DC2626;border-color:#FEE2E2" onclick="deleteOrder(this)" data-id="'+o.id+'"><i class="ti ti-trash"></i></button>';
   }
-  s += '</div></div>';
+  s += '</div>';
+  s += '</div>';
+  s += '</div>';
   return s;
+}
+// Order-card "More" dropdown toggle.
+function ofToggleMore(id){ var el=document.getElementById(id); if(el) el.style.display=(!el.style.display||el.style.display==='none')?'block':'none'; }
+// Office adds a photo to an order (Warehouse or Delivery) → shows up in the Pictures tab.
+function ofPickOrderPhoto(id, type){
+  window._ofPhotoType = type; window._ofPhotoOrderId = id;
+  var inp=document.getElementById('ofphoto_'+safeOrderId(id)); if(inp) inp.click();
+}
+function ofUploadOrderPhoto(input){
+  var file=input&&input.files&&input.files[0]; if(!file) return;
+  var id=window._ofPhotoOrderId, type=window._ofPhotoType||'delivery';
+  input.value='';
+  if(typeof compressPhotoFile!=='function' || typeof addOrderPhoto!=='function'){ alert('Image not supported'); return; }
+  var by=((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+  compressPhotoFile(file, function(dataUrl){
+    addOrderPhoto(id, type, dataUrl, by, function(ok){
+      if(!ok){ alert('❌ Upload failed / อัปโหลดไม่สำเร็จ'); return; }
+      try{ showNotif('✓ Foto → '+(type==='warehouse'?'Warehouse':'Delivery')+' · '+id); }catch(e){}
+      try{ if(typeof picsRender==='function' && document.getElementById('ofv-pics') && document.getElementById('ofv-pics').classList.contains('active')) picsRender(); }catch(e){}
+    });
+  });
 }
 
 // ── Quick payment on an order card (full via checkbox, partial via amount) ──
@@ -8360,40 +8393,71 @@ function _payRenderNow() {
     }
     return true;
   });
-  if(filtered.length===0) {
+  // ── Not-yet-delivered UNPAID orders → separate section under "Unpaid", with status ──
+  var payPendingHtml='';
+  if(payFilt_==='unpaid' && !payShipperFilt_){
+    var pending = orders.filter(function(o){ return o.status!=='delivered' && o.status!=='cancelled' && !o.payMethod; });
+    if(pq) pending = pending.filter(function(o){ var hay=((o.id||'')+' '+(o.customer||'')+' '+(o.phone||'')+' '+(o.address||'')+' '+(o.zone||'')).toLowerCase(); return hay.indexOf(pq)>=0; });
+    if(pending.length){
+      var pRk={Bangkok:0,Northern:1,Northeastern:2,Eastern:3,Southern:4,Instore:5};
+      pending.sort(function(a,b){ var ra=pRk[a.zone]==null?9:pRk[a.zone], rb=pRk[b.zone]==null?9:pRk[b.zone]; if(ra!==rb) return ra-rb; return ordNum(a.id)-ordNum(b.id); });
+      var pendTot = pending.reduce(function(a,o){ return a+(parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0); },0);
+      payPendingHtml = '<div style="margin-top:18px">'
+        +'<div style="font-size:12px;font-weight:800;color:#b45309;background:#fef3c7;border:1px solid #fde68a;border-radius:var(--rs);padding:8px 12px;margin-bottom:8px">🚚 Not delivered yet / ยังไม่ได้ส่ง · '+pending.length+' order'+(pending.length!==1?'s':'')+' · '+pendTot.toLocaleString()+' ฿</div>';
+      pending.forEach(function(o){ payPendingHtml += payPendingRow(o); });
+      payPendingHtml += '</div>';
+    }
+  }
+
+  if(filtered.length===0 && !payPendingHtml) {
     var msg = pq ? 'No orders match your search' : (payFilt_==='unpaid' ? 'All delivered orders are paid!' : 'No paid orders yet');
     list.innerHTML = '<div class="empty"><i class="ti ti-circle-check" style="font-size:36px;display:block;margin-bottom:8px;color:var(--green)"></i>'+msg+'</div>';
     return;
   }
-  // Group by zone (collapsible), newest first within each zone
+  // Group DELIVERED orders by zone (collapsible), order-number ascending within each zone
   var pZoneRank={Bangkok:0,Northern:1,Northeastern:2,Eastern:3,Southern:4,Instore:5};
   filtered = filtered.slice().sort(function(a,b){
     var ra=pZoneRank[a.zone]==null?9:pZoneRank[a.zone], rb=pZoneRank[b.zone]==null?9:pZoneRank[b.zone];
     if(ra!==rb) return ra-rb;
-    return ordNum(a.id) - ordNum(b.id); // order number ascending (small top, large bottom)
+    return ordNum(a.id) - ordNum(b.id);
   });
   var pZoneLabel={Bangkok:'🏬 Bangkok / กรุงเทพฯ',Northern:'⛰️ Northern / ภาคเหนือ',Northeastern:'🌾 Northeastern / ภาคอีสาน',Eastern:'🌊 Eastern / ภาคตะวันออก',Southern:'🏝️ Southern / ภาคใต้',Instore:'🏪 Instore / หน้าร้าน',Other:'❔ Other / อื่นๆ'};
-  var pHtml = '<div style="display:flex;justify-content:flex-end;margin:2px 2px 6px"><button type="button" onclick="payToggleAllZones(this)" class="btnsm" style="font-size:11px"><i class="ti ti-chevrons-up"></i> Collapse all</button></div>';
-  var pLastZone=null;
-  filtered.forEach(function(o){
-    var z=o.zone||'Other';
-    if(z!==pLastZone){
-      if(pLastZone!==null) pHtml+='</div></div>';
-      pLastZone=z;
-      var cnt=filtered.filter(function(x){return (x.zone||'Other')===z;}).length;
-      var col=!!payZoneCollapsed[z];
-      pHtml += '<div class="zone-group">'
-        +'<div onclick="payToggleZone(\''+z+'\')" style="display:flex;align-items:center;gap:8px;margin:14px 2px 8px;font-size:13px;font-weight:800;color:var(--text);cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none">'
-        +'<i class="ti ti-chevron-down" id="pzchev-'+z+'" style="font-size:16px;transition:transform .2s;transform:rotate('+(col?'-90deg':'0')+')"></i>'
-        +'<span>'+(pZoneLabel[z]||z)+'</span>'
-        +'<span style="background:var(--blue-bg);color:var(--blue);border-radius:20px;padding:1px 9px;font-size:11px;font-weight:700">'+cnt+'</span>'
-        +'<span style="flex:1;height:1px;background:var(--border)"></span></div>'
-        +'<div class="zone-body" id="pzbody-'+z+'"'+(col?' style="display:none"':'')+'>';
-    }
-    pHtml += payOrderCard(o);
-  });
-  if(pLastZone!==null) pHtml+='</div></div>';
-  list.innerHTML = pHtml;
+  var pHtml = '';
+  if(filtered.length){
+    pHtml += '<div style="display:flex;justify-content:flex-end;margin:2px 2px 6px"><button type="button" onclick="payToggleAllZones(this)" class="btnsm" style="font-size:11px"><i class="ti ti-chevrons-up"></i> Collapse all</button></div>';
+    if(payFilt_==='unpaid' && payPendingHtml) pHtml += '<div style="font-size:12px;font-weight:800;color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--rs);padding:8px 12px;margin:0 0 8px">✅ Delivered · unpaid / ส่งแล้ว ยังไม่จ่าย</div>';
+    var pLastZone=null;
+    filtered.forEach(function(o){
+      var z=o.zone||'Other';
+      if(z!==pLastZone){
+        if(pLastZone!==null) pHtml+='</div></div>';
+        pLastZone=z;
+        var cnt=filtered.filter(function(x){return (x.zone||'Other')===z;}).length;
+        var col=!!payZoneCollapsed[z];
+        pHtml += '<div class="zone-group">'
+          +'<div onclick="payToggleZone(\''+z+'\')" style="display:flex;align-items:center;gap:8px;margin:14px 2px 8px;font-size:13px;font-weight:800;color:var(--text);cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none">'
+          +'<i class="ti ti-chevron-down" id="pzchev-'+z+'" style="font-size:16px;transition:transform .2s;transform:rotate('+(col?'-90deg':'0')+')"></i>'
+          +'<span>'+(pZoneLabel[z]||z)+'</span>'
+          +'<span style="background:var(--blue-bg);color:var(--blue);border-radius:20px;padding:1px 9px;font-size:11px;font-weight:700">'+cnt+'</span>'
+          +'<span style="flex:1;height:1px;background:var(--border)"></span></div>'
+          +'<div class="zone-body" id="pzbody-'+z+'"'+(col?' style="display:none"':'')+'>';
+      }
+      pHtml += payOrderCard(o);
+    });
+    if(pLastZone!==null) pHtml+='</div></div>';
+  }
+  list.innerHTML = pHtml + payPendingHtml;
+}
+// Compact row for a not-yet-delivered unpaid order (status badge + jump to order).
+function payPendingRow(o){
+  var st=(typeof SL!=='undefined'&&SL[o.status])?SL[o.status]:(o.status||'');
+  var bc=(typeof BC!=='undefined'&&BC[o.status])?BC[o.status]:'';
+  var amt=parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0;
+  return '<div onclick="kpcJumpRef(\'order\',\''+String(o.id).replace(/["\\]/g,'')+'\')" style="display:flex;align-items:center;gap:8px;padding:9px 11px;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;cursor:pointer">'
+    +'<span class="badge '+bc+'" style="flex-shrink:0">'+st+'</span>'
+    +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700">'+o.id+'</div><div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(o.customer||'')+' · '+(o.zone||'')+'</div></div>'
+    +'<span style="font-size:13px;font-weight:700;color:#dc2626;flex-shrink:0">'+amt.toLocaleString()+' ฿</span>'
+    +'</div>';
 }
 
 
