@@ -452,6 +452,8 @@ textarea{resize:none}
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
+  <!-- jsQR: decode QR codes from payment-slip photos (client-side, no upload) -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script>
   (function() {
 
@@ -592,6 +594,7 @@ textarea{resize:none}
         try{if(document.getElementById('s-office-login').classList.contains('active'))ofLoginRender();}catch(e){}
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
+        try{ if(typeof kpcBgListen==='function') kpcBgListen(); }catch(e){}
       });
       db.ref('orders').on('value', function(snap) {
         orders = snap.val() ? Object.values(snap.val()) : [];
@@ -1351,7 +1354,7 @@ textarea{resize:none}
       <label class="fl" style="margin-top:0">Select driver / เลือกคนขับ</label>
       <div class="drselgrid" id="of-drsel"></div>
       <div id="of-nodrivers" style="display:none;font-size:12px;color:var(--text2);padding:8px 0">No drivers — add in Management first / เพิ่มคนขับใน Management ก่อน</div>
-      <label class="fl" style="margin-top:12px">Add ready orders / เพิ่มออเดอร์</label>
+      <label class="fl" style="margin-top:12px">Add orders / เพิ่มออเดอร์ <span style="font-weight:500;color:var(--text2)">— New · Packing · Ready</span></label>
       <div id="of-avail" style="margin-top:4px"></div>
       <div id="of-selected" style="margin-top:8px"></div>
       <button type="button" class="btn btnp" style="margin-top:12px" id="of-send-btn" onclick="ofCreateTour()"><i class="ti ti-send"></i> <span id="of-send-label">Send to driver / ส่งให้คนขับ</span></button>
@@ -1852,6 +1855,7 @@ textarea{resize:none}
     <div style="display:flex;gap:6px;margin-bottom:12px">
       <button type="button" id="pics-tab-warehouse" class="btn" onclick="picsSubTab('warehouse')" style="flex:1;background:var(--blue);color:#fff;border:none"><i class="ti ti-package"></i> Warehouse</button>
       <button type="button" id="pics-tab-delivery" class="btn" onclick="picsSubTab('delivery')" style="flex:1;background:var(--bg);color:var(--text);border:1.5px solid var(--border)"><i class="ti ti-truck"></i> Delivery</button>
+      <button type="button" id="pics-tab-slip" class="btn" onclick="picsSubTab('slip')" style="flex:1;background:var(--bg);color:var(--text);border:1.5px solid var(--border)"><i class="ti ti-receipt"></i> Slips</button>
     </div>
     <div style="position:relative;margin-bottom:12px">
       <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text2);font-size:14px;pointer-events:none"></i>
@@ -2010,12 +2014,12 @@ textarea{resize:none}
   <div class="mhdr"><span class="mtit">🔄 Change order / แก้ออเดอร์ <span id="co-id"></span></span><button type="button" class="mclose" onclick="closeCO()"><i class="ti ti-x"></i></button></div>
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Adjust qty, set 0 to remove, or add new lines. Warehouse must confirm. / ปรับจำนวน ใส่ 0 เพื่อลบ หรือเพิ่มรายการใหม่ — คลังต้องยืนยัน</div>
   <div class="stit" style="font-size:12px;font-weight:700;color:var(--text2);margin:6px 0 4px">Panels / แผ่น</div>
-  <div class="colh"><span>Code</span><span>฿/pc</span><span>Qty</span><span></span></div>
+  <div class="colh"><span>Code</span><span>Qty</span><span>฿/pc</span><span></span></div>
   <div id="co-lines"></div>
   <button type="button" class="abtn" onclick="coAddLine()"><i class="ti ti-plus"></i> Add panel / เพิ่มแผ่น</button>
 
   <div class="stit" style="font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 4px">Edges / ขอบ — L-Corner · T-Trim · U-Trim</div>
-  <div class="colh-e"><span>Type</span><span>Code</span><span>฿/pc</span><span>Qty</span><span></span></div>
+  <div class="colh-e"><span>Type</span><span>Code</span><span>Qty</span><span>฿/pc</span><span></span></div>
   <div id="co-edges"></div>
   <button type="button" class="abtn" onclick="coAddE()"><i class="ti ti-plus"></i> Add edge / เพิ่มขอบ</button>
 
@@ -3837,6 +3841,10 @@ function printDeliverySheet() {
     }
     var clips = parseInt(o.clips)||0;
     if(clips>0) prods += '<div class="ds-pi"><span>Clips <b>×'+clips.toLocaleString()+'</b></span><span class="box"></span></div>';
+    // Extra PAID clip packs (×199) — separate line so the driver hands them over.
+    var clipPacks = (o.lineItems||[]).filter(function(li){ return li.type==='clips'; })
+      .reduce(function(a,li){ return a+(parseInt(li.qty)||0); }, 0);
+    if(clipPacks>0) prods += '<div class="ds-pi"><span>📎 Clip packs / คลิปแพ็ค <b>×'+clipPacks.toLocaleString()+'</b></span><span class="box"></span></div>';
     var ctn = (o.ctn&&o.ctn>0) ? '<div class="ds-ctn">📦 '+o.ctn+' CTN</div>' : '';
     ctn += (o.bundle&&o.bundle>0) ? '<div class="ds-ctn" style="color:#c2410c">🧶 '+o.bundle+' มัด</div>' : '';
     var name = (o.customer&&o.customer!=='—') ? esc(o.customer) : '';
@@ -4849,7 +4857,10 @@ function ofRenderTour(){
     // Order list with remove button
     var orderList = t.orders.map(function(id) {
       var ord = orders.find(function(x){return x.id===id;});
-      var st = t.status[id]||'loaded';
+      var rawSt = t.status[id]||'loaded';
+      // Reflect the live packing status for planned-but-unready orders so the tour
+      // card auto-updates as the warehouse packs. Terminal tour states win.
+      var st = (rawSt==='delivered'||rawSt==='cancelled') ? rawSt : ((ord&&ord.status)||rawSt);
       var _opin = ord?orderLocUrl(ord):'';
       // Shipper per order: default = the tour driver (self); optionally a carrier company.
       var shipVal = (ord && ord.shipper) ? ord.shipper : '';
@@ -4859,6 +4870,14 @@ function ofRenderTour(){
       var driverEsc = String(t.driverName||'').replace(/['\\]/g,'');
       var shipOpts = '<option value="ส่งเอง"'+(!isCompany?' selected':'')+'>🧑 '+(t.driverName||'Driver')+' · ส่งเอง / self</option>'
         + shippers.filter(function(s){return s!=='ส่งเอง';}).map(function(s){ return '<option value="'+s+'"'+(shipVal===s?' selected':'')+'>🚚 '+s+'</option>'; }).join('');
+      // Payment columns: driver confirms cash / online amounts on delivery → show them here.
+      var _pc=parseFloat(ord&&ord.paidCash)||0, _po=parseFloat(ord&&ord.paidOnline)||0;
+      var payLine = (st==='delivered' && (_pc>0||_po>0))
+        ? '<div style="display:flex;gap:12px;font-size:11px;margin-top:3px;padding-left:2px">'
+          +'<span style="color:#166534;font-weight:700">💵 '+(_pc>0?_pc.toLocaleString()+' ฿':'—')+'</span>'
+          +'<span style="color:#1d4ed8;font-weight:700">🏦 '+(_po>0?_po.toLocaleString()+' ฿':'—')+(_po>0?ofSlipBadge(ord):'')+'</span>'
+          +'</div>'
+        : '';
       return '<div style="padding:4px 0">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">'+
         '<span onclick="ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="font-weight:600;cursor:pointer">'+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+' <span style="color:var(--text2);font-size:10px">▾</span>'+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+'</span>'+
@@ -4868,9 +4887,13 @@ function ofRenderTour(){
           ? (_multiTour?'<button type="button" onclick="ofMoveOrder(\''+t.id+'\',\''+id+'\')" title="Move to another tour" style="font-size:11px;padding:2px 8px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">⇄</button>':'')
             +'<button type="button" onclick="ofTourDeliver(\''+t.id+'\',\''+id+'\')" style="font-size:11px;padding:2px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">✓ Delivered</button>'
             +'<button type="button" data-tid="'+t.id+'" data-oid="'+id+'" onclick="rmFromTour(this)" style="font-size:11px;padding:2px 8px;border:1px solid #dc2626;background:#fee2e2;color:#dc2626;border-radius:var(--rs);cursor:pointer">✕ ลบ</button>'
-          : '<span class="badge" style="font-size:10px;background:var(--green-bg);color:var(--green)">'+st+'</span>')+
+          : (st==='new'||st==='packing'
+            ? '<span class="badge" style="font-size:10px;background:'+(st==='new'?'#e0e7ff':'#fef3c7')+';color:'+(st==='new'?'#3730a3':'#92400e')+'">'+(st==='new'?'⏳ New / รอแพ็ค':'📦 Packing / แพ็ค')+'</span>'
+              +'<button type="button" data-tid="'+t.id+'" data-oid="'+id+'" onclick="rmFromTour(this)" style="font-size:11px;padding:2px 8px;border:1px solid #dc2626;background:#fee2e2;color:#dc2626;border-radius:var(--rs);cursor:pointer">✕ ลบ</button>'
+            : '<span class="badge" style="font-size:10px;background:var(--green-bg);color:var(--green)">'+st+'</span>'))+
         '</div>'+
         '</div>'+
+        payLine+
         '<div id="'+wrapId+'" style="display:none;margin-top:5px">'+
           '<select onchange="ofTourSetShipper(\''+String(id).replace(/['\\]/g,'')+'\',\''+driverEsc+'\',this.value)" style="width:100%;padding:6px 8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;cursor:pointer">'+
             shipOpts+
@@ -4878,10 +4901,24 @@ function ofRenderTour(){
         '</div>'+
         '</div>';
     }).join('');
+    // Tour payment totals — sum of confirmed cash / online across delivered orders.
+    var tourCash=0, tourOnline=0;
+    t.orders.forEach(function(id){
+      if((t.status[id]||'')!=='delivered') return;
+      var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+      tourCash+=parseFloat(o.paidCash)||0; tourOnline+=parseFloat(o.paidOnline)||0;
+    });
+    var payTotals = (tourCash>0||tourOnline>0)
+      ? '<div style="display:flex;justify-content:space-between;gap:8px;margin:8px 0 4px;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);font-size:12px">'
+        +'<span style="color:#166534;font-weight:700">💵 Cash / เงินสด: '+tourCash.toLocaleString()+' ฿</span>'
+        +'<span style="color:#1d4ed8;font-weight:700">🏦 Online / โอน: '+tourOnline.toLocaleString()+' ฿</span>'
+        +'</div>'
+      : '';
     return '<div class="tmgmt">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;cursor:pointer" onclick="openTourDetail('+ti+')">'+
       '<div style="font-size:15px;font-weight:600"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+'</div>'+
       '<div style="display:flex;align-items:center;gap:6px">'+
+      kpcTourBubble(t.id)+
       '<button type="button" onclick="event.stopPropagation();ofOptimizeTour(\''+t.id+'\')" title="Optimal route order / จัดลำดับเส้นทาง" style="font-size:11px;padding:3px 8px;border:none;background:#7c3aed;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">↕ Route</button>'+
       '<button type="button" onclick="event.stopPropagation();printTourReceipts('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#1D4ED8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600"><i class="ti ti-printer"></i> All Print</button>'+
       '<button type="button" onclick="event.stopPropagation();ofAddOrderToTour(\''+t.id+'\')" title="Add a ready order to this tour / เพิ่มออเดอร์เข้าทัวร์" style="font-size:11px;padding:3px 8px;border:none;background:#0ea5e9;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">➕ Add</button>'+
@@ -4894,6 +4931,7 @@ function ofRenderTour(){
       '<span style="font-size:12px;color:var(--text2)">฿</span>'+
       '</div>'+
       '<div style="margin-bottom:8px">'+orderList+'</div>'+
+      payTotals+
       '<div style="height:6px;background:var(--bg2);border-radius:3px;overflow:hidden">'+
       '<div style="height:100%;background:var(--green);border-radius:3px;width:'+pct+'%"></div>'+
       '</div>'+
@@ -4924,15 +4962,21 @@ function ofRenderTour(){
     }).join('');
   }
 
-  // Available orders
+  // Available orders — Ready + also New/Packing so the office can plan a tour
+  // BEFORE the warehouse finishes. Planned-but-unready orders keep their packing
+  // status (shown as a badge here and on the tour card).
   var used=activeTours.reduce(function(acc,t){return acc.concat(t.orders);},[]);
-  var avail=orders.filter(function(o){return o.status==='ready'&&used.indexOf(o.id)<0&&ofSelOrders.indexOf(o.id)<0;});
+  var STP={'ready':0,'packing':1,'new':2};
+  var _availMeta={'ready':{l:'Ready / พร้อม',bg:'#dcfce7',c:'#166534'},'packing':{l:'Packing / แพ็ค',bg:'#fef3c7',c:'#92400e'},'new':{l:'New / ใหม่',bg:'#e0e7ff',c:'#3730a3'}};
+  var avail=orders.filter(function(o){return STP[o.status]!=null&&used.indexOf(o.id)<0&&ofSelOrders.indexOf(o.id)<0;})
+    .sort(function(a,b){return (STP[a.status]||0)-(STP[b.status]||0);});
   document.getElementById('of-avail').innerHTML=avail.length===0
-    ?'<div style="font-size:12px;color:var(--text2);padding:4px 0">No ready orders available</div>'
+    ?'<div style="font-size:12px;color:var(--text2);padding:4px 0">No orders available / ไม่มีออเดอร์</div>'
     :avail.map(function(o){
+      var m=_availMeta[o.status]||{l:o.status,bg:'#eee',c:'#555'};
       return '<div class="avrow" data-oid="'+o.id+'" onclick="ofSelOrd(this)" style="align-items:flex-start">'+
         '<div style="flex:1;min-width:0">'+
-          '<div style="font-size:13px;font-weight:700">'+o.id+' <span style="font-size:11px;font-weight:500;color:var(--text2)">&middot; '+(o.zone||'')+'</span></div>'+
+          '<div style="font-size:13px;font-weight:700">'+o.id+' <span style="font-size:11px;font-weight:500;color:var(--text2)">&middot; '+(o.zone||'')+'</span> <span style="font-size:10px;font-weight:700;background:'+m.bg+';color:'+m.c+';border-radius:8px;padding:1px 6px">'+m.l+'</span></div>'+
           '<div style="font-size:12px;color:var(--text2);margin-top:1px">👤 '+(o.customer||'—')+'</div>'+
           (o.phone&&o.phone!=='—'?'<div style="font-size:12px;color:var(--text2)">📞 '+o.phone+'</div>':'')+
           (o.address&&o.address!=='—'?'<div style="font-size:12px;color:var(--text2)">📍 '+o.address+'</div>':'')+
@@ -5131,15 +5175,19 @@ function ofAddOrderToTour(tourId){
 function ofRenderTourAddList(){
   var wrap=document.getElementById('tour-add-list'); if(!wrap) return;
   var used = activeTours.reduce(function(acc,x){return acc.concat(x.orders||[]);},[]);
-  var avail = orders.filter(function(o){return o.status==='ready' && used.indexOf(o.id)<0;});
+  var STP={'ready':0,'packing':1,'new':2};
+  var _m={'ready':{l:'Ready',bg:'#dcfce7',c:'#166534'},'packing':{l:'Packing',bg:'#fef3c7',c:'#92400e'},'new':{l:'New',bg:'#e0e7ff',c:'#3730a3'}};
+  var avail = orders.filter(function(o){return STP[o.status]!=null && used.indexOf(o.id)<0;})
+    .sort(function(a,b){return (STP[a.status]||0)-(STP[b.status]||0);});
   if(!avail.length){
-    wrap.innerHTML='<div style="font-size:13px;color:var(--text2);padding:16px;text-align:center">No ready orders available / ไม่มีออเดอร์พร้อมส่ง</div>';
+    wrap.innerHTML='<div style="font-size:13px;color:var(--text2);padding:16px;text-align:center">No orders available / ไม่มีออเดอร์</div>';
   } else {
     wrap.innerHTML = avail.map(function(o,i){
       var sel = ofAddSelId===o.id;
+      var m=_m[o.status]||{l:o.status,bg:'#eee',c:'#555'};
       return '<div class="avrow" onclick="ofAddPick(\''+o.id+'\')" style="cursor:pointer;margin-bottom:4px;'+(sel?'background:var(--blue-l);border-color:var(--blue)':'')+'">'+
         '<span style="font-size:12px;color:var(--text2);width:22px;flex-shrink:0">'+(i+1)+'.</span>'+
-        '<span style="font-size:13px;font-weight:600;flex:1">'+o.id+'</span>'+
+        '<span style="font-size:13px;font-weight:600;flex:1">'+o.id+' <span style="font-size:9px;font-weight:700;background:'+m.bg+';color:'+m.c+';border-radius:8px;padding:1px 5px">'+m.l+'</span></span>'+
         '<span style="font-size:12px;color:var(--text2)">'+(o.customer||'')+' · '+(o.zone||'')+'</span>'+
         (sel?'<i class="ti ti-check" style="font-size:16px;color:var(--blue);margin-left:8px"></i>':'<i class="ti ti-plus" style="font-size:14px;color:var(--blue);margin-left:8px"></i>')+
       '</div>';
@@ -5154,11 +5202,13 @@ function ofAddConfirm(){
   var t = activeTours.find(function(x){return x.id===ofAddTourId;});
   var o = orders.find(function(x){return x.id===ofAddSelId;});
   if(!t || !o){ closeTourAdd(); return; }
-  // Driver already out → the order is loaded onto the truck now; still loading → keep it ready.
-  var newSt = t.driving ? 'loaded' : 'ready';
+  // Planned New/Packing orders keep their packing status (warehouse still packs
+  // them). Ready ones: driver already out → loaded onto truck; still loading → ready.
+  var keepPack = (o.status==='new'||o.status==='packing');
+  var newSt = keepPack ? o.status : (t.driving ? 'loaded' : 'ready');
   if(t.orders.indexOf(o.id)<0) t.orders.push(o.id);
   t.status = t.status||{}; t.status[o.id] = newSt;
-  if(o.status!==newSt){ o.status=newSt; try{ addStatusLog(o,newSt,'Office'); }catch(e){} }
+  if(!keepPack && o.status!==newSt){ o.status=newSt; try{ addStatusLog(o,newSt,'Office'); }catch(e){} }
   // Make the driver app aware of the order (mirror what ofCreateTour does).
   try{ if(!dAllOrders.find(function(x){return x.id===o.id;})){ dAllOrders.push({id:o.id,customer:o.customer,phone:o.phone,address:o.address,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:o.clips,ctn:o.ctn,bundle:o.bundle}); dAllOrders.sort(function(a,b){return reg(a.id).s-reg(b.id).s;}); } }catch(e){}
   try{ dStatus[o.id]=newSt; }catch(e){}
@@ -5205,6 +5255,7 @@ function kpcSyncFab(){
   var def = role==='warehouse' ? 'wh' : role==='driver' ? ('drv_'+(currentDriverId||'?')) : 'office';
   if(role!=='office'){ if(kpcChannel!==def || !kpcRef) kpcListen(def); }
   else { if(!kpcRef) kpcListen('office'); }
+  try{ kpcBgListen(); }catch(e){}
 }
 function kpcSetDot(on){ var d=document.getElementById('kpc-dot'); if(d) d.style.display=on?'block':'none'; }
 function kpcInit(){
@@ -5257,6 +5308,68 @@ function kpcListen(ch){
   });
 }
 function kpcDmId(a,b){ return 'dm_'+[String(a),String(b)].sort().join('__'); }
+
+// ── Background notifications ── surface new messages from the Warehouse group,
+// any Driver channel, or a Direct message even when that channel isn't the one
+// currently open. The active channel is handled by kpcListen (dot + toast), so
+// it's skipped here to avoid double alerts.
+var kpcBgRefs={}, kpcBgSig='', _kpcBgStart=0;
+function kpcBgChannels(){
+  var role=kpcCurrentRole(); if(!role) return [];
+  var list=[];
+  var staff=((typeof staffList!=='undefined'?staffList:[])||[]);
+  var drv=((typeof drivers!=='undefined'?drivers:[])||[]);
+  if(role==='driver'){ list.push('drv_'+(currentDriverId||'?')); return list; }
+  if(role==='warehouse'){
+    list.push('wh');
+    staff.forEach(function(s){ if(s&&s.id!==currentStaffId) list.push(kpcDmId(currentStaffId,s.id)); });
+    return list;
+  }
+  // office / manager
+  list.push('office','wh');
+  drv.forEach(function(d){ if(d) list.push('drv_'+d.id); });
+  staff.forEach(function(s){ if(s&&s.id!==currentStaffId) list.push(kpcDmId(currentStaffId,s.id)); });
+  return list;
+}
+function kpcBgListen(){
+  if(!window.fbDB) return;
+  if(!_kpcBgStart) _kpcBgStart=Date.now();
+  var chans=kpcBgChannels();
+  var sig=chans.join('|');
+  if(sig===kpcBgSig) return;   // channel set unchanged → keep existing listeners
+  kpcBgSig=sig;
+  Object.keys(kpcBgRefs).forEach(function(ch){ try{ kpcBgRefs[ch].off(); }catch(e){} });
+  kpcBgRefs={};
+  var meId=kpcMyId();
+  chans.forEach(function(ch){
+    var ref=window.fbDB.ref('chat/channels/'+ch+'/messages').limitToLast(1);
+    kpcBgRefs[ch]=ref;
+    ref.on('child_added', function(snap){
+      var m=snap.val()||{};
+      if((m.ts||0) <= _kpcBgStart) return;   // ignore the backlog present at attach
+      if(m.by===meId) return;                 // not my own message
+      if(ch===kpcChannel) return;             // active channel → kpcListen handles it
+      kpcSetDot(true);
+      try{ kpcNotifyBg(ch, m); }catch(e){}
+    });
+  });
+}
+function kpcChannelLabel(ch){
+  if(ch==='office') return '👥 Office';
+  if(ch==='wh') return '📦 Warehouse';
+  if(ch.indexOf('drv_')===0){ var d=((typeof drivers!=='undefined'?drivers:[])||[]).find(function(x){return 'drv_'+x.id===ch;}); return '🚚 '+((d&&d.name)||'Driver'); }
+  return '👤 Direct';
+}
+function kpcNotifyBg(ch, m){
+  var prev = m.text ? m.text.slice(0,100) : (m.img?'📷 Photo / รูป':(m.ref?('📎 '+(m.ref.id||'')):''));
+  var el=document.createElement('div');
+  el.style.cssText='position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:99999;background:var(--bg);border:1.5px solid var(--border);border-radius:12px;padding:10px 14px;box-shadow:0 4px 20px rgba(0,0,0,0.15);max-width:340px;width:88%;font-size:13px;cursor:pointer';
+  el.innerHTML='<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:2px">💬 '+kpcEsc(kpcChannelLabel(ch))+'</div>'
+    +'<b>'+kpcEsc(m.byName||'Team')+'</b><div style="color:var(--text2);margin-top:2px">'+kpcEsc(prev)+'</div>';
+  el.onclick=function(){ this.remove(); try{ kpcSwitchChannel(ch); }catch(e){} kpcOpenPanel(); };
+  document.body.appendChild(el);
+  setTimeout(function(){ if(el.parentNode) el.remove(); }, 6000);
+}
 function kpcSwitchChannel(ch){
   if(!ch || ch===kpcChannel){ return; }
   kpcListen(ch);
@@ -5305,8 +5418,37 @@ function kpcBubble(m){
     +(m.text?'<div style="font-size:14px;white-space:pre-wrap;word-break:break-word">'+kpcEsc(m.text)+'</div>':'')
     +(m.ref?'<div style="margin-top:'+((m.text)?'6px':'0')+'">'+kpcRefChip(m.ref,true)+'</div>':'')
     +(m.img?'<div style="margin-top:'+((m.text||m.ref)?'6px':'0')+'"><img src="'+m.img+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="max-width:200px;max-height:220px;border-radius:10px;cursor:pointer;display:block"></div>':'')
+    +(m.tr&&m.tr.text?'<div style="font-size:13px;white-space:pre-wrap;word-break:break-word;margin-top:5px;padding-top:5px;border-top:1px dashed '+(mine?'rgba(255,255,255,.4)':'var(--border)')+';opacity:.92">🌐 '+kpcEsc(m.tr.text)+'</div>':'')
     +'<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:3px"><span style="font-size:10px;opacity:.7">'+t+'</span>'+pinCtrl+'</div>'
     +'</div></div>';
+}
+// Auto-translate helpers (Thai ↔ Burmese) for the Warehouse chat + DMs.
+function kpcDetectLang(t){
+  if(/[က-႟]/.test(t)) return 'my';   // Burmese script
+  if(/[฀-๿]/.test(t)) return 'th';   // Thai script
+  return null;                                  // latin/other → skip
+}
+// Channels where TH↔MY auto-translate is useful: Warehouse group + direct messages.
+function kpcAutoTrChannel(ch){ return ch==='wh' || String(ch||'').indexOf('dm_')===0; }
+function kpcTranslate(text, target, cb){
+  if(!KP_TRANSLATE_URL){ cb(null); return; }
+  try{
+    // Plain-text body → no CORS preflight (matches the resolver pattern).
+    fetch(KP_TRANSLATE_URL, { method:'POST', body:JSON.stringify({ text:text, target:target }) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ cb(j && j.text ? j.text : null); })
+      .catch(function(){ cb(null); });
+  }catch(e){ cb(null); }
+}
+// After a message is sent, translate TH→MY or MY→TH and patch it in place.
+function kpcMaybeTranslate(ch, msgId, text){
+  if(!KP_TRANSLATE_URL || !text || !kpcAutoTrChannel(ch)) return;
+  var src=kpcDetectLang(text); if(!src) return;
+  var target = src==='th' ? 'my' : 'th';
+  kpcTranslate(text, target, function(tr){
+    if(!tr || !window.fbDB) return;
+    window.fbDB.ref('chat/channels/'+ch+'/messages/'+msgId+'/tr').set({ lang:target, text:tr });
+  });
 }
 function kpcRender(){
   var box=document.getElementById('kpc-list'); if(!box) return;
@@ -5349,7 +5491,10 @@ function kpcSend(){
   var msg={ by:me.id, byName:me.name, role:me.role, text:text, ts:Date.now() };
   if(kpcPendingRef) msg.ref = kpcPendingRef;
   if(kpcPendingImg) msg.img = kpcPendingImg;
-  window.fbDB.ref('chat/channels/'+kpcChannel+'/messages').push(msg);
+  var _ch=kpcChannel;
+  var _ref=window.fbDB.ref('chat/channels/'+_ch+'/messages').push(msg);
+  // Auto-translate TH↔MY in Warehouse/DM channels — patched onto the message async.
+  if(text) try{ kpcMaybeTranslate(_ch, _ref.key, text); }catch(e){}
   i.value=''; kpcClearPending(); kpcClearImg(); i.focus();
 }
 // ── Stage 4: pin / unpin. Anyone can pin; only the pinner OR office staff can unpin.
@@ -5487,6 +5632,14 @@ function kpcPickImage(input){
 }
 // "Ask" from an order card → open chat with that order pre-attached.
 function kpcDiscussOrder(id){ kpcPendingRef={kind:'order',id:id}; kpcOpenPanel(); kpcRenderPending(); }
+// "Ask" from a tour card → open chat with that tour pre-attached.
+function kpcDiscussTour(id){
+  var t=(typeof activeTours!=='undefined'?activeTours:[]).find(function(x){return x&&x.id===id;});
+  kpcPendingRef={kind:'tour',id:id,name:(t&&t.driverName)||''}; kpcOpenPanel(); kpcRenderPending();
+}
+// Reusable little 💬 bubble markup for cards.
+function kpcOrderBubble(id){ return '<span onclick="event.stopPropagation();kpcDiscussOrder(\''+String(id).replace(/['\\]/g,'')+'\')" title="Ask team / ถามทีม" style="cursor:pointer;font-size:15px;line-height:1">💬</span>'; }
+function kpcTourBubble(id){ return '<span onclick="event.stopPropagation();kpcDiscussTour(\''+String(id).replace(/['\\]/g,'')+'\')" title="Ask team / ถามทีม" style="cursor:pointer;font-size:14px;line-height:1">💬</span>'; }
 
 // Mark/unmark an existing order as priority (with confirm + reason)
 function togglePriority(id){
@@ -5521,24 +5674,29 @@ function ofCreateTour(){
   const d=drivers.find(x=>x.id===ofSelDriver);
   const existingTour=activeTours.find(t=>t.driverId===ofSelDriver);
   const status={};ofSelOrders.forEach(id=>{
-    status[id]='ready';
+    const src=orders.find(x=>x.id===id);
+    // Planned New/Packing orders keep their packing status; the warehouse still
+    // sees them and the tour card shows the live status until they turn ready.
+    const keepPack=src&&(src.status==='new'||src.status==='packing');
+    status[id]=keepPack?src.status:'ready';
     if(!dAllOrders.find(x=>x.id===id)){
-      const src=orders.find(x=>x.id===id);
       if(src){dAllOrders.push({id:src.id,customer:src.customer,phone:src.phone,address:src.address,boxes:src.boxes,panels:src.panels,lcorner:src.lcorner,clips:src.clips,ctn:src.ctn,bundle:src.bundle});
       dAllOrders.sort((a,b)=>reg(a.id).s-reg(b.id).s);}
     }
-    dStatus[id]='ready';
-    // Order stays "ready" so it appears in the driver's Ready-to-Load (with the
-    // checklist). It's already excluded from the office pool by tour membership.
-    var _o=orders.find(x=>x.id===id); if(_o && _o.status!=='ready'){ _o.status='ready'; addStatusLog(_o,'ready','Office'); }
+    dStatus[id]=status[id];
+    // Ready order stays "ready" so it shows in the driver's Ready-to-Load.
+    if(src && !keepPack && src.status!=='ready'){ src.status='ready'; addStatusLog(src,'ready','Office'); }
   });
   var _tourId;
   if(existingTour && !existingTour.driving){
     // Driver still loading — just add orders to existing tour
     ofSelOrders.forEach(id=>{
       if(!existingTour.orders.includes(id)) existingTour.orders.push(id);
-      existingTour.status[id]='ready';
-      var _o=orders.find(x=>x.id===id); if(_o && _o.status!=='ready'){ _o.status='ready'; addStatusLog(_o,'ready','Office'); }
+      var _o=orders.find(x=>x.id===id);
+      var keepPack=_o&&(_o.status==='new'||_o.status==='packing');
+      existingTour.status[id]=keepPack?_o.status:'ready';
+      dStatus[id]=existingTour.status[id];
+      if(_o && !keepPack && _o.status!=='ready'){ _o.status='ready'; addStatusLog(_o,'ready','Office'); }
     });
     existingTour.orders=optimizeTourOrder(existingTour.orders); // initial sort by whatever coords we already have
     _tourId=existingTour.id;
@@ -5644,7 +5802,7 @@ function coSuggestShip(){ return coPanelQty()>=25 ? 0 : 400; }
 function coPanelQty(){
   var q=0;
   document.querySelectorAll('#co-lines .pline').forEach(function(l){
-    var i=l.querySelectorAll('input'); q+=parseInt(i[2].value)||0;
+    var i=l.querySelectorAll('input'); q+=parseInt(i[1].value)||0;
   });
   return q;
 }
@@ -5681,8 +5839,8 @@ function coAddLine(code,price,qty,grade){
   var wrap=document.getElementById('co-lines'); if(!wrap)return;
   var div=document.createElement('div'); div.className='pline';
   div.innerHTML='<input type="text" placeholder="KP009" value="'+(code||'')+'" oninput="this.value=this.value.toUpperCase();coCalc()">'
-    +'<input type="number" min="0" placeholder="179" value="'+(price!=null&&price!==''?price:'')+'" oninput="coCalc()">'
     +'<input type="number" min="0" placeholder="0" value="'+(qty!=null&&qty!==''?qty:'')+'" oninput="coCalc()">'
+    +'<input type="number" min="0" placeholder="179" value="'+(price!=null&&price!==''?price:'')+'" oninput="coCalc()">'
     +gradeSelHTML(grade)
     +'<button type="button" class="xbtn" onclick="this.parentNode.remove();coCalc()"><i class="ti ti-x"></i></button>';
   wrap.appendChild(div);
@@ -5696,18 +5854,18 @@ function coAddE(etype,code,price,qty){
   div.innerHTML='<select style="padding:8px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:11px;background:var(--bg);color:var(--text);width:100%" onchange="coCalc()">'
       +opt('lcorner','L-Corner')+opt('ttrim','T-Trim')+opt('utrim','U-Trim')+'</select>'
     +'<input type="text" placeholder="Code" value="'+(code||'')+'" oninput="this.value=this.value.toUpperCase();coCalc()">'
-    +'<input type="number" min="0" placeholder="179" value="'+(price!=null&&price!==''?price:'')+'" oninput="coCalc()">'
     +'<input type="number" min="0" placeholder="0" value="'+(qty!=null&&qty!==''?qty:'')+'" oninput="coCalc()">'
+    +'<input type="number" min="0" placeholder="179" value="'+(price!=null&&price!==''?price:'')+'" oninput="coCalc()">'
     +'<button type="button" class="xbtn" onclick="this.parentNode.remove();coCalc()"><i class="ti ti-x"></i></button>';
   wrap.appendChild(div);
 }
 function coCalc(){
   var sum=0;
   document.querySelectorAll('#co-lines .pline').forEach(function(l){
-    var i=l.querySelectorAll('input'); sum+=(parseFloat(i[1].value)||0)*(parseInt(i[2].value)||0);
+    var i=l.querySelectorAll('input'); sum+=(parseInt(i[1].value)||0)*(parseFloat(i[2].value)||0);
   });
   document.querySelectorAll('#co-edges .eline').forEach(function(l){
-    var i=l.querySelectorAll('input'); sum+=(parseFloat(i[1].value)||0)*(parseInt(i[2].value)||0);
+    var i=l.querySelectorAll('input'); sum+=(parseInt(i[1].value)||0)*(parseFloat(i[2].value)||0);
   });
   sum+=(parseInt((document.getElementById('co-clip-packs')||{}).value)||0)*199;
   // Delivery: auto-suggest by panel qty unless the user overrode the field.
@@ -5724,7 +5882,7 @@ function submitCO(){
   var newItems=[], tq=0, freeGift=0;
   document.querySelectorAll('#co-lines .pline').forEach(function(l){
     var i=l.querySelectorAll('input');
-    var code=i[0].value.trim().toUpperCase(), price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0, grade=lineGrade(l);
+    var code=i[0].value.trim().toUpperCase(), qty=parseInt(i[1].value)||0, price=parseFloat(i[2].value)||0, grade=lineGrade(l);
     if(!code||!qty)return;
     var t=mirrorClassify(code); if(t==='clip')t='clips';
     var item={type:t,code:code,qty:qty,unitPrice:price,amount:price*qty};
@@ -5734,7 +5892,7 @@ function submitCO(){
   document.querySelectorAll('#co-edges .eline').forEach(function(l){
     var sel=l.querySelector('select'), i=l.querySelectorAll('input');
     var etype=sel?sel.value:'lcorner';
-    var code=i[0].value.trim().toUpperCase(), price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0;
+    var code=i[0].value.trim().toUpperCase(), qty=parseInt(i[1].value)||0, price=parseFloat(i[2].value)||0;
     if(!code||!qty)return;
     newItems.push({type:etype,code:code,qty:qty,unitPrice:price,amount:price*qty});
   });
@@ -5885,9 +6043,14 @@ function whRender() {
     return '<div class="card" style="background:#fff7ed;border:2px solid #ea580c">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
       '<span style="font-size:18px;font-weight:700">'+o.id+'</span>'+
-      '<span class="badge" style="background:#ea580c;color:#fff">'+wtx('tag_change')+'</span></div>'+
+      '<span style="display:flex;align-items:center;gap:8px">'+kpcOrderBubble(o.id)+'<span class="badge" style="background:#ea580c;color:#fff">'+wtx('tag_change')+'</span></span></div>'+
       '<div style="font-size:12px;color:var(--text2);margin-bottom:6px">'+o.customer+' '+zoneBadge(o.zone)+'</div>'+
       '<div style="background:#fff;border-radius:var(--rs);padding:8px;font-size:14px;font-weight:700;color:#ea580c;line-height:1.8">'+coDiffText(o.changeReq).split(', ').join('<br>')+'</div>'+
+      // Full before/after product list so the warehouse re-packs against the complete picture.
+      '<div style="background:#fff;border-radius:var(--rs);padding:8px;margin-top:6px;font-size:12px;line-height:1.7">'+
+        '<div style="color:#888"><s>เดิม / Alt / Old: '+coProdText(o.changeReq.oldItems)+'</s></div>'+
+        '<div style="font-weight:700;color:#16a34a;margin-top:2px">ใหม่ / Neu / New: '+coProdText(o.changeReq.newItems)+'</div>'+
+      '</div>'+
       (o.changeReq.note?'<div style="font-size:12px;color:var(--text2);margin-top:6px">📝 '+o.changeReq.note+'</div>':'')+
       '<div style="font-size:11px;color:var(--text2);margin-top:4px">'+wtx('requested_by')+' '+(o.changeReq.by||'Office')+'</div>'+
       '<button type="button" class="btn" style="background:#16a34a;color:#fff;border:none;margin-top:10px;width:100%;min-height:48px;font-size:15px;font-weight:700;-webkit-tap-highlight-color:transparent;touch-action:manipulation" onclick="whConfirmChange(\''+o.id+'\')"><i class="ti ti-check"></i> '+wtx('confirm_change')+'</button>'+
@@ -5907,7 +6070,7 @@ function whRender() {
         return '<div class="card">'+
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
           '<span style="font-size:18px;font-weight:700">'+o.id+'</span>'+
-          '<span class="badge bpacking">'+wtx('badge_topack')+'</span></div>'+
+          '<span style="display:flex;align-items:center;gap:8px">'+kpcOrderBubble(o.id)+'<span class="badge bpacking">'+wtx('badge_topack')+'</span></span></div>'+
           '<div style="font-size:12px;color:var(--text2);margin-bottom:10px">'+zoneBadge(o.zone)+(o.ctn?' <span style="color:var(--green);font-weight:700">📦 '+o.ctn+' CTN</span>':'')+(o.bundle?' <span style="color:#ea580c;font-weight:700">🧶 '+o.bundle+' มัด</span>':'')+' · sticker: '+o.id+'</div>'+
           '<div class="pklist">'+
           '<div class="pkrow"><span class="pklbl">'+wtx('lbl_panels')+'</span><span class="pkval">'+panels+'</span></div>'+
@@ -6313,7 +6476,11 @@ function openDeliveryModal(id){
   document.getElementById('dl-cash-amt').value = '';
   document.getElementById('dl-online-amt').value = '';
   document.getElementById('dl-pay-msg').textContent = '';
+  _slipResult = null;
+  var _sr=document.getElementById('dl-slip-result'); if(_sr) _sr.innerHTML='';
+  var _ss=document.getElementById('dl-slip-section'); if(_ss) _ss.style.display='none';
   dlPhotoRefresh();
+  try{ dlSlipRefresh(); }catch(e){}
   dlGeoRefresh();
   document.getElementById('delivery-modal').classList.add('open');
 }
@@ -6338,11 +6505,155 @@ function dlPayMsg(){
   var sum=dlPaySum();
   if(sum===_deliveryTotal){ msg.style.color='var(--green)'; msg.textContent='✓ '+sum.toLocaleString()+' / '+_deliveryTotal.toLocaleString()+' ฿'; }
   else { msg.style.color='#dc2626'; msg.textContent=sum.toLocaleString()+' / '+_deliveryTotal.toLocaleString()+' ฿ — must match total / ต้องเท่ายอดรวม'; }
+  try{ dlSlipRefresh(); }catch(e){}
 }
 function closeDeliveryModal(){
   document.getElementById('delivery-modal').classList.remove('open');
   _deliveryId = null;
   _deliveryPhoto = null;
+  _slipResult = null;
+}
+
+// ── PAYMENT-SLIP QR CHECK (online payments) ──────────────────────────────
+// Decodes the QR on a Thai bank-transfer slip and sanity-checks it (EMVCo
+// format + CRC + amount). This is a FORMAT/amount check done on-device — it is
+// NOT a bank confirmation that the money arrived. Slip photo + result are saved
+// to the 'slip' picture node (Pictures → Slips) and onto the order.
+var _slipResult = null;
+// Show/hide the slip section based on the online amount + reload saved slips.
+function dlSlipRefresh(){
+  var sec=document.getElementById('dl-slip-section'); if(!sec) return;
+  var online=parseFloat((document.getElementById('dl-online-amt')||{}).value)||0;
+  sec.style.display = online>0 ? 'block' : 'none';
+  var prev=document.getElementById('dl-slip-preview'); if(!prev) return;
+  if(!_deliveryId || !window.fbDB || online<=0){ prev.style.display='none'; prev.innerHTML=''; return; }
+  var sid=safeOrderId(_deliveryId);
+  window.fbDB.ref('orderPhotos/slip/'+sid).once('value', function(snap){
+    var data=snap.val()||{}; var keys=Object.keys(data).sort(function(a,b){return (data[a].ts||0)-(data[b].ts||0);});
+    if(!keys.length){ prev.style.display='none'; prev.innerHTML=''; return; }
+    prev.style.display='block';
+    prev.innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">'+keys.map(function(k){
+      var p=data[k]||{}; var badge=(p.slip?'<div style="position:absolute;top:3px;left:3px;background:'+kpSlipColor(p.slip.status)+';color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px">'+kpSlipShort(p.slip)+'</div>':'');
+      return '<div style="position:relative"><img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid var(--border)">'+badge+'</div>';
+    }).join('')+'</div>';
+  });
+}
+// Draw the image to a canvas and scan for a QR code with jsQR.
+function kpScanQR(img){
+  try{
+    if(typeof jsQR!=='function') return null;
+    var w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+    var scale=Math.min(1, 1400/Math.max(w,h||1));
+    var cw=Math.max(1,Math.round(w*scale)), ch=Math.max(1,Math.round(h*scale));
+    var cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
+    cv.getContext('2d').drawImage(img,0,0,cw,ch);
+    var d=cv.getContext('2d').getImageData(0,0,cw,ch);
+    var r=jsQR(d.data, cw, ch, {inversionAttempts:'attemptBoth'});
+    return r ? r.data : null;
+  }catch(e){ return null; }
+}
+// CRC-16/CCITT-FALSE over the payload minus the last 4 CRC hex chars (EMVCo).
+function kpCrc16Ok(payload){
+  try{
+    var body=payload.slice(0, payload.length-4);
+    var given=payload.slice(payload.length-4).toUpperCase();
+    var crc=0xFFFF;
+    for(var i=0;i<body.length;i++){
+      crc ^= (body.charCodeAt(i) << 8);
+      for(var j=0;j<8;j++){ crc = (crc & 0x8000) ? ((crc<<1) ^ 0x1021) : (crc<<1); crc &= 0xFFFF; }
+    }
+    return given === ('000'+crc.toString(16).toUpperCase()).slice(-4);
+  }catch(e){ return false; }
+}
+// Minimal EMVCo TLV walk → return the value of a top-level tag (e.g. '54' amount).
+function kpEmvTag(payload, tag){
+  try{
+    var i=0;
+    while(i+4 <= payload.length){
+      var t=payload.substr(i,2); var len=parseInt(payload.substr(i+2,2),10);
+      if(isNaN(len)) break;
+      var val=payload.substr(i+4,len);
+      if(t===tag) return val;
+      i += 4+len;
+    }
+  }catch(e){}
+  return null;
+}
+// Decide the verification verdict.
+function kpVerifySlip(qr, expectedAmt){
+  if(!qr){ return {status:'unreadable', matched:false, msg:'อ่าน QR ไม่ได้ / QR unreadable — try again'}; }
+  var t=String(qr).trim();
+  var isEmv=/^000201/.test(t) && /6304[0-9A-Fa-f]{4}$/.test(t);
+  if(isEmv){
+    var crcOk=kpCrc16Ok(t);
+    var amtStr=kpEmvTag(t,'54');
+    var amt=amtStr!=null ? parseFloat(amtStr) : null;
+    var matched = (amt==null) ? true : (Math.round(amt) === Math.round(expectedAmt||0));
+    if(!crcOk){ return {status:'invalid', matched:false, msg:'QR checksum ผิด / invalid checksum — possible fake'}; }
+    if(amt!=null && !matched){ return {status:'mismatch', matched:false, amount:amt, msg:'ยอด QR '+amt.toLocaleString()+' ≠ '+ (expectedAmt||0).toLocaleString()+' ฿'}; }
+    return {status:'ok', matched:matched, amount:amt, ref:kpEmvTag(t,'62'), msg:'QR ถูกต้อง (format+CRC) / valid slip QR'+(amt!=null?' · '+amt.toLocaleString()+' ฿':'')};
+  }
+  // Non-EMVCo but decoded (some banks use a URL / ref string): store for manual review.
+  return {status:'unknown', matched:false, ref:t.slice(0,80), msg:'QR อ่านได้ (ตรวจด้วยตนเอง) / decoded — verify manually'};
+}
+function kpSlipColor(st){ return st==='ok'?'#16a34a':(st==='unknown'?'#2563eb':'#dc2626'); }
+function kpSlipShort(s){ if(!s) return '🧾'; return s.status==='ok'?'🧾✓':(s.status==='mismatch'?'🧾⚠':(s.status==='unknown'?'🧾?':'🧾✕')); }
+function kpRenderSlipResult(v){
+  var el=document.getElementById('dl-slip-result'); if(!el) return;
+  if(!v){ el.innerHTML=''; return; }
+  var col=kpSlipColor(v.status);
+  var head = v.status==='ok' ? '✅ ต้นฉบับ / Original — QR OK' : (v.status==='unknown' ? 'ℹ️ ตรวจด้วยตนเอง / Manual check' : '🚨 ALARM / เตือน');
+  el.innerHTML='<div style="background:'+col+'1a;border:1.5px solid '+col+';color:'+col+';border-radius:var(--rs);padding:8px 10px;font-weight:700">'+head+'<div style="font-weight:500;margin-top:2px">'+kpcEsc(v.msg||'')+'</div></div>';
+}
+// Store a slip photo (compressed) + verdict under the 'slip' picture node.
+function addSlipPhoto(orderId, dataUrl, by, verify, done){
+  if(!window.fbDB || !orderId || !dataUrl){ if(done) done(false); return; }
+  var sid=safeOrderId(orderId);
+  var ord=(typeof orders!=='undefined'?orders.find(function(x){return x.id===orderId;}):null)||{};
+  var ref=window.fbDB.ref('orderPhotos/slip/'+sid).push();
+  ref.set({ data:dataUrl, ts:Date.now(), by:by||'', slip:verify||null }, function(err){
+    if(err){ if(done) done(false); return; }
+    window.fbDB.ref('photoIndex/slip/'+sid).transaction(function(cur){
+      cur=cur||{id:orderId,n:0}; cur.id=orderId; cur.n=(parseInt(cur.n)||0)+1; cur.ts=Date.now();
+      cur.zone=ord.zone||cur.zone||''; cur.customer=ord.customer||cur.customer||''; return cur;
+    }, function(){ if(done) done(true); });
+  });
+}
+function handleSlipPhoto(input){
+  var f=input&&input.files&&input.files[0]; if(!f||!_deliveryId) return;
+  var drName=(typeof currentDriverId!=='undefined')?((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver'):'Driver';
+  var prog=document.getElementById('dl-slip-progress'); if(prog) prog.style.display='block';
+  var expected=parseFloat((document.getElementById('dl-online-amt')||{}).value)||0;
+  var reader=new FileReader();
+  reader.onload=function(ev){
+    var img=new Image();
+    img.onload=function(){
+      var qr=kpScanQR(img);
+      var v=kpVerifySlip(qr, expected);
+      _slipResult=v;
+      kpRenderSlipResult(v);
+      // Persist verdict on the order so tour cards / reports can show a badge.
+      var ord=(typeof orders!=='undefined'?orders.find(function(x){return x.id===_deliveryId;}):null);
+      if(ord){ ord.slip={status:v.status,matched:!!v.matched,amount:v.amount||0,ref:v.ref||'',ts:Date.now(),by:drName}; }
+      compressPhotoFile(f, function(dataUrl){
+        addSlipPhoto(_deliveryId, dataUrl, drName, {status:v.status,matched:!!v.matched,amount:v.amount||0,ref:v.ref||'',msg:v.msg||''}, function(){
+          if(prog) prog.style.display='none';
+          dlSlipRefresh();
+          try{ syncOrders(); }catch(e){}
+        });
+      });
+    };
+    img.onerror=function(){ if(prog) prog.style.display='none'; kpRenderSlipResult({status:'unreadable',msg:'ภาพเสีย / image error'}); };
+    img.src=ev.target.result;
+  };
+  reader.readAsDataURL(f);
+  input.value='';
+}
+// Little slip badge used on the active-tour order rows.
+function ofSlipBadge(ord){
+  var s=ord&&ord.slip; if(!s) return '';
+  var titles={ok:'Slip QR OK',mismatch:'Slip amount mismatch',invalid:'Slip QR invalid — possible fake',unreadable:'Slip QR unreadable',unknown:'Slip captured — verify manually'};
+  return ' <span title="'+(titles[s.status]||'Slip')+'" style="font-size:11px">'+kpSlipShort(s)+'</span>';
 }
 // Capture one or more delivery photos (camera or gallery) — saved immediately
 // to the order's 'delivery' photo node, like the warehouse pack photos.
@@ -6472,6 +6783,9 @@ function orderNavUrl(o){
 // Resolver web-app URL (Apps Script). Paste your /exec URL here after deploying
 // apps-script/resolve-link.gs. Empty = short-link resolving disabled.
 var KP_RESOLVER_URL = 'https://script.google.com/macros/s/AKfycbzrohJubgH23jnwaqURW5OETbDGoNl5j8zEa8gihPYkAMUn187gSlWVjqpPNaHEJNpZ/exec';
+// Translate web-app URL (Apps Script + Claude). Paste your /exec URL here after
+// deploying apps-script/translate.gs. Empty = chat auto-translate disabled.
+var KP_TRANSLATE_URL = '';
 // Pull {lat,lng} for an order: saved pin → resolved coord on the order → parse link.
 function orderLatLng(o){
   if(!o) return null;
@@ -6746,8 +7060,8 @@ function orderPhotoCount(orderId, type){
 var picsTab = 'warehouse';
 function picsSubTab(t){
   picsTab = t;
-  var wb=document.getElementById('pics-tab-warehouse'), db2=document.getElementById('pics-tab-delivery');
-  [['warehouse',wb],['delivery',db2]].forEach(function(p){
+  var wb=document.getElementById('pics-tab-warehouse'), db2=document.getElementById('pics-tab-delivery'), sb=document.getElementById('pics-tab-slip');
+  [['warehouse',wb],['delivery',db2],['slip',sb]].forEach(function(p){
     if(!p[1]) return;
     if(p[0]===t){ p[1].style.background='var(--blue)'; p[1].style.color='#fff'; p[1].style.border='none'; }
     else { p[1].style.background='var(--bg)'; p[1].style.color='var(--text)'; p[1].style.border='1.5px solid var(--border)'; }
@@ -6814,8 +7128,10 @@ function picsToggleOrder(sid){
       keys.map(function(k){
         var p=data[k]||{};
         var when = p.ts ? new Date(p.ts).toLocaleString('th-TH',{day:'numeric',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+        var slipTag = (picsTab==='slip'&&p.slip)?'<div title="'+kpcEsc(p.slip.msg||'')+'" style="position:absolute;top:3px;left:3px;background:'+kpSlipColor(p.slip.status)+';color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:6px">'+kpSlipShort(p.slip)+'</div>':'';
         return '<div style="position:relative">'+
           '<img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid var(--border)">'+
+          slipTag+
           '<button type="button" onclick="deleteOrderPhoto(\''+sid+'\',\''+k+'\')" title="Delete / ลบ" style="position:absolute;top:3px;right:3px;width:24px;height:24px;border-radius:50%;border:none;background:rgba(220,38,38,0.92);color:#fff;font-size:13px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center">✕</button>'+
           (when?'<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);color:#fff;font-size:9px;padding:2px 4px;border-radius:0 0 6px 6px;text-align:center">'+when+(p.by?' · '+p.by:'')+'</div>':'')+
         '</div>';
@@ -7902,6 +8218,15 @@ function confirmDelivery(){
     alert('Payment must match the total / ยอดชำระต้องเท่ายอดรวม ('+_deliveryTotal.toLocaleString()+' ฿)');
     return;
   }
+  // Online payment → a slip photo is required (QR checked on capture).
+  if(online>0 && orderPhotoCount(id,'slip') < 1){
+    alert('Online payment: please photograph the payment slip first.\nโอนเงิน: กรุณาถ่ายรูปสลิปก่อน');
+    return;
+  }
+  // If the slip QR failed the check, make the driver acknowledge before confirming.
+  if(online>0 && _slipResult && (_slipResult.status==='invalid'||_slipResult.status==='mismatch'||_slipResult.status==='unreadable')){
+    if(!confirm('🚨 Slip QR check: '+(_slipResult.msg||'problem')+'\n\nConfirm delivery anyway? / ยืนยันการส่งต่อไปหรือไม่?')) return;
+  }
   var payMethod = (cash>0 && online>0) ? 'split' : (online>0 ? 'online' : 'cash');
   var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
   // Save payment on the order.
@@ -8205,7 +8530,7 @@ function whRenderPacking() {
       (o.cantFinish?'<div style="background:#fee2e2;color:#dc2626;border-radius:var(--rs);padding:5px 9px;font-size:11px;font-weight:800;margin-bottom:8px">'+wtx('tag_cantfinish')+(o.cantFinishReason?' — <span style="font-weight:600">'+o.cantFinishReason+'</span>':'')+'</div>':'')+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
       '<span style="font-size:20px;font-weight:800">'+o.id+'</span>'+
-      '<span class="badge" style="background:#dbeafe;color:#1d4ed8">'+wtx('badge_packing')+'</span>'+
+      '<span style="display:flex;align-items:center;gap:8px">'+kpcOrderBubble(o.id)+'<span class="badge" style="background:#dbeafe;color:#1d4ed8">'+wtx('badge_packing')+'</span></span>'+
       '</div>'+
       '<div style="font-size:13px;color:var(--text2);margin-bottom:8px">'+o.zone+' · '+o.customer+'</div>'+
       (o.changeReq&&(o.changeReq.status==='pending'||o.changeReq.status==='confirmed')?(function(){var _cr=o.changeReq,_p=_cr.status==='pending';return '<div style="background:'+(_p?'#fff7ed':'#f0fdf4')+';color:'+(_p?'#ea580c':'#16a34a')+';border:1.5px solid '+(_p?'#fed7aa':'#bbf7d0')+';border-radius:var(--rs);padding:7px 10px;font-size:12px;margin-bottom:8px"><div style="font-weight:800;margin-bottom:3px">'+(_p?wtx('tag_change'):wtx('tag_changed'))+'</div><div style="font-weight:700">'+coDiffText(_cr)+'</div><div style="margin-top:3px;color:#888"><s>เดิม: '+coProdText(_cr.oldItems)+'</s></div><div style="font-weight:700;color:#16a34a">ใหม่: '+coProdText(_cr.newItems)+'</div></div>';})():'')+
@@ -10532,6 +10857,20 @@ function calcViz() {
         <input type="number" id="dl-online-amt" placeholder="0" oninput="dlPayManual()" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:15px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)"> ฿
       </div>
       <div id="dl-pay-msg" style="font-size:11px;margin-top:8px;text-align:center"></div>
+    </div>
+
+    <!-- Payment slip (online only): photograph the slip, QR is auto-checked -->
+    <div id="dl-slip-section" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--rs);padding:12px;margin-bottom:14px">
+      <label class="fl" style="margin-top:0">🧾 Payment slip / สลิปโอนเงิน <span style="color:#dc2626">*</span></label>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px">Online payment → photograph the slip. The QR is checked automatically. / โอนเงิน → ถ่ายรูปสลิป ระบบตรวจ QR อัตโนมัติ</div>
+      <div id="dl-slip-preview" style="display:none;margin-bottom:8px"></div>
+      <div id="dl-slip-upload" onclick="document.getElementById('dl-slip-input').click()" style="border:2px dashed #93c5fd;border-radius:var(--rs);padding:16px;text-align:center;cursor:pointer;background:var(--bg)">
+        <i class="ti ti-qrcode" style="font-size:26px;color:#2563eb;display:block;margin-bottom:6px"></i>
+        <div style="font-size:13px;color:#2563eb">Tap to photograph slip / ถ่ายรูปสลิป</div>
+      </div>
+      <input type="file" id="dl-slip-input" accept="image/*" style="display:none" onchange="handleSlipPhoto(this)">
+      <div id="dl-slip-progress" style="display:none;font-size:12px;color:var(--blue);margin-top:6px;text-align:center"><i class="ti ti-loader"></i> Checking QR... / กำลังตรวจ QR</div>
+      <div id="dl-slip-result" style="font-size:13px;margin-top:8px"></div>
     </div>
 
     <button type="button" class="btn btng" id="delivery-confirm-btn" onclick="confirmDelivery()" style="margin-top:4px">
