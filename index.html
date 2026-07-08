@@ -1982,7 +1982,6 @@ textarea{resize:none}
     </div>
     <div id="dr-vres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-bottom:10px;font-size:13px"></div>
     <div id="dr-tlist"></div>
-    <div id="dr-packsec" style="display:none"><div class="stit" style="margin-top:10px;color:#92400e">📦 Still packing / กำลังแพ็ค <span id="dr-packcnt" style="color:#92400e;font-weight:600"></span></div><div id="dr-packlist"></div></div>
     <div id="dr-donesec" style="display:none"><div class="donesep"><span>Done / เสร็จแล้ว</span></div><div id="dr-donelist"></div></div>
   </div></div>
 </div></div>
@@ -6203,10 +6202,12 @@ function drLogin(id){
           dAllOrders.push({id:src.id,customer:src.customer,phone:src.phone,address:src.address,boxes:src.boxes,panels:src.panels,lcorner:src.lcorner,clips:src.clips,ctn:src.ctn,bundle:src.bundle});
         const st=tour.status[oid]||'ready';
         dStatus[oid]=st;
-        if(st==='loaded'||st==='ready'){
-          if(!dTour.includes(oid)) dTour.push(oid);
-        } else if(st==='delivered'||st==='cancelled'){
+        if(st==='delivered'||st==='cancelled'){
           if(!dDone.includes(oid)) dDone.push(oid);
+        } else {
+          // ready / loaded / still-packing all live in the tour list so the driver
+          // can sequence them together (packing ones are shown faded until ready).
+          if(!dTour.includes(oid)) dTour.push(oid);
         }
       }
     });
@@ -6374,13 +6375,15 @@ function drTour(){
       const o=dAllOrders.find(x=>x.id===id);if(!o)return '';
       const c=dChecks[id]||{p:false,l:false,c:false};
       const loaded=dStatus[id]==='loaded'; // faded until the driver loads it on the truck
+      const liveO=orders.find(x=>x.id===id); // live warehouse status (may have changed since login)
+      const isPacking=liveO&&(liveO.status==='new'||liveO.status==='packing');
       const _locUrl=orderLocUrl(o);
       const _navUrl=orderNavUrl(o);
       const murl=_locUrl||('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(o.address));
       const ck=(f,v)=>'<div class="chkrow" onclick="drChkBtn(this)" data-id="'+id+'" data-field="'+f+'"><div class="chkbox '+(v?'on':'')+'">'+( v?'<i class="ti ti-check" style="font-size:12px;color:var(--green)"></i>':''  )+'</div>';
       return '<div class="tcard"'+(loaded?'':' style="opacity:0.45"')+'>'+
         '<div class="ttop">'+
-        '<div class="thdr"><span class="tnum">'+(idx+1)+'. '+o.id+(_locUrl?' <a href="'+_locUrl+'" target="_blank" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(loaded?'':' <span style="font-size:10px;font-weight:700;color:#6b7280;background:rgba(0,0,0,0.06);border-radius:8px;padding:1px 6px;white-space:nowrap">⬜ ยังไม่ขึ้นรถ</span>')+'</span> '+kpcOrderBubble(o.id)+'<div class="mvbtns"><button type="button" class="mvbtn" onclick="drUp('+idx+')" '+(idx===0?'disabled':'')+'>↑</button><button type="button" class="mvbtn" onclick="drDn('+idx+')" '+(idx===myTour.length-1?'disabled':'')+'>↓</button><input type="number" min="1" max="'+myTour.length+'" value="'+(idx+1)+'" onchange="drMoveTo(this,'+idx+')" style="width:42px;padding:3px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;text-align:center;background:var(--bg);color:var(--text)"></div></div>'+
+        '<div class="thdr"><span class="tnum">'+(idx+1)+'. '+o.id+(_locUrl?' <a href="'+_locUrl+'" target="_blank" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(loaded?'':(isPacking?' <span style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap">📦 กำลังแพ็ค / Packing</span>':' <span style="font-size:10px;font-weight:700;color:#6b7280;background:rgba(0,0,0,0.06);border-radius:8px;padding:1px 6px;white-space:nowrap">⬜ ยังไม่ขึ้นรถ</span>'))+'</span> '+kpcOrderBubble(o.id)+'<div class="mvbtns"><button type="button" class="mvbtn" onclick="drUp('+idx+')" '+(idx===0?'disabled':'')+'>↑</button><button type="button" class="mvbtn" onclick="drDn('+idx+')" '+(idx===myTour.length-1?'disabled':'')+'>↓</button><input type="number" min="1" max="'+myTour.length+'" value="'+(idx+1)+'" onchange="drMoveTo(this,'+idx+')" style="width:42px;padding:3px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;text-align:center;background:var(--bg);color:var(--text)"></div></div>'+
         '<div style="font-size:13px;margin-bottom:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' &middot; '+o.lcorner:'')+(o.clips&&o.clips>0?' &middot; 📎 '+o.clips+' clips':'')+(o.ctn?' &middot; <span style="color:var(--green);font-weight:700">📦 '+o.ctn+' CTN</span>':'')+(o.bundle?' &middot; <span style="color:#ea580c;font-weight:700">🧶 '+o.bundle+' มัด</span>':'')+'</div>'+
         '<div class="crow"><i class="ti ti-user" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.customer+'</span></div>'+
         '<div class="crow"><i class="ti ti-phone" style="font-size:13px;color:var(--text2)"></i><span>'+phoneLinks(o.phone,'var(--blue)')+'</span></div>'+
@@ -6389,32 +6392,15 @@ function drTour(){
         (o.contact?'<div class="crow"><i class="ti ti-message-circle" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.contact+'</span></div>':'')+
         ((o.reqDate||o.reqNote)?'<div class="crow"><i class="ti ti-calendar-event" style="font-size:13px;color:#c2410c"></i><span style="font-size:13px;color:#c2410c;font-weight:600">ต้องการรับ / Requested: '+(o.reqDate?fmtD(o.reqDate):'')+(o.reqNote?(o.reqDate?' · ':'')+o.reqNote:'')+'</span></div>':'')+
         '</div>'+
-        '<div class="tfoot"><button type="button" class="btn btng" style="margin-top:0;flex:1" onclick="drDeliverBtn(this)" data-id="'+id+'"><i class="ti ti-check"></i> Delivered / ส่งแล้ว</button><button type="button" class="btncancel" onclick="drCancelBtn(this)" data-id="'+id+'"><i class="ti ti-x"></i> Cancel</button></div>'+
+        (isPacking
+          ? '<div class="tfoot"><div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#92400e;background:#fef3c7;border-radius:var(--rs);padding:9px">📦 Waiting for warehouse / รอแพ็คเสร็จ</div></div>'
+          : '<div class="tfoot"><button type="button" class="btn btng" style="margin-top:0;flex:1" onclick="drDeliverBtn(this)" data-id="'+id+'"><i class="ti ti-check"></i> Delivered / ส่งแล้ว</button><button type="button" class="btncancel" onclick="drCancelBtn(this)" data-id="'+id+'"><i class="ti ti-x"></i> Cancel</button></div>')+
         '</div>';
     }).join('');
   }
-  // Still-packing preview: orders the office already assigned to this driver but the
-  // warehouse hasn't finished packing yet. Info-only (no deliver/load buttons); they
-  // move into "Ready to Load" automatically once the warehouse marks them ready.
-  var _ptour=activeTours.find(function(t){return t.driverId===currentDriverId;});
-  var packing=_ptour?_ptour.orders.map(function(id){return orders.find(function(x){return x.id===id;});}).filter(function(o){return o&&(o.status==='new'||o.status==='packing');}):[];
-  var _psec=document.getElementById('dr-packsec');
-  if(!packing.length){ if(_psec) _psec.style.display='none'; }
-  else if(_psec){
-    _psec.style.display='block';
-    document.getElementById('dr-packcnt').textContent='('+packing.length+')';
-    document.getElementById('dr-packlist').innerHTML=packing.map(function(o){
-      var st=o.status==='new'?'⏳ New / รอแพ็ค':'📦 Packing / แพ็ค';
-      var stbg=o.status==='new'?'#e0e7ff':'#fef3c7',stc=o.status==='new'?'#3730a3':'#92400e';
-      return '<div class="card" style="margin-bottom:8px;opacity:0.85;border-left:4px solid #f59e0b">'+
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'+
-        '<span style="font-size:16px;font-weight:700">'+o.id+'</span>'+
-        '<div style="display:flex;align-items:center;gap:6px">'+kpcOrderBubble(o.id)+'<span class="badge" style="background:'+stbg+';color:'+stc+'">'+st+'</span></div>'+
-        '</div>'+
-        '<div style="font-size:12px;color:var(--text2)">'+zoneBadge(o.zone)+(o.customer?' '+o.customer:'')+(o.ctn?' &middot; <span style="font-weight:700;color:var(--green)">📦 '+o.ctn+' CTN</span>':'')+(o.bundle?' &middot; <span style="font-weight:700;color:#ea580c">🧶 '+o.bundle+' มัด</span>':'')+'</div>'+
-        '</div>';
-    }).join('');
-  }
+  // Packing orders now live inside the tour list above (reorderable), so the
+  // old separate preview section is no longer used.
+  var _psec=document.getElementById('dr-packsec'); if(_psec) _psec.style.display='none';
   const ds=document.getElementById('dr-donesec');
   if(dDone.length===0){ds.style.display='none';return;}
   ds.style.display='block';
