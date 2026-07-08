@@ -5103,12 +5103,16 @@ function ofDriversRender(){
     var toursHtml = hist.length ? hist.map(function(t){
       var otid='drvt_'+key+'_'+t._k;
       var ordersHtml=(t.orders||[]).map(function(o){
+        var rowId='dro_'+key+'_'+t._k+'_'+safeOrderId(o.id);
         return '<div style="padding:6px 0;border-top:1px solid var(--border);font-size:11px">'
-          +'<div style="display:flex;justify-content:space-between;gap:6px"><span style="font-weight:700">'+o.id+'</span><span style="font-weight:700">'+(o.total||'')+'</span></div>'
-          +'<div style="color:var(--text);font-weight:600;margin-top:1px">'+(o.customer||'—')+' <span style="color:var(--text2);font-weight:500">· '+(o.zone||'')+'</span></div>'
-          +(o.status?'<div style="color:var(--text2);margin-top:1px">'+o.status+((o.shipper&&o.shipper!=='ส่งเอง')?' · 🚚 '+o.shipper:'')+'</div>':'')
-          +(o.phone&&o.phone!=='—'?'<div style="color:var(--text2);margin-top:1px">📞 '+o.phone+'</div>':'')
-          +(o.address&&o.address!=='—'?'<div style="color:var(--text2);margin-top:1px">📍 '+o.address+'</div>':'')
+          +'<div onclick="ofDrvToggleOrder(\''+rowId+'\')" style="cursor:pointer">'
+            +'<div style="display:flex;justify-content:space-between;gap:6px"><span style="font-weight:700">'+o.id+' <i class="ti ti-chevron-down" id="'+rowId+'_chev" style="font-size:12px;color:var(--text2);vertical-align:-1px"></i></span><span style="font-weight:700">'+(o.total||'')+'</span></div>'
+            +'<div style="color:var(--text);font-weight:600;margin-top:1px">'+(o.customer||'—')+' <span style="color:var(--text2);font-weight:500">· '+(o.zone||'')+'</span></div>'
+            +(o.status?'<div style="color:var(--text2);margin-top:1px">'+o.status+((o.shipper&&o.shipper!=='ส่งเอง')?' · 🚚 '+o.shipper:'')+'</div>':'')
+            +(o.phone&&o.phone!=='—'?'<div style="color:var(--text2);margin-top:1px">📞 '+o.phone+'</div>':'')
+            +(o.address&&o.address!=='—'?'<div style="color:var(--text2);margin-top:1px">📍 '+o.address+'</div>':'')
+          +'</div>'
+          +'<div id="'+rowId+'_det" style="display:none;margin-top:6px">'+ofDrvOrderDetail(o, rowId)+'</div>'
           +'</div>';
       }).join('')||'<div style="font-size:11px;color:var(--text2);padding:6px 0">No orders</div>';
       var dateStr=t.departedDate?fmtD(t.departedDate):(t.endedDate?fmtD(t.endedDate):'');
@@ -5128,6 +5132,64 @@ function ofDriversRender(){
       +'<div id="'+wid+'" style="display:none;margin-top:10px">'+toursHtml+'</div>'
       +'</div>';
   }).join('');
+}
+// Expandable order detail inside the Drivers tab: payment + delivery time + photo
+// buttons (Warehouse / Delivery / Slip) that lazy-load images like the Pictures tab.
+function ofDrvToggleOrder(rowId){
+  var det=document.getElementById(rowId+'_det'), chev=document.getElementById(rowId+'_chev');
+  if(!det) return;
+  var open=det.style.display==='block';
+  det.style.display=open?'none':'block';
+  if(chev) chev.style.transform=open?'':'rotate(180deg)';
+}
+function ofDrvOrderDetail(snap, rowId){
+  var oid=snap.id;
+  var live=(typeof orders!=='undefined')?orders.find(function(x){return x.id===oid;}):null;
+  var d=live||snap||{};
+  var esc=function(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
+  var pc=parseFloat(d.paidCash)||0, po=parseFloat(d.paidOnline)||0;
+  var tot=parseFloat(String(d.total||'').replace(/[^0-9]/g,''))||0;
+  var payLine;
+  if(d.payAtOffice && !d.payMethod){ payLine='💼 Pay at office / เก็บที่ออฟฟิศ · unpaid'; }
+  else if(d.payMethod){
+    var parts=[]; if(pc>0)parts.push('💵 '+pc.toLocaleString()+' ฿'); if(po>0)parts.push('🏦 '+po.toLocaleString()+' ฿');
+    if(!parts.length && tot>0) parts.push((d.payMethod==='online'?'🏦 ':'💵 ')+tot.toLocaleString()+' ฿');
+    var ml=d.payMethod==='split'?'Cash+Online':(d.payMethod==='online'?'โอน/Online':(d.payMethod==='cash'?'เงินสด/Cash':d.payMethod));
+    payLine='✅ '+ml+(parts.length?' · '+parts.join(' · '):'')+(d.paidBy?' · '+esc(d.paidBy):'');
+  } else { payLine='⏳ Unpaid / ยังไม่ชำระ'; }
+  var delAt='';
+  (d.statusLog||[]).forEach(function(l){ if(l && l.status==='delivered'){ delAt=((l.date||'')+' '+(l.time||'')).trim(); } });
+  if(!delAt && d.payDate) delAt=d.payDate;
+  var escId=String(oid).replace(/['\\]/g,'');
+  var gridId=rowId+'_pg';
+  var pbtn=function(type,label){
+    var n=orderPhotoCount(oid,type);
+    return '<button type="button" onclick="event.stopPropagation();ofDrvLoadPhotos(\''+escId+'\',\''+type+'\',\''+gridId+'\')" style="flex:1;padding:7px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:700;cursor:pointer">'+label+' <span style="color:var(--blue)">'+n+'</span></button>';
+  };
+  return '<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 10px;line-height:1.7">'
+    +'<div style="color:var(--text)">'+payLine+'</div>'
+    +(delAt?'<div style="color:var(--text2)">📦 Delivered / ส่งเมื่อ: '+esc(delAt)+'</div>':'')
+    +'<div style="display:flex;gap:6px;margin-top:6px">'+pbtn('warehouse','📦 Warehouse')+pbtn('delivery','🚚 Delivery')+pbtn('slip','🧾 Slip')+'</div>'
+    +'<div id="'+gridId+'" style="display:none;margin-top:6px" data-type=""></div>'
+  +'</div>';
+}
+function ofDrvLoadPhotos(oid, type, gridId){
+  var grid=document.getElementById(gridId); if(!grid) return;
+  // Clicking the same type again collapses the grid.
+  if(grid.getAttribute('data-type')===type && grid.style.display==='block'){ grid.style.display='none'; grid.setAttribute('data-type',''); return; }
+  grid.setAttribute('data-type',type); grid.style.display='block';
+  grid.innerHTML='<div style="font-size:11px;color:var(--text2);padding:6px 0">Loading… / กำลังโหลด</div>';
+  if(!window.fbDB){ grid.innerHTML='<div style="font-size:11px;color:var(--text2)">Offline</div>'; return; }
+  window.fbDB.ref('orderPhotos/'+type+'/'+safeOrderId(oid)).once('value', function(snap){
+    var data=snap.val()||{}; var keys=Object.keys(data).sort(function(a,b){return (data[a].ts||0)-(data[b].ts||0);});
+    if(!keys.length){ grid.innerHTML='<div style="font-size:11px;color:var(--text2);padding:6px 0">No photos / ไม่มีรูป</div>'; return; }
+    grid.innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">'+keys.map(function(k){
+      var p=data[k]||{};
+      var when=p.ts?new Date(p.ts).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'';
+      var slipTag=(type==='slip'&&p.slip)?'<div style="position:absolute;top:3px;left:3px;background:'+kpSlipColor(p.slip.status)+';color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px">'+kpSlipShort(p.slip)+'</div>':'';
+      return '<div style="position:relative"><img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid var(--border)">'+slipTag+(when?'<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);color:#fff;font-size:8px;padding:1px 3px;border-radius:0 0 6px 6px;text-align:center">'+when+'</div>':'')+'</div>';
+    }).join('')+'</div>';
+  });
 }
 function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.getAttribute("data-oid");
   var t = activeTours.find(function(x){return x.id===tourId;});
