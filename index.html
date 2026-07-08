@@ -6606,13 +6606,51 @@ function kpVerifySlip(qr, expectedAmt){
   // Non-EMVCo but decoded (some banks use a URL / ref string): store for manual review.
   return {status:'unknown', matched:false, ref:t.slice(0,80), msg:'QR อ่านได้ (ตรวจด้วยตนเอง) / decoded — verify manually'};
 }
-function kpSlipColor(st){ return st==='ok'?'#16a34a':(st==='unknown'?'#2563eb':'#dc2626'); }
-function kpSlipShort(s){ if(!s) return '🧾'; return s.status==='ok'?'🧾✓':(s.status==='mismatch'?'🧾⚠':(s.status==='unknown'?'🧾?':'🧾✕')); }
+// Turn a SlipOK proxy response into our verdict shape (real bank check).
+function kpSlipApiResult(j, expected){
+  if(!j) return null;
+  if(j.success){
+    var amt=parseFloat(j.amount)||0;
+    var matched=(expected>0)?(Math.round(amt)===Math.round(expected)):true;
+    return { status: matched?'verified':'mismatch', matched:matched, amount:amt, ref:j.transRef||'', receiver:j.receiver||'', bankVerified:true,
+      msg: matched ? ('✔ ธนาคารยืนยัน / Bank-verified'+(amt?' · '+amt.toLocaleString()+' ฿':'')+(j.transRef?' · '+j.transRef:'')+(j.receiver?' → '+j.receiver:''))
+                   : ('ยอด/Amount '+amt.toLocaleString()+' ≠ '+(expected||0).toLocaleString()+' ฿') };
+  }
+  var code=j.code||0;
+  var map={1012:'duplicate',1013:'mismatch',1014:'wrong_receiver'};
+  var st=map[code]||'invalid';
+  var msg={duplicate:'สลิปซ้ำ / Duplicate slip — already used',mismatch:'ยอดไม่ตรง / Amount mismatch',wrong_receiver:'ผู้รับไม่ถูกต้อง / Wrong receiver account',invalid:(j.message||'ตรวจไม่ผ่าน / Not verified')}[st];
+  return { status:st, matched:false, bankVerified:true, msg:msg };
+}
+// Call the SlipOK proxy with the decoded QR (async). cb(verdict|null).
+function kpSlipApiVerify(qr, expected, cb){
+  if(!KP_SLIPOK_URL || !qr){ cb(null); return; }
+  try{
+    fetch(KP_SLIPOK_URL, { method:'POST', body:JSON.stringify({ data:qr, amount:expected }) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ cb(kpSlipApiResult(j, expected)); })
+      .catch(function(){ cb(null); });
+  }catch(e){ cb(null); }
+}
+function kpSlipColor(st){ return (st==='ok'||st==='verified')?'#16a34a':(st==='unknown'?'#2563eb':'#dc2626'); }
+function kpSlipShort(s){
+  if(!s) return '🧾';
+  return s.status==='verified'?'🧾✅'
+    :s.status==='ok'?'🧾✓'
+    :s.status==='mismatch'?'🧾⚠'
+    :s.status==='duplicate'?'🧾♻'
+    :s.status==='wrong_receiver'?'🧾⛔'
+    :s.status==='unknown'?'🧾?'
+    :'🧾✕';
+}
 function kpRenderSlipResult(v){
   var el=document.getElementById('dl-slip-result'); if(!el) return;
   if(!v){ el.innerHTML=''; return; }
   var col=kpSlipColor(v.status);
-  var head = v.status==='ok' ? '✅ ต้นฉบับ / Original — QR OK' : (v.status==='unknown' ? 'ℹ️ ตรวจด้วยตนเอง / Manual check' : '🚨 ALARM / เตือน');
+  var head = v.status==='verified' ? '✅ ธนาคารยืนยัน / Bank-verified'
+    : v.status==='ok' ? '✅ ต้นฉบับ / Original — QR OK'
+    : v.status==='unknown' ? 'ℹ️ ตรวจด้วยตนเอง / Manual check'
+    : '🚨 ALARM / เตือน';
   el.innerHTML='<div style="background:'+col+'1a;border:1.5px solid '+col+';color:'+col+';border-radius:var(--rs);padding:8px 10px;font-weight:700">'+head+'<div style="font-weight:500;margin-top:2px">'+kpcEsc(v.msg||'')+'</div></div>';
 }
 // Store a slip photo (compressed) + verdict under the 'slip' picture node.
@@ -6626,7 +6664,7 @@ function addSlipPhoto(orderId, dataUrl, by, verify, done){
     window.fbDB.ref('photoIndex/slip/'+sid).transaction(function(cur){
       cur=cur||{id:orderId,n:0}; cur.id=orderId; cur.n=(parseInt(cur.n)||0)+1; cur.ts=Date.now();
       cur.zone=ord.zone||cur.zone||''; cur.customer=ord.customer||cur.customer||''; return cur;
-    }, function(){ if(done) done(true); });
+    }, function(){ if(done) done(true, ref.key); });
   });
 }
 function handleSlipPhoto(input){
@@ -6646,10 +6684,25 @@ function handleSlipPhoto(input){
       var ord=(typeof orders!=='undefined'?orders.find(function(x){return x.id===_deliveryId;}):null);
       if(ord){ ord.slip={status:v.status,matched:!!v.matched,amount:v.amount||0,ref:v.ref||'',ts:Date.now(),by:drName}; }
       compressPhotoFile(f, function(dataUrl){
-        addSlipPhoto(_deliveryId, dataUrl, drName, {status:v.status,matched:!!v.matched,amount:v.amount||0,ref:v.ref||'',msg:v.msg||''}, function(){
+        addSlipPhoto(_deliveryId, dataUrl, drName, {status:v.status,matched:!!v.matched,amount:v.amount||0,ref:v.ref||'',msg:v.msg||''}, function(ok, key){
           if(prog) prog.style.display='none';
           dlSlipRefresh();
           try{ syncOrders(); }catch(e){}
+          // Real bank verification (if the SlipOK proxy is configured) — upgrades
+          // the on-device format check to an authoritative verdict.
+          if(ok && KP_SLIPOK_URL && qr){
+            if(prog){ prog.style.display='block'; prog.innerHTML='<i class="ti ti-loader"></i> 🏦 Bank check... / กำลังตรวจกับธนาคาร'; }
+            kpSlipApiVerify(qr, expected, function(apiV){
+              if(prog) prog.style.display='none';
+              if(!apiV) return;   // API unreachable → keep the local verdict
+              _slipResult=apiV;
+              kpRenderSlipResult(apiV);
+              var o2=(typeof orders!=='undefined'?orders.find(function(x){return x.id===_deliveryId;}):null);
+              if(o2){ o2.slip={status:apiV.status,matched:!!apiV.matched,amount:apiV.amount||0,ref:apiV.ref||'',receiver:apiV.receiver||'',bankVerified:true,ts:Date.now(),by:drName}; try{ syncOrders(); }catch(e){} }
+              if(window.fbDB && key){ window.fbDB.ref('orderPhotos/slip/'+safeOrderId(_deliveryId)+'/'+key+'/slip').set({status:apiV.status,matched:!!apiV.matched,amount:apiV.amount||0,ref:apiV.ref||'',msg:apiV.msg||''}); }
+              dlSlipRefresh();
+            });
+          }
         });
       });
     };
@@ -6796,6 +6849,10 @@ var KP_RESOLVER_URL = 'https://script.google.com/macros/s/AKfycbzrohJubgH23jnwaq
 // Translate web-app URL (Apps Script + Claude). Paste your /exec URL here after
 // deploying apps-script/translate.gs. Empty = chat auto-translate disabled.
 var KP_TRANSLATE_URL = '';
+// SlipOK verify web-app URL (Apps Script proxy → SlipOK API). Paste your /exec
+// URL here after deploying apps-script/slipok-verify.gs. Empty = local QR
+// format check only (no real bank confirmation).
+var KP_SLIPOK_URL = '';
 // Pull {lat,lng} for an order: saved pin → resolved coord on the order → parse link.
 function orderLatLng(o){
   if(!o) return null;
@@ -8233,9 +8290,9 @@ function confirmDelivery(){
     alert('Online payment: please photograph the payment slip first.\nโอนเงิน: กรุณาถ่ายรูปสลิปก่อน');
     return;
   }
-  // If the slip QR failed the check, make the driver acknowledge before confirming.
-  if(online>0 && _slipResult && (_slipResult.status==='invalid'||_slipResult.status==='mismatch'||_slipResult.status==='unreadable')){
-    if(!confirm('🚨 Slip QR check: '+(_slipResult.msg||'problem')+'\n\nConfirm delivery anyway? / ยืนยันการส่งต่อไปหรือไม่?')) return;
+  // If the slip check failed (format or bank), make the driver acknowledge first.
+  if(online>0 && _slipResult && ['invalid','mismatch','unreadable','duplicate','wrong_receiver'].indexOf(_slipResult.status)>=0){
+    if(!confirm('🚨 Slip check: '+(_slipResult.msg||'problem')+'\n\nConfirm delivery anyway? / ยืนยันการส่งต่อไปหรือไม่?')) return;
   }
   var payMethod = (cash>0 && online>0) ? 'split' : (online>0 ? 'online' : 'cash');
   var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
