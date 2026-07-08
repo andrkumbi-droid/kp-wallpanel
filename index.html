@@ -1363,7 +1363,10 @@ textarea{resize:none}
     <div class="stit">Overview / ภาพรวม</div>
     <div id="of-tour-overview" style="margin-bottom:12px"></div>
     <div class="stit" style="display:flex;justify-content:space-between;align-items:center">Active tours / ทัวร์ที่กำลังดำเนินอยู่
-      <button type="button" onclick="ofBackfillPins(this)" title="Resolve all customer map-links into saved pins (one time)" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:600">📍 Map-Links → Pins</button>
+      <span style="display:flex;gap:6px">
+        <button type="button" onclick="ofRepairTotals()" title="Scan all zones for totals collapsed by German number format and fix them" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:600">🔧 Fix totals</button>
+        <button type="button" onclick="ofBackfillPins(this)" title="Resolve all customer map-links into saved pins (one time)" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:600">📍 Map-Links → Pins</button>
+      </span>
     </div>
     <div id="of-active-tours"><div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div></div>
     <div class="stit" style="margin-top:4px">Create new tour / สร้างทัวร์ใหม่</div>
@@ -4413,6 +4416,41 @@ function ofCanonTotal(o){
   var s = o.lineItems.reduce(function(a,li){ return a + (parseFloat(li && li.amount)||0); }, 0);
   if(!(s>0)) return null;
   return Math.round(s);
+}
+// Recompute an order total from qty×unitPrice (prices/qty never carry thousands
+// separators, so they survived the German-locale collapse). Used to detect + repair
+// orders whose stored total got collapsed (e.g. "17.873" parsed as 17.873 → 18).
+function ofRecomputeTotal(o){
+  if(!o || !Array.isArray(o.lineItems) || !o.lineItems.length) return null;
+  var s = o.lineItems.reduce(function(a,li){ var q=parseInt(li && li.qty)||0; var p=parseFloat(li && li.unitPrice)||0; return a + q*p; }, 0);
+  if(!(s>0)) return null;
+  return Math.round(s);
+}
+// Scan every order (all zones) for a stored total that disagrees with qty×unitPrice,
+// list them, and — after confirmation — fix + resync to Firebase and the sheet.
+function ofRepairTotals(){
+  var bad=[];
+  (orders||[]).forEach(function(o){
+    var fix=ofRecomputeTotal(o); if(fix==null) return;
+    var stored=ofOrderTotalNum(o);
+    if(Math.abs(fix-stored)>=1) bad.push({id:o.id, o:o, stored:stored, fix:fix});
+  });
+  if(!bad.length){ alert('✓ No wrong totals / ไม่พบยอดผิด — alle Totals stimmen.'); return; }
+  bad.sort(function(a,b){ return String(a.id).localeCompare(String(b.id), undefined, {numeric:true}); });
+  var list = bad.map(function(b){ return b.id+':   '+b.stored.toLocaleString('en-US')+'  →  '+b.fix.toLocaleString('en-US')+' ฿'; }).join('\n');
+  if(!confirm('Found '+bad.length+' order(s) with a wrong total\n(stored → recomputed from qty×price):\n\n'+list+'\n\nFix all and sync to the sheet now?')) return;
+  bad.forEach(function(b){
+    b.o.total = b.fix.toLocaleString('en-US')+' ฿';
+    // realign each line amount to qty×price so the auto-corrector won't fight it
+    b.o.lineItems.forEach(function(li){ var q=parseInt(li.qty)||0, p=parseFloat(li.unitPrice)||0; li.amount = q*p; });
+    // stamp editedBy so the sheet-sync guard (skips untouched imports) lets the
+    // corrected total through to the sheet
+    b.o.editedBy = b.o.editedBy || 'Auto-fix';
+  });
+  try{ syncOrders(); }catch(e){}
+  bad.forEach(function(b){ try{ sheetsSyncOrder(b.o); }catch(e){} });
+  try{ ofRenderOrders(); }catch(e){}
+  alert('✓ Fixed '+bad.length+' total(s) and synced to the sheet.');
 }
 function ofPaidAmt(id, val){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
@@ -8220,7 +8258,9 @@ function mirrorToAppOrder(g){
   var lineItems=[], panels=[], lcorners=[], totalQty=0;
   g.products.forEach(function(r){
     var code=String(r[3]||'').toUpperCase().trim(); if(!code) return;
-    var qty=mirrorNum(r[4]), price=mirrorNum(r[5]), amt=mirrorNum(r[6])||qty*price;
+    // Derive the line amount from qty×price (small numbers, immune to the German
+    // '.'/',' thousands collapse) rather than trusting the sheet's amount cell.
+    var qty=mirrorNum(r[4]), price=mirrorNum(r[5]), amt=(qty*price)||mirrorNum(r[6]);
     var type=mirrorClassify(code);
     lineItems.push({type:type, code:code, qty:qty, unitPrice:price, amount:amt});
     if(type==='panel'){ panels.push(code+' × '+qty); totalQty+=qty; }
@@ -8229,6 +8269,12 @@ function mirrorToAppOrder(g){
   });
   if(shipping>0) lineItems.push({type:'delivery',code:'Delivery / ค่าจัดส่ง',qty:1,unitPrice:shipping,amount:shipping});
   if(discount>0) lineItems.push({type:'discount',code:'Discount / ส่วนลด',qty:1,unitPrice:-discount,amount:-discount});
+  // Locale-safe total: qty×price can't collapse. If the sheet's Total cell is
+  // implausibly small vs the product sum, it was collapsed by a misread thousands
+  // separator (e.g. "17.873" → 17.873) → trust the recomputed sum. Syncing the
+  // order back to the sheet then heals the cell permanently.
+  var _prodSum=Math.round(lineItems.reduce(function(a,li){return a+((parseInt(li.qty)||0)*(parseFloat(li.unitPrice)||0));},0));
+  if(_prodSum>0 && total < _prodSum*0.5) total=_prodSum;
 
   var o={
     id:id, date:date, zone:mirrorZone(id),
