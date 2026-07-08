@@ -6530,6 +6530,8 @@ function openDeliveryModal(id){
   document.getElementById('dl-cash-amt').value = '';
   document.getElementById('dl-online-amt').value = '';
   document.getElementById('dl-pay-msg').textContent = '';
+  var _po=document.getElementById('dl-payoffice-chk'); if(_po) _po.checked=false;
+  ['dl-cash-chk','dl-online-chk','dl-cash-amt','dl-online-amt'].forEach(function(idv){var el=document.getElementById(idv);if(el){el.disabled=false;el.style.opacity='';}});
   _slipResult = null;
   var _sr=document.getElementById('dl-slip-result'); if(_sr) _sr.innerHTML='';
   var _ss=document.getElementById('dl-slip-section'); if(_ss) _ss.style.display='none';
@@ -6553,6 +6555,21 @@ function dlPayToggle(which){
   dlPayMsg();
 }
 function dlPayManual(){ dlPayMsg(); }
+// "Customer pays at office" — driver confirms delivery without collecting money or a
+// slip; the order stays UNPAID so it lands in the office Pay tab (Delivered · unpaid)
+// for a staff member to record the payment later.
+function dlPayAtOfficeToggle(){
+  var on=!!(document.getElementById('dl-payoffice-chk')||{}).checked;
+  ['dl-cash-chk','dl-online-chk','dl-cash-amt','dl-online-amt'].forEach(function(idv){var el=document.getElementById(idv);if(el){el.disabled=on;el.style.opacity=on?'0.4':'';}});
+  if(on){
+    document.getElementById('dl-cash-chk').checked=false; document.getElementById('dl-online-chk').checked=false;
+    document.getElementById('dl-cash-amt').value=''; document.getElementById('dl-online-amt').value='';
+    var msg=document.getElementById('dl-pay-msg'); if(msg){ msg.style.color='#92400e'; msg.textContent='💼 Office collects payment later / ออฟฟิศเก็บเงินภายหลัง'; }
+  } else {
+    var msg2=document.getElementById('dl-pay-msg'); if(msg2) msg2.textContent='';
+  }
+  try{ dlSlipRefresh(); }catch(e){}
+}
 function dlPaySum(){ return (parseFloat((document.getElementById('dl-cash-amt')||{}).value)||0) + (parseFloat((document.getElementById('dl-online-amt')||{}).value)||0); }
 function dlPayMsg(){
   var msg=document.getElementById('dl-pay-msg'); if(!msg) return;
@@ -6577,6 +6594,9 @@ var _slipResult = null;
 // Show/hide the slip section based on the online amount + reload saved slips.
 function dlSlipRefresh(){
   var sec=document.getElementById('dl-slip-section'); if(!sec) return;
+  // Pays-at-office → no slip needed; keep the section hidden.
+  var poff=document.getElementById('dl-payoffice-chk');
+  if(poff&&poff.checked){ sec.style.display='none'; var _pp=document.getElementById('dl-slip-preview'); if(_pp){_pp.style.display='none';_pp.innerHTML='';} return; }
   var online=parseFloat((document.getElementById('dl-online-amt')||{}).value)||0;
   sec.style.display = online>0 ? 'block' : 'none';
   var prev=document.getElementById('dl-slip-preview'); if(!prev) return;
@@ -8328,28 +8348,36 @@ function confirmDelivery(){
     alert('Please take a delivery photo first.\nกรุณาถ่ายรูปการจัดส่งก่อน');
     return;
   }
-  // Require payment to match the total (cash + online = total).
+  var payOffice = !!(document.getElementById('dl-payoffice-chk')||{}).checked;
   var cash = parseFloat((document.getElementById('dl-cash-amt')||{}).value)||0;
   var online = parseFloat((document.getElementById('dl-online-amt')||{}).value)||0;
-  if((cash+online) !== _deliveryTotal){
-    alert('Payment must match the total / ยอดชำระต้องเท่ายอดรวม ('+_deliveryTotal.toLocaleString()+' ฿)');
-    return;
-  }
-  // Online payment → a slip photo is required (QR checked on capture).
-  if(online>0 && orderPhotoCount(id,'slip') < 1){
-    alert('Online payment: please photograph the payment slip first.\nโอนเงิน: กรุณาถ่ายรูปสลิปก่อน');
-    return;
-  }
-  // Bad slip verdict → do NOT alarm/block the driver. Notify the OFFICE team
-  // instead (they also see the 🧾 badge on the tour row + Pictures → Slips).
-  if(online>0 && _slipResult && ['invalid','mismatch','unreadable','duplicate','wrong_receiver'].indexOf(_slipResult.status)>=0){
-    try{ pushSend('office','🚨 Slip problem: '+id, (_slipResult.msg||'slip check failed')+' · '+((orders.find(function(x){return x.id===id;})||{}).customer||''), {tag:'slip-alert', orderId:id}); }catch(e){}
+  if(!payOffice){
+    // Require payment to match the total (cash + online = total).
+    if((cash+online) !== _deliveryTotal){
+      alert('Payment must match the total / ยอดชำระต้องเท่ายอดรวม ('+_deliveryTotal.toLocaleString()+' ฿)');
+      return;
+    }
+    // Online payment → a slip photo is required (QR checked on capture).
+    if(online>0 && orderPhotoCount(id,'slip') < 1){
+      alert('Online payment: please photograph the payment slip first.\nโอนเงิน: กรุณาถ่ายรูปสลิปก่อน');
+      return;
+    }
+    // Bad slip verdict → do NOT alarm/block the driver. Notify the OFFICE team
+    // instead (they also see the 🧾 badge on the tour row + Pictures → Slips).
+    if(online>0 && _slipResult && ['invalid','mismatch','unreadable','duplicate','wrong_receiver'].indexOf(_slipResult.status)>=0){
+      try{ pushSend('office','🚨 Slip problem: '+id, (_slipResult.msg||'slip check failed')+' · '+((orders.find(function(x){return x.id===id;})||{}).customer||''), {tag:'slip-alert', orderId:id}); }catch(e){}
+    }
   }
   var payMethod = (cash>0 && online>0) ? 'split' : (online>0 ? 'online' : 'cash');
   var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
   // Save payment on the order.
   var ord = orders.find(function(x){return x.id===id;});
-  if(ord){ ord.payMethod=payMethod; ord.paidCash=cash; ord.paidOnline=online; ord.paidBy=drName; ord.payDate=new Date().toISOString().split('T')[0]; }
+  if(payOffice){
+    // Leave it UNPAID (no payMethod) so it appears under "Delivered · unpaid" in the
+    // office Pay tab; flag it so office sees the driver deferred collection on purpose.
+    if(ord){ delete ord.payMethod; ord.paidCash=0; ord.paidOnline=0; ord.payAtOffice=true; ord.deliveredBy=drName; }
+    try{ pushSend('office','💼 Pay at office: '+id, ((ord&&ord.customer)||'')+' · '+_deliveryTotal.toLocaleString()+' ฿ — collect / record payment', {tag:'pay-office', orderId:id}); }catch(e){}
+  } else if(ord){ ord.payMethod=payMethod; ord.paidCash=cash; ord.paidOnline=online; ord.paidBy=drName; ord.payDate=new Date().toISOString().split('T')[0]; }
   closeDeliveryModal();
   drDoDeliver(id, null);
   try{ syncOrders(); }catch(e){}
@@ -9110,6 +9138,7 @@ function payOrderCard(o) {
       +'<span style="font-size:18px;font-weight:800;color:#111">'+o.id+'</span>'
       +'<span class="badge" style="background:'+(paid?'#dcfce7':'#fee2e2')+';color:'+(paid?'#166534':'#991b1b')+'">'+(paid?'Paid':'Unpaid')+'</span>'
       +'</div>'
+      +(o.payAtOffice&&!paid?'<div style="font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:var(--rs);padding:4px 9px;margin-bottom:6px;display:inline-block">💼 เก็บที่ออฟฟิศ / Pay at office — record below</div>':'')
       +'<div style="font-size:13px;font-weight:600;color:#333;margin-bottom:2px">'+(o.customer||'--')+'</div>'
       +'<div style="font-size:12px;color:#666;margin-bottom:6px">'+(o.zone||'')+(o.date?' - '+fmtD(o.date):'')+'</div>'
       +(o.phone?'<div style="font-size:12px;margin-bottom:6px;font-weight:600">'+phoneLinks(o.phone,'var(--blue)')+'</div>':'')
@@ -9277,6 +9306,7 @@ function paySetMethod(id, method) {
   if(!o) return;
   if(o.payMethod === method) { payClear(id); return; }
   o.payMethod = method;
+  delete o.payAtOffice; // payment now recorded → clear the deferred-collection flag
   var now = new Date();
   o.paidAt = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   o.paidBy = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
@@ -10977,6 +11007,9 @@ function calcViz() {
         <span style="font-size:13px;font-weight:700">💰 Payment / การชำระเงิน</span>
         <span style="font-size:16px;font-weight:800;color:var(--green)" id="dl-total">0 ฿</span>
       </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;cursor:pointer;background:#fef3c7;border:1px solid #fde68a;border-radius:var(--rs);padding:9px 10px;margin-bottom:10px;color:#92400e">
+        <input type="checkbox" id="dl-payoffice-chk" onchange="dlPayAtOfficeToggle()" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">💼 Customer pays at office / ลูกค้าจ่ายที่ออฟฟิศ
+      </label>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;width:110px;cursor:pointer">
           <input type="checkbox" id="dl-cash-chk" onchange="dlPayToggle('cash')" style="width:18px;height:18px;cursor:pointer"> เงินสด/Cash
