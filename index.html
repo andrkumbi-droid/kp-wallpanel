@@ -583,6 +583,13 @@ textarea{resize:none}
     window.fbDB = db;
     try{ window.fbStorage = firebase.storage(); }catch(e){}
     window.firebaseReady = true;
+    // Expose the push helpers — the main app script (a separate scope) calls these
+    // from ~10 places (new order, delivered, tour, slip alert, login token reg).
+    // Without this they were trapped in this IIFE and silently failed in try/catch.
+    window.pushSend = pushSend;
+    window.pushRequestPermission = pushRequestPermission;
+    window.pushInit = pushInit;
+    window.showInAppNotif = showInAppNotif;
 
     function startListeners() {
       db.ref('managerPin').on('value', function(snap) {
@@ -8296,9 +8303,10 @@ function confirmDelivery(){
     alert('Online payment: please photograph the payment slip first.\nโอนเงิน: กรุณาถ่ายรูปสลิปก่อน');
     return;
   }
-  // If the slip check failed (format or bank), make the driver acknowledge first.
+  // Bad slip verdict → do NOT alarm/block the driver. Notify the OFFICE team
+  // instead (they also see the 🧾 badge on the tour row + Pictures → Slips).
   if(online>0 && _slipResult && ['invalid','mismatch','unreadable','duplicate','wrong_receiver'].indexOf(_slipResult.status)>=0){
-    if(!confirm('🚨 Slip check: '+(_slipResult.msg||'problem')+'\n\nConfirm delivery anyway? / ยืนยันการส่งต่อไปหรือไม่?')) return;
+    try{ pushSend('office','🚨 Slip problem: '+id, (_slipResult.msg||'slip check failed')+' · '+((orders.find(function(x){return x.id===id;})||{}).customer||''), {tag:'slip-alert', orderId:id}); }catch(e){}
   }
   var payMethod = (cash>0 && online>0) ? 'split' : (online>0 ? 'online' : 'cash');
   var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
