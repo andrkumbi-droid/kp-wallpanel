@@ -4426,47 +4426,31 @@ function ofRecomputeTotal(o){
   if(!(s>0)) return null;
   return Math.round(s);
 }
-// Read the sheet (mirror) across ALL zones and find Total CELLS that were collapsed
-// by the German '.'/',' confusion (e.g. 17.873 instead of 17873). The app's own data
-// is already right (ofOrderTotalNum strips the dot), so we compare the RAW sheet cell
-// against qty×price and rewrite the correct value back to the sheet on confirm.
+// Find orders whose stored total STRING was collapsed by the German '.'/',' confusion
+// (e.g. "17.873" instead of 17873), then fix + push the correct value to the sheet.
+// Detection parses o.total the "naive" way (keeping the dot) so a collapsed 17.873
+// shows up as 17.873 — far below the qty×price total — and gets flagged. (The earlier
+// check used ofOrderTotalNum, which strips the dot and hid the collapse.)
 function ofRepairTotals(){
-  if(!SHEETS_WEBAPP_URL){ alert('No sheet URL configured / ยังไม่ได้ตั้งค่า'); return; }
-  fetch(SHEETS_WEBAPP_URL,{ method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({ token:SHEETS_TOKEN, action:'readMirror' }) })
-    .then(function(r){ return r.json(); })
-    .then(function(res){
-      if(!res || !res.ok){ alert('Read failed / อ่านไม่ได้: '+((res&&res.error)||'unknown — Script redeploy?')); return; }
-      var bad=[];
-      MIRROR_TABS.forEach(function(name){
-        mirrorGroup(res.tabs[name]||[]).forEach(function(g){
-          var mo; try{ mo=mirrorToAppOrder(g); }catch(e){ return; }
-          var correct=ofOrderTotalNum(mo); if(!(correct>0)) return;   // qty×price-corrected
-          var rawCell=cm(g.colMap||{}, 'total', g.raw);
-          if(rawCell==null || rawCell==='') return;
-          // parse the cell the "naive" way (keep the dot) → this is the value the sheet
-          // actually holds, so a collapsed 17.873 shows up as 17.873, not 17873.
-          var rawNum=(typeof rawCell==='number')?rawCell:(parseFloat(String(rawCell).replace(/[^0-9.\-]/g,''))||0);
-          if(Math.abs(rawNum-correct)>=1) bad.push({id:mo.id, sheet:rawCell, fix:correct, mo:mo});
-        });
-      });
-      if(!bad.length){ alert('✓ Sheet totals all correct / ยอดใน Sheet ถูกต้อง.'); return; }
-      bad.sort(function(a,b){ return String(a.id).localeCompare(String(b.id), undefined, {numeric:true}); });
-      var list=bad.map(function(b){ return b.id+':   '+b.sheet+'   →   '+b.fix.toLocaleString('en-US')+' ฿'; }).join('\n');
-      if(!confirm('Sheet has '+bad.length+' collapsed total(s)\n(sheet cell → correct from qty×price):\n\n'+list+'\n\nRewrite the correct values to the sheet now?')) return;
-      var pushed=0;
-      bad.forEach(function(b){
-        var o=(orders||[]).find(function(x){return x.id===b.id;}) || b.mo;
-        o.total=b.fix.toLocaleString('en-US')+' ฿';
-        (o.lineItems||[]).forEach(function(li){ var q=parseInt(li.qty)||0,p=parseFloat(li.unitPrice)||0; li.amount=q*p; });
-        o.editedBy=o.editedBy||'Auto-fix';   // pass the imported-order sync guard
-        try{ kpSheetSend('upsert', o); pushed++; }catch(e){}
-      });
-      try{ syncOrders(); }catch(e){}
-      try{ ofRenderOrders(); }catch(e){}
-      alert('✓ Rewriting '+pushed+' total(s) to the sheet — refresh the sheet in a moment.');
-    })
-    .catch(function(e){ alert('Read failed / อ่านไม่ได้: '+e); });
+  var bad=[];
+  (orders||[]).forEach(function(o){
+    var fix=ofRecomputeTotal(o); if(fix==null) return;                 // qty×price truth
+    var naive=(typeof o.total==='number')?o.total:(parseFloat(String(o.total||'').replace(/[^0-9.\-]/g,''))||0);
+    if(Math.abs(fix-naive)>=1) bad.push({id:o.id, o:o, cur:o.total, fix:fix});
+  });
+  if(!bad.length){ alert('✓ No collapsed totals found / ไม่พบยอดผิด — the app data is clean. If the SHEET still shows wrong values, tell me the order numbers and I push them.'); return; }
+  bad.sort(function(a,b){ return String(a.id).localeCompare(String(b.id), undefined, {numeric:true}); });
+  var list=bad.map(function(b){ return b.id+':   '+String(b.cur).trim()+'   →   '+b.fix.toLocaleString('en-US')+' ฿'; }).join('\n');
+  if(!confirm('Found '+bad.length+' collapsed total(s)\n(current → correct from qty×price):\n\n'+list+'\n\nFix and push to the sheet now?')) return;
+  bad.forEach(function(b){
+    b.o.total=b.fix.toLocaleString('en-US')+' ฿';
+    (b.o.lineItems||[]).forEach(function(li){ var q=parseInt(li.qty)||0,p=parseFloat(li.unitPrice)||0; li.amount=q*p; });
+    b.o.editedBy=b.o.editedBy||'Auto-fix';   // pass the imported-order sheet-sync guard
+  });
+  try{ syncOrders(); }catch(e){}
+  bad.forEach(function(b){ try{ kpSheetSend('upsert', b.o); }catch(e){} });
+  try{ ofRenderOrders(); }catch(e){}
+  alert('✓ Fixed '+bad.length+' total(s) and pushed to the sheet — refresh the sheet in a moment.');
 }
 function ofPaidAmt(id, val){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
