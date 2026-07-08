@@ -673,7 +673,7 @@ textarea{resize:none}
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
         try{if(document.getElementById('s-office').classList.contains('active')){ofRenderTour();if(document.getElementById('ofv-home').classList.contains('active'))ofRenderDashboard();}}catch(e){}
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
-        try{if(document.getElementById('s-driver-tour').classList.contains('active'))drReady();}catch(e){}
+        try{if(document.getElementById('s-driver-tour').classList.contains('active')){drRenderTourSwitch();drReady();}}catch(e){}
       });
       db.ref('tourHistory').on('value', function(snap) {
         tourHistory = snap.val() || {};
@@ -1368,7 +1368,10 @@ textarea{resize:none}
       <label class="fl" style="margin-top:12px">Add orders / เพิ่มออเดอร์ <span style="font-weight:500;color:var(--text2)">— New · Packing · Ready</span></label>
       <div id="of-avail" style="margin-top:4px"></div>
       <div id="of-selected" style="margin-top:8px"></div>
-      <button type="button" class="btn btnp" style="margin-top:12px" id="of-send-btn" onclick="ofCreateTour()"><i class="ti ti-send"></i> <span id="of-send-label">Send to driver / ส่งให้คนขับ</span></button>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;cursor:pointer;margin-top:10px;color:var(--text2)">
+        <input type="checkbox" id="of-newtour-chk" onchange="ofRefreshSendLabel()" style="width:17px;height:17px;cursor:pointer">➕ Create as a NEW 2nd tour / สร้างเป็นทัวร์ใหม่ <span style="font-weight:400">— don't merge into the loading tour</span>
+      </label>
+      <button type="button" class="btn btnp" style="margin-top:10px" id="of-send-btn" onclick="ofCreateTour()"><i class="ti ti-send"></i> <span id="of-send-label">Send to driver / ส่งให้คนขับ</span></button>
       <div id="of-tres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-top:8px;font-size:13px"></div>
     </div>
   </div></div>
@@ -1965,6 +1968,8 @@ textarea{resize:none}
   <div class="header"><button type="button" class="back-btn" onclick="drBack()"><i class="ti ti-arrow-left"></i></button><div><div class="h-title" id="dt-title">My Tour</div><div class="h-sub">KP Wallpanel</div></div></div>
   <!-- Depart / Back banner -->
   <div id="dr-status-bar" style="padding:10px 16px 4px"></div>
+  <!-- Tour switcher (only when the driver has more than one planned tour) -->
+  <div id="dr-tourswitch" style="display:none;padding:0 16px 4px"></div>
   <div class="tabs t2">
     <button type="button" class="tab active" onclick="drt('ready')" id="drt-ready">Ready to Load / พร้อมขึ้นรถ <span class="tc tcb" id="dr-r-cnt">0</span></button>
     <button type="button" class="tab" onclick="drt('tour')" id="drt-tour">My Tour / แผนการส่ง <span class="tc tcw" id="dr-t-cnt">0</span></button>
@@ -2527,6 +2532,11 @@ var costFixed={};                     // Bills: {"YYYY-MM":[{id,label,amount}]} 
 var costCats={utilities:[],other:[]}; // Bills: sub-category defs for utilities/other (office add/remove); amounts come from receipts
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
 let ofFilt_='all',ofSelDriver=null,ofSelOrders=[],currentDriverId=null;
+// A driver can have several planned tours at once. currentDriverTourId picks which
+// one the driver app is currently working on (switcher at the top of the screen).
+let currentDriverTourId=null;
+function drTours(){ return (activeTours||[]).filter(function(t){return t.driverId===currentDriverId;}); }
+function drGetTour(){ var ts=drTours(); if(!ts.length) return null; var sel=ts.find(function(t){return t.id===currentDriverTourId;}); return sel||ts[0]; }
 var tourHistory={};
 let editId=null,editSM=null,editIM=null,editDM=null,selMonth='';
 
@@ -5029,13 +5039,17 @@ function ofRenderTour(){
 function ofSelDr(btn){
   ofSelDriver=btn.getAttribute("data-did");
   ofRenderTour();
-  // Update button label based on driver state
-  const lbl=document.getElementById('of-send-label');
-  if(lbl){
-    const et=activeTours.find(t=>t.driverId===ofSelDriver);
-    if(et&&!et.driving) lbl.textContent='Add to tour / เพิ่มในทัวร์';
-    else lbl.textContent='Send to driver / ส่งให้คนขับ';
-  }
+  ofRefreshSendLabel();
+}
+// Send-button label: "Add to tour" when merging into a loading tour, "Send NEW tour"
+// when the new-tour toggle is on, else "Send to driver".
+function ofRefreshSendLabel(){
+  const lbl=document.getElementById('of-send-label'); if(!lbl) return;
+  const forceNew=!!(document.getElementById('of-newtour-chk')||{}).checked;
+  const et=ofSelDriver?activeTours.find(function(t){return t.driverId===ofSelDriver;}):null;
+  if(!forceNew && et && !et.driving) lbl.textContent='Add to tour / เพิ่มในทัวร์';
+  else if(forceNew && et) lbl.textContent='Send NEW tour / ส่งทัวร์ใหม่';
+  else lbl.textContent='Send to driver / ส่งให้คนขับ';
 }
 function ofSelOrd(btn){var id=btn.getAttribute("data-oid");if(!ofSelOrders.includes(id))ofSelOrders.push(id);ofRenderTour();}
 function ofDeselOrd(id){ofSelOrders=ofSelOrders.filter(function(x){return x!==id;});ofRenderTour();}
@@ -5782,7 +5796,10 @@ function ofCreateTour(){
   if(!ofSelDriver){res.style.background=OL;res.style.color=OT;res.textContent='Select a driver first / เลือกคนขับก่อน';return;}
   if(ofSelOrders.length===0){res.style.background=OL;res.style.color=OT;res.textContent='Add at least one order';return;}
   const d=drivers.find(x=>x.id===ofSelDriver);
-  const existingTour=activeTours.find(t=>t.driverId===ofSelDriver);
+  // "Create as new tour" forces a separate 2nd tour instead of merging into the
+  // driver's still-loading tour (lets the office pre-plan multiple tours).
+  const forceNew=!!(document.getElementById('of-newtour-chk')||{}).checked;
+  const existingTour=forceNew?null:activeTours.find(t=>t.driverId===ofSelDriver);
   const status={};ofSelOrders.forEach(id=>{
     const src=orders.find(x=>x.id===id);
     // Planned New/Packing orders keep their packing status; the warehouse still
@@ -5824,7 +5841,7 @@ function ofCreateTour(){
     var _od=orders.find(function(x){return x.id===id;});
     if(_od){ _od.deliveredBy=d.name; try{ sheetsSyncOrder(_od); }catch(e){} }
   }); }
-  ofSelDriver=null;ofSelOrders=[];setTimeout(()=>{res.style.display='none';},3000);
+  ofSelDriver=null;ofSelOrders=[];var _ntc=document.getElementById('of-newtour-chk');if(_ntc)_ntc.checked=false;setTimeout(()=>{res.style.display='none';},3000);
   ofRenderTour();ofRenderOrders();mgRender();syncTours();syncOrders();
   try{ ofOptimizeTour(_tourId, true); }catch(e){} // resolve map-links, then refine the route order (no alert)
 }
@@ -6247,14 +6264,14 @@ function drLoginRender(){
   const grid=document.getElementById('dr-login');
   if(drivers.length===0){grid.innerHTML='<div class="empty" style="grid-column:1/-1">No drivers yet<br>Ask Management to add you</div>';return;}
   grid.innerHTML=drivers.map(d=>{
-    const tour=activeTours.find(t=>t.driverId===d.id);
-    const tourOrders=tour&&tour.orders?tour.orders:[];
-    const del=tourOrders.filter(id=>(tour.status||{})[id]==='delivered').length;
-    const pen=tourOrders.length-del;
-    return '<button type="button" class="dlbtn '+(tour?'has-tour':'')+'" onclick="drLoginBtn(this)" data-id="'+d.id+'">'+
+    const dTours=activeTours.filter(t=>t.driverId===d.id);
+    var pen=0; dTours.forEach(function(t){ pen+=(t.orders||[]).filter(function(id){return (t.status||{})[id]!=='delivered'&&(t.status||{})[id]!=='cancelled';}).length; });
+    const hasTour=dTours.length>0;
+    const label=hasTour?(pen+' orders'+(dTours.length>1?' · '+dTours.length+' tours':' on tour')):'No tour';
+    return '<button type="button" class="dlbtn '+(hasTour?'has-tour':'')+'" onclick="drLoginBtn(this)" data-id="'+d.id+'">'+
       '<div style="width:44px;height:44px;border-radius:50%;background:var(--blue-l);display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:var(--blue-t);margin:0 auto 8px">'+initials(d.name)+'</div>'+
       '<div style="font-size:13px;font-weight:600">'+d.name+'</div>'+
-      '<div style="font-size:11px;margin-top:3px;color:'+(tour?'var(--green)':'var(--text2)')+'">'+( tour?pen+' orders on tour':'No tour')+'</div>'+
+      '<div style="font-size:11px;margin-top:3px;color:'+(hasTour?'var(--green)':'var(--text2)')+'">'+label+'</div>'+
       '</button>';
   }).join('');
 }
@@ -6269,9 +6286,25 @@ function drLogin(id){
   document.getElementById('dt-title').textContent=d.name+"'s Tour";
   try{ kpcInit(); }catch(e){}
 
-  // Reconstruct dTour, dAllOrders, dStatus, dDone from Firebase data
-  dTour=[];dAllOrders=[];dStatus={};dDone=[];dChecks={};
-  const tour=activeTours.find(t=>t.driverId===id);
+  // Pick the driver's current working tour (first one unless already chosen).
+  var _mine=drTours();
+  if(!_mine.some(function(t){return t.id===currentDriverTourId;})) currentDriverTourId=_mine.length?_mine[0].id:null;
+  drLoadTourData();
+  drRenderTourSwitch();
+
+  document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
+  document.getElementById('s-driver-tour').classList.add('active');
+  window.scrollTo(0,0);
+  // Go straight to My Tour if there are loaded orders, else Ready to Load
+  var _t=drGetTour();
+  const hasLoaded=_t&&_t.orders.some(function(oid){return orders.find(x=>x.id===oid&&x.status==='loaded');});
+  drt(hasLoaded?'tour':'ready');
+}
+// (Re)build the driver working state (dTour/dAllOrders/dStatus/dDone) from the
+// currently-selected tour. Called on login and whenever the driver switches tours.
+function drLoadTourData(){
+  dTour=[];dAllOrders=[];dStatus={};dDone=[];
+  const tour=drGetTour();
   if(tour){
     tour.orders.forEach(function(oid){
       const src=orders.find(x=>x.id===oid);
@@ -6283,26 +6316,38 @@ function drLogin(id){
         if(st==='delivered'||st==='cancelled'){
           if(!dDone.includes(oid)) dDone.push(oid);
         } else {
-          // ready / loaded / still-packing all live in the tour list so the driver
-          // can sequence them together (packing ones are shown faded until ready).
           if(!dTour.includes(oid)) dTour.push(oid);
         }
       }
     });
     dAllOrders.sort((a,b)=>reg(a.id).s-reg(b.id).s);
   }
-
-  document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
-  document.getElementById('s-driver-tour').classList.add('active');
-  window.scrollTo(0,0);
-  // Go straight to My Tour if there are loaded orders, else Ready to Load
-  const hasLoaded=tour&&tour.orders.some(function(oid){return orders.find(x=>x.id===oid&&x.status==='loaded');});
-  drt(hasLoaded?'tour':'ready');
+}
+// Tour switcher shown at the top of the driver screen when there is >1 tour.
+function drRenderTourSwitch(){
+  var el=document.getElementById('dr-tourswitch'); if(!el) return;
+  var ts=drTours();
+  if(ts.length<2){ el.style.display='none'; el.innerHTML=''; return; }
+  var cur=drGetTour();
+  el.style.display='block';
+  el.innerHTML='<div style="display:flex;gap:6px;overflow-x:auto;padding:2px 0">'+ts.map(function(t,i){
+    var sel=cur&&t.id===cur.id;
+    var pend=t.orders.filter(function(id){return (t.status||{})[id]!=='delivered'&&(t.status||{})[id]!=='cancelled';}).length;
+    return '<button type="button" onclick="drSwitchTour(\''+t.id+'\')" style="flex-shrink:0;padding:7px 12px;border-radius:var(--rs);border:1.5px solid '+(sel?'var(--blue)':'var(--border)')+';background:'+(sel?'var(--blue)':'var(--bg)')+';color:'+(sel?'#fff':'var(--text)')+';font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">'+(t.driving?'🚚 ':'📋 ')+'Tour '+(i+1)+' · '+pend+'</button>';
+  }).join('')+'</div>';
+}
+function drSwitchTour(tourId){
+  if(currentDriverTourId===tourId) return;
+  currentDriverTourId=tourId;
+  drLoadTourData();
+  drRenderTourSwitch();
+  var onTour=document.getElementById('drt-tour')&&document.getElementById('drt-tour').classList.contains('active');
+  drt(onTour?'tour':'ready');
 }
 function drt(t){document.querySelectorAll('#s-driver-tour .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-driver-tour .view').forEach(x=>x.classList.remove('active'));document.getElementById('drt-'+t).classList.add('active');document.getElementById('drv-'+t).classList.add('active');if(t==='tour')drTour();else drReady();drRenderStatusBar();}
 
 function drReady(){
-  const tour = activeTours.find(t=>t.driverId===currentDriverId);
+  const tour = drGetTour();
 
   // Show ONLY the orders assigned to THIS driver via an office tour (sent to me)
   // that are still 'ready'. Loaded ones move to "Loaded on truck" below.
@@ -6394,13 +6439,13 @@ function drReady(){
     }).join('');
   }
 }
-function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();syncOrders();syncTours();}
-function drUnload(id){dStatus[id]='ready';if(!dTour.includes(id))dTour.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord)ord.status='ready';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='ready';drTour();drReady();syncOrders();syncTours();}
+function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=drGetTour();if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();syncOrders();syncTours();}
+function drUnload(id){dStatus[id]='ready';if(!dTour.includes(id))dTour.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord)ord.status='ready';const tour=drGetTour();if(tour)tour.status[id]='ready';drTour();drReady();syncOrders();syncTours();}
 
 function drRenderStatusBar(){
   var bar=document.getElementById('dr-status-bar');
   if(!bar)return;
-  var tour=activeTours.find(function(t){return t.driverId===currentDriverId;});
+  var tour=drGetTour();
   if(!tour){bar.innerHTML='';return;}
   if(tour.driving){
     bar.innerHTML='<div style="background:var(--green-bg);border:1px solid var(--green-l);border-radius:var(--r);padding:12px 14px;display:flex;align-items:center;gap:10px;margin-bottom:2px">'+
@@ -6422,7 +6467,7 @@ function drRenderStatusBar(){
 }
 
 function drDepart(){
-  var tour=activeTours.find(function(t){return t.driverId===currentDriverId;});
+  var tour=drGetTour();
   if(!tour)return;
   var loaded=orders.filter(function(o){return tour.orders.includes(o.id)&&o.status==="loaded";});
   if(loaded.length===0){alert('Load orders onto truck first!');return;}
@@ -6435,7 +6480,7 @@ function drDepart(){
 
 function drBackFree(){
   if(!confirm('Back at warehouse? / \u0e01\u0e25\u0e31\u0e1a\u0e16\u0e36\u0e07\u0e42\u0e01\u0e14\u0e31\u0e07\u0e41\u0e25\u0e49\u0e27?'))return;
-  var tour=activeTours.find(function(t){return t.driverId===currentDriverId;});
+  var tour=drGetTour();
   if(!tour)return;
   tour.driving=false;
   tour.departedAt=null;
@@ -6532,7 +6577,7 @@ function drLoadChecks(){try{var s=localStorage.getItem('kp-checks-'+currentDrive
 // Persist the driver's manual delivery order into the tour so it stays fixed and
 // doesn't revert on the next Firebase refresh or re-login.
 function drPersistOrder(){
-  var tour=activeTours.find(function(t){return t.driverId===currentDriverId;});
+  var tour=drGetTour();
   if(!tour)return;
   var mt=dTour.filter(function(id){return dAllOrders.find(function(x){return x.id===id;});});
   tour.orders=mt.concat(tour.orders.filter(function(x){return !mt.includes(x);}));
@@ -6557,7 +6602,7 @@ function drMoveTo(input,fromIdx){
   drPersistOrder();
 }
 function drSyncTourOrder(){
-  const tour=activeTours.find(function(t){return t.driverId===currentDriverId;});
+  const tour=drGetTour();
   if(!tour){alert('No active tour found.');return;}
   const mt=dTour.filter(id=>dAllOrders.find(x=>x.id===id));
   tour.orders=mt.concat(tour.orders.filter(function(x){return !mt.includes(x);}));
@@ -8475,24 +8520,24 @@ function drDoDeliver(id, photoUrl){
     const amt=parseFloat((ord.total+'').replace(/[^0-9]/g,''))||0;
     if(amt>0 && !revOrders.find(function(r){return r.id===ord.id;})){revOrders.push({rid:'r'+Date.now(),id:ord.id,cust:ord.customer,amt,date:new Date().toISOString().split('T')[0],zone:ord.zone,month:mkey(new Date().toISOString())});addLog('Order '+id+' delivered: '+amt.toLocaleString()+' ฿','+');}
   }
-  const tour=activeTours.find(t=>t.driverId===currentDriverId);
+  const tour=drGetTour();
   if(tour)tour.status[id]='delivered';
   drTour();drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;
   ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();try{payUpdateBadge();}catch(e){}
   try{ if(ord) sheetsSyncOrder(ord); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
 }
-function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';revOrders=revOrders.filter(x=>x.id!==id);const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
+function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';revOrders=revOrders.filter(x=>x.id!==id);const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
 function drCancel(id){
   const ord=orders.find(x=>x.id===id);
   const name=ord?ord.id:id;
   if(!confirm('Cancel order '+name+'?\nThis cannot be undone / ยืนยันการยกเลิก?')) return;
   dStatus[id]='cancelled';dTour=dTour.filter(x=>x!==id);if(!dDone.includes(id))dDone.push(id);delete dChecks[id];
   if(ord){ord.status='cancelled';addStatusLog(ord,'cancelled','Driver');}
-  const tour=activeTours.find(t=>t.driverId===currentDriverId);
+  const tour=drGetTour();
   if(tour)tour.status[id]='cancelled';
   drTour();drReady();ofRenderOrders();syncOrders();syncTours();
 }
-function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=activeTours.find(t=>t.driverId===currentDriverId);if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();}
+function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();}
 
 // ── STAFF MODAL FUNCTIONS ──
 // Drivers are derived from staffList (staff flagged isDriver). Old driver ids are
