@@ -2019,6 +2019,7 @@ textarea{resize:none}
     <div><label class="fl">📦 CTN / ลัง</label><input type="number" id="em-ctn" min="0" placeholder="—"></div>
     <div><label class="fl">🧶 Bundle / มัด</label><input type="number" id="em-bundle" min="0" placeholder="—"></div>
     <div><label class="fl">💰 Deposit / มัดจำ (฿)</label><input type="number" id="em-deposit" min="0" placeholder="0"></div>
+    <div><label class="fl" style="color:var(--red)">🏷️ Discount / ส่วนลด (฿)</label><input type="number" id="em-discount" min="0" placeholder="0" oninput="emCalc()" style="border-color:var(--red)"></div>
   </div>
   <label class="fl">Pack status / สถานะแพ็ค</label><input type="text" id="em-packstatus">
   <label class="fl">Date / วันที่</label><input type="date" lang="en-GB" id="em-date">
@@ -5891,6 +5892,9 @@ function ofCreateTour(){
 function openEM(idOrBtn){
   var id = typeof idOrBtn === 'string' ? idOrBtn : idOrBtn.getAttribute('data-id');
   const o=orders.find(x=>x.id===id);if(!o)return;editId=id;document.getElementById('em-id').textContent=id;document.getElementById('em-cust').value=o.customer;document.getElementById('em-phone').value=o.phone;document.getElementById('em-addr').value=o.address;document.getElementById('em-loc').value=o.location||'';document.getElementById('em-contact').value=o.contact||'';document.getElementById('em-deliveround').value=o.deliveryRound||'';document.getElementById('em-reqdate').value=o.reqDate||'';document.getElementById('em-reqnote').value=o.reqNote||'';document.getElementById('em-shipbill').value=o.shippingBill||'';document.getElementById('em-ctn').value=o.ctn||'';document.getElementById('em-bundle').value=o.bundle||'';document.getElementById('em-deposit').value=o.deposit||'';document.getElementById('em-packstatus').value=o.packStatus||'';document.getElementById('em-date').value=o.date||new Date().toISOString().split('T')[0];document.getElementById('em-status').value=o.status;document.getElementById('em-notes').value=o.notes||'';
+  // Existing discount → prefill the discount field (stored as a negative line item)
+  var _exDisc=(o.lineItems||[]).filter(function(li){return li.type==='discount';}).reduce(function(a,li){return a-(parseFloat(li.amount)||0);},0);
+  document.getElementById('em-discount').value=_exDisc>0?_exDisc:'';
   // Populate editable product lines from the order's products
   var emWrap=document.getElementById('em-lines'); if(emWrap){ emWrap.innerHTML='';
     var EMPROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
@@ -5915,9 +5919,10 @@ function emCalc(){
   document.querySelectorAll('#em-lines .pline').forEach(function(l){
     var i=l.querySelectorAll('input'); var price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0; sum+=price*qty;
   });
-  var o=orders.find(function(x){return x.id===editId;}), extra=0;
-  if(o&&o.lineItems) o.lineItems.forEach(function(li){ if(li.type==='delivery'||li.type==='discount') extra+=parseFloat(li.amount)||0; });
-  var el=document.getElementById('em-total'); if(el) el.textContent='Total / รวม: '+(sum+extra).toLocaleString()+' ฿';
+  var o=orders.find(function(x){return x.id===editId;}), other=0;
+  if(o&&o.lineItems) o.lineItems.forEach(function(li){ if(li.type==='delivery'||li.type==='clips'||li.type==='extra') other+=parseFloat(li.amount)||0; });
+  var disc=parseFloat((document.getElementById('em-discount')||{}).value)||0;
+  var el=document.getElementById('em-total'); if(el) el.textContent='Total / รวม: '+(sum+other-disc).toLocaleString('en-US')+' ฿';
 }
 function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o.status;o.customer=document.getElementById('em-cust').value;o.phone=document.getElementById('em-phone').value;o.address=document.getElementById('em-addr').value;o.location=document.getElementById('em-loc').value;o.contact=document.getElementById('em-contact').value;o.deliveryRound=document.getElementById('em-deliveround').value;o.reqDate=document.getElementById('em-reqdate').value;o.reqNote=(document.getElementById('em-reqnote').value||'').trim();o.shippingBill=document.getElementById('em-shipbill').value;o.ctn=parseInt(document.getElementById('em-ctn').value)||0;o.bundle=parseInt(document.getElementById('em-bundle').value)||0;o.deposit=parseFloat(document.getElementById('em-deposit').value)||0;try{var _dao=dAllOrders.find(function(x){return x.id===o.id;});if(_dao){_dao.ctn=o.ctn;_dao.bundle=o.bundle;}}catch(e){}o.packStatus=document.getElementById('em-packstatus').value;o.notes=document.getElementById('em-notes').value;o.status=document.getElementById('em-status').value;var newDate=document.getElementById('em-date').value;if(newDate)o.date=newDate;const editorMember=staffList.find(x=>x.id===currentStaffId);if(editorMember)o.editedBy=editorMember.name;o._editTs=Date.now();
   // Rebuild products from the edited lines (give old stock back first, re-deduct after)
@@ -5935,15 +5940,21 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   });
   var emFreeGift=0;
   (o.lineItems||[]).forEach(function(li){
-    if(li.type==='delivery'||li.type==='discount'||li.type==='clips'||li.type==='free-gift-clips'||li.type==='extra'){ emItems.push(li); if(li.type==='free-gift-clips') emFreeGift+=parseInt(li.qty)||0; }
+    if(li.type==='delivery'||li.type==='clips'||li.type==='free-gift-clips'||li.type==='extra'){ emItems.push(li); if(li.type==='free-gift-clips') emFreeGift+=parseInt(li.qty)||0; }
   });
   if(emTq>0) emItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)',qty:emTq*10,unitPrice:0,amount:0});
+  // Discount from the edit field (replaces any previous discount line) → lowers total
+  var emDisc=parseFloat((document.getElementById('em-discount')||{}).value)||0;
+  if(emDisc>0) emItems.push({type:'discount',code:'Discount / ส่วนลด',qty:1,unitPrice:-emDisc,amount:-emDisc});
   o.lineItems=emItems;
   o.panels=emPa.length?emPa.join(' · '):'—';
   o.lcorner=emLa.length?emLa.join(' · '):'—';
   o.clips=emTq*10+emFreeGift;
   o.boxes=Math.max(1,Math.ceil(emTq/10));
   o.total=emItems.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0).toLocaleString('en-US')+' ฿';
+  // Already-delivered order whose total changed (e.g. a discount added at payment):
+  // keep the recorded revenue in sync so Sales/Pay reflect the discounted amount.
+  if(o.status==='delivered'){ var _nt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0; var _r=revOrders.find(function(x){return x.id===o.id;}); if(_r && _r.amt!==_nt){ _r.amt=_nt; try{ syncRevOrders(); }catch(e){} } }
   try{ deductOrderStock(o); }catch(e){}if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}try{sheetsUpdateMaster(o);}catch(e){console.error('Master update failed (non-blocking):',e);}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
 
 // CHANGE ORDER (customer adds/removes items; warehouse confirms)
