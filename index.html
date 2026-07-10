@@ -1092,7 +1092,7 @@ textarea{resize:none}
       <b>Just type a number</b> (metres) + Enter to set the exact length. Cursor lines up with other points (dashed guide).
       Enter a <b style="color:#dc2626">panel code</b> to drop panels (w × 2.9 m); <b>hold & drag</b> a panel to auto-tile a butted row.
       <b style="color:#7c3aed">Move</b> (Ctrl+M) = pointer: tap a piece to select, <b>drag a box</b> over several to multi-select, then drag them as a group. <b>Del</b> deletes, <b>Ctrl+C/Ctrl+V</b> copy/paste the selection, <b>Ctrl+H</b> harvests. <b style="color:#f59e0b">Harvest</b> cuts each selected overhang — the panel trims to the wall (1.1), its overhang becomes a grabbable offcut (1.2) you drag back in &amp; Harvest again. <b>Ctrl+L</b> toggles the line/draw tool vs. the pointer.
-      <b>Fill</b> tiles the whole wall automatically. <b>Opening</b> → type the door/window size, position it (snaps to edges, shows 4-way spacing) &amp; click to cut it out.
+      <b>Fill</b> tiles the whole wall automatically. <b>Opening</b> → type the door/window size, position it (snaps to edges, shows 4-way spacing) &amp; click to cut it out; any panel it covers is lifted out as a movable offcut piece.
       <b>Save</b>/Load keeps named sketches on this device; <b>→ Quote</b> sends the panel count to a quotation.
       <b>Middle-mouse drag</b> = pan the canvas. <b>Copy</b> = image of the drawing + all stats to the clipboard.
       Click the first point to close the shape. <b>Esc</b> cancels, <b>Enter</b>/Finish ends the line.
@@ -2976,7 +2976,7 @@ function skTileRow(st,C){
 }
 function skClick(e){
   if(skMoveMode) return; // move tool drags pieces, doesn't add points
-  if(skHoleDraw){ var g=skOpeningSnap(skPt(e)); if(g.w>4&&g.h>4){ skHoles.push({x:g.x,y:g.y,w:g.w,h:g.h}); skFlash('🚪 Opening placed'); } skRender(); return; }
+  if(skHoleDraw){ var g=skOpeningSnap(skPt(e)); if(g.w>4&&g.h>4){ var hr={x:g.x,y:g.y,w:g.w,h:g.h}; skHoles.push(hr); var nc=skOpeningExtract(hr); skFlash('🚪 Opening'+(nc?' · '+nc+' cut piece'+(nc>1?'s':'')+' → drag':'')); } skRender(); return; }
   if(skPanelProd){ if(skSuppressClick){ skSuppressClick=false; return; } var g=skPanelSnap(skPt(e)); var rem=skPanelProd._remnant; skPanels.push(skNewPiece(g.x,g.y,g.w,g.h,skPanelProd.code, rem?rem.fromN:null)); skGhost=g; if(rem){ skStopPanel(); } skRender(); return; }
   var s=skSnap(skPt(e)); var p={x:s.x,y:s.y};
   if(skCur.length===0){ skCur.push(p); skRender(); return; }
@@ -3124,6 +3124,15 @@ function skOpeningSnap(center){
 }
 // Area (px²) of a panel that sits over an opening (cut out, discarded as scrap).
 function skHoleCovPanel(pn){ var a=0; skHoles.forEach(function(hr){ var cp=skPolyClip(skPanelRect(hr),skPanelRect(pn)); if(cp.length>=3) a+=Math.abs(skSignedArea(cp)); }); return a; }
+// When an opening lands over panels, lift each covered panel-region out as a movable offcut
+// piece (board.seg) — the door/window cut-outs become reusable stock you can drag away.
+function skOpeningExtract(hr){ var made=0;
+  skPanels.forEach(function(pn){
+    var ix=Math.max(pn.x,hr.x), iy=Math.max(pn.y,hr.y), aw=Math.min(pn.x+pn.w,hr.x+hr.w)-ix, ah=Math.min(pn.y+pn.h,hr.y+hr.h)-iy;
+    if(aw>2 && ah>2){ if(!pn.board){ pn.board=++skBoardSeq; pn.seg=1; } skOffcuts.push({x:ix,y:iy,w:aw,h:ah,code:pn.code,board:pn.board,seg:skBoardMaxSeg(pn.board)+1}); made++; }
+  });
+  return made;
+}
 // ── Draggable offcut pieces + board numbering (a cut board = N; its segments = N.1, N.2…) ──
 // Material accounting reuses the existing src logic: a dropped offcut that installs becomes
 // a panel with src=source → counted as reused, its parent's cut no longer scrap. board.seg
@@ -3271,7 +3280,13 @@ function skRender(){
     if(p.closed){ out+=skSegLabel(pts[pts.length-1],pts[0]); var c=skCentroid(pts); out+=skLabel(c.x,c.y,(skAreaPx(pts)*Math.pow(skRealPerPx(),2)/10000).toFixed(2)+' m²','#1d4ed8'); }
     pts.forEach(function(v){ out+=skDot(v.x,v.y,'#2563eb'); });
   });
-  // loose offcut pieces (draggable in Move mode): amber, labelled board.seg + size
+  // openings (doors/windows): opaque cut-outs on top, with an ✕ and their size
+  skHoles.forEach(function(hr){
+    out+=skRect(hr.x,hr.y,hr.w,hr.h,'var(--bg)','#0f172a','5 3');
+    out+=skLine(hr.x,hr.y,hr.x+hr.w,hr.y+hr.h,'#0f172a',1)+skLine(hr.x+hr.w,hr.y,hr.x,hr.y+hr.h,'#0f172a',1);
+    out+=skLabel(hr.x+hr.w/2,hr.y+hr.h/2,Math.round(hr.w*skRealPerPx())+'×'+Math.round(hr.h*skRealPerPx())+' cm','#0f172a');
+  });
+  // loose offcut pieces ABOVE openings (a piece cut from an opening sits over it, grabbable)
   skOffcuts.forEach(function(oc){ var selc=skSelHas(oc);
     out+=skRect(oc.x,oc.y,oc.w,oc.h,'rgba(245,158,11,0.28)',selc?'#7c3aed':'#f59e0b','4 3');
     out+=skLabel(oc.x+oc.w/2,oc.y+oc.h/2-6,oc.board+'.'+oc.seg,'#b45309');
@@ -3280,12 +3295,6 @@ function skRender(){
   // selection highlight (all selected pieces) + rubber-band box
   skSel.forEach(function(s){ var o=s.obj; out+='<rect x="'+o.x+'" y="'+o.y+'" width="'+o.w+'" height="'+o.h+'" fill="rgba(124,58,237,0.12)" stroke="#7c3aed" stroke-width="2"/>'; });
   if(skMarquee){ var b=skNorm(skMarquee); out+='<rect x="'+b.x+'" y="'+b.y+'" width="'+b.w+'" height="'+b.h+'" fill="rgba(124,58,237,0.10)" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4 3"/>'; }
-  // openings (doors/windows): opaque cut-outs on top, with an ✕ and their size
-  skHoles.forEach(function(hr){
-    out+=skRect(hr.x,hr.y,hr.w,hr.h,'var(--bg)','#0f172a','5 3');
-    out+=skLine(hr.x,hr.y,hr.x+hr.w,hr.y+hr.h,'#0f172a',1)+skLine(hr.x+hr.w,hr.y,hr.x,hr.y+hr.h,'#0f172a',1);
-    out+=skLabel(hr.x+hr.w/2,hr.y+hr.h/2,Math.round(hr.w*skRealPerPx())+'×'+Math.round(hr.h*skRealPerPx())+' cm','#0f172a');
-  });
   // opening ghost + 4-way distance guides to the wall's outer edges
   if(skHoleDraw && skHoleGhost){
     var gh=skHoleGhost;
@@ -3371,8 +3380,7 @@ function skComputeStats(){
     var cw=skCoveredWidth(pn.x,pn.x+pn.w,bands), overCol=(cw*pn.h)*per;
     var cut=Math.max(0, overCol-ins), side=Math.max(0, full-overCol);
     if(!used[pn.n]){ cutArea+=cut; if(cut>1e-4) cutLenPx+=cw; }   // a reused/harvested top-offcut is not scrap
-    cutArea+=skHoleCovPanel(pn)*per;                             // opening cut-outs are always scrap
-    sideWaste+=side;
+    sideWaste+=side;  // opening cut-outs become movable offcut stock (skOpeningExtract), not scrap
   });
   var stockArea=0; skOffcuts.forEach(function(o){ stockArea+=(o.w*o.h)*per; });
   return { totLen: totPx*perW, wallArea:wallArea, hasWalls:walls.length>0, panels:buyCount, reused:reuseCount,
