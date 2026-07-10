@@ -1091,7 +1091,7 @@ textarea{resize:none}
       Near horizontal/vertical it <b style="color:#dc2626">locks red</b> / <b style="color:#16a34a">green</b>; hold <b>Shift</b> to keep the lock.
       <b>Just type a number</b> (metres) + Enter to set the exact length. Cursor lines up with other points (dashed guide).
       Enter a <b style="color:#dc2626">panel code</b> to drop panels (w × 2.9 m); <b>hold & drag</b> a panel to auto-tile a butted row.
-      <b style="color:#7c3aed">Move</b> to select a piece (tap it) and drag it; <b style="color:#f59e0b">Harvest</b> cuts the selected overhang — the panel trims to the wall (1.1) and its overhang becomes a grabbable offcut (1.2) you drag back in &amp; Harvest again. Park unused pieces as stock; double-click to delete.
+      <b style="color:#7c3aed">Move</b> to select a piece (tap it) and drag it; press <b>Delete</b> (or double-click) to remove just that one; <b style="color:#f59e0b">Harvest</b> cuts the selected overhang — the panel trims to the wall (1.1) and its overhang becomes a grabbable offcut (1.2) you drag back in &amp; Harvest again.
       <b>Fill</b> tiles the whole wall automatically. <b>Opening</b> → type the door/window size, position it (snaps to edges, shows 4-way spacing) &amp; click to cut it out.
       <b>Save</b>/Load keeps named sketches on this device; <b>→ Quote</b> sends the panel count to a quotation.
       <b>Middle-mouse drag</b> = pan the canvas. <b>Copy</b> = image of the drawing + all stats to the clipboard.
@@ -2885,6 +2885,9 @@ function skBind(){
     var sc=document.getElementById('s-sketch'); if(!sc||!sc.classList.contains('active')) return;
     if(e.key==='Shift'){ skShift=true; skShiftAxis=(skCursor&&skCursor.axis)||null; return; }
     if(e.target&&e.target.tagName==='INPUT') return;
+    // Move tool: Delete/Backspace removes the selected piece
+    if(skMoveMode && skSel && (e.key==='Delete'||e.key==='Backspace')){ e.preventDefault(); skDeleteSel(); return; }
+    if(skMoveMode && e.key==='Escape'){ skSel=null; skRender(); return; }
     var inp=document.getElementById('sk-len'), typing=inp&&inp.value.trim()!=='';
     // SketchUp-style: just type a number (metres) to set the exact length.
     // Accept the numpad decimal/Del key and comma as the decimal separator (e.g. 2,9 m).
@@ -3004,10 +3007,16 @@ function skPanelDims(){ var w=(+skPanelProd.w)/skRealPerPx(); var h=(skPanelProd
 // Create + register a placed piece with a stable id and optional offcut source.
 function skNewPiece(x,y,w,h,code,src){ return {x:x,y:y,w:w,h:h,code:code,n:++skPieceSeq,src:src||null}; }
 function skSnapPoints(){ var pts=skAllVerts().slice(); skPanels.forEach(function(pn){ pts.push({x:pn.x,y:pn.y},{x:pn.x+pn.w,y:pn.y},{x:pn.x,y:pn.y+pn.h},{x:pn.x+pn.w,y:pn.y+pn.h}); }); return pts; }
-// Rectangle centred on the cursor; snap a corner to a point, else snap edges to wall/panel
-// lines — so a panel sticks to the wall floor & sides without aiming the centre exactly.
+// Panel placement snap. Near a wall it drops into the wall's TILING GRID (anchored at the
+// bottom-left corner, stepping by panel w/h, floor-aligned) so a rough click lands in the
+// right cell. Away from the wall it falls back to corner/edge snapping.
 function skPanelSnap(center){
-  var d=skPanelDims(), w=d.w, h=d.h, tlx=center.x-w/2, tly=center.y-h/2;
+  var d=skPanelDims(), w=d.w, h=d.h, tlx=center.x-w/2, tly=center.y-h/2, bb=skWallBBox();
+  if(bb && center.x>bb.minX-w && center.x<bb.maxX+w && center.y>bb.minY-h && center.y<bb.maxY+h){
+    tlx=bb.minX+Math.round((tlx-bb.minX)/w)*w;      // columns from the left edge
+    tly=bb.maxY-h-Math.round((bb.maxY-h-tly)/h)*h;  // rows stacked up from the floor
+    return {x:tlx,y:tly,w:w,h:h};
+  }
   var pts=skSnapPoints(), corners=[{x:tlx,y:tly},{x:tlx+w,y:tly},{x:tlx,y:tly+h},{x:tlx+w,y:tly+h}], off=null, bd=SK_ENDPOINT;
   corners.forEach(function(c){ pts.forEach(function(s){ var ox=s.x-c.x, oy=s.y-c.y, dd=Math.hypot(ox,oy); if(dd<bd){ bd=dd; off={x:ox,y:oy}; } }); });
   if(off){ tlx+=off.x; tly+=off.y; }
@@ -3114,6 +3123,7 @@ function skHitPiece(pt){ // offcuts sit on top; test them first, then installed 
   for(var j=skPanels.length-1;j>=0;j--){ if(skInRect(pt,skPanels[j])) return {obj:skPanels[j],kind:'panel'}; }
   return null;
 }
+function skDeleteSel(){ if(!skSel) return; var arr=skSel.kind==='offcut'?skOffcuts:skPanels, i=arr.indexOf(skSel.obj); if(i>=0) arr.splice(i,1); skSel=null; skGrab=null; skRender(); skFlash('🗑 Deleted'); }
 function skMoveSnapPts(exclude){ var pts=skAllVerts().slice();
   skPanels.forEach(function(p){ if(p===exclude) return; pts.push({x:p.x,y:p.y},{x:p.x+p.w,y:p.y},{x:p.x,y:p.y+p.h},{x:p.x+p.w,y:p.y+p.h}); });
   skOffcuts.forEach(function(p){ if(p===exclude) return; pts.push({x:p.x,y:p.y},{x:p.x+p.w,y:p.y},{x:p.x,y:p.y+p.h},{x:p.x+p.w,y:p.y+p.h}); });
