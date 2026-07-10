@@ -1,6 +1,6 @@
 # Static server for offline fixture dev (serves the whole kp-wallpanel repo).
 # Same pattern as ../../serve.ps1, own port so it never collides with it.
-$port = 8471
+$port = if ($env:PORT) { [int]$env:PORT } else { 8471 }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://localhost:$port/")

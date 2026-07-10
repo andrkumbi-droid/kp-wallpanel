@@ -38,12 +38,20 @@ Business Suite (Browser)                Apps Script                Firebase RTDB
 
 ## Datenmodell (Firebase, unter `assistant/` — außerhalb des saisonalen v2/-Präfix)
 
-- `assistant/styleProfile/current` — aktives Stilprofil (Partikel, Anrede, Begrüßungen, Emoji-Regeln, Rabatt-/Absage-Stil). **Getrennt vom Sachwissen.**
-- `assistant/styleProfile/drafts/<ts>` — von `buildStyleDraft` erzeugt; erst nach deinem Review via `promoteStyleDraft()` aktiv.
-- `assistant/knowledgeStatic` — Garantie, Versand, FAQ (manuell, `seedKnowledge()` legt TODO-Gerüst an).
+**Pro-Mitarbeiter-Stil** (Entscheidung 10.07, siehe Stil-Lernen unten): jeder Mitarbeiter bekommt ein eigenes Profil, keyed nach `staffKey(name)` (z.B. `lanoy-add`). Das alte einzelne `styleProfile/*` bleibt als **House-Style-Fallback**.
+
+- `assistant/staff/<key>` — `{name, lastCollectedAt}`, Klarname zum Key (aus „Gesendet von X").
+- `assistant/styleProfiles/<key>/current` — aktives Stilprofil dieses Mitarbeiters. `suggest` mit `staff:"Name"` imitiert genau diese Person; ohne → House-Style.
+- `assistant/styleProfiles/<key>/drafts/<ts>` — von `buildStyleDraft` erzeugt; erst nach Review via `promoteStyleDraft('Name')` aktiv.
+- `assistant/styleSamples/<key>` — gescrapte Kunde→Mitarbeiter-Paare, pro Mitarbeiter, PII maskiert (Client + Server).
+- `assistant/corrections/<key>` — Vorschlag→editiert-Paare pro Mitarbeiter. Nur Log; fließt erst über Draft+Review ins Profil.
+- `assistant/styleProfile/current` + `/drafts` — House-Style-Fallback (generischer Seed via `seedStyleProfile()`).
+- `assistant/knowledgeStatic` — Garantie, Versand, FAQ (manuell, `seedKnowledge()` legt TODO-Gerüst an). **Getrennt vom Stil.**
 - `assistant/productCatalog` — Spiegel von `QT_PRODUCTS`, schreibt die App selbst (Hook in `qtRebuildProducts`, index.html). Single Source of Truth bleibt der App-Code.
-- `assistant/styleSamples` — vom Sammelmodus gescrapte Paare (Kunde→Mitarbeiter), PII maskiert (Client + Server).
-- `assistant/corrections` — Vorschlag→editiert-Paare (Overlay loggt bei Blur nach Einfügen). Nur Log; fließt erst über Draft+Review ins Profil.
+
+## Mitarbeiter-Zuordnung (verifiziert 10.07 am echten Posteingang)
+
+Die Business Suite zeigt unter ausgehenden Nachrichten **„Gesendet von <Name>"** — d.h. sie weiß, wer geantwortet hat (ein Mitarbeiter im Test: „Lanoy Add"). **ABER:** die Angabe steht nur unter der **letzten** Nachricht des Threads, nicht pro Nachricht, und erscheint nicht beim Hover. Deshalb wird **auf Konversations-Ebene** zugeordnet: ist ein Chat eindeutig von *einer* Person betreut (Regelfall), labelt `kpLiveStaff()` alle ausgehenden Nachrichten dieses Chats auf sie; bei mehreren/keinem Absender wird der Chat übersprungen (nicht geraten). Geometrie: eingehend links (x≈590), ausgehend rechts (x≈1080) — in `inbox-live.js`.
 
 Live-Wissen (`stockItems`, `orders` für Kundenhistorie) liest das Backend direkt — keine zweite Datenbank. Kunden-Match: Meta-Profilname ↔ `orders.customer` (fuzzy), da Meta keine Telefonnummer liefert.
 

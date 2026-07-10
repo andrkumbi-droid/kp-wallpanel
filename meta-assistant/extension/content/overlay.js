@@ -140,20 +140,39 @@ const KPUI = {
     box.addEventListener('blur', check);
   },
 
-  // Scrape visible in/out pairs of the open conversation as style samples (PII masked before sending)
+  // Scrape visible in/out pairs of the open conversation as style samples, LABELED
+  // with the staff member who wrote them ("Gesendet von X"). PII masked before sending.
   async collectStyle() {
-    const rows = kpQueryAll(KPSEL.messageRow, kpQuery(KPSEL.thread) || document);
+    let bubbles, staff;
+    const fixtureRows = kpQueryAll(KPSEL.messageRow, kpQuery(KPSEL.thread) || document);
+    if (fixtureRows.length) {
+      // offline fixture mode
+      bubbles = fixtureRows.map(row => ({ dir: KPSEL.isIncoming(row) ? 'in' : 'out', text: KPSEL.messageText(row) }));
+      staff = 'Fixture-Demo';
+    } else if (typeof kpLiveTrailingSamples === 'function') {
+      // live Business Suite mode — SAFE: only the trailing, correctly-attributed run
+      staff = kpLiveStaff();
+      if (!staff) { this.status('⚠ Kein Absender erkennbar — Chat übersprungen'); return; }
+      const raw = kpLiveTrailingSamples();
+      const samples = raw.map(s => ({ in: kpMask(s.in), out: kpMask(s.out) }));
+      if (!samples.length) { this.status('keine Paare gefunden'); return; }
+      this.status('⏳ speichere ' + samples.length + ' Paare von ' + staff + '…');
+      const r = await this.api({ action: 'saveStyleSamples', staff, samples });
+      this.status(r.ok ? ('✓ ' + r.saved + ' Beispiele von ' + staff + ' gespeichert') : ('⚠ ' + r.error));
+      return;
+    } else { this.status('kein Posteingang erkannt'); return; }
+
+    // fixture path: pair each customer message with the staff reply that follows it
     const samples = []; let lastIn = '';
-    rows.forEach(row => {
-      const text = KPSEL.messageText(row);
-      if (!text) return;
-      if (KPSEL.isIncoming(row)) lastIn = text;
-      else if (KP_THAI_RE.test(text)) { samples.push({ in: kpMask(lastIn), out: kpMask(text) }); lastIn = ''; }
+    bubbles.forEach(b => {
+      if (!b.text) return;
+      if (b.dir === 'in') lastIn = b.text;
+      else if (KP_THAI_RE.test(b.text)) { samples.push({ in: kpMask(lastIn), out: kpMask(b.text) }); lastIn = ''; }
     });
     if (!samples.length) { this.status('keine Paare gefunden'); return; }
-    this.status('⏳ speichere ' + samples.length + ' Paare…');
-    const r = await this.api({ action: 'saveStyleSamples', samples });
-    this.status(r.ok ? ('✓ ' + r.saved + ' Stil-Beispiele gespeichert') : ('⚠ ' + r.error));
+    this.status('⏳ speichere ' + samples.length + ' Paare von ' + staff + '…');
+    const r = await this.api({ action: 'saveStyleSamples', staff, samples });
+    this.status(r.ok ? ('✓ ' + r.saved + ' Beispiele von ' + staff + ' gespeichert') : ('⚠ ' + r.error));
   }
 };
 

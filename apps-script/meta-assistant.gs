@@ -33,6 +33,7 @@ function doPost(e){
     else if(b.action==='saveStyleSamples')      out = actSaveSamples(b);
     else if(b.action==='buildStyleDraft')       out = actBuildStyleDraft(b);
     else if(b.action==='logCorrection')         out = actLogCorrection(b);
+    else if(b.action==='listStaff')             out = actListStaff();
     else if(b.action==='health')                out = {ok:true, provider:PROVIDER, model:MODELS[PROVIDER]};
     else                                        out = {error:'unknown_action'};
   }catch(err){ out = {error:String(err)}; }
@@ -49,8 +50,9 @@ var PROVIDERS = {
         messages:[{role:'user', content:user}] })
     });
     var j = JSON.parse(res.getContentText());
-    if(j.error) throw new Error('claude: ' + j.error.message);
-    return (j.content && j.content[0] && j.content[0].text) || '';
+    if(j.error) throw new Error('claude: ' + (j.error.message || JSON.stringify(j.error)));
+    // Join ALL text blocks (model may emit thinking blocks before the text).
+    return (j.content||[]).map(function(c){ return (c&&c.text)||''; }).join('');
   },
   openai: function(system, user, maxTokens){
     var res = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
@@ -99,10 +101,37 @@ function ctxKnowledge(){
   if(!k) return '';
   return 'COMPANY FACTS (warranty, shipping, FAQ):\n' + Object.keys(k).map(function(key){ return '- '+key+': '+k[key]; }).join('\n');
 }
+// Normalize a "Gesendet von X" display name into a safe Firebase key.
+// Firebase keys may not contain . $ # [ ] / — and we want stable per-staff buckets.
+function staffKey(name){
+  return String(name||'').trim().toLowerCase()
+    .replace(/[.$#\[\]\/]/g,'').replace(/\s+/g,'-').replace(/-+/g,'-') || 'unknown';
+}
+// Nickname → Facebook display name (as it appears in "Gesendet von X"). Lets you say
+// "schreib wie Bobby" while data is keyed by the real FB name. Extend as staff change.
+var STAFF_ALIASES = {
+  'pim':   'Pimlada Rattana',
+  'bobby': 'วุฒิศักดิ์ ปราบวงษา',
+  'lanoy': 'Lanoy Add'
+};
+// Resolve a nickname OR an FB display name to the storage key.
+function resolveStaffKey(nameOrNick){
+  var raw = String(nameOrNick||'').trim();
+  return staffKey(STAFF_ALIASES[raw.toLowerCase()] || raw);
+}
+// House style (aggregate) — fallback when no specific staff persona is requested.
 function ctxStyle(){
   var s = fbGet('assistant/styleProfile/current');
   if(!s) return 'STYLE: polite Thai retail customer service, particle ' + '"ค่ะ"' + ', address customers as คุณ, light emoji use.';
   return 'COMPANY STYLE PROFILE (imitate the style, never copy sentences verbatim):\n' + JSON.stringify(s);
+}
+// Per-staff style: imitate ONE staff member's voice (b.staff = their display name).
+// Falls back to house style if that staff has no profile yet.
+function ctxStyleFor(name){
+  if(!name) return ctxStyle();
+  var s = fbGet('assistant/styleProfiles/' + resolveStaffKey(name) + '/current');
+  if(!s) return ctxStyle();
+  return 'STAFF STYLE PROFILE — write exactly like "'+name+'" writes (imitate their voice, never copy sentences verbatim):\n' + JSON.stringify(s);
 }
 // Fuzzy match Meta profile name → app orders (customerMeta is phone-keyed, so we go via orders).
 function ctxCustomer(name){
@@ -145,7 +174,7 @@ function actSuggest(b){
   var cust = ctxCustomer(b.customerName);
   var blocks = [ctxCatalog(), ctxStock(), ctxKnowledge(), cust, ctxConversation(b.context)].filter(Boolean).join('\n\n');
   var sys = 'You are the Thai customer-service voice of KP Wallpanel (WPC/PVC wall panels, Thailand, Facebook page chat). ' +
-    ctxStyle() + '\n' + TH_RULES + '\n' +
+    ctxStyleFor(b.staff) + '\n' + TH_RULES + '\n' +
     'Ground every factual claim (price, stock, width, shipping) ONLY in the DATA block; if the data does not answer it, say you will check (politely) instead of inventing. ' +
     'Return ONLY JSON {"suggestions":[{"th":"","back":""}]} with 2-3 alternative replies. th = the Thai reply ready to send. back = faithful '+L+' back-translation so a non-Thai-speaker can verify before sending. Vary the alternatives meaningfully (e.g. short vs. detailed, with vs. without upsell).';
   var user = 'DATA:\n' + blocks + '\n\nCUSTOMER MESSAGE:\n' + String(b.message||'') +
@@ -155,36 +184,61 @@ function actSuggest(b){
   return out;
 }
 
-// {action:'saveStyleSamples', samples:[{in,out}]} — pairs scraped by the extension (PII already masked client-side).
+// {action:'saveStyleSamples', staff, samples:[{in,out}]} — pairs scraped by the extension,
+// labeled with the staff member who wrote the outgoing replies ("Gesendet von X").
+// Stored per staff so each person's voice can be learned separately. PII masked (client + here).
 function actSaveSamples(b){
-  var samples = (b.samples||[]).filter(function(s){ return s && s.out; }).slice(0,100);
-  samples.forEach(function(s){ fbPush('assistant/styleSamples', { in:maskPII(s.in||''), out:maskPII(s.out||''), ts:Date.now() }); });
-  return {ok:true, saved:samples.length};
+  var k = staffKey(b.staff);
+  var samples = (b.samples||[]).filter(function(s){ return s && s.out; }).slice(0,200);
+  samples.forEach(function(s){ fbPush('assistant/styleSamples/'+k, { in:maskPII(s.in||''), out:maskPII(s.out||''), ts:Date.now() }); });
+  // remember the human-readable display name for this key
+  fbSet('assistant/staff/'+k, { name:String(b.staff||''), lastCollectedAt:Date.now() });
+  return {ok:true, staff:k, saved:samples.length};
 }
 
-// {action:'logCorrection', suggested, edited, msgContext?} — collected only; learning happens via buildStyleDraft + your review.
+// {action:'logCorrection', staff?, suggested, edited, msgContext?} — collected per staff; review-gated learning.
 function actLogCorrection(b){
-  fbPush('assistant/corrections', { suggested:String(b.suggested||''), edited:String(b.edited||''),
+  var k = staffKey(b.staff);
+  fbPush('assistant/corrections/'+k, { suggested:String(b.suggested||''), edited:String(b.edited||''),
     msgContext:maskPII(String(b.msgContext||'').slice(0,300)), ts:Date.now() });
   return {ok:true};
 }
 
-// {action:'buildStyleDraft'} — analyze samples + corrections → styleProfile/drafts/<ts>. You review in Firebase,
-// then copy the draft to assistant/styleProfile/current (or run promoteStyleDraft below).
-function actBuildStyleDraft(){
-  var samples = asArr(fbGet('assistant/styleSamples')).slice(-80);
-  var corr = asArr(fbGet('assistant/corrections')).slice(-40);
-  if(!samples.length && !corr.length) return {error:'no_samples'};
-  var draft = llmJson(
-    'You analyze how a Thai wall-panel shop\'s staff writes to customers on Facebook. ANALYZE the style, do not copy sentences. ' +
-    'Return ONLY JSON: {"particle":"ค่ะ|ครับ","address":"","greetings":[],"closings":[],"emojiUsage":"","commonPhrases":[],"discountStyle":"","refusalStyle":"","alternativesStyle":"","notes":""}. ' +
-    'Fields describe patterns (short English descriptions + a few Thai examples). Corrections show suggested→edited pairs: what the staff changed reveals preferences — weigh them strongly.',
-    'STAFF REPLIES (in = customer, out = staff):\n' + JSON.stringify(samples) +
-    (corr.length ? ('\n\nCORRECTIONS (suggested → edited):\n' + JSON.stringify(corr)) : ''), 1500);
-  var key = Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss');
-  draft.builtAt = Date.now(); draft.sampleCount = samples.length; draft.correctionCount = corr.length;
-  fbSet('assistant/styleProfile/drafts/' + key, draft);
-  return {ok:true, draftKey:key, draft:draft};
+// {action:'buildStyleDraft', staff?} — analyze one staff's samples+corrections (or ALL staff if omitted)
+// → assistant/styleProfiles/<key>/drafts/<ts>. Review in Firebase, then promoteStyleDraft(key).
+function actBuildStyleDraft(b){
+  var only = b && b.staff ? resolveStaffKey(b.staff) : null;
+  var allSamples = fbGet('assistant/styleSamples') || {};
+  var keys = only ? [only] : Object.keys(allSamples);
+  if(!keys.length) return {error:'no_samples'};
+  var results = [];
+  keys.forEach(function(k){
+    var samples = asArr(allSamples[k]).slice(-120);
+    var corr = asArr(fbGet('assistant/corrections/'+k)).slice(-40);
+    if(!samples.length && !corr.length) return;
+    var name = (fbGet('assistant/staff/'+k)||{}).name || k;
+    var draft = llmJson(
+      'You analyze how ONE Thai wall-panel shop staff member ("'+name+'") writes to customers on Facebook. ANALYZE their personal style, do not copy sentences. ' +
+      'Return ONLY JSON: {"particle":"ค่ะ|ครับ","address":"","greetings":[],"closings":[],"emojiUsage":"","commonPhrases":[],"discountStyle":"","refusalStyle":"","alternativesStyle":"","tone":"","notes":""}. ' +
+      'Fields describe THIS person\'s patterns (short English descriptions + a few Thai examples). Corrections (suggested→edited) reveal their preferences — weigh strongly.',
+      'STAFF REPLIES (in = customer, out = "'+name+'"):\n' + JSON.stringify(samples) +
+      (corr.length ? ('\n\nCORRECTIONS (suggested → edited):\n' + JSON.stringify(corr)) : ''), 1500);
+    var ts = Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss');
+    draft.staffName = name; draft.builtAt = Date.now(); draft.sampleCount = samples.length; draft.correctionCount = corr.length;
+    fbSet('assistant/styleProfiles/'+k+'/drafts/'+ts, draft);
+    results.push({staff:k, name:name, draftKey:ts, sampleCount:samples.length});
+  });
+  return {ok:true, built:results};
+}
+
+// {action:'listStaff'} → the discovered staff + how many samples each has (for the extension's persona picker).
+function actListStaff(){
+  var samples = fbGet('assistant/styleSamples') || {};
+  var meta = fbGet('assistant/staff') || {};
+  return { staff: Object.keys(samples).map(function(k){
+    return { key:k, name:(meta[k]||{}).name||k, samples:asArr(samples[k]).length,
+             hasProfile: !!fbGet('assistant/styleProfiles/'+k+'/current') };
+  }) };
 }
 
 // ── PII masking (defense in depth; extension masks too) ────
@@ -207,6 +261,34 @@ function seedStyleProfile(){
     version:1, seededAt:Date.now(), note:'generic seed — replace via buildStyleDraft after collecting samples'
   });
 }
+// Seed the PRELIMINARY per-staff profiles from the 10.07 live inbox read
+// (see meta-assistant/docs/STYLE-PROFILES-PRELIMINARY.md). Starting points only —
+// refine via buildStyleDraft once real samples are collected. Pim omitted on purpose
+// (no reliable free-text observed yet). Run once from the editor after deploy.
+function seedPreliminaryStaffProfiles(){
+  fbSet('assistant/styleProfiles/' + staffKey('Lanoy Add') + '/current', {
+    staffName:'Lanoy Add', nickname:'Lanoy', particle:'ครับ',
+    tone:'consultative, honest — will advise against unsuitable uses instead of overselling',
+    form:'answers split into several short lines; names concrete use-cases',
+    emojiUsage:'sparing',
+    examples:['ภายนอก 100% ยังไม่มีนะครับ','สินค้าที่ร้าน จะแนะนำในส่วนที่เป็น ฝาโรงรถ / ผนัง ที่อยู่ได้ชายคา','แต่ถ้าเอาไปทำรั้ว กันกำแพงข้างบ้าง แบบนี้ไม่แนะนำ ครับ'],
+    version:1, confidence:'medium', seededAt:Date.now(), note:'preliminary from live read — refine via buildStyleDraft'
+  });
+  fbSet('assistant/styleProfiles/' + staffKey('วุฒิศักดิ์ ปราบวงษา') + '/current', {
+    staffName:'วุฒิศักดิ์ ปราบวงษา', nickname:'Bobby', particle:'ครับ (often ครับผม)',
+    tone:'brief, prompt operational confirmations (shipping, next steps)',
+    form:'short one-liners; little elaboration',
+    emojiUsage:'minimal',
+    examples:['น่าจะส่งวันอังคารครับ','เดี๋ยวแจ้งไปครับ','ครับผม'],
+    version:1, confidence:'medium-low', seededAt:Date.now(), note:'preliminary from live read — refine via buildStyleDraft'
+  });
+  // Pim (Pimlada Rattana): intentionally NOT seeded — collect real free-text first.
+}
+// Seed the nickname map into Firebase too, so the extension can show friendly names.
+// (Source of truth stays STAFF_ALIASES in this file.) Run once from the editor.
+function seedStaffAliases(){
+  fbSet('assistant/staffAliases', STAFF_ALIASES);   // { nickname: "FB display name" }
+}
 // Seed static company knowledge — edit values to reality, extend freely.
 function seedKnowledge(){
   fbSet('assistant/knowledgeStatic', {
@@ -217,13 +299,23 @@ function seedKnowledge(){
     returns:'TODO: return policy'
   });
 }
-// Promote the newest draft to current (after you reviewed it in Firebase).
-function promoteStyleDraft(){
-  var drafts = fbGet('assistant/styleProfile/drafts') || {};
+// Promote a staff member's newest draft → their current profile (after you reviewed it in Firebase).
+// staffKeyOrName: the key (e.g. 'lanoy-add') or the display name. Run from the editor: promoteStyleDraft('Lanoy Add')
+function promoteStyleDraft(staffKeyOrName){
+  var k = resolveStaffKey(staffKeyOrName);
+  var base = 'assistant/styleProfiles/' + k;
+  var drafts = fbGet(base + '/drafts') || {};
   var keys = Object.keys(drafts).sort();
-  if(!keys.length) throw new Error('no drafts');
+  if(!keys.length) throw new Error('no drafts for ' + k);
   var d = drafts[keys[keys.length-1]];
-  d.version = ((fbGet('assistant/styleProfile/current')||{}).version||0) + 1;
+  d.version = ((fbGet(base + '/current')||{}).version||0) + 1;
   d.promotedAt = Date.now();
-  fbSet('assistant/styleProfile/current', d);
+  fbSet(base + '/current', d);
+  return d;
+}
+// Build drafts for everyone, then promote all newest drafts at once (convenience).
+function buildAndPromoteAllStaff(){
+  var res = actBuildStyleDraft({});
+  (res.built||[]).forEach(function(r){ promoteStyleDraft(r.staff); });
+  return res;
 }

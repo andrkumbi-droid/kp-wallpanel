@@ -6,11 +6,17 @@
   let lastSeen = '';
 
   function conversationSnapshot() {
-    const thread = kpQuery(KPSEL.thread) || document;
-    return kpQueryAll(KPSEL.messageRow, thread).map(row => ({
-      dir: KPSEL.isIncoming(row) ? 'in' : 'out',
-      text: KPSEL.messageText(row)
-    })).filter(m => m.text);
+    // fixture mode: data-kp rows exist → use them
+    const thread = kpQuery(KPSEL.thread);
+    const rows = thread ? kpQueryAll(KPSEL.messageRow, thread) : [];
+    if (rows.length) {
+      return rows.map(row => ({
+        dir: KPSEL.isIncoming(row) ? 'in' : 'out',
+        text: KPSEL.messageText(row)
+      })).filter(m => m.text);
+    }
+    // real Business Suite: geometric detection lives in inbox-live.js
+    return (typeof kpLiveBubbles === 'function') ? kpLiveBubbles() : [];
   }
 
   // The trailing run of consecutive incoming messages = everything the customer
@@ -19,8 +25,10 @@
   function trailingBurst(conv) {
     const burst = [];
     for (let i = conv.length - 1; i >= 0; i--) {
-      if (conv[i].dir === 'in') burst.unshift(conv[i].text);
-      else break;
+      if (conv[i].dir !== 'in') break;
+      // stop at long ad/boilerplate blocks (the ad-referral message shows as incoming)
+      if (conv[i].text.length > 300) break;
+      burst.unshift(conv[i].text);
     }
     return burst;
   }

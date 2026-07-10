@@ -1272,6 +1272,7 @@ textarea{resize:none}
     <label class="fl">Phone / เบอร์โทร</label><input type="tel" id="of-phone" placeholder="08x-xxx-xxxx (multiple: 08x / 08x)" oninput="ofLookupCustomer()" onblur="ofLookupCustomer()">
     <div id="of-cust-lookup" style="display:none;margin:6px 0 4px"></div>
     <label class="fl">Address / ที่อยู่</label><textarea id="of-addr" rows="2" placeholder="Delivery address"></textarea>
+    <label class="fl">Province / จังหวัด <span style="font-size:11px;color:var(--text2)">(optional)</span></label><input type="text" id="of-province" placeholder="e.g. ลำปาง / Lampang">
     <label class="fl">Location link <span style="font-size:11px;color:var(--text2)">(optional)</span></label><input type="text" id="of-loc" placeholder="https://maps.google.com/...">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div><label class="fl">Contact channel / ช่องทางติดต่อ</label><input type="text" id="of-contact" placeholder="Line OA / หน้าร้าน / FB"></div>
@@ -4127,6 +4128,32 @@ function ofDirectSale(){
   ofCreate();   // reads _ofDirectSold → delivered+paid, then resets the flag
 }
 function ofUpdateDirectSoldBtn(){ /* button is a one-click action, no toggle state to render */ }
+// Signature of the physical products in an order (panels + edge strips), used to
+// spot duplicate orders. Sorted so order-of-entry doesn't matter.
+function ofProductSig(items){
+  if(!items||!items.length) return '';
+  var PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  var arr=[];
+  items.forEach(function(li){
+    if(!PROD[li.type]) return;
+    var code=String(li.code||'').trim().toUpperCase();
+    var qty=parseInt(li.qty)||0;
+    if(code&&qty) arr.push(li.type+':'+code+':'+qty);
+  });
+  return arr.sort().join('|');
+}
+// Read the currently-entered panels/edges from the New Order form.
+function ofCurrentProductItems(){
+  var items=[];
+  document.querySelectorAll('#of-panels .pline').forEach(function(l){
+    var i=l.querySelectorAll('input'); items.push({type:'panel',code:i[0].value,qty:i[1].value});
+  });
+  document.querySelectorAll('#of-edges .eline').forEach(function(l){
+    var sel=l.querySelector('select'); var inp=l.querySelectorAll('input');
+    items.push({type:sel?sel.value:'lcorner',code:inp[0].value,qty:inp[1].value});
+  });
+  return items;
+}
 function ofCreate(){
   const zoneVal = document.getElementById('of-zone').value;
   let no = document.getElementById('of-no').value.trim();
@@ -4144,6 +4171,20 @@ function ofCreate(){
     alert('Please fill in / กรุณากรอก:\n\n• '+_missing.map(function(f){return f.label;}).join('\n• '));
     var _first=document.getElementById(_missing[0].el); if(_first){ try{_first.focus();}catch(e){} }
     return;
+  }
+  // Duplicate-order guard: if an order with the SAME phone AND the SAME products
+  // already exists, warn (Office may be entering it twice by mistake).
+  var _dupPhone = normPhone((document.getElementById('of-phone')||{}).value||'');
+  if(_dupPhone && zoneVal!=='Instore'){
+    var _sig = ofProductSig(ofCurrentProductItems());
+    if(_sig){
+      var _dup = orders.find(function(x){
+        return x.status!=='cancelled' && normPhone(x.phone||'')===_dupPhone && ofProductSig(x.lineItems)===_sig;
+      });
+      if(_dup){
+        if(!confirm('⚠️ Possible duplicate order / อาจเป็นออเดอร์ซ้ำ\n\nAn order with the same phone and same products already exists / มีออเดอร์เบอร์เดียวกันและสินค้าเดียวกันอยู่แล้ว:\n\n• '+_dup.id+(_dup.customer&&_dup.customer!=='—'?' — '+_dup.customer:'')+'\n\nCreate anyway? / สร้างต่อหรือไม่?\nOK = create / สร้าง   ·   Cancel = abort / ยกเลิก')) return;
+      }
+    }
   }
   // Safety net: if the field holds a stale number (≠ the live next number for
   // this zone, e.g. left over from an earlier session), confirm before using it
@@ -4203,7 +4244,7 @@ function ofCreate(){
   const assignedReceiptNum = currentReceiptNum + 1;
   currentReceiptNum = assignedReceiptNum;
   syncReceiptNum();
-  const o={id:no,receiptNum:assignedReceiptNum,date:document.getElementById('of-date').value||new Date().toISOString().split('T')[0],zone,customer:document.getElementById('of-cust').value||'—',phone:document.getElementById('of-phone').value||'—',address:document.getElementById('of-addr').value||'—',location:document.getElementById('of-loc').value||'',panels:panStr,lcorner:lcStr,clips,boxes:Math.max(1,Math.ceil(tq/10)),total:grand,status:'new',notes:'',contact:document.getElementById('of-contact').value||'',deliveryRound:document.getElementById('of-deliveround').value||'',reqDate:document.getElementById('of-reqdate').value||'',reqNote:(document.getElementById('of-reqnote').value||'').trim(),custRaw:((document.getElementById('of-paste')||{}).value||'').trim(),createdBy,editedBy:'',lineItems,_stockDeducted:true,_editTs:Date.now(),
+  const o={id:no,receiptNum:assignedReceiptNum,date:document.getElementById('of-date').value||new Date().toISOString().split('T')[0],zone,customer:document.getElementById('of-cust').value||'—',phone:document.getElementById('of-phone').value||'—',address:document.getElementById('of-addr').value||'—',province:(document.getElementById('of-province').value||'').trim(),location:document.getElementById('of-loc').value||'',panels:panStr,lcorner:lcStr,clips,boxes:Math.max(1,Math.ceil(tq/10)),total:grand,status:'new',notes:'',contact:document.getElementById('of-contact').value||'',deliveryRound:document.getElementById('of-deliveround').value||'',reqDate:document.getElementById('of-reqdate').value||'',reqNote:(document.getElementById('of-reqnote').value||'').trim(),custRaw:((document.getElementById('of-paste')||{}).value||'').trim(),createdBy,editedBy:'',lineItems,_stockDeducted:true,_editTs:Date.now(),
   priority:_ofPriority,priorityReason:_ofPriorityReason,priorityBy:_ofPriority?createdBy:'',priorityAt:_ofPriority?Date.now():0,
   statusLog:[{status:'new',time:ts,by:createdBy}]};
   orders.unshift(o);wOrders.unshift({id:no,zone,boxes:o.boxes,panels:panStr,lcorner:lcStr,clips,packed:false,packedAt:null});
@@ -4218,7 +4259,7 @@ function ofCreate(){
   }
   {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;stockBucketDeduct(li.code,_q,li.grade);addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
   var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';ofUpdPrioCnt();addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order'});}catch(e){}
-  ['of-no','of-cust','of-phone','of-loc','of-contact','of-deliveround','of-reqdate','of-reqnote','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='none';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').valueAsDate=new Date();
+  ['of-no','of-cust','of-phone','of-province','of-loc','of-contact','of-deliveround','of-reqdate','of-reqnote','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='none';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').valueAsDate=new Date();
   if(_ofPriority){ try{ pushSend('warehouse','⭐ Priority order: '+no, _ofPriorityReason||'Important order', {tag:'priority'}); }catch(e){} }
   _ofPriority=false;_ofPriorityReason='';try{ofUpdatePriorityBtn();}catch(e){}
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
@@ -4983,7 +5024,7 @@ function ofRenderTour(){
         '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;flex-wrap:nowrap;gap:8px">'+
         '<span onclick="ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">'+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+' <span style="color:var(--text2);font-size:10px">▾</span>'+'</span>'+
         '<div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;justify-content:flex-end">'+
-        '<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+(ord?ord.zone:'')+'</span>'+
+        '<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+(ord?((ord.province||'').trim()||ord.zone||''):'')+'</span>'+
         payInline+
         (st==='loaded'||st==='ready'
           ? (_multiTour?'<button type="button" onclick="ofMoveOrder(\''+t.id+'\',\''+id+'\')" title="Move to another tour" style="font-size:11px;padding:2px 8px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">⇄</button>':'')
@@ -5076,6 +5117,7 @@ function ofRenderTour(){
         '<div style="font-size:12px;color:var(--text2);margin-top:1px">👤 '+(o.customer||'—')+'</div>'+
         (o.phone&&o.phone!=='—'?'<div style="font-size:12px;color:var(--text2)">📞 '+o.phone+'</div>':'')+
         (o.address&&o.address!=='—'?'<div style="font-size:12px;color:var(--text2)">📍 '+o.address+'</div>':'')+
+        (function(){var _n=[(o.reqNote||'').trim(),(o.notes||'').trim()].filter(Boolean).join(' · ');return _n?'<div style="font-size:12px;color:#b45309;margin-top:1px">📝 '+_n+'</div>':'';})()+
       '</div>'+
       '<i class="ti ti-plus" style="font-size:16px;color:var(--blue);margin-left:8px;flex-shrink:0"></i></div>';
   };
@@ -11512,6 +11554,18 @@ function kpParseCustomer(text){
   out.address=addr.replace(/[ \t]{2,}/g,' ').replace(/^[\s,;]+|[\s,;]+$/g,'').trim();
   return out;
 }
+
+// Pull a Thai province out of an address blob. Matches "จังหวัด X" / "จ.X" and
+// Bangkok variants. Returns '' if none found (province stays optional/manual).
+function kpExtractProvince(text){
+  var t=String(text||'');
+  if(/กรุงเทพ|กทม/.test(t)) return 'กรุงเทพมหานคร';
+  var m=t.match(/จังหวัด\s*([^\s,\d]+)/);
+  if(m) return m[1].trim();
+  m=t.match(/จ\.\s*([^\s,\d]+)/);
+  if(m) return m[1].trim();
+  return '';
+}
 function ofQuickParse(){
   var raw = (document.getElementById('of-paste')||{}).value || '';
   if(!raw.trim()) return;
@@ -11520,6 +11574,8 @@ function ofQuickParse(){
   if(ex.phone) document.getElementById('of-phone').value = ex.phone;
   if(ex.address) document.getElementById('of-addr').value = ex.address;
   if(ex.maps) document.getElementById('of-loc').value = ex.maps;
+  var _prov = kpExtractProvince(ex.address||raw);
+  if(_prov){ var _pv=document.getElementById('of-province'); if(_pv && !_pv.value) _pv.value=_prov; }
   try{ ofLookupCustomer(); }catch(e){}
   // AI fallback: only if the heuristic found no name (name can be anywhere).
   if(!ex.name && BOT_PARSE_URL){
@@ -11532,6 +11588,7 @@ function ofQuickParse(){
         var ph=document.getElementById('of-phone'); if(ai.phone && !ph.value) ph.value=ai.phone;
         var ad=document.getElementById('of-addr'); if(ai.address && !ad.value) ad.value=ai.address;
         var lo=document.getElementById('of-loc'); if(ai.maps && !lo.value) lo.value=ai.maps;
+        var pvp=kpExtractProvince(ai.address||''); var pv=document.getElementById('of-province'); if(pvp && pv && !pv.value) pv.value=pvp;
         try{ ofLookupCustomer(); }catch(e){}
       }).catch(function(){});
   }
