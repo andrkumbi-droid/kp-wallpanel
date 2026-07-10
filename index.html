@@ -1091,7 +1091,7 @@ textarea{resize:none}
       Near horizontal/vertical it <b style="color:#dc2626">locks red</b> / <b style="color:#16a34a">green</b>; hold <b>Shift</b> to keep the lock.
       <b>Just type a number</b> (metres) + Enter to set the exact length. Cursor lines up with other points (dashed guide).
       Enter a <b style="color:#dc2626">panel code</b> to drop panels (w × 2.9 m); <b>hold & drag</b> a panel to auto-tile a butted row.
-      <b style="color:#7c3aed">Move</b> to select a piece (tap it) and drag it; press <b>Delete</b> (or double-click) to remove just that one; <b style="color:#f59e0b">Harvest</b> cuts the selected overhang — the panel trims to the wall (1.1) and its overhang becomes a grabbable offcut (1.2) you drag back in &amp; Harvest again.
+      <b style="color:#7c3aed">Move</b> (Ctrl+M) = pointer: tap a piece to select, <b>drag a box</b> over several to multi-select, then drag them as a group. <b>Del</b> deletes, <b>Ctrl+C/Ctrl+V</b> copy/paste the selection, <b>Ctrl+H</b> harvests. <b style="color:#f59e0b">Harvest</b> cuts each selected overhang — the panel trims to the wall (1.1), its overhang becomes a grabbable offcut (1.2) you drag back in &amp; Harvest again. <b>Ctrl+L</b> toggles the line/draw tool vs. the pointer.
       <b>Fill</b> tiles the whole wall automatically. <b>Opening</b> → type the door/window size, position it (snaps to edges, shows 4-way spacing) &amp; click to cut it out.
       <b>Save</b>/Load keeps named sketches on this device; <b>→ Quote</b> sends the panel count to a quotation.
       <b>Middle-mouse drag</b> = pan the canvas. <b>Copy</b> = image of the drawing + all stats to the clipboard.
@@ -2851,7 +2851,7 @@ var skPanelProd=null, skPanels=[], skGhost=null, skPieceSeq=0;  // panel placeme
 var skPanX=0, skPanY=0, skPanning=false, skPanStart=null;   // canvas pan (middle-mouse drag, Canva-style)
 var skDrag=null, skTiles=null, skDragMoved=false, skSuppressClick=false; // drag-to-tile panels
 var skHoles=[], skHoleDraw=false, skHoleGhost=null, skOpW=100, skOpH=200; // openings (doors/windows); dims in cm (default door 1×2 m)
-var skOffcuts=[], skBoardSeq=0, skMoveMode=false, skSel=null, skGrab=null; // offcut pieces; skSel = persistent selection {obj,kind}; skGrab = active drag
+var skOffcuts=[], skBoardSeq=0, skMoveMode=false, skSel=[], skGrab=null, skMarquee=null, skClip=[]; // skSel = selection [{obj,kind}]; skGrab = active drag; skMarquee = rubber-band box; skClip = copied pieces
 function skRealPerPx(){ return skScale/SK_PXCM; }   // real cm per screen px
 function skSvg(){ return document.getElementById('sk-svg'); }
 function skInit(){ if(!skBound){ skBind(); skBound=true; } var sc=document.getElementById('sk-scale'); if(sc) skScale=+sc.value||50; skRefreshSaved(); skRender(); }
@@ -2865,15 +2865,19 @@ function skBind(){
   // Middle-mouse = grab & pan the canvas (Canva/whiteboard); left+hold in panel mode = drag-to-tile.
   s.addEventListener('mousedown',function(e){
     if(e.button===1){ e.preventDefault(); skPanning=true; skPanStart={sx:e.clientX,sy:e.clientY,px:skPanX,py:skPanY}; return; }
-    if(e.button===0 && skMoveMode){ var pt=skPt(e), hit=skHitPiece(pt); skSel=hit?{obj:hit.obj,kind:hit.kind}:null; skGrab=hit?{dx:pt.x-hit.obj.x, dy:pt.y-hit.obj.y, moved:false}:null; skRender(); return; }
+    if(e.button===0 && skMoveMode){ var pt=skPt(e), hit=skHitPiece(pt);
+      if(hit){ if(!skSelHas(hit.obj)) skSel=[{obj:hit.obj,kind:hit.kind}]; skGrab={ox:pt.x,oy:pt.y,moved:false}; }   // click a piece → select+grab (keep group if already in it)
+      else { skMarquee={x0:pt.x,y0:pt.y,x1:pt.x,y1:pt.y}; skSel=[]; }                                              // empty → rubber-band select
+      skRender(); return; }
     if(e.button===0 && skHoleDraw) return; // openings are placed on click (dimensioned ghost)
     if(e.button===0 && skPanelProd && !skPanelProd._remnant){ var g=skPanelSnap(skPt(e)), r=skPt(e); skDrag={sx:g.x,sy:g.y,w:g.w,h:g.h,ox:r.x,oy:r.y}; skDragMoved=false; skTiles=[{x:g.x,y:g.y,w:g.w,h:g.h}]; }
   });
-  s.addEventListener('dblclick',function(e){ if(!skMoveMode) return; var hit=skHitPiece(skPt(e)); if(hit){ if(hit.kind==='offcut'){ var i=skOffcuts.indexOf(hit.obj); if(i>=0) skOffcuts.splice(i,1); } else { var j=skPanels.indexOf(hit.obj); if(j>=0) skPanels.splice(j,1); } if(skSel&&skSel.obj===hit.obj) skSel=null; skRender(); } });
+  s.addEventListener('dblclick',function(e){ if(!skMoveMode) return; var hit=skHitPiece(skPt(e)); if(hit){ skSel=[{obj:hit.obj,kind:hit.kind}]; skDeleteSel(); } });
   window.addEventListener('mousemove',function(e){ if(skPanning&&skPanStart){ skPanX=skPanStart.px+(e.clientX-skPanStart.sx); skPanY=skPanStart.py+(e.clientY-skPanStart.sy); skRender(); } });
   window.addEventListener('mouseup',function(e){
     if(e.button===1){ skPanning=false; skPanStart=null; return; }
-    if(e.button===0 && skGrab){ skGrab=null; skRender(); return; }   // end drag; selection (skSel) persists
+    if(e.button===0 && skGrab){ if(skGrab.moved && skSel.length){ var c=skSnapPiece(skSel[0].obj); if(c.dx||c.dy) skSel.forEach(function(s){ s.obj.x+=c.dx; s.obj.y+=c.dy; }); } skGrab=null; skRender(); return; }
+    if(e.button===0 && skMarquee){ var b=skNorm(skMarquee); skSel=[]; skPanels.forEach(function(p){ if(skRectHit(p,b)) skSel.push({obj:p,kind:'panel'}); }); skOffcuts.forEach(function(o){ if(skRectHit(o,b)) skSel.push({obj:o,kind:'offcut'}); }); skMarquee=null; skRender(); return; }
     if(e.button===0 && skDrag){
       if(skDragMoved && skTiles && skTiles.length){ skTiles.forEach(function(t){ skPanels.push(skNewPiece(t.x,t.y,t.w,t.h,skPanelProd.code,null)); }); var lt=skTiles[skTiles.length-1]; skGhost={x:lt.x,y:lt.y,w:lt.w,h:lt.h}; skSuppressClick=true; }
       skDrag=null; skTiles=null; skRender();
@@ -2885,9 +2889,16 @@ function skBind(){
     var sc=document.getElementById('s-sketch'); if(!sc||!sc.classList.contains('active')) return;
     if(e.key==='Shift'){ skShift=true; skShiftAxis=(skCursor&&skCursor.axis)||null; return; }
     if(e.target&&e.target.tagName==='INPUT') return;
-    // Move tool: Delete/Backspace removes the selected piece
-    if(skMoveMode && skSel && (e.key==='Delete'||e.key==='Backspace')){ e.preventDefault(); skDeleteSel(); return; }
-    if(skMoveMode && e.key==='Escape'){ skSel=null; skRender(); return; }
+    // Tool shortcuts (Ctrl/Cmd): M=move  L=line/pointer  H=harvest  C=copy  V=paste
+    var ctrl=e.ctrlKey||e.metaKey;
+    if(ctrl && (e.key==='m'||e.key==='M')){ e.preventDefault(); skToggleMove(); return; }
+    if(ctrl && (e.key==='l'||e.key==='L')){ e.preventDefault(); var inDraw=!skMoveMode&&!skPanelProd&&!skHoleDraw; skSetLineMode(!inDraw); return; }
+    if(ctrl && (e.key==='h'||e.key==='H')){ e.preventDefault(); skHarvestOffcuts(); return; }
+    if(ctrl && (e.key==='c'||e.key==='C') && skSel.length){ e.preventDefault(); skCopySel(); return; }
+    if(ctrl && (e.key==='v'||e.key==='V') && skClip.length){ e.preventDefault(); skPaste(); return; }
+    // Move tool: Delete removes the selection, Esc deselects
+    if(skMoveMode && skSel.length && (e.key==='Delete'||e.key==='Backspace')){ e.preventDefault(); skDeleteSel(); return; }
+    if(skMoveMode && e.key==='Escape'){ skSel=[]; skMarquee=null; skRender(); return; }
     var inp=document.getElementById('sk-len'), typing=inp&&inp.value.trim()!=='';
     // SketchUp-style: just type a number (metres) to set the exact length.
     // Accept the numpad decimal/Del key and comma as the decimal separator (e.g. 2,9 m).
@@ -2936,7 +2947,11 @@ function skNearestCoord(verts,key,val,exclude){ var best=null,bd=SK_ALIGN; for(v
 function skMove(e){
   if(skPanning) return; // pan handled on the window
   skRaw=skPt(e);
-  if(skMoveMode){ if(skGrab && skSel && (e.buttons&1)){ skGrab.moved=true; var np=skSnapCorners(skRaw.x-skGrab.dx, skRaw.y-skGrab.dy, skSel.obj.w, skSel.obj.h, skSel.obj); skSel.obj.x=np.x; skSel.obj.y=np.y; skRender(); } skCursor=null; skGhost=null; return; }
+  if(skMoveMode){
+    if(skGrab && (e.buttons&1)){ skGrab.moved=true; var ddx=skRaw.x-skGrab.ox, ddy=skRaw.y-skGrab.oy; skSel.forEach(function(s){ s.obj.x+=ddx; s.obj.y+=ddy; }); skGrab.ox=skRaw.x; skGrab.oy=skRaw.y; skRender(); }
+    else if(skMarquee && (e.buttons&1)){ skMarquee.x1=skRaw.x; skMarquee.y1=skRaw.y; skRender(); }
+    skCursor=null; skGhost=null; return;
+  }
   if(skHoleDraw){ skHoleGhost=skOpeningSnap(skRaw); skCursor=null; skGhost=null; skRender(); return; }
   if(skPanelProd){
     // tile only once the drag clearly exceeds a small threshold, so a light click still places one panel
@@ -2985,7 +3000,7 @@ function skCommitLen(){
 function skLenKey(e){ if(e.key==='Enter'){ e.preventDefault(); skCommitLen(); } }
 function skUndo(){ if(skHoleDraw&&skHoles.length){ skHoles.pop(); skRender(); return; } if(skPanelProd&&skPanels.length) skPanels.pop(); else if(skCur.length>0) skCur.pop(); else if(skOffcuts.length) skOffcuts.pop(); else if(skPanels.length) skPanels.pop(); else if(skHoles.length) skHoles.pop(); else if(skPaths.length>0) skPaths.pop(); skRender(); }
 function skFinish(){ if(skCur.length>=2) skPaths.push({pts:skCur.slice(),closed:false}); skCur=[]; skRender(); }
-function skClear(){ if((skPaths.length||skCur.length||skPanels.length||skHoles.length||skOffcuts.length)&&confirm('Clear the drawing? / ล้างภาพวาด?')){ skPaths=[]; skCur=[]; skPanels=[]; skHoles=[]; skOffcuts=[]; skPieceSeq=0; skBoardSeq=0; skPanX=0; skPanY=0; skSel=null; if(skHoleDraw) skToggleHole(); if(skMoveMode) skToggleMove(); if(skPanelProd&&skPanelProd._remnant) skStopPanel(); skRender(); } }
+function skClear(){ if((skPaths.length||skCur.length||skPanels.length||skHoles.length||skOffcuts.length)&&confirm('Clear the drawing? / ล้างภาพวาด?')){ skPaths=[]; skCur=[]; skPanels=[]; skHoles=[]; skOffcuts=[]; skPieceSeq=0; skBoardSeq=0; skPanX=0; skPanY=0; skSel=[]; skGrab=null; skMarquee=null; if(skHoleDraw) skToggleHole(); if(skMoveMode) skToggleMove(); if(skPanelProd&&skPanelProd._remnant) skStopPanel(); skRender(); } }
 // ── Panel placement ──
 function skFindProduct(code){
   var c=(code||'').trim().toUpperCase(); if(!c) return null;
@@ -3090,7 +3105,7 @@ function skRenderTray(){
 }
 // ── Openings (doors/windows) ── dimensioned ghost you position, snapping to wall
 // points AND edges, with 4-way distance guides; click drops it and cuts the wall.
-function skToggleHole(){ skHoleDraw=!skHoleDraw; if(skHoleDraw){ if(skPanelProd) skStopPanel(); if(skMoveMode){ skMoveMode=false; skSel=null; var mb=document.getElementById('sk-move-btn'); if(mb){ mb.style.background='transparent'; mb.style.color='var(--text)'; } var sv=skSvg(); if(sv) sv.style.cursor='crosshair'; } } skHoleGhost=null; skOpDims();
+function skToggleHole(){ skHoleDraw=!skHoleDraw; if(skHoleDraw){ if(skPanelProd) skStopPanel(); if(skMoveMode){ skMoveMode=false; skSel=[]; skGrab=null; skMarquee=null; var mb=document.getElementById('sk-move-btn'); if(mb){ mb.style.background='transparent'; mb.style.color='var(--text)'; } var sv=skSvg(); if(sv) sv.style.cursor='crosshair'; } } skHoleGhost=null; skOpDims();
   var row=document.getElementById('sk-op-row'); if(row) row.style.display=skHoleDraw?'flex':'none';
   var b=document.getElementById('sk-hole-btn'); if(b){ b.style.background=skHoleDraw?'#0f172a':'transparent'; b.style.color=skHoleDraw?'#fff':'var(--text)'; }
   skRender(); }
@@ -3113,17 +3128,36 @@ function skHoleCovPanel(pn){ var a=0; skHoles.forEach(function(hr){ var cp=skPol
 // Material accounting reuses the existing src logic: a dropped offcut that installs becomes
 // a panel with src=source → counted as reused, its parent's cut no longer scrap. board.seg
 // are just labels for the user to trace which physical board a piece came from.
-function skToggleMove(){ skMoveMode=!skMoveMode; if(skMoveMode){ if(skPanelProd) skStopPanel(); if(skHoleDraw) skToggleHole(); } skSel=null; skGrab=null;
+function skToggleMove(){ skMoveMode=!skMoveMode; if(skMoveMode){ if(skPanelProd) skStopPanel(); if(skHoleDraw) skToggleHole(); } skSel=[]; skGrab=null; skMarquee=null;
   var b=document.getElementById('sk-move-btn'); if(b){ b.style.background=skMoveMode?'#7c3aed':'transparent'; b.style.color=skMoveMode?'#fff':'var(--text)'; }
-  var svg=skSvg(); if(svg) svg.style.cursor=skMoveMode?'move':'crosshair';
+  var svg=skSvg(); if(svg) svg.style.cursor=skMoveMode?'default':'crosshair';
   skRender(); }
+function skSetLineMode(on){ // on = draw/set-point (line); off = normal pointer (select/move)
+  if(on){ if(skMoveMode) skToggleMove(); if(skPanelProd) skStopPanel(); if(skHoleDraw) skToggleHole(); }
+  else { if(!skMoveMode) skToggleMove(); }
+}
 function skInRect(pt,r){ return pt.x>=r.x && pt.x<=r.x+r.w && pt.y>=r.y && pt.y<=r.y+r.h; }
 function skHitPiece(pt){ // offcuts sit on top; test them first, then installed panels, topmost first
   for(var i=skOffcuts.length-1;i>=0;i--){ if(skInRect(pt,skOffcuts[i])) return {obj:skOffcuts[i],kind:'offcut'}; }
   for(var j=skPanels.length-1;j>=0;j--){ if(skInRect(pt,skPanels[j])) return {obj:skPanels[j],kind:'panel'}; }
   return null;
 }
-function skDeleteSel(){ if(!skSel) return; var arr=skSel.kind==='offcut'?skOffcuts:skPanels, i=arr.indexOf(skSel.obj); if(i>=0) arr.splice(i,1); skSel=null; skGrab=null; skRender(); skFlash('🗑 Deleted'); }
+function skSelHas(o){ return skSel.some(function(s){ return s.obj===o; }); }
+function skNorm(m){ return {x:Math.min(m.x0,m.x1), y:Math.min(m.y0,m.y1), w:Math.abs(m.x1-m.x0), h:Math.abs(m.y1-m.y0)}; }
+function skRectHit(r,b){ return !(r.x>b.x+b.w || r.x+r.w<b.x || r.y>b.y+b.h || r.y+r.h<b.y); } // any overlap
+// Snap correction {dx,dy} for a moved piece: to the wall tiling grid if near, else corner/edge.
+function skSnapPiece(o){ var bb=skWallBBox(), w=o.w, h=o.h, cx=o.x+w/2, cy=o.y+h/2;
+  if(bb && cx>bb.minX-w && cx<bb.maxX+w && cy>bb.minY-h && cy<bb.maxY+h){ return {dx:(bb.minX+Math.round((o.x-bb.minX)/w)*w)-o.x, dy:(bb.maxY-h-Math.round((bb.maxY-h-o.y)/h)*h)-o.y}; }
+  var np=skSnapCorners(o.x,o.y,w,h,o); return {dx:np.x-o.x, dy:np.y-o.y};
+}
+function skDeleteSel(){ if(!skSel.length) return; var n=skSel.length; skSel.forEach(function(s){ var arr=s.kind==='offcut'?skOffcuts:skPanels, i=arr.indexOf(s.obj); if(i>=0) arr.splice(i,1); }); skSel=[]; skGrab=null; skRender(); skFlash('🗑 Deleted '+n); }
+// Ctrl+C: snapshot the selection to the clipboard.
+function skCopySel(){ if(!skSel.length) return; skClip=skSel.map(function(s){ var o=s.obj; return {kind:s.kind, x:o.x, y:o.y, w:o.w, h:o.h, code:o.code, board:o.board, seg:o.seg}; }); skFlash('⧉ Copied '+skClip.length); }
+// Ctrl+V: paste the clipboard (offset), select the new copies so they can be dragged.
+function skPaste(){ if(!skClip.length) return; var off=18/skRealPerPx(); skSel=[]; if(!skMoveMode) skToggleMove();
+  skClip.forEach(function(c){ if(c.kind==='panel'){ var p=skNewPiece(c.x+off,c.y+off,c.w,c.h,c.code,null); skPanels.push(p); skSel.push({obj:p,kind:'panel'}); }
+    else { var o={x:c.x+off,y:c.y+off,w:c.w,h:c.h,code:c.code,board:c.board,seg:c.seg}; skOffcuts.push(o); skSel.push({obj:o,kind:'offcut'}); } });
+  skRender(); skFlash('⧉ Pasted '+skClip.length+' — drag them'); }
 function skMoveSnapPts(exclude){ var pts=skAllVerts().slice();
   skPanels.forEach(function(p){ if(p===exclude) return; pts.push({x:p.x,y:p.y},{x:p.x+p.w,y:p.y},{x:p.x,y:p.y+p.h},{x:p.x+p.w,y:p.y+p.h}); });
   skOffcuts.forEach(function(p){ if(p===exclude) return; pts.push({x:p.x,y:p.y},{x:p.x+p.w,y:p.y},{x:p.x,y:p.y+p.h},{x:p.x+p.w,y:p.y+p.h}); });
@@ -3139,20 +3173,21 @@ function skParkPiece(p){ var bb=skWallBBox(), gap=20/skRealPerPx(); var x=(bb?bb
 // board.1); its overhang stays exactly in place as a grabbable offcut (board.2). Harvesting a
 // loose offcut installs its in-wall part (reused) and leaves its overhang as the next segment.
 function skHarvestOffcuts(){
-  if(!skSel){ if(!skMoveMode) skToggleMove(); skFlash('Tap a piece (Move tool), then Harvest'); return; }
+  if(!skSel.length){ if(!skMoveMode) skToggleMove(); skFlash('Select piece(s), then Harvest'); return; }
   var bb=skWallBBox(); if(!bb){ alert('Draw a closed wall first. / วาดผนังปิดก่อน'); return; }
-  var t=skSel.obj, Ytop=bb.minY, walls=skWallPolys();
-  var overlaps = walls.some(function(wp){ return skPolyClip(wp.pts,skPanelRect(t)).length>=3; });
-  if(!(overlaps && t.y<Ytop-2 && (t.y+t.h)-Ytop>3)){ alert('This piece has no overhang above the wall to cut. / ไม่มีส่วนเกิน'); return; }
-  if(!t.board){ t.board=++skBoardSeq; t.seg=1; }
-  var overhangH=Ytop-t.y, inWallH=(t.y+t.h)-Ytop;
-  var ov={x:t.x, y:t.y, w:t.w, h:overhangH, code:t.code, board:t.board, seg:skBoardMaxSeg(t.board)+1};
-  if(skSel.kind==='panel'){ t.y=Ytop; t.h=inWallH; }        // trim the installed panel → board.1
-  else { var i=skOffcuts.indexOf(t); if(i>=0) skOffcuts.splice(i,1);
-    skPanels.push({x:t.x,y:Ytop,w:t.w,h:inWallH,code:t.code,n:++skPieceSeq,reused:true,board:t.board,seg:t.seg}); }
-  skOffcuts.push(ov);
-  skSel={obj:ov,kind:'offcut'};                             // keep the fresh offcut selected to drag next
-  skRender(); skFlash('✂ Cut → '+ov.board+'.'+ov.seg);
+  var Ytop=bb.minY, walls=skWallPolys(), targets=skSel.slice(), newSel=[], done=0;
+  targets.forEach(function(sd){
+    var t=sd.obj, overlaps=walls.some(function(wp){ return skPolyClip(wp.pts,skPanelRect(t)).length>=3; });
+    if(!(overlaps && t.y<Ytop-2 && (t.y+t.h)-Ytop>3)) return;   // no overhang to cut → skip
+    if(!t.board){ t.board=++skBoardSeq; t.seg=1; }
+    var overhangH=Ytop-t.y, inWallH=(t.y+t.h)-Ytop, ov={x:t.x,y:t.y,w:t.w,h:overhangH,code:t.code,board:t.board,seg:skBoardMaxSeg(t.board)+1};
+    if(sd.kind==='panel'){ t.y=Ytop; t.h=inWallH; }            // trim the installed panel → board.1
+    else { var i=skOffcuts.indexOf(t); if(i>=0) skOffcuts.splice(i,1);
+      skPanels.push({x:t.x,y:Ytop,w:t.w,h:inWallH,code:t.code,n:++skPieceSeq,reused:true,board:t.board,seg:t.seg}); }
+    skOffcuts.push(ov); newSel.push({obj:ov,kind:'offcut'}); done++;
+  });
+  if(!done){ alert('None of the selected pieces overhang the wall to cut. / ไม่มีส่วนเกิน'); return; }
+  skSel=newSel; skRender(); skFlash('✂ Cut '+done+' piece'+(done>1?'s':''));   // select the fresh offcuts
 }
 // ── Auto-fill the wall(s) with the selected panel ──
 function skFillArea(){
@@ -3237,12 +3272,14 @@ function skRender(){
     pts.forEach(function(v){ out+=skDot(v.x,v.y,'#2563eb'); });
   });
   // loose offcut pieces (draggable in Move mode): amber, labelled board.seg + size
-  skOffcuts.forEach(function(oc){ var selc=(skSel&&skSel.obj===oc);
+  skOffcuts.forEach(function(oc){ var selc=skSelHas(oc);
     out+=skRect(oc.x,oc.y,oc.w,oc.h,'rgba(245,158,11,0.28)',selc?'#7c3aed':'#f59e0b','4 3');
     out+=skLabel(oc.x+oc.w/2,oc.y+oc.h/2-6,oc.board+'.'+oc.seg,'#b45309');
     out+=skLabel(oc.x+oc.w/2,oc.y+oc.h/2+8,Math.round(oc.w*skRealPerPx())+'×'+Math.round(oc.h*skRealPerPx())+'','#b45309');
   });
-  if(skSel && skSel.kind==='panel'){ var sp=skSel.obj; out+=skRect(sp.x,sp.y,sp.w,sp.h,'none','#7c3aed',null); }
+  // selection highlight (all selected pieces) + rubber-band box
+  skSel.forEach(function(s){ var o=s.obj; out+='<rect x="'+o.x+'" y="'+o.y+'" width="'+o.w+'" height="'+o.h+'" fill="rgba(124,58,237,0.12)" stroke="#7c3aed" stroke-width="2"/>'; });
+  if(skMarquee){ var b=skNorm(skMarquee); out+='<rect x="'+b.x+'" y="'+b.y+'" width="'+b.w+'" height="'+b.h+'" fill="rgba(124,58,237,0.10)" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4 3"/>'; }
   // openings (doors/windows): opaque cut-outs on top, with an ✕ and their size
   skHoles.forEach(function(hr){
     out+=skRect(hr.x,hr.y,hr.w,hr.h,'var(--bg)','#0f172a','5 3');
@@ -3378,6 +3415,7 @@ function skBBox(){
 // Build a standalone (CSS-var-free) SVG of the whole sketch + a stats footer.
 function skExportSVG(){
   var bb=skBBox(); if(!bb) return null;
+  var M=Math.max(26,(bb.maxX-bb.minX)*0.05); bb={minX:bb.minX-M,maxX:bb.maxX+M,minY:bb.minY-M,maxY:bb.maxY+M}; // margin so edge labels aren't clipped
   var pad=40, drawW=Math.max(60,bb.maxX-bb.minX), drawH=Math.max(60,bb.maxY-bb.minY);
   var scale=Math.min(2.2, 900/drawW), DW=Math.round(drawW*scale), DH=Math.round(drawH*scale);
   var walls=skWallPolys(), bands=skWallXBands(), inner='';
