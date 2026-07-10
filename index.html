@@ -957,6 +957,11 @@ textarea{resize:none}
 
   <div style="padding:0 0 80px">
 
+    <!-- Wall sketch entry -->
+    <div class="sec" style="margin-bottom:0;border-bottom:2px solid var(--border)">
+      <button type="button" onclick="go('sketch')" style="width:100%;padding:12px;border-radius:var(--rs);border:1.5px solid var(--blue);background:var(--blue-bg);color:var(--blue);font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px"><i class="ti ti-pencil"></i> Draw area (2D) / วาดพื้นที่ · SketchUp-style</button>
+    </div>
+
     <!-- Panel Config -->
     <div class="sec" style="margin-bottom:0;border-bottom:2px solid var(--border)">
       <div class="stit" style="margin-bottom:10px">📐 Panel Size / ขนาดแผ่น</div>
@@ -1025,6 +1030,50 @@ textarea{resize:none}
     <!-- Results -->
     <div class="sec" id="calc-results" style="border-top:2px solid var(--border)"></div>
 
+  </div>
+</div></div>
+
+<!-- WALL SKETCH — SketchUp-style 2D line tool -->
+<div class="screen" id="s-sketch"><div class="pb">
+  <div class="header">
+    <button type="button" class="back-btn" onclick="go('calc')"><i class="ti ti-arrow-left"></i></button>
+    <div><div class="h-title">Wall Sketch / วาดพื้นที่</div><div class="h-sub">2D · click to draw · axis lock</div></div>
+  </div>
+  <div style="padding:8px 12px 60px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+      <label style="font-size:12px;color:var(--text2);font-weight:600">Scale 1 :</label>
+      <select id="sk-scale" onchange="skSetScale()" class="finp" style="width:auto;padding:6px 8px;margin:0">
+        <option value="20">20</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+      </select>
+      <button type="button" class="btn" style="width:auto;margin:0;flex:none;padding:6px 12px" onclick="skUndo()"><i class="ti ti-arrow-back-up"></i> Undo</button>
+      <button type="button" class="btn" style="width:auto;margin:0;flex:none;padding:6px 12px" onclick="skFinish()"><i class="ti ti-check"></i> Finish</button>
+      <button type="button" class="btn" style="width:auto;margin:0;flex:none;padding:6px 12px;border-color:#dc2626;color:#dc2626" onclick="skClear()"><i class="ti ti-trash"></i> Clear</button>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <span style="font-size:12px;color:var(--text2)">Length (m):</span>
+      <input id="sk-len" type="number" min="0" step="0.01" placeholder="type + Enter" onkeydown="skLenKey(event)" class="finp" style="width:110px;padding:6px 8px;margin:0">
+      <span id="sk-hint" style="font-size:12px;color:var(--text2);font-weight:600"></span>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap;padding:6px 8px;background:rgba(220,38,38,0.06);border:1px dashed #dc2626;border-radius:var(--rs)">
+      <span style="font-size:12px;color:#dc2626;font-weight:700">🟥 Panel:</span>
+      <input id="sk-prod" type="text" placeholder="e.g. KP054" oninput="skProd()" class="finp" style="width:120px;padding:6px 8px;margin:0;text-transform:uppercase">
+      <span id="sk-prod-info" style="font-size:12px;font-weight:600;color:var(--text2)"></span>
+      <button type="button" class="btn" id="sk-prod-stop" style="display:none;width:auto;margin:0;flex:none;padding:6px 10px;border-color:#dc2626;color:#dc2626" onclick="skStopPanel()">✕ stop</button>
+    </div>
+    <div id="sk-canvas-wrap" style="border:1px solid var(--border);border-radius:var(--rs);overflow:hidden;background:var(--bg);touch-action:none">
+      <svg id="sk-svg" style="display:block;width:100%;height:60vh;cursor:crosshair;-webkit-user-select:none;user-select:none"></svg>
+    </div>
+    <div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.6">
+      Click = set point · line follows the cursor · click again = next point.
+      Near horizontal/vertical it <b style="color:#dc2626">locks red</b> / <b style="color:#16a34a">green</b>; hold <b>Shift</b> to keep the lock.
+      <b>Just type a number</b> (metres) + Enter to set the exact length. Cursor lines up with other points (dashed guide).
+      Enter a <b style="color:#dc2626">panel code</b> to drop panels (w × 2.9 m) and see how many fit + the waste.
+      Click the first point to close the shape. <b>Esc</b> cancels, <b>Enter</b>/Finish ends the line.
+    </div>
+    <div id="sk-stats" style="margin-top:10px"></div>
   </div>
 </div></div>
 
@@ -2638,6 +2687,7 @@ function go(s){
   if(s==='calc')calcInit();
   if(s==='quote')qtInit();
   if(s==='count')cntInit();
+  if(s==='sketch')skInit();
 }
 function back(){document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));document.getElementById('s-menu').classList.add('active');window.scrollTo(0,0);try{kpcSyncFab();}catch(e){}try{kpUpdMenuUser();}catch(e){}}
 
@@ -2760,6 +2810,266 @@ function cntPanUp(){
 }
 // True (and self-resetting) if the last press was a drag, so click handlers skip.
 function cntWasPan(){ if(cntPanMoved){ cntPanMoved=false; return true; } return false; }
+
+// ── WALL SKETCH — SketchUp-style 2D line tool ───────────────────────
+// Click to drop points; the next segment rubber-bands off the cursor. Segments
+// snap (lock) to horizontal/vertical and to parallel/perpendicular of the last
+// segment, SketchUp-style, with the length shown along each line. 1 screen-cm =
+// <scale> real-cm (default 1:50). Closed shapes report their area (m²).
+var SK_PXCM=96/2.54;          // CSS px in one real screen-cm (~37.8)
+var SK_ENDPOINT=12;           // px radius for point-snapping
+var SK_ALIGN=8;               // px radius for horizontal/vertical alignment to other points
+var SK_SNAP=6*Math.PI/180;    // axis-lock angular threshold
+var SK_PANEL_H=290;           // panel height is always 2.9 m (cm)
+var skScale=50, skPaths=[], skCur=[], skCursor=null, skRaw=null, skShift=false, skShiftAxis=null, skBound=false;
+var skPanelProd=null, skPanels=[], skGhost=null;  // panel placement mode
+function skRealPerPx(){ return skScale/SK_PXCM; }   // real cm per screen px
+function skSvg(){ return document.getElementById('sk-svg'); }
+function skInit(){ if(!skBound){ skBind(); skBound=true; } var sc=document.getElementById('sk-scale'); if(sc) skScale=+sc.value||50; skRender(); }
+function skPt(e){ var s=skSvg(),r=s.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+function skBind(){
+  var s=skSvg(); if(!s) return;
+  s.addEventListener('mousemove',skMove);
+  s.addEventListener('click',skClick);
+  s.addEventListener('mouseleave',function(){ skCursor=null; skGhost=null; skRender(); });
+  s.addEventListener('touchmove',function(e){ if(e.touches[0]){ skMove(e.touches[0]); e.preventDefault(); } },{passive:false});
+  s.addEventListener('touchend',function(e){ var t=e.changedTouches&&e.changedTouches[0]; if(t){ skMove(t); skClick(t); } });
+  document.addEventListener('keydown',function(e){
+    var sc=document.getElementById('s-sketch'); if(!sc||!sc.classList.contains('active')) return;
+    if(e.key==='Shift'){ skShift=true; skShiftAxis=(skCursor&&skCursor.axis)||null; return; }
+    if(e.target&&e.target.tagName==='INPUT') return;
+    var inp=document.getElementById('sk-len'), typing=inp&&inp.value.trim()!=='';
+    // SketchUp-style: just type a number (metres) to set the exact length.
+    if(/^[0-9]$/.test(e.key)||e.key==='.'||e.key===','){ if(skCur.length>0){ inp.value+=(e.key===','?'.':e.key); e.preventDefault(); skRender(); } return; }
+    if(e.key==='Enter'){ if(skCur.length>0&&typing) skCommitLen(); else skFinish(); }
+    else if(e.key==='Backspace'){ e.preventDefault(); if(typing){ inp.value=inp.value.slice(0,-1); skRender(); } else skUndo(); }
+    else if(e.key==='Escape'){ if(typing){ inp.value=''; skRender(); } else { skCur=[]; skRender(); } }
+  });
+  document.addEventListener('keyup',function(e){ if(e.key==='Shift'){ skShift=false; skShiftAxis=null; } });
+  window.addEventListener('resize',function(){ var sc=document.getElementById('s-sketch'); if(sc&&sc.classList.contains('active')) skRender(); });
+}
+function skAllVerts(){ var v=[]; skPaths.forEach(function(p){ p.pts.forEach(function(pt){ v.push(pt); }); }); skCur.forEach(function(pt){ v.push(pt); }); return v; }
+function skPrevDir(){ if(skCur.length>=2){ var a=skCur[skCur.length-2],b=skCur[skCur.length-1]; var dx=b.x-a.x,dy=b.y-a.y,L=Math.hypot(dx,dy); if(L>0.5) return {x:dx/L,y:dy/L}; } return null; }
+// Compute a snapped preview point (endpoint snap → axis / perpendicular lock).
+function skSnap(raw){
+  var res={x:raw.x,y:raw.y,axis:null,color:null,name:''};
+  var anchor = skCur.length? skCur[skCur.length-1] : null;
+  // 1) Snap to an existing point.
+  var verts=skAllVerts(), best=null, bd=SK_ENDPOINT;
+  for(var i=0;i<verts.length;i++){ var v=verts[i]; if(anchor&&v===anchor) continue; var d=Math.hypot(v.x-raw.x,v.y-raw.y); if(d<bd){ bd=d; best=v; } }
+  if(best){ res.x=best.x; res.y=best.y; res.name='point'; return res; }
+  if(!anchor) return res;
+  var dx=raw.x-anchor.x, dy=raw.y-anchor.y, L=Math.hypot(dx,dy);
+  if(L<0.5) return res;
+  // 2) Axis / inference lock.
+  var cands=[{v:{x:1,y:0},color:'#dc2626',name:'horizontal'},{v:{x:0,y:1},color:'#16a34a',name:'vertical'}];
+  var prev=skPrevDir();
+  if(prev){ cands.push({v:prev,color:'#d946ef',name:'parallel'}); cands.push({v:{x:-prev.y,y:prev.x},color:'#d946ef',name:'perpendicular'}); }
+  var chosen=null;
+  if(skShift&&skShiftAxis){ chosen=skShiftAxis; }
+  else { var cbest=SK_SNAP; for(var j=0;j<cands.length;j++){ var a=cands[j].v; var dot=(dx*a.x+dy*a.y)/L; var ang=Math.acos(Math.min(1,Math.abs(dot))); if(ang<cbest){ cbest=ang; chosen=cands[j]; } } }
+  if(chosen){ var a2=chosen.v; var t=dx*a2.x+dy*a2.y; res.x=anchor.x+a2.x*t; res.y=anchor.y+a2.y*t; res.axis=chosen; res.color=chosen.color; res.name=chosen.name; }
+  // 3) Alignment inference: snap the free coordinate so the point lines up
+  //    vertically / horizontally with an existing point (dashed guide shown).
+  var slanted = res.axis && (res.name==='parallel'||res.name==='perpendicular');
+  if(!slanted){
+    var lockX=(res.name==='vertical'), lockY=(res.name==='horizontal'), guides=[];
+    if(!lockX){ var vx=skNearestCoord(verts,'x',res.x,anchor); if(vx){ res.x=vx.x; guides.push({x1:vx.x,y1:vx.y,x2:res.x,y2:res.y}); res.aligned=true; } }
+    if(!lockY){ var vy=skNearestCoord(verts,'y',res.y,anchor); if(vy){ res.y=vy.y; guides.push({x1:vy.x,y1:vy.y,x2:res.x,y2:res.y}); res.aligned=true; } }
+    if(guides.length) res.guides=guides;
+  }
+  return res;
+}
+function skNearestCoord(verts,key,val,exclude){ var best=null,bd=SK_ALIGN; for(var i=0;i<verts.length;i++){ var v=verts[i]; if(v===exclude) continue; var d=Math.abs(v[key]-val); if(d<bd){ bd=d; best=v; } } return best; }
+function skMove(e){ skRaw=skPt(e); if(skPanelProd){ skGhost=skPanelSnap(skRaw); skCursor=null; } else { skCursor=skSnap(skRaw); } skRender(); }
+function skClick(e){
+  if(skPanelProd){ var g=skPanelSnap(skPt(e)); skPanels.push({x:g.x,y:g.y,w:g.w,h:g.h,code:skPanelProd.code}); skGhost=g; skRender(); return; }
+  var s=skSnap(skPt(e)); var p={x:s.x,y:s.y};
+  if(skCur.length===0){ skCur.push(p); skRender(); return; }
+  var anchor=skCur[skCur.length-1];
+  if(Math.hypot(p.x-anchor.x,p.y-anchor.y)<3) return; // ignore repeat / zero-length
+  if(skCur.length>=3 && Math.hypot(p.x-skCur[0].x,p.y-skCur[0].y)<SK_ENDPOINT){ // close shape
+    skPaths.push({pts:skCur.slice(),closed:true}); skCur=[]; skRender(); return;
+  }
+  skCur.push(p); skRender();
+}
+// Commit an exact length (metres) along the current cursor direction.
+function skCommitLen(){
+  var inp=document.getElementById('sk-len'); if(!inp) return;
+  var m=parseFloat(inp.value); if(!(m>0)||skCur.length===0){ inp.value=''; skRender(); return; }
+  var anchor=skCur[skCur.length-1], dx=1, dy=0;
+  if(skCursor){ var ddx=skCursor.x-anchor.x, ddy=skCursor.y-anchor.y, L=Math.hypot(ddx,ddy); if(L>0.5){ dx=ddx/L; dy=ddy/L; } }
+  var px=(m*100)/skRealPerPx();
+  skCur.push({x:anchor.x+dx*px, y:anchor.y+dy*px});
+  inp.value=''; skRender();
+}
+function skLenKey(e){ if(e.key==='Enter'){ e.preventDefault(); skCommitLen(); } }
+function skUndo(){ if(skPanelProd&&skPanels.length) skPanels.pop(); else if(skCur.length>0) skCur.pop(); else if(skPanels.length) skPanels.pop(); else if(skPaths.length>0) skPaths.pop(); skRender(); }
+function skFinish(){ if(skCur.length>=2) skPaths.push({pts:skCur.slice(),closed:false}); skCur=[]; skRender(); }
+function skClear(){ if((skPaths.length||skCur.length||skPanels.length)&&confirm('Clear the drawing? / ล้างภาพวาด?')){ skPaths=[]; skCur=[]; skPanels=[]; skRender(); } }
+// ── Panel placement ──
+function skFindProduct(code){
+  var c=(code||'').trim().toUpperCase(); if(!c) return null;
+  var arr=(typeof QT_PRODUCTS!=='undefined'?QT_PRODUCTS:[]);
+  var flat=function(s){ return String(s).toUpperCase().replace(/[^A-Z0-9]/g,''); };
+  return arr.find(function(x){ return String(x.code).toUpperCase()===c; })
+      || arr.find(function(x){ return flat(x.code)===flat(c); }) || null;
+}
+function skProd(){
+  var inp=document.getElementById('sk-prod'), info=document.getElementById('sk-prod-info'), stop=document.getElementById('sk-prod-stop');
+  var p=skFindProduct(inp.value);
+  if(p && +p.w>0){ skPanelProd=p; info.textContent=p.w+' cm × '+(SK_PANEL_H/100)+' m'+(p.name?' · '+p.name:''); info.style.color='#dc2626'; stop.style.display=''; }
+  else { skPanelProd=null; skGhost=null; info.textContent=inp.value.trim()?'not found / ไม่พบ':''; info.style.color='var(--text2)'; stop.style.display='none'; }
+  skRender();
+}
+function skStopPanel(){ skPanelProd=null; skGhost=null; var inp=document.getElementById('sk-prod'); if(inp) inp.value=''; skProd(); }
+function skPanelDims(){ return { w:(+skPanelProd.w)/skRealPerPx(), h:SK_PANEL_H/skRealPerPx() }; }
+function skSnapPoints(){ var pts=skAllVerts().slice(); skPanels.forEach(function(pn){ pts.push({x:pn.x,y:pn.y},{x:pn.x+pn.w,y:pn.y},{x:pn.x,y:pn.y+pn.h},{x:pn.x+pn.w,y:pn.y+pn.h}); }); return pts; }
+// Rectangle centred on the cursor; nudge so its nearest corner snaps to a point.
+function skPanelSnap(center){
+  var d=skPanelDims(), w=d.w, h=d.h, tlx=center.x-w/2, tly=center.y-h/2;
+  var corners=[{x:tlx,y:tly},{x:tlx+w,y:tly},{x:tlx,y:tly+h},{x:tlx+w,y:tly+h}];
+  var pts=skSnapPoints(), off=null, bd=SK_ENDPOINT;
+  corners.forEach(function(c){ pts.forEach(function(s){ var ox=s.x-c.x, oy=s.y-c.y, dd=Math.hypot(ox,oy); if(dd<bd){ bd=dd; off={x:ox,y:oy}; } }); });
+  if(off){ tlx+=off.x; tly+=off.y; }
+  return {x:tlx,y:tly,w:w,h:h};
+}
+function skSetScale(){ var sc=document.getElementById('sk-scale'); skScale=(sc&&+sc.value)||50; skRender(); }
+// ── drawing helpers ──
+function skFmt(px){ var cm=px*skRealPerPx(); return cm>=100 ? (cm/100).toFixed(2)+' m' : Math.round(cm)+' cm'; }
+function skLine(x1,y1,x2,y2,stroke,w,dash){ return '<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+stroke+'" stroke-width="'+(w||1)+'"'+(dash?' stroke-dasharray="'+dash+'"':'')+' stroke-linecap="round"/>'; }
+function skDot(x,y,color){ return '<circle cx="'+x+'" cy="'+y+'" r="3.5" fill="'+(color||'#2563eb')+'" stroke="var(--bg)" stroke-width="1.5"/>'; }
+function skLabel(x,y,txt,color){ return '<text x="'+x+'" y="'+y+'" text-anchor="middle" dominant-baseline="middle" style="paint-order:stroke;stroke:var(--bg);stroke-width:3.5px;fill:'+(color||'var(--text)')+';font-size:12px;font-weight:800;font-family:inherit">'+txt+'</text>'; }
+function skSegLabel(a,b){ var mx=(a.x+b.x)/2,my=(a.y+b.y)/2, dx=b.x-a.x,dy=b.y-a.y, L=Math.hypot(dx,dy); if(L<8) return ''; var ox=-dy/L*11, oy=dx/L*11; return skLabel(mx+ox,my+oy,skFmt(L)); }
+function skAreaPx(pts){ var a=0; for(var i=0;i<pts.length;i++){ var j=(i+1)%pts.length; a+=pts[i].x*pts[j].y-pts[j].x*pts[i].y; } return Math.abs(a)/2; }
+function skCentroid(pts){ var x=0,y=0; pts.forEach(function(p){ x+=p.x; y+=p.y; }); return {x:x/pts.length, y:y/pts.length}; }
+function skRect(x,y,w,h,fill,stroke,dash){ return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="'+fill+'"'+((stroke&&stroke!=='none')?' stroke="'+stroke+'" stroke-width="1.5"'+(dash?' stroke-dasharray="'+dash+'"':''):' stroke="none"')+'/>'; }
+function skWallPolys(){ return skPaths.filter(function(p){ return p.closed && p.pts.length>2; }); }
+// Horizontal (x) extent of each wall — the columns that count as "over the wall".
+// A panel column inside such a band that sticks out above/below the wall is a
+// height CUT (ตัด), not side waste.
+function skWallXBands(){ return skWallPolys().map(function(p){ var xs=p.pts.map(function(v){return v.x;}); return {min:Math.min.apply(null,xs), max:Math.max.apply(null,xs)}; }); }
+// Length of [x0,x1] covered by the union of the wall x-bands (px).
+function skCoveredWidth(x0,x1,bands){
+  var segs=[]; bands.forEach(function(b){ var lo=Math.max(x0,b.min), hi=Math.min(x1,b.max); if(hi>lo) segs.push([lo,hi]); });
+  if(!segs.length) return 0; segs.sort(function(a,b){return a[0]-b[0];});
+  var tot=0, cs=segs[0][0], ce=segs[0][1];
+  for(var i=1;i<segs.length;i++){ if(segs[i][0]>ce){ tot+=ce-cs; cs=segs[i][0]; ce=segs[i][1]; } else ce=Math.max(ce,segs[i][1]); }
+  return tot+(ce-cs);
+}
+function skRender(){
+  var s=skSvg(); if(!s) return;
+  var W=s.clientWidth||600, H=s.clientHeight||400, out='';
+  var gpx=100/skRealPerPx(); // grid every 1 real metre
+  if(gpx>=6){ var g=''; for(var gx=gpx; gx<W; gx+=gpx) g+=skLine(gx,0,gx,H,'var(--border)',1); for(var gy=gpx; gy<H; gy+=gpx) g+=skLine(0,gy,W,gy,'var(--border)',1); out+='<g opacity="0.4">'+g+'</g>'; }
+  var walls=skWallPolys();
+  // wall fills / open lines (below panels)
+  skPaths.forEach(function(p){
+    var pts=p.pts; if(pts.length<2) return;
+    if(p.closed) out+='<polygon points="'+pts.map(function(v){return v.x+','+v.y;}).join(' ')+'" fill="rgba(37,99,235,0.10)" stroke="#2563eb" stroke-width="2" stroke-linejoin="round"/>';
+    else { for(var i=1;i<pts.length;i++) out+=skLine(pts[i-1].x,pts[i-1].y,pts[i].x,pts[i].y,'#2563eb',2); }
+  });
+  // panels: full = light red; part inside the wall = strong red (clipped). The
+  // lighter overhang beyond the wall outline is the visible offcut / waste.
+  if(skPanels.length){
+    skPanels.forEach(function(pn){ out+=skRect(pn.x,pn.y,pn.w,pn.h,'rgba(220,38,38,0.14)','#dc2626','4 3'); }); // base tone = side waste
+    if(walls.length){
+      var bands=skWallXBands();
+      out+='<defs><clipPath id="skbandclip">'+bands.map(function(b){ return '<rect x="'+b.min+'" y="0" width="'+(b.max-b.min)+'" height="'+H+'"/>'; }).join('')
+          +'</clipPath><clipPath id="skwallclip">'+walls.map(function(p){ return '<polygon points="'+p.pts.map(function(v){return v.x+','+v.y;}).join(' ')+'"/>'; }).join('')+'</clipPath></defs>';
+      var band=''; skPanels.forEach(function(pn){ band+=skRect(pn.x,pn.y,pn.w,pn.h,'rgba(245,158,11,0.32)','none',null); }); // amber = over-wall columns (cut region)
+      out+='<g clip-path="url(#skbandclip)">'+band+'</g>';
+      var inside=''; skPanels.forEach(function(pn){ inside+=skRect(pn.x,pn.y,pn.w,pn.h,'rgba(220,38,38,0.34)','none',null); }); // strong red = on the wall
+      out+='<g clip-path="url(#skwallclip)">'+inside+'</g>';
+    }
+  }
+  // wall outline + labels + vertices on top of panels
+  skPaths.forEach(function(p){
+    var pts=p.pts; if(pts.length<2) return;
+    if(p.closed) out+='<polygon points="'+pts.map(function(v){return v.x+','+v.y;}).join(' ')+'" fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round"/>';
+    for(var k=1;k<pts.length;k++) out+=skSegLabel(pts[k-1],pts[k]);
+    if(p.closed){ out+=skSegLabel(pts[pts.length-1],pts[0]); var c=skCentroid(pts); out+=skLabel(c.x,c.y,(skAreaPx(pts)*Math.pow(skRealPerPx(),2)/10000).toFixed(2)+' m²','#1d4ed8'); }
+    pts.forEach(function(v){ out+=skDot(v.x,v.y,'#2563eb'); });
+  });
+  // current chain + rubber band + alignment guides
+  if(skCur.length>0){
+    for(var i=1;i<skCur.length;i++){ out+=skLine(skCur[i-1].x,skCur[i-1].y,skCur[i].x,skCur[i].y,'#0f172a',2); out+=skSegLabel(skCur[i-1],skCur[i]); }
+    skCur.forEach(function(v){ out+=skDot(v.x,v.y,'#0f172a'); });
+    if(skCursor){ var a=skCur[skCur.length-1], col=skCursor.color||'#64748b';
+      if(skCursor.guides) skCursor.guides.forEach(function(gd){ out+=skLine(gd.x1,gd.y1,gd.x2,gd.y2,'#0ea5e9',1,'2 4'); });
+      out+=skLine(a.x,a.y,skCursor.x,skCursor.y,col,2,'6 5');
+      out+=skSegLabel(a,{x:skCursor.x,y:skCursor.y});
+      out+=skDot(skCursor.x,skCursor.y,col);
+      if(skCursor.name==='point') out+='<circle cx="'+skCursor.x+'" cy="'+skCursor.y+'" r="7" fill="none" stroke="#ea580c" stroke-width="2"/>';
+    }
+  } else if(skCursor && skCursor.name==='point'){ out+='<circle cx="'+skCursor.x+'" cy="'+skCursor.y+'" r="7" fill="none" stroke="#ea580c" stroke-width="2"/>'; }
+  // panel ghost on the cursor
+  if(skPanelProd && skGhost){ out+=skRect(skGhost.x,skGhost.y,skGhost.w,skGhost.h,'rgba(220,38,38,0.20)','#dc2626','4 3'); var gcx=skGhost.x+skGhost.w/2, gcy=skGhost.y+skGhost.h/2; out+=skLabel(gcx,gcy,skPanelProd.w+'×'+(SK_PANEL_H/100)+'m','#b91c1c'); out+=skDot(gcx,gcy,'#dc2626'); }
+  s.innerHTML=out; skUpdHint(); skStats();
+}
+// Sutherland–Hodgman: clip subject polygon (any) by a convex clip polygon.
+function skSignedArea(pts){ var a=0; for(var i=0;i<pts.length;i++){ var j=(i+1)%pts.length; a+=pts[i].x*pts[j].y-pts[j].x*pts[i].y; } return a/2; }
+function skPolyClip(subject,clip){
+  if(subject.length<3||clip.length<3) return [];
+  var cw=skSignedArea(clip)<0, out=subject.slice();
+  for(var i=0;i<clip.length;i++){
+    var A=clip[i], B=clip[(i+1)%clip.length], input=out; out=[];
+    for(var j=0;j<input.length;j++){
+      var P=input[j], Q=input[(j+1)%input.length];
+      var inP=skSideIn(P,A,B,cw), inQ=skSideIn(Q,A,B,cw);
+      if(inP) out.push(P);
+      if(inP!==inQ){ var ip=skSegInt(P,Q,A,B); if(ip) out.push(ip); }
+    }
+    if(!out.length) return [];
+  }
+  return out;
+}
+function skSideIn(P,A,B,cw){ var cr=(B.x-A.x)*(P.y-A.y)-(B.y-A.y)*(P.x-A.x); return cw?cr<=1e-7:cr>=-1e-7; }
+function skSegInt(P,Q,A,B){ var a1=Q.y-P.y,b1=P.x-Q.x,c1=a1*P.x+b1*P.y, a2=B.y-A.y,b2=A.x-B.x,c2=a2*A.x+b2*A.y, det=a1*b2-a2*b1; if(Math.abs(det)<1e-9) return null; return {x:(b2*c1-b1*c2)/det, y:(a1*c2-a2*c1)/det}; }
+function skPanelRect(pn){ return [{x:pn.x,y:pn.y},{x:pn.x+pn.w,y:pn.y},{x:pn.x+pn.w,y:pn.y+pn.h},{x:pn.x,y:pn.y+pn.h}]; }
+function skUpdHint(){
+  var h=document.getElementById('sk-hint'); if(!h) return;
+  if(skCur.length>0 && skCursor){ var a=skCur[skCur.length-1], L=Math.hypot(skCursor.x-a.x,skCursor.y-a.y);
+    var tag = skCursor.name==='point' ? ' · endpoint' : (skCursor.name?(' · '+skCursor.name+(skShift?' 🔒':'')):'');
+    h.textContent=skFmt(L)+tag;
+  } else h.textContent = skCur.length===0 ? 'Click to start / คลิกเพื่อเริ่ม' : '';
+}
+function skStats(){
+  var el=document.getElementById('sk-stats'); if(!el) return;
+  function seglen(pts,closed){ var t=0; for(var i=1;i<pts.length;i++) t+=Math.hypot(pts[i].x-pts[i-1].x,pts[i].y-pts[i-1].y); if(closed&&pts.length>2) t+=Math.hypot(pts[0].x-pts[pts.length-1].x,pts[0].y-pts[pts.length-1].y); return t; }
+  var per=Math.pow(skRealPerPx(),2)/10000; // px² → m²
+  var totPx=0, wallArea=0;
+  skPaths.forEach(function(p){ totPx+=seglen(p.pts,p.closed); if(p.closed&&p.pts.length>2) wallArea+=skAreaPx(p.pts)*per; });
+  totPx+=seglen(skCur,false);
+  function cell(lbl,val,color,sub){ return '<div><div style="font-size:11px;color:var(--text2);text-transform:uppercase;font-weight:700;letter-spacing:.05em">'+lbl+'</div><div style="font-size:22px;font-weight:800;color:'+color+'">'+val+'</div>'+(sub?'<div style="font-size:11px;color:var(--text2)">'+sub+'</div>':'')+'</div>'; }
+  var html='<div class="sec" style="margin:0;border:1px solid var(--border);border-radius:var(--rs)"><div style="display:flex;gap:20px;flex-wrap:wrap">'
+    +cell('Total length',(totPx*skRealPerPx()/100).toFixed(2)+' m','var(--blue)')
+    +cell('Wall area',wallArea.toFixed(2)+' m²','#1d4ed8');
+  if(skPanels.length){
+    var walls=skWallPolys(), bands=skWallXBands(), panelArea=0, inside=0, cutArea=0, sideWaste=0, cutLenPx=0;
+    var perW=skRealPerPx()/100; // px → m (length)
+    skPanels.forEach(function(pn){
+      var full=(pn.w*pn.h)*per; panelArea+=full;
+      if(!walls.length) return;
+      var ins=0; walls.forEach(function(wp){ var cp=skPolyClip(wp.pts,skPanelRect(pn)); if(cp.length>=3) ins+=Math.abs(skSignedArea(cp)); });
+      ins*=per; inside+=ins;
+      var owPx=skCoveredWidth(pn.x,pn.x+pn.w,bands);       // panel width sitting over the wall
+      var overCol=(owPx*pn.h)*per;                          // area of those over-wall columns
+      var cut=Math.max(0, overCol-ins);                     // over wall x, but above/below → height cut
+      var side=Math.max(0, full-overCol);                  // beside the wall → real waste
+      cutArea+=cut; sideWaste+=side;
+      if(cut>1e-4) cutLenPx+=owPx;                          // running length of the cut across the panel
+    });
+    html+=cell('Panels',skPanels.length,'#dc2626',(panelArea).toFixed(2)+' m²');
+    if(walls.length){
+      var wpct=panelArea>0?Math.round(sideWaste/panelArea*100):0;
+      if(cutArea>1e-4) html+=cell('Cut / ตัด',cutArea.toFixed(2)+' m²','#f59e0b',(cutLenPx*perW).toFixed(2)+' m cut');
+      html+=cell('Waste / เศษ',wpct+'%','#dc2626',sideWaste.toFixed(2)+' m²');
+    }
+  }
+  html+='</div></div>';
+  el.innerHTML=html;
+}
 // SSO menu: show who's logged in + a one-tap full logout from the hub.
 function kpUpdMenuUser(){
   var el=document.getElementById('menu-user'); if(!el) return;
