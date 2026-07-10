@@ -938,7 +938,7 @@ textarea{resize:none}
       <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
         <button type="button" class="btn" onclick="cntZoom(-1)" style="width:auto;flex:none;margin-top:0;padding:6px 16px;font-size:18px;line-height:1">−</button>
         <button type="button" class="btn" onclick="cntZoom(1)" style="width:auto;flex:none;margin-top:0;padding:6px 16px;font-size:18px;line-height:1">＋</button>
-        <span style="font-size:11px;color:var(--text2);flex:1;min-width:120px">Tap item = +1 · tap a number to remove it</span>
+        <span style="font-size:11px;color:var(--text2);flex:1;min-width:120px">Tap = +1 · tap a number to remove · scroll = zoom · drag = move</span>
         <button type="button" class="btn" onclick="cntNewImage()" style="width:auto;flex:none;margin-top:0;margin-left:auto;border-color:var(--blue);color:var(--blue);padding:6px 12px"><i class="ti ti-photo"></i> New / รูปใหม่</button>
       </div>
       <div id="cnt-wrap" style="overflow:auto;-webkit-overflow-scrolling:touch;max-height:75vh;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2)">
@@ -2655,6 +2655,13 @@ function cntBindInputs(){
     var items=(e.clipboardData&&e.clipboardData.items)||[];
     for(var i=0;i<items.length;i++){ if(items[i].type&&items[i].type.indexOf('image')===0){ var f=items[i].getAsFile(); if(f){ cntReadBlob(f); e.preventDefault(); return; } } }
   });
+  // Mouse-wheel / trackpad zoom, centred on the pointer.
+  var wrap=document.getElementById('cnt-wrap');
+  if(wrap) wrap.addEventListener('wheel', cntWheel, {passive:false});
+  // Mouse drag-to-pan (touch already pans natively via overflow scroll).
+  if(wrap) wrap.addEventListener('mousedown', cntPanDown);
+  document.addEventListener('mousemove', cntPanMove);
+  document.addEventListener('mouseup', cntPanUp);
   // Drag & drop onto the dropzone or the image area.
   var targets=[document.getElementById('cnt-drop'), document.getElementById('cnt-stage-wrap')];
   var drop=document.getElementById('cnt-drop');
@@ -2678,6 +2685,7 @@ function cntSetImage(src){
 }
 function cntStageClick(e){
   if(!cntHasImg) return;
+  if(cntWasPan()) return; // was a drag-pan, not a tap
   if(e.target&&e.target.classList&&e.target.classList.contains('cnt-mark')) return; // removal handled on the marker
   var img=document.getElementById('cnt-img'); if(!img) return;
   var r=img.getBoundingClientRect(); if(!r.width||!r.height) return;
@@ -2695,7 +2703,7 @@ function cntRender(){
   cntMarks.forEach(function(mk,i){
     var el=document.createElement('div'); el.className='cnt-mark';
     el.style.left=mk.x+'%'; el.style.top=mk.y+'%'; el.textContent=(i+1);
-    el.onclick=function(ev){ ev.stopPropagation(); cntMarks.splice(i,1); cntRender(); };
+    el.onclick=function(ev){ ev.stopPropagation(); if(cntWasPan()) return; cntMarks.splice(i,1); cntRender(); };
     stage.appendChild(el);
   });
 }
@@ -2711,6 +2719,47 @@ function cntApplyZoom(){
   var base=wrap.clientWidth||320, natural=img.naturalWidth||base, fit=Math.min(base,natural);
   img.style.width=Math.round(fit*cntZoomLevel)+'px';
 }
+// Wheel zoom that keeps the image point under the cursor fixed in place.
+function cntWheel(e){
+  if(!cntHasImg) return;
+  e.preventDefault();
+  var wrap=document.getElementById('cnt-wrap'), img=document.getElementById('cnt-img'); if(!wrap||!img) return;
+  var ir=img.getBoundingClientRect(); if(!ir.width||!ir.height) return;
+  var fx=Math.min(1,Math.max(0,(e.clientX-ir.left)/ir.width));
+  var fy=Math.min(1,Math.max(0,(e.clientY-ir.top)/ir.height));
+  var wr=wrap.getBoundingClientRect();
+  var cx=e.clientX-wr.left, cy=e.clientY-wr.top;
+  var prev=cntZoomLevel;
+  cntZoomLevel=Math.min(6,Math.max(0.5, cntZoomLevel+(e.deltaY<0?0.25:-0.25)));
+  if(cntZoomLevel===prev) return;
+  cntApplyZoom();
+  var nr=img.getBoundingClientRect();
+  wrap.scrollLeft=fx*nr.width-cx;
+  wrap.scrollTop=fy*nr.height-cy;
+}
+// Hold + drag the image to pan it. A drag past a few px suppresses the click so
+// no marker is dropped; a plain click (no drag) still adds/removes a marker.
+var cntPanning=false, cntPanMoved=false, cntPanSX=0, cntPanSY=0, cntPanL=0, cntPanT=0;
+function cntPanDown(e){
+  if(!cntHasImg || (e.button!==undefined && e.button!==0)) return;
+  var wrap=document.getElementById('cnt-wrap'); if(!wrap) return;
+  cntPanning=true; cntPanMoved=false;
+  cntPanSX=e.clientX; cntPanSY=e.clientY; cntPanL=wrap.scrollLeft; cntPanT=wrap.scrollTop;
+}
+function cntPanMove(e){
+  if(!cntPanning) return;
+  var dx=e.clientX-cntPanSX, dy=e.clientY-cntPanSY;
+  if(!cntPanMoved && (Math.abs(dx)>4||Math.abs(dy)>4)){ cntPanMoved=true; var im=document.getElementById('cnt-img'); if(im) im.style.cursor='grabbing'; }
+  if(cntPanMoved){ var wrap=document.getElementById('cnt-wrap'); if(wrap){ wrap.scrollLeft=cntPanL-dx; wrap.scrollTop=cntPanT-dy; } e.preventDefault(); }
+}
+function cntPanUp(){
+  if(!cntPanning) return;
+  cntPanning=false;
+  var im=document.getElementById('cnt-img'); if(im) im.style.cursor='';
+  // cntPanMoved stays set until the trailing click consumes it (see cntWasPan)
+}
+// True (and self-resetting) if the last press was a drag, so click handlers skip.
+function cntWasPan(){ if(cntPanMoved){ cntPanMoved=false; return true; } return false; }
 // SSO menu: show who's logged in + a one-tap full logout from the hub.
 function kpUpdMenuUser(){
   var el=document.getElementById('menu-user'); if(!el) return;
