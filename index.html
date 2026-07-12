@@ -10530,12 +10530,13 @@ function payToggleAllZones(btn){
 }
 
 function payOrderCard(o) {
-    var paid = !!o.payMethod;
+    var _pc = parseFloat(o.paidCash)||0, _po = parseFloat(o.paidOnline)||0;
+    var paid = !!o.payMethod || _pc>0 || _po>0;
     var bg     = paid ? '#f0fdf4' : '#fef2f2';
     var border = paid ? '#16a34a' : '#dc2626';
     var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+' x'+i.qty;}).join(', ')||o.panels||'--';
-    var cashChk   = o.payMethod==='cash';
-    var onlineChk = o.payMethod==='online';
+    var cashChk   = _pc>0 || o.payMethod==='cash';
+    var onlineChk = _po>0 || o.payMethod==='online';
     var oid = o.id;
     var cborder = cashChk ? '#16a34a' : '#d1d5db';
     var cbg     = cashChk ? '#dcfce7' : '#fff';
@@ -10568,15 +10569,15 @@ function payOrderCard(o) {
       +(o.shipperRaw?'<div style="font-size:11px;color:#6b7280;margin:0 0 8px;padding-left:2px">📋 '+o.shipperRaw+'</div>':'')
       +'<div style="font-size:12px;background:rgba(0,0,0,0.04);border-radius:var(--rs);padding:7px 10px;margin-bottom:10px;color:#333">'+panels+(o.total?' - '+o.total:'')+'</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
-      +'<button type="button" onclick="paySetMethod(\''+oid+'\',\'cash\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+cborder+';background:'+cbg+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+ccol+'">'
+      +'<button type="button" onclick="payOpenAmount(\''+oid+'\',\'cash\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+cborder+';background:'+cbg+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+ccol+'">'
       +'<div style="width:20px;height:20px;border-radius:5px;border:2px solid '+cborder+';background:'+cbgbox+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+(cashChk?'<i class="ti ti-check" style="font-size:12px;color:#fff"></i>':'')+'</div>Cash</button>'
-      +'<button type="button" onclick="paySetMethod(\''+oid+'\',\'online\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+oborder+';background:'+obg+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+ocol+'">'
+      +'<button type="button" onclick="payOpenAmount(\''+oid+'\',\'online\')" style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);border:2px solid '+oborder+';background:'+obg+';cursor:pointer;-webkit-tap-highlight-color:transparent;font-size:13px;font-weight:600;color:'+ocol+'">'
       +'<div style="width:20px;height:20px;border-radius:5px;border:2px solid '+oborder+';background:'+obgbox+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+(onlineChk?'<i class="ti ti-check" style="font-size:12px;color:#fff"></i>':'')+'</div>Online</button>'
       +'</div>'
       +(paid?
         '<div style="margin-top:10px;padding:8px 10px;background:rgba(0,0,0,0.04);border-radius:var(--rs)">'
         +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
-        +'<span style="font-size:11px;color:#6b7280">'+(o.payMethod==='cash'?'Cash':'Online')+(o.paidBy?' · '+o.paidBy:'')+(o.paidAt?' · '+o.paidAt:'')+'</span>'
+        +'<span style="font-size:11px;color:#6b7280">'+(function(){var co=ofPayCO(o);var p=[];if(co.cash>0)p.push('💵 '+co.cash.toLocaleString());if(co.online>0)p.push('🏦 '+co.online.toLocaleString());return p.join(' · ')||(o.payMethod==='cash'?'Cash':'Online');})()+(o.paidBy?' · '+o.paidBy:'')+(o.paidAt?' · '+o.paidAt:'')+'</span>'
         +'<button type="button" onclick="payClear(\''+oid+'\')" style="background:none;border:none;font-size:11px;color:#9ca3af;cursor:pointer;padding:0;-webkit-tap-highlight-color:transparent">undo</button>'
         +'</div>'
         +'<div style="display:flex;align-items:center;gap:6px;margin-top:6px">'
@@ -10733,12 +10734,83 @@ function paySetMethod(id, method) {
 function payClear(id) {
   var o = orders.find(function(x){ return x.id===id; });
   if(!o) return;
-  delete o.payMethod; delete o.paidAt; delete o.paidBy; delete o.payDate;
+  delete o.payMethod; delete o.paidAt; delete o.paidBy; delete o.payDate; delete o.paidAmount; o.paidCash=0; o.paidOnline=0;
   syncOrders();
   try{ sheetsSyncOrder(o); }catch(e){}
   _payRenderNow();
   try{ofRenderRevenue();}catch(e){}
   try{mgRevenue();}catch(e){}
+}
+
+// ── PAYMENT AMOUNT MODAL ──
+// Click Cash/Online on a pay card → enter the exact amount(s) (cash and/or online
+// for split payments), Confirm, then a final yes/no before it's booked. Writes the
+// same paidCash/paidOnline/payMethod shape the driver delivery modal uses.
+function payOpenAmount(id, method){
+  var o = orders.find(function(x){ return x.id===id; });
+  if(!o) return;
+  var total = parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0;
+  var curCash = parseFloat(o.paidCash)||0, curOnline = parseFloat(o.paidOnline)||0;
+  var preCash, preOnline;
+  if(curCash>0||curOnline>0){ preCash=curCash; preOnline=curOnline; }           // editing an existing payment
+  else if(method==='online'){ preCash=0; preOnline=total; }
+  else { preCash=total; preOnline=0; }
+  var esc = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  payCloseAmount();
+  var ov = document.createElement('div');
+  ov.id = 'pay-amt-ov';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.onclick = function(e){ if(e.target===ov) payCloseAmount(); };
+  ov.innerHTML =
+    '<div style="background:var(--bg);color:var(--text);border-radius:var(--r);max-width:360px;width:100%;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,0.35)">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:16px;font-weight:800">💰 บันทึกการชำระ / Record payment</span>'
+    +'<button type="button" onclick="payCloseAmount()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);line-height:1">✕</button></div>'
+    +'<div style="font-size:13px;font-weight:700;margin-bottom:2px">'+esc(o.id)+' · '+esc(o.customer||'')+'</div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:14px">ยอดรวม / Total: <b style="color:var(--text)">'+total.toLocaleString()+' ฿</b></div>'
+    +'<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="width:118px;font-size:13px;font-weight:600;color:#166534">💵 เงินสด / Cash</span>'
+    +'<input type="number" id="pay-amt-cash" inputmode="numeric" value="'+(preCash||'')+'" placeholder="0" oninput="payAmtRecalc()" style="flex:1;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:var(--rs);font-size:15px;background:var(--bg);color:var(--text);min-width:0"></label>'
+    +'<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="width:118px;font-size:13px;font-weight:600;color:#1d4ed8">🏦 โอน / Online</span>'
+    +'<input type="number" id="pay-amt-online" inputmode="numeric" value="'+(preOnline||'')+'" placeholder="0" oninput="payAmtRecalc()" style="flex:1;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:var(--rs);font-size:15px;background:var(--bg);color:var(--text);min-width:0"></label>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);margin-bottom:14px"><span style="font-size:12px;color:var(--text2)">รวม / Sum</span><span id="pay-amt-sum" style="font-size:16px;font-weight:800">'+(preCash+preOnline).toLocaleString()+' ฿</span></div>'
+    +'<div style="display:flex;gap:8px"><button type="button" onclick="payCloseAmount()" style="flex:1;padding:11px;border:1.5px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);font-size:14px;font-weight:600;cursor:pointer">ยกเลิก / Cancel</button>'
+    +'<button type="button" onclick="payConfirmAmount(\''+String(id).replace(/['\\]/g,'')+'\')" style="flex:1.4;padding:11px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);font-size:14px;font-weight:700;cursor:pointer">✓ บันทึก / Confirm</button></div>'
+    +'</div>';
+  document.body.appendChild(ov);
+  setTimeout(function(){ var el=document.getElementById(method==='online'?'pay-amt-online':'pay-amt-cash'); if(el){ el.focus(); el.select(); } }, 50);
+}
+function payAmtRecalc(){
+  var c=parseFloat((document.getElementById('pay-amt-cash')||{}).value)||0;
+  var o=parseFloat((document.getElementById('pay-amt-online')||{}).value)||0;
+  var el=document.getElementById('pay-amt-sum'); if(el) el.textContent=(c+o).toLocaleString()+' ฿';
+}
+function payCloseAmount(){ var ov=document.getElementById('pay-amt-ov'); if(ov) ov.remove(); }
+function payConfirmAmount(id){
+  var o = orders.find(function(x){ return x.id===id; });
+  if(!o) return;
+  var cash   = parseFloat((document.getElementById('pay-amt-cash')||{}).value)||0;
+  var online = parseFloat((document.getElementById('pay-amt-online')||{}).value)||0;
+  if(cash<=0 && online<=0){ alert('กรุณาใส่จำนวนเงิน / Please enter an amount'); return; }
+  var sum = cash+online;
+  var msg = 'ยืนยันการชำระ? / Confirm payment?\n\n'+o.id+' · '+(o.customer||'')+'\n'
+    +(cash>0?'💵 เงินสด/Cash: '+cash.toLocaleString()+' ฿\n':'')
+    +(online>0?'🏦 โอน/Online: '+online.toLocaleString()+' ฿\n':'')
+    +'รวม/Sum: '+sum.toLocaleString()+' ฿';
+  if(!confirm(msg)) return;
+  o.paidCash=cash; o.paidOnline=online;
+  o.payMethod=(online>cash)?'online':'cash';   // dominant method (amounts drive ofPayCO)
+  o.paidAmount=sum;
+  delete o.payAtOffice;
+  var now=new Date();
+  o.paidAt=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  o.paidBy=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+  if(!o.payDate) o.payDate=o.date||new Date().toISOString().split('T')[0];
+  payCloseAmount();
+  syncOrders();
+  try{ sheetsSyncOrder(o); }catch(e){}
+  _payRenderNow();
+  try{ofRenderRevenue();}catch(e){}
+  try{mgRevenue();}catch(e){}
+  try{ auditAdd({type:'payment',orderId:id,method:o.payMethod,by:o.paidBy}); }catch(e){}
 }
 
 function paySetShipper(id, shipper) {
