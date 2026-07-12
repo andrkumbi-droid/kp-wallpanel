@@ -5467,6 +5467,31 @@ function quickStatus(btn) {
   try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}
 }
 
+// Office finalises a shipper handover: the customer has now received the goods from
+// the carrier → mark the order delivered (books revenue). Keeps any still-active tour
+// row consistent. Payment stays open → lands in the Pay tab as "delivered · unpaid".
+function ofFinalizeShipped(id){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  if(!confirm('Customer received '+id+'? Mark as delivered / ลูกค้าได้รับแล้ว ยืนยันส่งแล้ว?')) return;
+  var byName=((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+  var old=o.status;
+  addStatusLog(o,'delivered',byName); o.editedBy=byName; o.status='delivered';
+  // keep any active tour that still holds this order in sync
+  (activeTours||[]).forEach(function(t){ if(t&&t.status&&t.orders&&t.orders.indexOf(id)>=0) t.status[id]='delivered'; });
+  var amt=parseFloat((o.total||'').replace(/[^0-9]/g,''))||0;
+  if(amt>0 && !revOrders.find(function(r){return r.id===o.id;})){
+    revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt:amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});
+    addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');
+  }
+  syncOrders();syncRevOrders();try{syncTours();}catch(e){}
+  try{ sheetsSyncOrder(o); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
+  ofRenderOrders();mgRender();
+  try{payUpdateBadge();}catch(e){}
+  try{auditAdd({type:'status',orderId:id,from:old,to:'delivered',by:byName});}catch(e){}
+  try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}
+  try{ showNotif('✓ Delivered · '+id); }catch(e){}
+}
+
 var ofZoneCollapsed = {}; // zone name → collapsed?
 function ofToggleZone(z){
   ofZoneCollapsed[z] = !ofZoneCollapsed[z];
@@ -5555,6 +5580,7 @@ function ofOrderCard(o){
   // Visible row: Print receipt stays · "More" toggle opens the rest.
   var _moreId='omore_'+safeOrderId(o.id);
   s += '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">';
+  if(o.status==='shipped') s += '<button type="button" class="btnsm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="ofFinalizeShipped(\''+o.id+'\')" title="Customer received — mark delivered / ลูกค้าได้รับแล้ว"><i class="ti ti-check"></i> Delivered / ส่งถึงลูกค้าแล้ว</button>';
   s += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
   s += '<button type="button" class="btnsm" onclick="ofToggleMore(\''+_moreId+'\')" style="background:var(--bg2);color:var(--text)"><i class="ti ti-dots"></i> Mehr / จัดการ ⌄</button>';
   s += '</div>';
