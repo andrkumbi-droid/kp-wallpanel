@@ -6055,15 +6055,19 @@ function ofRenderTour(){
         }
       });
       // Full active-tour value per zone = loaded + already-delivered (excl. cancelled),
-      // so the "assigned" line can show the whole tour total in parentheses.
-      var tourTotalByZone = {};
+      // so each driver's block can show BOTH on-tour and the whole tour (incl. delivered).
+      var tourTotalByDrv = {};  // zone -> driverName -> {orders,panels,ctn,bundle,baht} (loaded+delivered, excl cancelled)
       (activeTours||[]).forEach(function(t){
         if(!t||!t.orders) return;
+        var dn=t.driverName||'—';
         t.orders.forEach(function(id){
           if(((t.status||{})[id]||'loaded')==='cancelled') return;
           var o=orders.find(function(x){return x.id===id;}); if(!o) return;
           var z=o.zone||'Unknown';
-          tourTotalByZone[z]=(tourTotalByZone[z]||0)+ofOrderTotalNum(o);
+          if(!tourTotalByDrv[z]) tourTotalByDrv[z]={};
+          var ft=tourTotalByDrv[z][dn]||(tourTotalByDrv[z][dn]={orders:0,panels:0,ctn:0,bundle:0,baht:0});
+          var _p=(o.lineItems||[]).filter(function(i){return i.type==='panel';}).reduce(function(a,i){return a+(parseInt(i.qty)||0);},0)||parseInt(o.panels)||0;
+          ft.orders++; ft.panels+=_p; ft.ctn+=parseInt(o.ctn)||0; ft.bundle+=parseInt(o.bundle)||0; ft.baht+=ofOrderTotalNum(o);
         });
       });
       var zoneColors = {
@@ -6085,6 +6089,8 @@ function ofRenderTour(){
           var fmtQty = function(a){ return a.panels.toLocaleString()+' panels'
             +(a.ctn>0?' · <span style="color:#16A34A;font-weight:600">'+a.ctn+' CTN</span>':'')
             +(a.bundle>0?' · <span style="color:#ea580c;font-weight:600">'+a.bundle+' มัด</span>':''); };
+          // stops · CTN · (มัด) · panels · baht — one compact line for a driver's on-tour / full-tour totals
+          var fmtLine = function(a,lbl,col){ return '<div style="font-size:11px;font-weight:700;margin-top:1px;color:'+col+'">'+lbl+' '+a.orders+' stop'+(a.orders!==1?'s':'')+' · '+a.ctn+' CTN'+(a.bundle>0?' · '+a.bundle+' มัด':'')+' · '+a.panels.toLocaleString()+' panels · '+a.baht.toLocaleString()+' ฿</div>'; };
           var stMeta = {
             'new':{l:'New',bg:'#e0e7ff',c:'#3730a3'},
             'packing':{l:'Packing',bg:'#fef3c7',c:'#92400e'},
@@ -6131,13 +6137,13 @@ function ofRenderTour(){
               +'<div style="font-size:12.5px;font-weight:800;margin-top:1px;color:'+amtCol+'">💰 '+d.ready.baht.toLocaleString()+' ฿</div>'
               +'</div>':'')
             +Object.keys(d.tours).map(function(_dn){ var tt=d.tours[_dn];
+              var ft=(tourTotalByDrv[z]||{})[_dn]||tt;   // whole tour incl. already-delivered
               return '<div style="margin-top:4px;padding:5px 7px;background:rgba(109,40,217,0.10);border-radius:6px">'
-                +'<div style="font-size:10px;font-weight:800;color:#6d28d9;text-transform:uppercase;letter-spacing:.03em">🚚 '+_dn+' · on tour · '+tt.orders+' order'+(tt.orders!==1?'s':'')+'</div>'
-                +'<div style="font-size:11px;color:var(--text2);margin-top:1px">'+fmtQty(tt)+'</div>'
-                +'<div style="font-size:12px;font-weight:700;margin-top:1px;color:#6d28d9">💰 '+tt.baht.toLocaleString()+' ฿</div>'
+                +'<div style="font-size:10px;font-weight:800;color:#6d28d9;text-transform:uppercase;letter-spacing:.03em">🚚 '+_dn+'</div>'
+                +fmtLine(tt,'🚚 on tour:','#6d28d9')
+                +fmtLine(ft,'📊 total tour:','var(--text2)')
                 +'</div>';
             }).join('')
-            +((tourTotalByZone[z]||0)>d.onTourBaht?'<div style="font-size:10px;font-weight:600;color:var(--text2);margin-top:3px">🚚 Tour total incl. delivered / รวมทั้งทัวร์: '+(tourTotalByZone[z]||0).toLocaleString()+' ฿</div>':'')
             +'</summary>'
             +'<div style="padding:0 10px 8px">'+rows+'</div>'
             +'</details>';
