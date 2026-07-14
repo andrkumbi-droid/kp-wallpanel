@@ -1051,7 +1051,7 @@ textarea{resize:none}
       <span style="width:1px;height:22px;background:var(--border);flex:none"></span>
       <button type="button" class="btn" id="sk-move-btn" style="width:auto;margin:0;flex:none;padding:6px 12px" onclick="skToggleMove()" title="Move / select (Ctrl+M)"><i class="ti ti-hand-finger"></i> Move</button>
       <button type="button" class="btn" id="sk-cut-btn" style="width:auto;margin:0;flex:none;padding:6px 12px" onclick="skToggleCut()" title="Cut a piece anywhere (Shift = vertical cut)"><i class="ti ti-cut"></i> Cut</button>
-      <button type="button" class="btn" id="sk-trim-btn" style="width:auto;margin:0;flex:none;padding:6px 12px" onclick="skToggleTrim()" title="Mark wall/opening edges as finishing profiles"><i class="ti ti-border-bottom"></i> Trim</button>
+      <button type="button" class="btn" id="sk-trim-btn" style="width:auto;margin:0;flex:none;padding:6px 12px" onclick="skToggleTrim()" title="Mark wall/opening edges or panel joints as finishing profiles (2.9 m per bar)"><i class="ti ti-border-bottom"></i> Trim</button>
       <button type="button" class="btn" id="sk-hole-btn" style="width:auto;margin:0;flex:none;padding:6px 12px" onclick="skToggleHole()" title="Place a door/window opening"><i class="ti ti-door"></i> Opening</button>
       <button type="button" class="btn" style="width:auto;margin:0;flex:none;padding:6px 12px;border-color:#f59e0b;color:#f59e0b" onclick="skHarvestOffcuts()" title="Cut the selected overhang into a grabbable offcut (Ctrl+H)"><i class="ti ti-scissors"></i> Harvest</button>
       <button type="button" class="btn" style="width:auto;margin:0;flex:none;padding:6px 10px;border-color:#f59e0b;color:#f59e0b" onclick="skParkAll()" title="Tidy all loose offcuts into a column next to the wall"><i class="ti ti-stack-2"></i></button>
@@ -3320,6 +3320,18 @@ function skToggleTrim(){ skTrimMode=!skTrimMode; if(skTrimMode){ if(skPanelProd)
 function skAllEdgeSegs(){ var segs=[];
   skWallPolys().forEach(function(p){ var pts=p.pts; for(var i=0;i<pts.length;i++){ var a=pts[i], b=pts[(i+1)%pts.length]; segs.push({x1:a.x,y1:a.y,x2:b.x,y2:b.y}); } });
   skHoles.forEach(function(h){ segs.push({x1:h.x,y1:h.y,x2:h.x+h.w,y2:h.y},{x1:h.x+h.w,y1:h.y,x2:h.x+h.w,y2:h.y+h.h},{x1:h.x+h.w,y1:h.y+h.h,x2:h.x,y2:h.y+h.h},{x1:h.x,y1:h.y+h.h,x2:h.x,y2:h.y}); });
+  // Panel butt joints (Stoßkanten): the vertical seams at each panel's side edges,
+  // so trims can be marked on the joints between panels, not only wall/opening edges.
+  // A full panel seam = one panel height = 2.9 m = one trim bar; longer runs are
+  // counted as ceil(len/2.9) bars (cut a bar and continue) in skComputeStats.
+  var _seen={};
+  skPanels.forEach(function(pn){
+    [pn.x, pn.x+pn.w].forEach(function(xv){
+      var key=Math.round(xv)+'|'+Math.round(pn.y)+'|'+Math.round(pn.y+pn.h);
+      if(_seen[key]) return; _seen[key]=1;
+      segs.push({x1:xv,y1:pn.y,x2:xv,y2:pn.y+pn.h});
+    });
+  });
   return segs; }
 function skPtSegDist(p,s){ var dx=s.x2-s.x1, dy=s.y2-s.y1, L2=dx*dx+dy*dy; if(L2<1e-9) return Math.hypot(p.x-s.x1,p.y-s.y1); var t=Math.max(0,Math.min(1,((p.x-s.x1)*dx+(p.y-s.y1)*dy)/L2)); return Math.hypot(p.x-(s.x1+t*dx), p.y-(s.y1+t*dy)); }
 function skNearestEdgeSeg(pt){ var best=null, bd=10/skZoom; skAllEdgeSegs().forEach(function(s){ var d=skPtSegDist(pt,s); if(d<bd){ bd=d; best=s; } }); return best; }
@@ -3559,7 +3571,7 @@ function skUpdHint(){
     else h.textContent='Tap a piece or drag a box / แตะชิ้นหรือลากกรอบ';
     return; }
   if(skCutMode){ h.textContent=skCutHover?'Click to cut / คลิกเพื่อตัด'+(skShift?' (vertical)':''):'Hover a piece to cut / ชี้ชิ้นที่จะตัด'; return; }
-  if(skTrimMode){ h.textContent='Tap wall or opening edges / แตะขอบ'; return; }
+  if(skTrimMode){ h.textContent='Tap edges or panel joints (2.9 m/bar) / แตะขอบหรือรอยต่อ'; return; }
   if(skCur.length>0 && skCursor){ var a=skCur[skCur.length-1], L=Math.hypot(skCursor.x-a.x,skCursor.y-a.y);
     var tag = skCursor.name==='point' ? ' · endpoint' : (skCursor.name?(' · '+skCursor.name+(skShift?' 🔒':'')):'');
     h.textContent=skFmt(L)+tag;
