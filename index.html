@@ -1420,7 +1420,7 @@ textarea{resize:none}
     <label class="fl">Phone / เบอร์โทร</label><input type="tel" id="of-phone" placeholder="08x-xxx-xxxx (multiple: 08x / 08x)" oninput="ofLookupCustomer()" onblur="ofLookupCustomer()">
     <div id="of-cust-lookup" style="display:none;margin:6px 0 4px"></div>
     <label class="fl">Address / ที่อยู่</label><textarea id="of-addr" rows="2" placeholder="Delivery address"></textarea>
-    <label class="fl">Province / จังหวัด <span style="font-size:11px;color:var(--text2)">(optional)</span></label><input type="text" id="of-province" placeholder="e.g. ลำปาง / Lampang">
+    <label class="fl">Province / จังหวัด <span style="font-size:11px;color:var(--text2)">(auto-zone / เลือกโซนอัตโนมัติ)</span></label><input type="text" id="of-province" placeholder="e.g. ลำปาง / Lampang" onchange="ofProvinceAutoZone()" onblur="ofProvinceAutoZone()">
     <label class="fl">Location link <span style="font-size:11px;color:var(--text2)">(optional)</span></label><input type="text" id="of-loc" placeholder="https://maps.google.com/...">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div><label class="fl">Contact channel / ช่องทางติดต่อ</label><input type="text" id="of-contact" placeholder="Line OA / หน้าร้าน / FB"></div>
@@ -12987,6 +12987,45 @@ function kpExtractProvince(text){
   if(m) return m[1].trim();
   return '';
 }
+// Province → delivery zone map (Thai canonical + English names). Zone numbers per
+// KP: Northern=1, Bangkok/Central=#, Northeastern=2, Eastern=3, Southern=4.
+var KP_PROV_ZONE=(function(){
+  var Z={
+    Northern:{th:['เชียงราย','เชียงใหม่','แม่ฮ่องสอน','พะเยา','น่าน','ลำปาง','ลำพูน','แพร่','อุตรดิตถ์','ตาก','สุโขทัย','พิษณุโลก','กำแพงเพชร','เพชรบูรณ์','พิจิตร','นครสวรรค์','อุทัยธานี','ชัยนาท','ลพบุรี','สิงห์บุรี','อ่างทอง'],
+      en:['Chiang Rai','Chiang Mai','Mae Hong Son','Phayao','Nan','Lampang','Lamphun','Phrae','Uttaradit','Tak','Sukhothai','Phitsanulok','Kamphaeng Phet','Phetchabun','Phichit','Nakhon Sawan','Uthai Thani','Chai Nat','Lopburi','Sing Buri','Ang Thong']},
+    Bangkok:{th:['สระบุรี','สุพรรณบุรี','พระนครศรีอยุธยา','กาญจนบุรี','นครนายก','ปทุมธานี','นนทบุรี','กรุงเทพมหานคร','สมุทรปราการ','นครปฐม','สมุทรสาคร','ราชบุรี','สมุทรสงคราม'],
+      en:['Saraburi','Suphan Buri','Ayutthaya','Kanchanaburi','Nakhon Nayok','Pathum Thani','Nonthaburi','Bangkok','Samut Prakan','Nakhon Pathom','Samut Sakhon','Ratchaburi','Samut Songkhram']},
+    Northeastern:{th:['บึงกาฬ','หนองคาย','เลย','หนองบัวลำภู','อุดรธานี','สกลนคร','นครพนม','ขอนแก่น','กาฬสินธุ์','มหาสารคาม','มุกดาหาร','ร้อยเอ็ด','ยโสธร','อำนาจเจริญ','ชัยภูมิ','นครราชสีมา','บุรีรัมย์','สุรินทร์','ศรีสะเกษ','อุบลราชธานี'],
+      en:['Bueng Kan','Nong Khai','Loei','Nong Bua Lamphu','Udon Thani','Sakon Nakhon','Nakhon Phanom','Khon Kaen','Kalasin','Maha Sarakham','Mukdahan','Roi Et','Yasothon','Amnat Charoen','Chaiyaphum','Nakhon Ratchasima','Buriram','Surin','Sisaket','Ubon Ratchathani']},
+    Eastern:{th:['ปราจีนบุรี','ฉะเชิงเทรา','สระแก้ว','ชลบุรี','จันทบุรี','ระยอง','ตราด'],
+      en:['Prachin Buri','Chachoengsao','Sa Kaeo','Chon Buri','Chanthaburi','Rayong','Trat']},
+    Southern:{th:['เพชรบุรี','ประจวบคีรีขันธ์','ชุมพร','ระนอง','สุราษฎร์ธานี','พังงา','กระบี่','ภูเก็ต','นครศรีธรรมราช','ตรัง','พัทลุง','สตูล','สงขลา','ปัตตานี','ยะลา','นราธิวาส'],
+      en:['Phetchaburi','Prachuap Khiri Khan','Chumphon','Ranong','Surat Thani','Phang Nga','Krabi','Phuket','Nakhon Si Thammarat','Trang','Phatthalung','Satun','Songkhla','Pattani','Yala','Narathiwat']}
+  };
+  var map={};
+  function norm(s){ return String(s).toLowerCase().replace(/[\s\-\.]/g,''); }
+  Object.keys(Z).forEach(function(zone){
+    Z[zone].th.forEach(function(n){ map[n]=zone; });        // Thai: exact name
+    Z[zone].en.forEach(function(n){ map[norm(n)]=zone; });   // English: normalized
+  });
+  return map;
+})();
+// Resolve a province string (Thai or English) to a KP zone; '' if unknown.
+function kpProvinceZone(prov){
+  var t=String(prov||'').trim(); if(!t) return '';
+  if(/กรุงเทพ|กทม|bangkok/i.test(t)) return 'Bangkok';
+  if(KP_PROV_ZONE[t]) return KP_PROV_ZONE[t];                 // Thai exact
+  var n=t.toLowerCase().replace(/[\s\-\.]/g,'');
+  if(KP_PROV_ZONE[n]) return KP_PROV_ZONE[n];                 // English normalized
+  for(var k in KP_PROV_ZONE){ if(/[ก-๙]/.test(k) && t.indexOf(k)>=0) return KP_PROV_ZONE[k]; } // Thai embedded
+  return '';
+}
+// From the Province field, auto-pick the zone (which also prepares the order no).
+function ofProvinceAutoZone(){
+  var pv=document.getElementById('of-province'); if(!pv) return;
+  var zone=kpProvinceZone(pv.value);
+  if(zone){ try{ selectZone(zone); }catch(e){} }
+}
 function ofQuickParse(){
   var raw = (document.getElementById('of-paste')||{}).value || '';
   if(!raw.trim()) return;
@@ -12996,7 +13035,7 @@ function ofQuickParse(){
   if(ex.address) document.getElementById('of-addr').value = ex.address;
   if(ex.maps) document.getElementById('of-loc').value = ex.maps;
   var _prov = kpExtractProvince(ex.address||raw);
-  if(_prov){ var _pv=document.getElementById('of-province'); if(_pv && !_pv.value) _pv.value=_prov; }
+  if(_prov){ var _pv=document.getElementById('of-province'); if(_pv && !_pv.value) _pv.value=_prov; try{ ofProvinceAutoZone(); }catch(e){} }
   try{ ofLookupCustomer(); }catch(e){}
   // AI fallback: only if the heuristic found no name (name can be anywhere).
   if(!ex.name && BOT_PARSE_URL){
@@ -13009,7 +13048,7 @@ function ofQuickParse(){
         var ph=document.getElementById('of-phone'); if(ai.phone && !ph.value) ph.value=ai.phone;
         var ad=document.getElementById('of-addr'); if(ai.address && !ad.value) ad.value=ai.address;
         var lo=document.getElementById('of-loc'); if(ai.maps && !lo.value) lo.value=ai.maps;
-        var pvp=kpExtractProvince(ai.address||''); var pv=document.getElementById('of-province'); if(pvp && pv && !pv.value) pv.value=pvp;
+        var pvp=kpExtractProvince(ai.address||''); var pv=document.getElementById('of-province'); if(pvp && pv && !pv.value){ pv.value=pvp; try{ ofProvinceAutoZone(); }catch(e){} }
         try{ ofLookupCustomer(); }catch(e){}
       }).catch(function(){});
   }
