@@ -3768,13 +3768,18 @@ function kpLogoutAll(){
 // Entering the Driver hub: sticky login — if a driver session is remembered, go
 // straight to that driver's tour (no picker, no re-PIN). Otherwise show the picker.
 function drEnter(){
+  // Office/management (SSO) always sees the picker so they can open ANY driver.
+  if(kpUser){ document.getElementById('s-driver').classList.add('active'); drLoginRender(); return; }
   var id=null; try{ id=localStorage.getItem('kp-driver-session'); }catch(e){}
   var d = id && (drivers||[]).find(function(x){return x.id===id;});
   if(d){ drLogin(id); } else { document.getElementById('s-driver').classList.add('active'); drLoginRender(); }
 }
-// ← from the tour: leave the Driver area back to the main hub, but KEEP the session
-// (re-opening Driver returns straight to this driver's tour).
-function drBack(){ back(); }
+// ← from the tour. Office/management → back to the driver picker (switch freely, as
+// before). A real driver → back to the main hub, KEEPING their sticky session.
+function drBack(){
+  if(kpUser){ document.querySelectorAll('.screen').forEach(function(x){x.classList.remove('active');}); document.getElementById('s-driver').classList.add('active'); window.scrollTo(0,0); drLoginRender(); }
+  else { back(); }
+}
 // Explicit logout / switch driver: clear the session and show the picker again.
 function drLogout(){
   if(!confirm('ออกจากระบบ / เปลี่ยนคนขับ? / Logout / switch driver?')) return;
@@ -7663,7 +7668,9 @@ function drLoginRender(){
 
 function drLogin(id){
   currentDriverId=id;
-  try{ localStorage.setItem('kp-driver-session', id); }catch(e){}   // sticky login: remember this driver
+  // Sticky login only for a real driver (own device). An office/management SSO
+  // session (kpUser) is just browsing → never lock the device to one driver.
+  try{ if(!kpUser) localStorage.setItem('kp-driver-session', id); }catch(e){}
   const d=drivers.find(x=>x.id===id);
   // Request push permission for driver
   try{ pushRequestPermission('driver_'+id, id, null); }catch(e){}
@@ -10505,16 +10512,19 @@ function whUnpackBtn(btn){whUnpack(btn.getAttribute('data-id'));}
 function drLoginBtn(btn){
   var id=btn.getAttribute('data-id');
   var d=(drivers||[]).find(function(x){return x.id===id;});
-  // Driver login requires the driver's own PIN (same PIN as their staff record).
-  var pin = (d && d.pin!=null) ? d.pin : null;
-  if(pin==null){
-    var st=(staffList||[]).find(function(s){return s.isDriver && ((s.driverId||s.id)===id);});
-    if(st) pin=st.pin;
-  }
-  if(pin!=null && String(pin).trim()!==''){
-    var entered=prompt('🔒 '+((d&&d.name)||'Driver')+'\n\nEnter your PIN / ใส่รหัส PIN:');
-    if(entered===null) return;                              // cancelled
-    if(String(entered).trim()!==String(pin).trim()){ alert('❌ Wrong PIN / รหัสไม่ถูกต้อง'); return; }
+  // Office/management (SSO session, kpUser) may open ANY driver freely, like before — no PIN.
+  // A real driver (no SSO session) must enter their own PIN (same PIN as their staff record).
+  if(!kpUser){
+    var pin = (d && d.pin!=null) ? d.pin : null;
+    if(pin==null){
+      var st=(staffList||[]).find(function(s){return s.isDriver && ((s.driverId||s.id)===id);});
+      if(st) pin=st.pin;
+    }
+    if(pin!=null && String(pin).trim()!==''){
+      var entered=prompt('🔒 '+((d&&d.name)||'Driver')+'\n\nEnter your PIN / ใส่รหัส PIN:');
+      if(entered===null) return;                              // cancelled
+      if(String(entered).trim()!==String(pin).trim()){ alert('❌ Wrong PIN / รหัสไม่ถูกต้อง'); return; }
+    }
   }
   drLogin(id);
 }
