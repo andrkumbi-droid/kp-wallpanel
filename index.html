@@ -96,6 +96,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 #s-manager-login .pin-btn:not(.empty):not(.del):active{background:rgba(124,58,237,0.15)}
 #s-office-login  .pin-btn:not(.empty):not(.del){border-color:rgba(22,163,74,0.25);background:rgba(22,163,74,0.05)}
 #s-office-login  .pin-btn:not(.empty):not(.del):active{background:rgba(22,163,74,0.15)}
+#s-driver        .pin-dot.filled{background:#0284c7}
+#s-driver        .pin-btn:not(.empty):not(.del){border-color:rgba(2,132,199,0.25);background:rgba(2,132,199,0.05)}
+#s-driver        .pin-btn:not(.empty):not(.del):active{background:rgba(2,132,199,0.15)}
 /* Management icon circle */
 #s-manager-login .pin-screen > div:first-child{background:rgba(124,58,237,0.12)!important;color:#7c3aed!important}
 /* Staff cards on office login */
@@ -2132,8 +2135,35 @@ textarea{resize:none}
 <!-- DRIVER LOGIN -->
 <div class="screen" id="s-driver"><div class="pb">
   <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div><div class="h-title">Driver / คนขับ</div><div class="h-sub">KP Wallpanel</div></div></div>
-  <div style="padding:20px 16px 8px"><div style="font-size:18px;font-weight:700">Who are you? / คุณคือใคร?</div><div style="font-size:13px;color:var(--text2);margin-top:3px">Select your name to see your tour</div></div>
-  <div class="dlgrid" id="dr-login"></div>
+  <div id="dr-login-step1">
+    <div style="padding:20px 16px 8px"><div style="font-size:18px;font-weight:700">Who are you? / คุณคือใคร?</div><div style="font-size:13px;color:var(--text2);margin-top:3px">Select your name to see your tour</div></div>
+    <div class="dlgrid" id="dr-login"></div>
+  </div>
+  <div id="dr-login-step2" style="display:none">
+    <div class="pin-screen">
+      <div class="pin-title">Enter PIN / ใส่รหัส</div>
+      <div class="pin-sub" id="dr-pin-name"></div>
+      <div class="pin-display" id="dr-pin-display">
+        <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+      </div>
+      <div class="pin-grid">
+        <button type="button" class="pin-btn" onclick="pinPress('1')">1</button>
+        <button type="button" class="pin-btn" onclick="pinPress('2')">2</button>
+        <button type="button" class="pin-btn" onclick="pinPress('3')">3</button>
+        <button type="button" class="pin-btn" onclick="pinPress('4')">4</button>
+        <button type="button" class="pin-btn" onclick="pinPress('5')">5</button>
+        <button type="button" class="pin-btn" onclick="pinPress('6')">6</button>
+        <button type="button" class="pin-btn" onclick="pinPress('7')">7</button>
+        <button type="button" class="pin-btn" onclick="pinPress('8')">8</button>
+        <button type="button" class="pin-btn" onclick="pinPress('9')">9</button>
+        <button type="button" class="pin-btn" onclick="checkPin()" style="color:#0284c7;font-weight:800" title="Enter"><i class="ti ti-check"></i></button>
+        <button type="button" class="pin-btn" onclick="pinPress('0')">0</button>
+        <button type="button" class="pin-btn del" onclick="pinDel()"><i class="ti ti-backspace"></i></button>
+      </div>
+      <div class="pin-error" id="dr-pin-error"></div>
+      <button type="button" class="btn" style="max-width:280px;margin:12px auto 0" onclick="drLoginBack()"><i class="ti ti-arrow-left"></i> Back</button>
+    </div>
+  </div>
 </div></div>
 
 <!-- DRIVER TOUR -->
@@ -2414,7 +2444,8 @@ function saveMgrPin() {
 }
 
 // ── OFFICE / WAREHOUSE PIN FUNCTIONS (global) ──
-var pinMode = 'office'; // 'office' | 'warehouse' — which login the PIN belongs to
+var pinMode = 'office'; // 'office' | 'warehouse' | 'driver' — which login the PIN belongs to
+var pinTargetDriverId = null; // driver being logged in (pinMode==='driver')
 function pinPress(digit) {
   if(typeof pinEntry === 'undefined') pinEntry = '';
   if(pinEntry.length >= 30) return; // sane upper bound
@@ -2429,7 +2460,7 @@ function pinDel() {
 }
 
 function updatePinDisplay() {
-  var cont=document.getElementById(pinMode==='warehouse'?'wh-pin-display':'of-pin-display'); if(!cont) return;
+  var cont=document.getElementById(pinMode==='warehouse'?'wh-pin-display':pinMode==='driver'?'dr-pin-display':'of-pin-display'); if(!cont) return;
   var n=(pinEntry||'').length, total=Math.max(4,n), h='';
   for(var i=0;i<total;i++){ h+='<span class="pin-dot'+(i<n?' filled':'')+'"></span>'; }
   cont.innerHTML=h;
@@ -2440,7 +2471,7 @@ document.addEventListener('keydown', function(e){
   if(e.ctrlKey||e.altKey||e.metaKey) return;
   function vis(id){ var el=document.getElementById(id); return el && el.offsetParent !== null; }
   var ctx = vis('mgr-pin-display') ? {p:mgrPinPress,d:mgrPinDel,k:checkMgrPin}
-          : (vis('of-pin-display')||vis('wh-pin-display')) ? {p:pinPress,d:pinDel,k:checkPin}
+          : (vis('of-pin-display')||vis('wh-pin-display')||vis('dr-pin-display')) ? {p:pinPress,d:pinDel,k:checkPin}
           : null;
   if(!ctx) return;
   if(e.key>='0' && e.key<='9'){ ctx.p(e.key); e.preventDefault(); }
@@ -2449,6 +2480,7 @@ document.addEventListener('keydown', function(e){
 });
 
 function checkPin() {
+  if(pinMode==='driver'){ drCheckPin(); return; }   // driver login has its own target + handler
   const s = staffList.find(x => x.id === pinTargetStaffId);
   if(!s) return;
   if(pinEntry !== String(s.pin)) {
@@ -7651,6 +7683,9 @@ function whUnpack(id){const o=wOrders.find(x=>x.id===id);if(!o)return;o.packed=f
 
 // DRIVER
 function drLoginRender(){
+  // Always show the name picker (step 1), hide the PIN keypad (step 2).
+  var _s1=document.getElementById('dr-login-step1'); if(_s1) _s1.style.display='block';
+  var _s2=document.getElementById('dr-login-step2'); if(_s2) _s2.style.display='none';
   const grid=document.getElementById('dr-login');
   if(drivers.length===0){grid.innerHTML='<div class="empty" style="grid-column:1/-1">No drivers yet<br>Ask Management to add you</div>';return;}
   grid.innerHTML=drivers.map(d=>{
@@ -10511,22 +10546,46 @@ function whAcceptBtnSafe(btn) {
 function whUnpackBtn(btn){whUnpack(btn.getAttribute('data-id'));}
 function drLoginBtn(btn){
   var id=btn.getAttribute('data-id');
+  // Office/management (SSO session, kpUser) may open ANY driver freely — no PIN, straight in.
+  if(kpUser){ drLogin(id); return; }
+  // Real driver → office-style PIN keypad screen.
+  drSelectStaff(id);
+}
+// Real driver picked a name → show the office-style PIN keypad (step 2).
+function drSelectStaff(id){
   var d=(drivers||[]).find(function(x){return x.id===id;});
-  // Office/management (SSO session, kpUser) may open ANY driver freely, like before — no PIN.
-  // A real driver (no SSO session) must enter their own PIN (same PIN as their staff record).
-  if(!kpUser){
-    var pin = (d && d.pin!=null) ? d.pin : null;
-    if(pin==null){
-      var st=(staffList||[]).find(function(s){return s.isDriver && ((s.driverId||s.id)===id);});
-      if(st) pin=st.pin;
-    }
-    if(pin!=null && String(pin).trim()!==''){
-      var entered=prompt('🔒 '+((d&&d.name)||'Driver')+'\n\nEnter your PIN / ใส่รหัส PIN:');
-      if(entered===null) return;                              // cancelled
-      if(String(entered).trim()!==String(pin).trim()){ alert('❌ Wrong PIN / รหัสไม่ถูกต้อง'); return; }
-    }
+  var pin=(d&&d.pin!=null)?d.pin:null;
+  if(pin==null){ var st=(staffList||[]).find(function(s){return s.isDriver&&((s.driverId||s.id)===id);}); if(st) pin=st.pin; }
+  if(pin==null || String(pin).trim()===''){ drLogin(id); return; }   // no PIN set → legacy direct login
+  pinMode='driver'; pinTargetDriverId=id; pinEntry='';
+  var nm=document.getElementById('dr-pin-name'); if(nm) nm.textContent='Hello '+((d&&d.name)||'')+' / สวัสดี '+((d&&d.name)||'');
+  document.getElementById('dr-login-step1').style.display='none';
+  document.getElementById('dr-login-step2').style.display='block';
+  updatePinDisplay();
+  var e=document.getElementById('dr-pin-error'); if(e) e.textContent='';
+  window.scrollTo(0,0);
+}
+// Validate the driver PIN keypad entry; on success enter that driver's tour.
+function drCheckPin(){
+  var d=(drivers||[]).find(function(x){return x.id===pinTargetDriverId;});
+  var pin=(d&&d.pin!=null)?d.pin:null;
+  if(pin==null){ var st=(staffList||[]).find(function(s){return s.isDriver&&((s.driverId||s.id)===pinTargetDriverId);}); if(st) pin=st.pin; }
+  if(pin!=null && String(pinEntry)!==String(pin)){
+    var eEl=document.getElementById('dr-pin-error'); if(eEl) eEl.textContent='Wrong PIN / รหัสไม่ถูกต้อง ลองใหม่';
+    pinEntry=''; updatePinDisplay();
+    var disp=document.getElementById('dr-pin-display'); if(disp){ disp.style.background='#FEE2E2'; setTimeout(function(){ if(disp) disp.style.background=''; },600); }
+    return;
   }
-  drLogin(id);
+  document.getElementById('dr-login-step1').style.display='block';
+  document.getElementById('dr-login-step2').style.display='none';
+  pinEntry='';
+  drLogin(pinTargetDriverId);
+}
+// Back from the driver PIN keypad to the name picker.
+function drLoginBack(){
+  document.getElementById('dr-login-step1').style.display='block';
+  document.getElementById('dr-login-step2').style.display='none';
+  pinEntry='';
 }
 function drLoadBtn(btn){drLoad(btn.getAttribute('data-id'));}
 function drUnloadBtn(btn){drUnload(btn.getAttribute('data-id'));}
