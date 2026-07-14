@@ -32,6 +32,7 @@ function doPost(e){
     else if(b.action==='suggest')               out = actSuggest(b);
     else if(b.action==='saveStyleSamples')      out = actSaveSamples(b);
     else if(b.action==='buildStyleDraft')       out = actBuildStyleDraft(b);
+    else if(b.action==='buildHouseStyle')       out = actBuildHouseStyle();
     else if(b.action==='logCorrection')         out = actLogCorrection(b);
     else if(b.action==='listStaff')             out = actListStaff();
     else if(b.action==='health')                out = {ok:true, provider:PROVIDER, model:MODELS[PROVIDER]};
@@ -173,13 +174,15 @@ function actSuggest(b){
   var L = b.lang==='en' ? 'English' : 'German';
   var cust = ctxCustomer(b.customerName);
   var blocks = [ctxCatalog(), ctxStock(), ctxKnowledge(), cust, ctxConversation(b.context)].filter(Boolean).join('\n\n');
+  // One aggregate company voice — no per-staff separation (ctxStyle, not ctxStyleFor).
   var sys = 'You are the Thai customer-service voice of KP Wallpanel (WPC/PVC wall panels, Thailand, Facebook page chat). ' +
-    ctxStyleFor(b.staff) + '\n' + TH_RULES + '\n' +
+    ctxStyle() + '\n' + TH_RULES + '\n' +
     'Ground every factual claim (price, stock, width, shipping) ONLY in the DATA block; if the data does not answer it, say you will check (politely) instead of inventing. ' +
-    'Return ONLY JSON {"suggestions":[{"th":"","back":""}]} with 2-3 alternative replies. th = the Thai reply ready to send. back = faithful '+L+' back-translation so a non-Thai-speaker can verify before sending. Vary the alternatives meaningfully (e.g. short vs. detailed, with vs. without upsell).';
+    'Keep every reply SHORT, warm and polite — answer ONLY what the customer asked, nothing more. No filler, no long text for a short question, no unsolicited upsell or extra explanation. Aim for 1-2 short sentences (a one-line answer is ideal for a one-line question). ' +
+    'Return ONLY JSON {"suggestions":[{"th":"","back":""}]} with 2-3 alternative replies. th = the Thai reply ready to send. back = faithful '+L+' back-translation so a non-Thai-speaker can verify before sending. The alternatives should differ in wording/phrasing, NOT in length — all stay short.';
   var user = 'DATA:\n' + blocks + '\n\nCUSTOMER MESSAGE:\n' + String(b.message||'') +
     (b.intent ? ('\n\nWHAT I WANT TO SAY (in '+L+', express this naturally in Thai, not literally):\n' + b.intent) : '');
-  var out = llmJson(sys, user, 1500);
+  var out = llmJson(sys, user, 600);
   out.customerInfo = cust || null;
   return out;
 }
@@ -231,6 +234,30 @@ function actBuildStyleDraft(b){
   return {ok:true, built:results};
 }
 
+// {action:'buildHouseStyle'} — pool the last ~100 replies across the WHOLE team
+// (no per-staff separation) and distil ONE short, consistent company voice, written
+// straight to assistant/styleProfile/current (the profile every suggestion uses).
+function actBuildHouseStyle(){
+  var allSamples = fbGet('assistant/styleSamples') || {};
+  var pooled = [];
+  Object.keys(allSamples).forEach(function(k){ pooled = pooled.concat(asArr(allSamples[k])); });
+  if(!pooled.length) return {error:'no_samples'};
+  pooled.sort(function(a,b){ return (a.ts||0)-(b.ts||0); });
+  var recent = pooled.slice(-100);   // the last ~100 messages, all staff combined
+  var allCorr = fbGet('assistant/corrections') || {};
+  var corrAll = [];
+  Object.keys(allCorr).forEach(function(k){ corrAll = corrAll.concat(asArr(allCorr[k])); });
+  corrAll.sort(function(a,b){ return (a.ts||0)-(b.ts||0); });
+  var profile = llmJson(
+    'You analyze how a Thai wall-panel shop answers customers on Facebook across the WHOLE team (no per-person separation). Distil ONE consistent company voice from how questions were actually answered. ' +
+    'Return ONLY JSON: {"particle":"ค่ะ|ครับ","address":"","greetings":[],"closings":[],"emojiUsage":"","commonPhrases":[],"discountStyle":"","refusalStyle":"","tone":"","notes":""}. ' +
+    'Emphasise SHORT, warm, to-the-point replies that answer only what was asked — no long text for short questions. Corrections (suggested → edited) reveal preferences — weigh strongly.',
+    'TEAM REPLIES (in = customer, out = staff), last ~100:\n' + JSON.stringify(recent) +
+    (corrAll.length ? ('\n\nCORRECTIONS (suggested → edited):\n' + JSON.stringify(corrAll.slice(-40))) : ''), 1200);
+  profile.builtAt = Date.now(); profile.sampleCount = recent.length;
+  fbSet('assistant/styleProfile/current', profile);   // aggregate = auto-live (no per-staff review needed)
+  return {ok:true, sampleCount:recent.length};
+}
 // {action:'listStaff'} → the discovered staff + how many samples each has (for the extension's persona picker).
 function actListStaff(){
   var samples = fbGet('assistant/styleSamples') || {};
