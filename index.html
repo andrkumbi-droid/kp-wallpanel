@@ -5320,18 +5320,25 @@ function ofCreate(){
     var _first=document.getElementById(_missing[0].el); if(_first){ try{_first.focus();}catch(e){} }
     return;
   }
-  // Duplicate-order guard: if an order with the SAME phone AND the SAME products
-  // already exists, warn (Office may be entering it twice by mistake).
+  // Duplicate-order guard: warn if an order with the SAME phone was created within
+  // the last 7 days (office may be entering the same customer twice). Phone-only —
+  // the old check also required an exact product-signature match, which almost never
+  // matched (form items vs stored lineItems) so the warning effectively never fired.
   var _dupPhone = normPhone((document.getElementById('of-phone')||{}).value||'');
   if(_dupPhone && zoneVal!=='Instore'){
-    var _sig = ofProductSig(ofCurrentProductItems());
-    if(_sig){
-      var _dup = orders.find(function(x){
-        return x.status!=='cancelled' && normPhone(x.phone||'')===_dupPhone && ofProductSig(x.lineItems)===_sig;
-      });
-      if(_dup){
-        if(!confirm('⚠️ Possible duplicate order / อาจเป็นออเดอร์ซ้ำ\n\nAn order with the same phone and same products already exists / มีออเดอร์เบอร์เดียวกันและสินค้าเดียวกันอยู่แล้ว:\n\n• '+_dup.id+(_dup.customer&&_dup.customer!=='—'?' — '+_dup.customer:'')+'\n\nCreate anyway? / สร้างต่อหรือไม่?\nOK = create / สร้าง   ·   Cancel = abort / ยกเลิก')) return;
-      }
+    var _now=Date.now(), _wk=7*24*60*60*1000;
+    function _ordTs(x){ return x.date?new Date(x.date+'T00:00:00').getTime():(x._editTs||0); }
+    var _recent = orders.filter(function(x){
+      if(x.status==='cancelled') return false;
+      if(normPhone(x.phone||'')!==_dupPhone) return false;
+      var d=_ordTs(x);
+      return d>0 && (_now-d)>=0 && (_now-d)<=_wk;
+    }).sort(function(a,b){ return _ordTs(b)-_ordTs(a); });
+    if(_recent.length){
+      var _d=_recent[0];
+      var _days=Math.max(0,Math.floor((_now-_ordTs(_d))/(24*60*60*1000)));
+      var _ago=_days===0?'วันนี้ / today':(_days+' วันก่อน / '+_days+'d ago');
+      if(!confirm('⚠️ เบอร์นี้เพิ่งมีออเดอร์ / Recent order with this phone\n\nมีออเดอร์เบอร์เดียวกันถูกสร้างใน 7 วันที่ผ่านมา / An order with this phone number was created in the last 7 days:\n\n• '+_d.id+(_d.customer&&_d.customer!=='—'?' — '+_d.customer:'')+' ('+_ago+')'+(_recent.length>1?'\n  + อีก '+(_recent.length-1)+' / +'+(_recent.length-1)+' more':'')+'\n\nสร้างต่อหรือไม่? / Create anyway?\nOK = สร้าง / create   ·   Cancel = ยกเลิก / abort')) return;
     }
   }
   // Safety net: if the field holds a stale number (≠ the live next number for
