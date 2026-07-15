@@ -4980,28 +4980,42 @@ function printTourReceipts(ti) {
 // Three inline-SVG donuts (orders / panels / sales) over the zone list, each
 // with the per-zone percentage split. Colours are fixed per zone (ZONE_DEFS order).
 var ZONE_CHART_COLORS = ['#2563eb','#16a34a','#ea580c','#0891b2','#db2777','#7c3aed'];
-function ofDonutSVG(segs, total, centerTop, centerBot){
-  var W=360, H=250, cx=180, cy=125, r=78, sw=34, C=2*Math.PI*r, rl=r+16;
-  var arcs='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="var(--bg2)" stroke-width="'+sw+'"/>';
-  var labels='';
-  if(total>0){
-    var off=0, cum=0;
-    segs.filter(function(s){return s.value>0;}).forEach(function(s){
-      var frac=s.value/total, len=frac*C;
-      arcs+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+s.color+'" stroke-width="'+sw+'" stroke-dasharray="'+len.toFixed(2)+' '+(C-len).toFixed(2)+'" stroke-dashoffset="'+(-off).toFixed(2)+'"/>';
-      // zone + % label placed just outside the ring at the segment's mid-angle, in its colour
-      var mid=cum+frac/2, ang=(-90+mid*360)*Math.PI/180, co=Math.cos(ang), si=Math.sin(ang);
-      var lx=cx+rl*co, ly=cy+rl*si, anchor=co<-0.15?'end':(co>0.15?'start':'middle');
-      labels+='<text x="'+lx.toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="'+anchor+'" dominant-baseline="middle" style="font-size:13px;font-weight:700;fill:'+s.color+'">'+s.label+' '+Math.round(frac*100)+'%</text>';
-      off+=len; cum+=frac;
+// Full pie: percentage INSIDE each slice (white), zone name OUTSIDE (in its colour).
+// Small slices (< threshold) get their % pulled OUT with a leader line so it stays legible.
+function ofPieSVG(segs, total){
+  var W=420, H=290, cx=210, cy=142, r=104, rin=r*0.6, rout=r+14, rlead=r+34, TH=0.10;
+  function polar(rad,deg){ var a=(deg-90)*Math.PI/180; return [cx+rad*Math.cos(a), cy+rad*Math.sin(a)]; }
+  var nz=segs.filter(function(s){return s.value>0;});
+  if(!total||!nz.length) return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:430px;height:auto"><text x="'+cx+'" y="'+cy+'" text-anchor="middle" style="font-size:13px;fill:var(--text2)">No data / ไม่มีข้อมูล</text></svg>';
+  var paths='', leadT='', pctT='', nameT='';
+  if(nz.length===1){
+    paths='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="'+nz[0].color+'"/>';
+    pctT='<text x="'+cx+'" y="'+cy+'" text-anchor="middle" dominant-baseline="central" style="font-size:15px;font-weight:800;fill:#fff">100%</text>';
+    var np=polar(rout,0); nameT='<text x="'+np[0].toFixed(1)+'" y="'+np[1].toFixed(1)+'" text-anchor="middle" style="font-size:13px;font-weight:700;fill:'+nz[0].color+'">'+nz[0].label+'</text>';
+  } else {
+    var start=0;
+    nz.forEach(function(s){
+      var frac=s.value/total, endd=start+frac*360, mid=start+frac*180, pct=Math.round(frac*100);
+      var a=polar(r,start), b=polar(r,endd), large=(frac*360)>180?1:0;
+      paths+='<path d="M'+cx+' '+cy+' L'+a[0].toFixed(1)+' '+a[1].toFixed(1)+' A'+r+' '+r+' 0 '+large+' 1 '+b[0].toFixed(1)+' '+b[1].toFixed(1)+' Z" fill="'+s.color+'"/>';
+      var co=Math.cos((mid-90)*Math.PI/180), anchor=co<-0.15?'end':(co>0.15?'start':'middle');
+      if(frac>=TH){
+        // big slice → % inside (white), name just outside
+        var ip=polar(rin,mid);
+        pctT+='<text x="'+ip[0].toFixed(1)+'" y="'+ip[1].toFixed(1)+'" text-anchor="middle" dominant-baseline="central" style="font-size:14px;font-weight:800;fill:#fff">'+pct+'%</text>';
+        var op=polar(rout,mid);
+        nameT+='<text x="'+op[0].toFixed(1)+'" y="'+op[1].toFixed(1)+'" text-anchor="'+anchor+'" dominant-baseline="middle" style="font-size:12.5px;font-weight:700;fill:'+s.color+'">'+s.label+'</text>';
+      } else {
+        // small slice → pull the label out with a leader line (name + %)
+        var e1=polar(r-2,mid), e2=polar(rlead-3,mid);
+        leadT+='<line x1="'+e1[0].toFixed(1)+'" y1="'+e1[1].toFixed(1)+'" x2="'+e2[0].toFixed(1)+'" y2="'+e2[1].toFixed(1)+'" stroke="'+s.color+'" stroke-width="1.3"/>';
+        var lp=polar(rlead,mid);
+        nameT+='<text x="'+lp[0].toFixed(1)+'" y="'+lp[1].toFixed(1)+'" text-anchor="'+anchor+'" dominant-baseline="middle" style="font-size:12.5px;font-weight:700;fill:'+s.color+'">'+s.label+' '+pct+'%</text>';
+      }
+      start=endd;
     });
   }
-  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:420px;height:auto">'
-    +'<g transform="rotate(-90 '+cx+' '+cy+')">'+arcs+'</g>'
-    +labels
-    +'<text x="'+cx+'" y="'+(cy-2)+'" text-anchor="middle" style="font-size:26px;font-weight:800;fill:var(--text)">'+centerTop+'</text>'
-    +'<text x="'+cx+'" y="'+(cy+18)+'" text-anchor="middle" style="font-size:12px;fill:var(--text2)">'+centerBot+'</text>'
-  +'</svg>';
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:430px;height:auto">'+paths+leadT+pctT+nameT+'</svg>';
 }
 function ofRenderZoneCharts(defs, agg){
   var el=document.getElementById('of-sales-zone-charts'); if(!el) return;
@@ -5016,12 +5030,13 @@ function ofRenderZoneCharts(defs, agg){
   if(!anyData){ el.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">No data / ไม่มีข้อมูล</div>'; return; }
   var charts=metrics.map(function(m){
     var total=defs.reduce(function(a,z){return a+(agg[z.key][m.key]||0);},0);
-    // biggest slice first so its label sits at the top for readability
+    // biggest slice first so its name sits at the top for readability
     var segs=defs.map(function(z,i){return {color:cols[i], value:agg[z.key][m.key]||0, label:z.emoji+' '+z.label.split('/')[0].trim()};})
       .sort(function(a,b){return b.value-a.value;});
-    return '<div style="margin-bottom:10px">'
-      +'<div style="font-size:13px;font-weight:700;color:var(--text);text-align:center;margin-bottom:2px">'+m.title+'</div>'
-      +'<div style="text-align:center">'+ofDonutSVG(segs, total, m.fmt(total), m.suf)+'</div>'
+    return '<div style="margin-bottom:12px">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--text);text-align:center">'+m.title+'</div>'
+      +'<div style="font-size:12px;color:var(--text2);text-align:center;margin-bottom:2px">'+m.fmt(total)+' '+m.suf+'</div>'
+      +'<div style="text-align:center">'+ofPieSVG(segs, total)+'</div>'
     +'</div>';
   }).join('');
   el.innerHTML='<div class="card" style="padding:12px 10px 6px;margin-bottom:8px">'+charts+'</div>';
