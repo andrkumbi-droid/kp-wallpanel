@@ -6513,26 +6513,31 @@ function ofSetTourAdvance(tourId, val){
 }
 // Remaining tour pay after the start-of-tour advance (never below 0).
 function tourNetPay(t){ return Math.max(0, (parseFloat(t.driverPay)||0) - (parseFloat(t.driverAdvance)||0)); }
-// Confirm-dialog line: "Tour pay X ฿ − advance Y ฿ = Z ฿ → payroll".
+// Confirm-dialog line. Payroll always books the FULL tour pay (what the driver earned);
+// the advance was already paid at the start, so only the remainder is handed over at end.
 function tourEndPaySummary(t){
   var tp=parseFloat(t.driverPay)||0, ad=parseFloat(t.driverAdvance)||0;
   if(tp<=0) return '';
-  return '\nTour pay '+tp.toLocaleString()+' ฿'+(ad>0?' − advance '+ad.toLocaleString()+' ฿ = '+tourNetPay(t).toLocaleString()+' ฿':'')+' → payroll';
+  var s='\nTour pay '+tp.toLocaleString()+' ฿ → payroll';
+  if(ad>0) s+='\n(advance '+ad.toLocaleString()+' ฿ paid at start · hand over at end: '+tourNetPay(t).toLocaleString()+' ฿)';
+  return s;
 }
 // Category key for tour pay: the office-managed "Tour Pay" category if present, else 'tour_pay'.
 function payTourCatKey(){ try{ var c=payCats().find(function(x){ return x.key==='tour_pay' || /tour\s*pay/i.test(x.label||''); }); return c?c.key:'tour_pay'; }catch(e){ return 'tour_pay'; } }
-// On End tour: book the tour pay MINUS the start-of-tour advance into the driver's payroll.
+// On End tour: book the FULL tour pay into the driver's payroll (that's the total they
+// earned). The advance is only a timing split — it was paid at start, remainder at end —
+// so it does NOT reduce the payroll total, only the cash handed over at tour end.
 function endTourPayroll(t){
   if(!t) return;
-  var total=parseFloat(t.driverPay)||0, adv=parseFloat(t.driverAdvance)||0;
-  var amt=total-adv; if(amt<=0) return;   // fully covered by the advance (or nothing owed)
+  var amt=parseFloat(t.driverPay)||0; if(amt<=0) return;
+  var adv=parseFloat(t.driverAdvance)||0;
   var s=(staffList||[]).find(function(x){return x.driverId && x.driverId===t.driverId;})
        || (staffList||[]).find(function(x){return x.name===t.driverName;});
   if(!s){ return; } // can't attribute to a payroll person
   var now=new Date();
   var rec={ id:'pl-'+Date.now(), who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:amt,
     date: now.toISOString().slice(0,10), ts:Date.now(),
-    note:'Tour'+(t.created?' '+t.created:'')+(adv>0?' (total '+total.toLocaleString()+' − advance '+adv.toLocaleString()+')':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
+    note:'Tour'+(t.created?' '+t.created:'')+(adv>0?' (incl. advance '+adv.toLocaleString()+' paid at start, '+tourNetPay(t).toLocaleString()+' at end)':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
 }
 // DRIVERS tab — list drivers → their past tours (Tour 1,2,… + date) → orders in each.
