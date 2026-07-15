@@ -4981,19 +4981,26 @@ function printTourReceipts(ti) {
 // with the per-zone percentage split. Colours are fixed per zone (ZONE_DEFS order).
 var ZONE_CHART_COLORS = ['#2563eb','#16a34a','#ea580c','#0891b2','#db2777','#7c3aed'];
 function ofDonutSVG(segs, total, centerTop, centerBot){
-  var r=54, C=2*Math.PI*r, off=0, size=130, cx=size/2, cy=size/2;
-  var arcs='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="var(--bg2)" stroke-width="18"/>';
+  var W=360, H=250, cx=180, cy=125, r=78, sw=34, C=2*Math.PI*r, rl=r+16;
+  var arcs='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="var(--bg2)" stroke-width="'+sw+'"/>';
+  var labels='';
   if(total>0){
-    arcs += segs.filter(function(s){return s.value>0;}).map(function(s){
-      var len=(s.value/total)*C;
-      var el='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+s.color+'" stroke-width="18" stroke-dasharray="'+len.toFixed(2)+' '+(C-len).toFixed(2)+'" stroke-dashoffset="'+(-off).toFixed(2)+'"/>';
-      off+=len; return el;
-    }).join('');
+    var off=0, cum=0;
+    segs.filter(function(s){return s.value>0;}).forEach(function(s){
+      var frac=s.value/total, len=frac*C;
+      arcs+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+s.color+'" stroke-width="'+sw+'" stroke-dasharray="'+len.toFixed(2)+' '+(C-len).toFixed(2)+'" stroke-dashoffset="'+(-off).toFixed(2)+'"/>';
+      // zone + % label placed just outside the ring at the segment's mid-angle, in its colour
+      var mid=cum+frac/2, ang=(-90+mid*360)*Math.PI/180, co=Math.cos(ang), si=Math.sin(ang);
+      var lx=cx+rl*co, ly=cy+rl*si, anchor=co<-0.15?'end':(co>0.15?'start':'middle');
+      labels+='<text x="'+lx.toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="'+anchor+'" dominant-baseline="middle" style="font-size:13px;font-weight:700;fill:'+s.color+'">'+s.label+' '+Math.round(frac*100)+'%</text>';
+      off+=len; cum+=frac;
+    });
   }
-  return '<svg viewBox="0 0 '+size+' '+size+'" style="width:118px;height:118px">'
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:420px;height:auto">'
     +'<g transform="rotate(-90 '+cx+' '+cy+')">'+arcs+'</g>'
-    +'<text x="'+cx+'" y="'+(cy-1)+'" text-anchor="middle" style="font-size:18px;font-weight:800;fill:var(--text)">'+centerTop+'</text>'
-    +'<text x="'+cx+'" y="'+(cy+15)+'" text-anchor="middle" style="font-size:9px;fill:var(--text2)">'+centerBot+'</text>'
+    +labels
+    +'<text x="'+cx+'" y="'+(cy-2)+'" text-anchor="middle" style="font-size:26px;font-weight:800;fill:var(--text)">'+centerTop+'</text>'
+    +'<text x="'+cx+'" y="'+(cy+18)+'" text-anchor="middle" style="font-size:12px;fill:var(--text2)">'+centerBot+'</text>'
   +'</svg>';
 }
 function ofRenderZoneCharts(defs, agg){
@@ -5009,23 +5016,15 @@ function ofRenderZoneCharts(defs, agg){
   if(!anyData){ el.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">No data / ไม่มีข้อมูล</div>'; return; }
   var charts=metrics.map(function(m){
     var total=defs.reduce(function(a,z){return a+(agg[z.key][m.key]||0);},0);
-    var segs=defs.map(function(z,i){return {color:cols[i], value:agg[z.key][m.key]||0};});
-    var rows=defs.map(function(z,i){ return {z:z,i:i,v:agg[z.key][m.key]||0}; })
-      .filter(function(r){return r.v>0;})
-      .sort(function(a,b){return b.v-a.v;})
-      .map(function(r){ var pct=total>0?Math.round(r.v/total*100):0;
-        return '<div style="display:flex;align-items:center;gap:5px;font-size:11px;margin:1px 0">'
-          +'<span style="width:9px;height:9px;border-radius:2px;background:'+cols[r.i]+';flex-shrink:0"></span>'
-          +'<span style="color:var(--text2);flex:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+r.z.emoji+' '+r.z.label.split('/')[0].trim()+'</span>'
-          +'<span style="font-weight:700;color:var(--text)">'+pct+'%</span></div>';
-      }).join('');
-    return '<div style="flex:1 1 160px;min-width:150px">'
-      +'<div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:4px;text-align:center">'+m.title+'</div>'
+    // biggest slice first so its label sits at the top for readability
+    var segs=defs.map(function(z,i){return {color:cols[i], value:agg[z.key][m.key]||0, label:z.emoji+' '+z.label.split('/')[0].trim()};})
+      .sort(function(a,b){return b.value-a.value;});
+    return '<div style="margin-bottom:10px">'
+      +'<div style="font-size:13px;font-weight:700;color:var(--text);text-align:center;margin-bottom:2px">'+m.title+'</div>'
       +'<div style="text-align:center">'+ofDonutSVG(segs, total, m.fmt(total), m.suf)+'</div>'
-      +'<div style="margin-top:5px">'+(rows||'<div style="font-size:11px;color:var(--text2);text-align:center">—</div>')+'</div>'
     +'</div>';
   }).join('');
-  el.innerHTML='<div class="card" style="padding:12px 14px;margin-bottom:8px"><div style="display:flex;flex-wrap:wrap;gap:14px;justify-content:center">'+charts+'</div></div>';
+  el.innerHTML='<div class="card" style="padding:12px 10px 6px;margin-bottom:8px">'+charts+'</div>';
 }
 function toggleSalesDetail(type) {
   const detail = document.getElementById('of-sales-'+type+'-detail');
