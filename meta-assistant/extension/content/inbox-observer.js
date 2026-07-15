@@ -46,7 +46,10 @@
 
   const mo = new MutationObserver(() => {
     clearTimeout(mo._t);
-    mo._t = setTimeout(check, 400); // debounce bursts of DOM changes
+    mo._t = setTimeout(() => {
+      check();
+      try { if (KPUI && KPUI.autoCollect) KPUI.autoCollect(); } catch (e) {} // auto-learn new replies
+    }, 400); // debounce bursts of DOM changes
   });
   mo.observe(document.body, { childList: true, subtree: true });
 

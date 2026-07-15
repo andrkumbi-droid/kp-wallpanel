@@ -35,9 +35,11 @@ const KPUI = {
         </div>
         <div class="kp-sec" id="kp-sugs"></div>
         <div class="kp-foot">
-          <button id="kp-collect" class="kp-btn" title="Sichtbare Chat-Paare als Stil-Beispiele speichern (PII maskiert)"
+          <button id="kp-collect" class="kp-btn" title="Nur die letzte Antwort dieses Chats als Stil-Beispiel speichern (PII maskiert)"
             data-de="📚 Stil sammeln" data-en="📚 Collect style">📚 Stil sammeln</button>
-          <span id="kp-status"></span>
+          <button id="kp-collect-hist" class="kp-btn" title="Ganzen sichtbaren Verlauf dieses Chats lernen — nach oben scrollen lädt mehr (PII maskiert)"
+            data-de="🕘 Verlauf lernen" data-en="🕘 Learn history">🕘 Verlauf lernen</button>
+          <span id="kp-status" title="🧠 = lernt automatisch aus neuen Antworten"></span>
         </div>
       </div>`;
     document.body.appendChild(el);
@@ -47,6 +49,7 @@ const KPUI = {
     el.querySelectorAll('.kp-langs button').forEach(b => b.onclick = () => this.setLang(b.dataset.l));
     el.querySelector('#kp-go').onclick = () => this.suggest();
     el.querySelector('#kp-collect').onclick = () => this.collectStyle();
+    el.querySelector('#kp-collect-hist').onclick = () => this.collectHistory();
   },
 
   setLang(l) {
@@ -173,6 +176,40 @@ const KPUI = {
     this.status('⏳ speichere ' + samples.length + ' Paare von ' + staff + '…');
     const r = await this.api({ action: 'saveStyleSamples', staff, samples });
     this.status(r.ok ? ('✓ ' + r.saved + ' Beispiele von ' + staff + ' gespeichert') : ('⚠ ' + r.error));
+  },
+
+  // Learn from the WHOLE visible history of the open conversation (all customer→reply
+  // pairs). Staff attribution no longer matters — one aggregate house style — so we
+  // collect every pair regardless of who wrote it. Scroll up first to load more history.
+  async collectHistory() {
+    if (typeof kpLiveBubbles !== 'function') { this.status('kein Posteingang erkannt'); return; }
+    const pairs = kpPairConversation(kpLiveBubbles());
+    if (!pairs.length) { this.status('keine Paare im Verlauf'); return; }
+    const staff = (typeof kpLiveStaff === 'function' && kpLiveStaff()) || 'team';
+    this.status('⏳ lerne ' + pairs.length + ' Paare aus dem Verlauf…');
+    const r = await this.api({ action: 'saveStyleSamples', staff, samples: pairs.map(p => ({ in: kpMask(p.in), out: kpMask(p.out) })) });
+    this.status(r.ok ? ('🧠 ' + r.saved + ' aus Verlauf gelernt' + (r.rebuilt ? ' · Stil aktualisiert' : '')) : ('⚠ ' + (r.error || '?')));
+  },
+
+  // Auto-learn: called by the observer on DOM changes. Saves the newest sent reply as a
+  // style sample (once), so every new answer is learned without a click. Deduped by
+  // recent reply text so revisiting a chat doesn't re-save the same reply.
+  _autoSigs: null,
+  autoCollect() {
+    if (typeof kpLiveBubbles !== 'function') return;
+    const pairs = kpPairConversation(kpLiveBubbles());
+    if (!pairs.length) return;
+    const latest = pairs[pairs.length - 1];
+    const sig = kpMask(latest.out || '');
+    if (!sig) return;
+    if (!this._autoSigs) this._autoSigs = new Set();
+    if (this._autoSigs.has(sig)) return;
+    this._autoSigs.add(sig);
+    if (this._autoSigs.size > 60) this._autoSigs = new Set([sig]); // bound memory
+    const staff = (typeof kpLiveStaff === 'function' && kpLiveStaff()) || 'team';
+    this.api({ action: 'saveStyleSamples', staff, samples: [{ in: kpMask(latest.in), out: sig }] })
+      .then(r => { if (r && r.ok) this.status('🧠 gelernt' + (r.rebuilt ? ' · Stil aktualisiert' : '')); })
+      .catch(() => {});
   }
 };
 
@@ -181,4 +218,26 @@ function kpMask(t) {
   return String(t || '')
     .replace(/0[\d\s\-]{8,11}/g, '[PHONE]')
     .replace(/https?:\/\/\S+/g, '[URL]');
+}
+
+// Pair a conversation's bubbles into {in, out} learning samples: each outgoing run
+// (the shop's reply, joined) paired with the preceding customer message. No per-staff
+// attribution needed — the backend aggregates everything into one house style.
+function kpPairConversation(bubbles) {
+  const pairs = [];
+  let lastIn = '';
+  for (let i = 0; i < bubbles.length; ) {
+    const b = bubbles[i];
+    if (!b || !b.text) { i++; continue; }
+    if (b.dir === 'in') { lastIn = b.text; i++; continue; }
+    // outgoing run → join the Thai lines into one reply
+    const parts = [];
+    while (i < bubbles.length && bubbles[i].dir === 'out') {
+      if (KP_THAI_RE.test(bubbles[i].text)) parts.push(bubbles[i].text);
+      i++;
+    }
+    const out = parts.join('\n').trim();
+    if (out) { pairs.push({ in: lastIn, out }); lastIn = ''; }
+  }
+  return pairs;
 }
