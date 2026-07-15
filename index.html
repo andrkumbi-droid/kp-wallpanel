@@ -4053,7 +4053,7 @@ function openDM(id){editDM=id;document.getElementById('dm-title').textContent=id
 function closeDM(){document.getElementById('dm-modal').classList.remove('open');editDM=null;}
 function saveDM(){const name=document.getElementById('dm-name').value.trim();if(!name){alert('Enter a name');return;}const phone=document.getElementById('dm-phone').value.trim(),vehicle=document.getElementById('dm-vehicle').value.trim();if(editDM){const d=drivers.find(x=>x.id===editDM);d.name=name;d.phone=phone;d.vehicle=vehicle;}else drivers.push({id:'d'+Date.now(),name,phone,vehicle});closeDM();mgRender();syncDrivers();}
 function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filter(x=>x.id!==editDM);closeDM();mgRender();syncDrivers();}
-function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)))return;try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)))return;if(!ofSlipGuard(t))return;try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').valueAsDate=new Date();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -5062,6 +5062,7 @@ function ofEndTourFromDetail() {
   if(currentTourDetailIdx === null) return;
   const t = activeTours[currentTourDetailIdx];
   if(!confirm('End ' + t.driverName + "'s tour?"+tourEndPaySummary(t))) return;
+  if(!ofSlipGuard(t)) return;
   var _pinBy = requireStaffPin('End tour / จบทัวร์ · ' + t.driverName);
   if(!_pinBy) return;
   try{ addLog('Tour '+(t.driverName||'')+' ended (PIN: '+_pinBy+')','-'); }catch(e){}
@@ -6282,6 +6283,11 @@ function ofRenderTour(){
     var pct=t.orders.length>0?Math.round((del+shp)/t.orders.length*100):0;
     var totCtn=t.orders.reduce(function(a,id){var o=orders.find(function(x){return x.id===id;});return a+(parseInt(o&&o.ctn)||0);},0);
     var totBundle=t.orders.reduce(function(a,id){var o=orders.find(function(x){return x.id===id;});return a+(parseInt(o&&o.bundle)||0);},0);
+    // Online-payment slips the office should eyeball before accepting the transfer.
+    var slipOrds=ofTourSlipOrders(t);
+    var slipDone=slipOrds.filter(function(o){return o.slipReview&&o.slipReview.status;}).length;
+    var slipFlag=slipOrds.filter(function(o){return o.slipReview&&o.slipReview.status==='flag';}).length;
+    var slipBtnBg=slipFlag>0?'#dc2626':(slipDone<slipOrds.length?'#d97706':'#16a34a');
     // Order list with remove button
     var orderList = t.orders.map(function(id) {
       var ord = orders.find(function(x){return x.id===id;});
@@ -6360,6 +6366,7 @@ function ofRenderTour(){
       kpcTourBubble(t.id)+
       '<button type="button" onclick="event.stopPropagation();ofOptimizeTour(\''+t.id+'\')" title="Optimal route order / จัดลำดับเส้นทาง" style="font-size:11px;padding:3px 8px;border:none;background:#7c3aed;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">↕ Route</button>'+
       '<button type="button" onclick="event.stopPropagation();printTourReceipts('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#1D4ED8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600"><i class="ti ti-printer"></i> All Print</button>'+
+      (slipOrds.length>0?'<button type="button" onclick="event.stopPropagation();ofReviewTourSlips(\''+t.id+'\')" title="Check online-payment slips / ตรวจสลิปโอน" style="font-size:11px;padding:3px 8px;border:none;background:'+slipBtnBg+';color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🧾 Slips '+slipDone+'/'+slipOrds.length+(slipFlag>0?' ⚠':'')+'</button>':'')+
       '<button type="button" onclick="event.stopPropagation();ofAddOrderToTour(\''+t.id+'\')" title="Add a ready order to this tour / เพิ่มออเดอร์เข้าทัวร์" style="font-size:11px;padding:3px 8px;border:none;background:#0ea5e9;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">➕ Add</button>'+
       (!t.driving?'<button type="button" onclick="event.stopPropagation();ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 Departed</button>':'<span style="font-size:11px;color:var(--green);font-weight:600">🚚 Driving '+(t.departedDate?fmtD(t.departedDate)+' ':'')+t.departedAt+'</span>')+
       '<span class="badge bactive">'+t.orders.length+' orders</span><i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2)"></i></div>'+
@@ -8375,11 +8382,118 @@ function handleSlipPhoto(input){
   reader.readAsDataURL(f);
   input.value='';
 }
-// Little slip badge used on the active-tour order rows.
+// Little slip badge used on the active-tour order rows. Shows the driver's auto
+// QR verdict plus (once the office has eyeballed it) a green ✅ / red 🚩 mark.
 function ofSlipBadge(ord){
-  var s=ord&&ord.slip; if(!s) return '';
-  var titles={ok:'Slip QR OK',mismatch:'Slip amount mismatch',invalid:'Slip QR invalid — possible fake',unreadable:'Slip QR unreadable',unknown:'Slip captured — verify manually'};
-  return ' <span title="'+(titles[s.status]||'Slip')+'" style="font-size:11px">'+kpSlipShort(s)+'</span>';
+  var s=ord&&ord.slip, r=ord&&ord.slipReview, out='';
+  if(s){
+    var titles={ok:'Slip QR OK',mismatch:'Slip amount mismatch',invalid:'Slip QR invalid — possible fake',unreadable:'Slip QR unreadable',unknown:'Slip captured — verify manually'};
+    out+=' <span title="'+(titles[s.status]||'Slip')+'" style="font-size:11px">'+kpSlipShort(s)+'</span>';
+  }
+  if(r&&r.status) out+=' <span title="Office: '+(r.status==='ok'?'checked OK':'flagged')+(r.by?' — '+r.by:'')+'" style="font-size:11px">'+(r.status==='ok'?'✅':'🚩')+'</span>';
+  return out;
+}
+// ── OFFICE SLIP CONTROL (per active tour) ─────────────────────────────
+// One-tap panel: every online-paid delivered order in the tour with its uploaded
+// slip photo(s), the driver's auto QR verdict, an amount cross-check, and OK /
+// Problem buttons — so the office can catch fake slips, wrong amounts, or a driver
+// who hit "online" but attached no slip, without hunting the Pictures tab.
+function ofTourSlipOrders(t){
+  if(!t) return [];
+  return t.orders.filter(function(id){
+    if((t.status[id]||'')!=='delivered') return false;
+    var o=orders.find(function(x){return x.id===id;});
+    return o && ofPayCO(o).online>0;
+  }).map(function(id){ return orders.find(function(x){return x.id===id;}); }).filter(Boolean);
+}
+// Guard before ending a tour: every online slip must be controlled by the office.
+// Blocks on unreviewed OR 🚩-flagged slips. The office can still force-end with an
+// explicit confirm (slip genuinely unresolvable), but never end by accident.
+function ofSlipGuard(t){
+  var list=ofTourSlipOrders(t);
+  var unrev=list.filter(function(o){return !(o.slipReview&&o.slipReview.status);});
+  var flagged=list.filter(function(o){return o.slipReview&&o.slipReview.status==='flag';});
+  if(!unrev.length && !flagged.length) return true;
+  var lines=[];
+  if(unrev.length) lines.push('• '+unrev.length+' Slip(s) noch nicht kontrolliert / not checked:\n   '+unrev.map(function(o){return o.id;}).join(', '));
+  if(flagged.length) lines.push('• '+flagged.length+' Slip(s) als 🚩 Problem markiert / flagged:\n   '+flagged.map(function(o){return o.id;}).join(', '));
+  return confirm('🧾 Slip-Kontrolle offen / Slip control open:\n\n'+lines.join('\n\n')+'\n\n👉 Erst über "🧾 Slips" prüfen. Tour TROTZDEM beenden? / End tour anyway?');
+}
+function ofSlipTime(ts){
+  if(!ts) return ''; var d=new Date(ts);
+  var p=function(n){return('0'+n).slice(-2);};
+  return p(d.getDate())+'.'+p(d.getMonth()+1)+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+function ofReviewTourSlips(tourId){
+  var t=(activeTours||[]).find(function(x){return x.id===tourId;}); if(!t) return;
+  var list=ofTourSlipOrders(t);
+  var ov=document.getElementById('slip-review-modal');
+  if(!ov){
+    ov=document.createElement('div'); ov.id='slip-review-modal';
+    ov.style.cssText='position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center';
+    ov.onclick=function(e){ if(e.target===ov) ofCloseSlipReview(); };
+    document.body.appendChild(ov);
+  }
+  ov.dataset.tid=tourId;
+  var totOnline=list.reduce(function(a,o){return a+ofPayCO(o).online;},0);
+  var rows=list.map(function(o){ return ofSlipReviewCard(o); }).join('');
+  ov.innerHTML='<div style="background:var(--bg);color:var(--text);width:100%;max-width:560px;max-height:88vh;border-radius:16px 16px 0 0;display:flex;flex-direction:column">'
+    +'<div style="padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">'
+      +'<div><div style="font-size:16px;font-weight:700">🧾 Slip control · '+kpcEsc(t.driverName||'')+'</div>'
+        +'<div style="font-size:12px;color:var(--text2)">'+list.length+' online '+(list.length===1?'payment':'payments')+' · 🏦 '+totOnline.toLocaleString()+' ฿</div></div>'
+      +'<button type="button" onclick="ofCloseSlipReview()" style="border:none;background:var(--bg2);width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;color:var(--text)">✕</button>'
+    +'</div>'
+    +'<div style="padding:12px 16px;overflow-y:auto">'+(rows||'<div class="empty" style="padding:1rem">No online payments in this tour / ไม่มีการโอน</div>')+'</div>'
+  +'</div>';
+  ov.style.display='flex';
+  list.forEach(function(o){ ofLoadSlipPhotos(o.id); });
+}
+function ofCloseSlipReview(){ var ov=document.getElementById('slip-review-modal'); if(ov) ov.style.display='none'; }
+function ofSlipReviewCard(o){
+  var online=ofPayCO(o).online, sid=safeOrderId(o.id), s=o.slip;
+  var badge=s?('<span style="font-size:12px;font-weight:700;color:'+kpSlipColor(s.status)+'">'+kpSlipShort(s)+'</span>'):'';
+  var vmsg=(s&&s.msg)?'<div style="font-size:11px;color:var(--text2);margin-top:2px">'+kpcEsc(s.msg)+'</div>':'';
+  // Cross-check: does the amount decoded from the slip QR match what the driver entered?
+  var amtWarn=(s&&s.amount>0&&Math.abs(s.amount-online)>=1)
+    ? '<div style="font-size:11px;font-weight:700;color:#dc2626;margin-top:2px">⚠ Slip '+s.amount.toLocaleString()+' ฿ ≠ entered '+online.toLocaleString()+' ฿</div>' : '';
+  return '<div style="border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
+      +'<div style="min-width:0"><div style="font-weight:700;font-size:14px">'+kpcEsc(o.id)+' '+badge+'</div>'
+        +'<div style="font-size:12px;color:var(--text2)">'+kpcEsc((o.customer||'').trim()||o.zone||'')+(o.province?' · '+kpcEsc(o.province):'')+'</div>'+vmsg+amtWarn+'</div>'
+      +'<div style="text-align:right;flex-shrink:0"><div style="font-size:16px;font-weight:800;color:#1d4ed8">🏦 '+online.toLocaleString()+'</div><div style="font-size:10px;color:var(--text2)">฿ online</div></div>'
+    +'</div>'
+    +'<div id="slrev_ph_'+sid+'" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><span style="font-size:12px;color:var(--text2)">Loading slip… / กำลังโหลด</span></div>'
+    +'<div id="slrev_btn_'+sid+'" style="margin-top:8px">'+ofSlipReviewButtons(o)+'</div>'
+  +'</div>';
+}
+function ofSlipReviewButtons(o){
+  var r=o.slipReview||null, okOn=r&&r.status==='ok', flagOn=r&&r.status==='flag';
+  var oid=String(o.id).replace(/['\\]/g,'');
+  var meta=r?('<span style="font-size:11px;color:var(--text2);margin-left:8px">'+(r.status==='ok'?'✅':'🚩')+' '+kpcEsc(r.by||'')+' · '+ofSlipTime(r.ts)+'</span>'):'';
+  return '<button type="button" onclick="ofSetSlipReview(\''+oid+'\',\'ok\')" style="font-size:12px;font-weight:700;padding:6px 12px;border-radius:var(--rs);cursor:pointer;border:1.5px solid #16a34a;background:'+(okOn?'#16a34a':'transparent')+';color:'+(okOn?'#fff':'#16a34a')+'">✅ OK / ยืนยัน</button> '
+    +'<button type="button" onclick="ofSetSlipReview(\''+oid+'\',\'flag\')" style="font-size:12px;font-weight:700;padding:6px 12px;border-radius:var(--rs);cursor:pointer;border:1.5px solid #dc2626;background:'+(flagOn?'#dc2626':'transparent')+';color:'+(flagOn?'#fff':'#dc2626')+'">🚩 Problem / มีปัญหา</button>'
+    +meta;
+}
+function ofLoadSlipPhotos(orderId){
+  var sid=safeOrderId(orderId), el=document.getElementById('slrev_ph_'+sid); if(!el) return;
+  if(!window.fbDB){ el.innerHTML='<span style="font-size:12px;color:var(--text2)">—</span>'; return; }
+  window.fbDB.ref('orderPhotos/slip/'+sid).once('value', function(snap){
+    var data=snap.val()||{}, keys=Object.keys(data);
+    if(!keys.length){ el.innerHTML='<div style="font-size:12px;font-weight:700;color:#dc2626;background:#fee2e2;border-radius:8px;padding:6px 10px">⚠ ไม่มีสลิป / No slip — driver marked online but attached none!</div>'; return; }
+    el.innerHTML=keys.map(function(k){
+      var p=data[k]||{};
+      var tag=p.slip?('<div style="position:absolute;top:2px;left:2px;background:'+kpSlipColor(p.slip.status)+';color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px">'+kpSlipShort(p.slip)+'</div>'):'';
+      return '<div style="position:relative"><img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:84px;height:84px;object-fit:cover;border-radius:8px;cursor:pointer;border:1px solid var(--border)">'+tag+'</div>';
+    }).join('');
+  });
+}
+function ofSetSlipReview(orderId, status){
+  var o=orders.find(function(x){return x.id===orderId;}); if(!o) return;
+  if(o.slipReview && o.slipReview.status===status) o.slipReview=null;   // tap again → clear
+  else o.slipReview={status:status, by:(currentStaffName||'Office'), ts:Date.now()};
+  try{ syncOrders(); }catch(e){}
+  var el=document.getElementById('slrev_btn_'+safeOrderId(orderId)); if(el) el.innerHTML=ofSlipReviewButtons(o);
+  try{ ofRenderTour(); }catch(e){}   // refresh the header 🧾 Slips count/colour
 }
 // Capture one or more delivery photos (camera or gallery) — saved immediately
 // to the order's 'delivery' photo node, like the warehouse pack photos.
