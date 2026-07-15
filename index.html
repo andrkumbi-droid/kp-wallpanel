@@ -11705,8 +11705,25 @@ function qtProductRow(p) {
 }
 
 function qtToggleSoldOut(code) {
-  if(soldOut[code]) delete soldOut[code]; else soldOut[code]=1;
-  if(window.fbDB) window.fbDB.ref('soldOut').set(Object.keys(soldOut).length ? soldOut : null);
+  var makeSold = !soldOut[code];
+  if(makeSold) soldOut[code]=1; else delete soldOut[code];
+  // Atomic per-product write: only touches THIS code, so it can never depend on or
+  // clobber the rest of the soldOut node. Reports success/failure so a silent
+  // connection/rules error can't look like "it worked" while the website never updates.
+  if(window.fbDB){
+    window.fbDB.ref('soldOut/'+code).set(makeSold ? 1 : null, function(err){
+      if(err){
+        // revert the optimistic local change so the UI matches reality
+        if(makeSold) delete soldOut[code]; else soldOut[code]=1;
+        try{ var r2=document.getElementById('qtrow-'+code); var p2=QT_PRODUCTS.find(function(x){return x.code===code;}); if(r2&&p2) r2.outerHTML=qtProductRow(p2); }catch(e){}
+        alert('❌ Konnte nicht speichern / บันทึกไม่สำเร็จ — '+((err&&err.message)||err)+'\nBitte App neu laden / โปรดรีเฟรช');
+      } else {
+        try{ showNotif((makeSold?'✕ '+code+' → หมด / sold out — เว็บไซต์ซ่อนแล้ว':'☐ '+code+' → พร้อมขาย / back on website')); }catch(e){}
+      }
+    });
+  } else {
+    alert('⚠ Keine DB-Verbindung — App neu laden / ไม่ได้เชื่อมต่อฐานข้อมูล โปรดรีเฟรช');
+  }
   var row = document.getElementById('qtrow-'+code);
   if(row) {
     var p = QT_PRODUCTS.find(function(x){return x.code===code;});
