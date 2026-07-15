@@ -7702,15 +7702,23 @@ function submitCO(){
   alert('Order updated & sent to warehouse / อัปเดตออเดอร์และส่งให้คลังแล้ว ✓');
 }
 function whConfirmChange(id){
-  // Order is already updated; this just acknowledges the warehouse re-packed the delta.
+  // Confirming a change routes the order back through the FULL packing flow
+  // (CTN, bundle, packers, fresh photo) — like a new order — so the re-packed
+  // goods are documented, not just acknowledged.
   var o=orders.find(function(x){return x.id===id;}); if(!o||!o.changeReq)return;
-  if(!confirm('Confirm done / ยืนยันว่าแก้ของแล้ว?\n'+coDiffText(o.changeReq)))return;
+  if(!confirm('Confirm change & re-pack / ยืนยันแก้ไขและแพ็คใหม่?\n'+coDiffText(o.changeReq)))return;
   var who=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Warehouse';
   try{auditAdd({type:'change-confirmed',orderId:o.id,by:who,detail:coDiffText(o.changeReq)});}catch(e){}
   // keep the record on the order (calm "changed" banner), just mark it confirmed
   o.changeReq.status='confirmed'; o.changeReq.confirmedBy=who; o.changeReq.confirmedAt=Date.now();
+  // Send it into Packing and require a NEW photo of the re-packed order: record the
+  // current photo count as a baseline so whDonePacking demands at least one more.
+  o._repackPhotoBase = (typeof orderPhotoCount==='function')?orderPhotoCount(id,'warehouse'):0;
+  o.status='packing';
+  try{ whPackerSel[o.id]=[]; }catch(e){}   // re-pick who did the re-pack
+  addStatusLog(o,'packing',who);
   o._editTs=Date.now();
-  syncOrders();ofRenderOrders();whRender();try{mgRender();}catch(e){}
+  syncOrders();ofRenderOrders();whRender();try{whRenderPacking();}catch(e){}try{mgRender();}catch(e){}
 }
 
 // WAREHOUSE
@@ -7846,6 +7854,7 @@ function whRender() {
         : '<div class="empty"><i class="ti ti-package" style="font-size:40px;display:block;margin-bottom:8px"></i>'+wtx('no_packed')+'</div>';
     } else {
       pkList.innerHTML = recentPacked.map(function(o) {
+        var pcnt = (typeof orderPhotoCount==='function')?orderPhotoCount(o.id,'warehouse'):0;
         var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
         var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
         var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
@@ -7859,6 +7868,14 @@ function whRender() {
           '<div class="pkrow"><span class="pklbl">'+wtx('lbl_edges')+'</span><span class="pkval">'+edges+'</span></div>'+
           '<div class="pkrow"><span class="pklbl">'+wtx('lbl_clips')+'</span><span class="pkval">'+clips.toLocaleString()+'</span></div>'+(o.ctn?'<div class="pkrow" style="background:#f0fdf4;border-radius:var(--rs);margin-top:4px"><span class="pklbl" style="font-weight:700">📦 CTN</span><span class="pkval" style="font-weight:800;color:var(--green);font-size:16px">'+o.ctn+' ลัง</span></div>':'')+(o.bundle?'<div class="pkrow" style="background:#fff7ed;border-radius:var(--rs);margin-top:4px"><span class="pklbl" style="font-weight:700">🧶 Bundle</span><span class="pkval" style="font-weight:800;color:#ea580c;font-size:16px">'+o.bundle+' มัด</span></div>':'')+
           '</div>'+
+          // Add-photo field — e.g. after an order was changed / re-packed
+          '<input type="file" accept="image/*" capture="environment" id="whcam-'+o.id+'" style="display:none" onchange="whCapturePackPhoto(this,\''+o.id+'\')">'+
+          '<input type="file" accept="image/*" multiple id="whphoto-'+o.id+'" style="display:none" onchange="whCapturePackPhoto(this,\''+o.id+'\')">'+
+          '<div style="display:flex;gap:6px;margin-top:8px">'+
+          '<button type="button" class="btn" style="flex:1;background:'+(pcnt>0?'#dcfce7':'#eff6ff')+';color:'+(pcnt>0?'#166534':'#1d4ed8')+';border:none" onclick="document.getElementById(\'whcam-'+o.id+'\').click()"><i class="ti ti-camera"></i> '+wtx('take_photo')+(pcnt>0?' ('+pcnt+')':'')+'</button>'+
+          '<button type="button" class="btn" style="flex:1;background:var(--bg2);color:var(--text);border:1px solid var(--border)" onclick="document.getElementById(\'whphoto-'+o.id+'\').click()"><i class="ti ti-photo"></i> '+wtx('gallery')+'</button>'+
+          '</div>'+
+          '<div id="whphoto-prog-'+o.id+'" style="display:none;font-size:12px;color:var(--text2);text-align:center;margin-top:4px">'+wtx('uploading')+'</div>'+
           '<button type="button" class="btn" style="margin-top:8px;width:100%;background:#dbeafe;color:#1d4ed8;border:none" onclick="whBackToPacking(this)" data-id="'+o.id+'"><i class="ti ti-arrow-back-up"></i> '+wtx('back_packing')+'</button>'+
           '<button type="button" class="btnundo" style="margin-top:6px" onclick="whUnpackBtn(this)" data-id="'+o.id+'"><i class="ti ti-arrow-back-up"></i> '+wtx('back_topack')+'</button>'+
           '</div>';
@@ -10775,6 +10792,7 @@ function whCapturePackPhoto(input, id){
           input.value = '';
           if(prog) prog.style.display = 'none';
           try{ whRenderPacking(); }catch(e){}
+          try{ whRender(); }catch(e){}   // refresh the Packed list too (photo count)
         }
       });
     });
@@ -10810,11 +10828,17 @@ function whDonePacking(btn) {
   var id = btn.getAttribute('data-id');
   var ord = orders.find(function(x){return x.id===id;});
   if(!ord) return;
-  // Require at least one pack photo before finishing.
-  if(orderPhotoCount(id,'warehouse') < 1){
-    alert('Please take at least 1 photo of the packed order.\nกรุณาถ่ายรูปสินค้าที่แพ็คเสร็จอย่างน้อย 1 รูป');
+  // Require a pack photo before finishing. For a re-pack after a change, require at
+  // least one NEW photo (count must exceed the baseline captured at confirm time).
+  var _base = (typeof ord._repackPhotoBase==='number') ? ord._repackPhotoBase : null;
+  var _need = (_base!==null) ? _base+1 : 1;
+  if(orderPhotoCount(id,'warehouse') < _need){
+    alert(_base!==null
+      ? 'This order was changed — please take a NEW photo of the re-packed order.\nออเดอร์นี้แก้ไข กรุณาถ่ายรูปใหม่หลังแพ็คใหม่'
+      : 'Please take at least 1 photo of the packed order.\nกรุณาถ่ายรูปสินค้าที่แพ็คเสร็จอย่างน้อย 1 รูป');
     return;
   }
+  delete ord._repackPhotoBase;   // re-pack documented — clear the baseline
   // Save packers (who packed it) + who/when finished.
   ord.packers = (whPackerSel[id]||[]).slice();
   ord.packedBy = (typeof currentStaffName!=='undefined' && currentStaffName) ? currentStaffName : 'Warehouse';
