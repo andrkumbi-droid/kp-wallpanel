@@ -4053,7 +4053,7 @@ function openDM(id){editDM=id;document.getElementById('dm-title').textContent=id
 function closeDM(){document.getElementById('dm-modal').classList.remove('open');editDM=null;}
 function saveDM(){const name=document.getElementById('dm-name').value.trim();if(!name){alert('Enter a name');return;}const phone=document.getElementById('dm-phone').value.trim(),vehicle=document.getElementById('dm-vehicle').value.trim();if(editDM){const d=drivers.find(x=>x.id===editDM);d.name=name;d.phone=phone;d.vehicle=vehicle;}else drivers.push({id:'d'+Date.now(),name,phone,vehicle});closeDM();mgRender();syncDrivers();}
 function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filter(x=>x.id!==editDM);closeDM();mgRender();syncDrivers();}
-function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"+(parseFloat(t.driverPay)>0?'\nTour pay '+(parseFloat(t.driverPay)||0).toLocaleString()+' ฿ → payroll':'')))return;try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)))return;try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').valueAsDate=new Date();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -5061,7 +5061,7 @@ function requireStaffPin(actionLabel){
 function ofEndTourFromDetail() {
   if(currentTourDetailIdx === null) return;
   const t = activeTours[currentTourDetailIdx];
-  if(!confirm('End ' + t.driverName + "'s tour?"+(parseFloat(t.driverPay)>0?'\nTour pay '+(parseFloat(t.driverPay)||0).toLocaleString()+' ฿ → payroll':''))) return;
+  if(!confirm('End ' + t.driverName + "'s tour?"+tourEndPaySummary(t))) return;
   var _pinBy = requireStaffPin('End tour / จบทัวร์ · ' + t.driverName);
   if(!_pinBy) return;
   try{ addLog('Tour '+(t.driverName||'')+' ended (PIN: '+_pinBy+')','-'); }catch(e){}
@@ -6369,6 +6369,12 @@ function ofRenderTour(){
       '<input type="number" min="0" value="'+(t.driverPay!=null&&t.driverPay!==''?t.driverPay:'')+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourPay(\''+t.id+'\',this.value)" style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
       '<span style="font-size:12px;color:var(--text2)">฿</span>'+
       '</div>'+
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'+
+      '<span style="font-size:12px;color:var(--text2);white-space:nowrap">🤝 Advance / เบิกก่อนออกทัวร์:</span>'+
+      '<input type="number" min="0" value="'+(t.driverAdvance!=null&&t.driverAdvance!==''?t.driverAdvance:'')+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourAdvance(\''+t.id+'\',this.value)" style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
+      '<span style="font-size:12px;color:var(--text2)">฿</span>'+
+      '</div>'+
+      ((parseFloat(t.driverAdvance)||0)>0&&(parseFloat(t.driverPay)||0)>0?'<div style="font-size:11px;color:var(--text2);margin:-4px 0 8px;text-align:right">คงเหลือจ่ายท้ายทัวร์ / Pay at end: <b style="color:var(--green)">'+tourNetPay(t).toLocaleString()+' ฿</b></div>':'')+
       '<div style="margin-bottom:8px">'+orderList+'</div>'+
       payTotals+
       '<div style="height:6px;background:var(--bg2);border-radius:3px;overflow:hidden">'+
@@ -6483,7 +6489,8 @@ function archiveTour(t){
   var rec={ tourNo:existing+1, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
     created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
     endedDate:now.toISOString().slice(0,10), endedAt:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),
-    driverPay:parseFloat(t.driverPay)||0, orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now() };
+    driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0, driverPayNet:tourNetPay(t),
+    orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now() };
   try{ window.fbDB.ref('tourHistory/'+key).push(rec); }catch(e){ console.error('archiveTour failed',e); }
 }
 // Tour pay the drivers get for this tour. Stored on the tour for now; not yet
@@ -6493,20 +6500,39 @@ function ofSetTourPay(tourId, val){
   if(!t) return;
   t.driverPay = (val===''||val==null) ? '' : (parseFloat(val)||0);
   syncTours();
+  try{ ofRenderTour(); }catch(e){}   // refresh the "pay at end" net hint
+}
+// Advance the driver got at the START of the tour (cash up front). Deducted from the
+// tour pay when the tour is ended, so payroll only books the remaining amount.
+function ofSetTourAdvance(tourId, val){
+  var t=activeTours.find(function(x){return x.id===tourId;});
+  if(!t) return;
+  t.driverAdvance = (val===''||val==null) ? '' : (parseFloat(val)||0);
+  syncTours();
+  try{ ofRenderTour(); }catch(e){}
+}
+// Remaining tour pay after the start-of-tour advance (never below 0).
+function tourNetPay(t){ return Math.max(0, (parseFloat(t.driverPay)||0) - (parseFloat(t.driverAdvance)||0)); }
+// Confirm-dialog line: "Tour pay X ฿ − advance Y ฿ = Z ฿ → payroll".
+function tourEndPaySummary(t){
+  var tp=parseFloat(t.driverPay)||0, ad=parseFloat(t.driverAdvance)||0;
+  if(tp<=0) return '';
+  return '\nTour pay '+tp.toLocaleString()+' ฿'+(ad>0?' − advance '+ad.toLocaleString()+' ฿ = '+tourNetPay(t).toLocaleString()+' ฿':'')+' → payroll';
 }
 // Category key for tour pay: the office-managed "Tour Pay" category if present, else 'tour_pay'.
 function payTourCatKey(){ try{ var c=payCats().find(function(x){ return x.key==='tour_pay' || /tour\s*pay/i.test(x.label||''); }); return c?c.key:'tour_pay'; }catch(e){ return 'tour_pay'; } }
-// On End tour: if a tour pay amount was entered, book it into the driver's payroll.
+// On End tour: book the tour pay MINUS the start-of-tour advance into the driver's payroll.
 function endTourPayroll(t){
   if(!t) return;
-  var amt=parseFloat(t.driverPay)||0; if(amt<=0) return;
+  var total=parseFloat(t.driverPay)||0, adv=parseFloat(t.driverAdvance)||0;
+  var amt=total-adv; if(amt<=0) return;   // fully covered by the advance (or nothing owed)
   var s=(staffList||[]).find(function(x){return x.driverId && x.driverId===t.driverId;})
        || (staffList||[]).find(function(x){return x.name===t.driverName;});
   if(!s){ return; } // can't attribute to a payroll person
   var now=new Date();
   var rec={ id:'pl-'+Date.now(), who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:amt,
     date: now.toISOString().slice(0,10), ts:Date.now(),
-    note:'Tour'+(t.created?' '+t.created:''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
+    note:'Tour'+(t.created?' '+t.created:'')+(adv>0?' (total '+total.toLocaleString()+' − advance '+adv.toLocaleString()+')':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
 }
 // DRIVERS tab — list drivers → their past tours (Tour 1,2,… + date) → orders in each.
