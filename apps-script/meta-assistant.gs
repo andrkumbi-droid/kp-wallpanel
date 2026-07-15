@@ -196,7 +196,25 @@ function actSaveSamples(b){
   samples.forEach(function(s){ fbPush('assistant/styleSamples/'+k, { in:maskPII(s.in||''), out:maskPII(s.out||''), ts:Date.now() }); });
   // remember the human-readable display name for this key
   fbSet('assistant/staff/'+k, { name:String(b.staff||''), lastCollectedAt:Date.now() });
-  return {ok:true, staff:k, saved:samples.length};
+  var rebuilt = maybeRebuildHouseStyle(samples.length);   // continuous learning from new messages
+  return {ok:true, staff:k, saved:samples.length, rebuilt:rebuilt};
+}
+// Continuous learning: after new samples arrive, rebuild the aggregate house style —
+// but throttled (every ~10 new pairs, or at least twice a day) so we don't call the
+// LLM on every single message.
+function maybeRebuildHouseStyle(added){
+  try{
+    var meta = fbGet('assistant/houseStyleMeta') || {};
+    var since = (parseInt(meta.samplesSinceBuild)||0) + (parseInt(added)||0);
+    var lastTs = parseInt(meta.lastBuildTs)||0;
+    var due = since >= 10 || (lastTs>0 && (Date.now()-lastTs) > 12*60*60*1000);
+    if(due){
+      var r = actBuildHouseStyle();
+      if(r && r.ok){ fbSet('assistant/houseStyleMeta', {lastBuildTs:Date.now(), samplesSinceBuild:0}); return true; }
+    }
+    fbSet('assistant/houseStyleMeta', {lastBuildTs:lastTs, samplesSinceBuild:since});
+  }catch(e){}
+  return false;
 }
 
 // {action:'logCorrection', staff?, suggested, edited, msgContext?} — collected per staff; review-gated learning.
