@@ -5838,7 +5838,7 @@ function ofOrderCard(o){
   s += '<button type="button" class="btnsm" onclick="openEM(this)" data-id="'+o.id+'"><i class="ti ti-pencil"></i> Edit</button>';
   s += '<button type="button" class="btnsm" style="background:#fff7ed;color:#ea580c;border-color:#fed7aa" onclick="openCO(this)" data-id="'+o.id+'"><i class="ti ti-replace"></i> Change order</button>';
   s += '<button type="button" class="btnsm" style="'+(o.priority?'background:#7c3aed;color:#fff;border-color:#7c3aed':'background:#f3e8ff;color:#7c3aed;border-color:#e9d5ff')+'" onclick="togglePriority(\''+o.id+'\')"><i class="ti ti-star"></i> '+(o.priority?'Priority ✓':'Priority')+'</button>';
-  s += '<input type="file" id="ofphoto_'+safeOrderId(o.id)+'" accept="image/*" style="display:none" onchange="ofUploadOrderPhoto(this)">';
+  s += '<input type="file" id="ofphoto_'+safeOrderId(o.id)+'" accept="image/*" multiple style="display:none" onchange="ofUploadOrderPhoto(this)">';
   s += '<button type="button" class="btnsm" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe" onclick="ofPickOrderPhoto(\''+o.id+'\',\'delivery\')" title="Add delivery photo / เพิ่มรูปส่ง">📷 Delivery</button>';
   s += '<button type="button" class="btnsm" style="background:#f0fdf4;color:#16a34a;border-color:#bbf7d0" onclick="ofPickOrderPhoto(\''+o.id+'\',\'warehouse\')" title="Add warehouse photo / เพิ่มรูปคลัง">📦 Warehouse</button>';
   if(window.canDeleteOrders) {
@@ -5857,18 +5857,27 @@ function ofPickOrderPhoto(id, type, inputId){
   var inp=document.getElementById(inputId||('ofphoto_'+safeOrderId(id))); if(inp) inp.click();
 }
 function ofUploadOrderPhoto(input){
-  var file=input&&input.files&&input.files[0]; if(!file) return;
+  var files=input&&input.files?Array.prototype.slice.call(input.files):[]; if(!files.length) return;
   var id=window._ofPhotoOrderId, type=window._ofPhotoType||'delivery';
   input.value='';
   if(typeof compressPhotoFile!=='function' || typeof addOrderPhoto!=='function'){ alert('Image not supported'); return; }
   var by=((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
-  compressPhotoFile(file, function(dataUrl){
-    addOrderPhoto(id, type, dataUrl, by, function(ok){
-      if(!ok){ alert('❌ Upload failed / อัปโหลดไม่สำเร็จ'); return; }
-      try{ showNotif('✓ Foto → '+(type==='warehouse'?'Warehouse':'Delivery')+' · '+id); }catch(e){}
+  var total=files.length, done=0, ok=0;
+  // Upload one at a time (sequential) so the Firebase writes don't race each other.
+  (function next(i){
+    if(i>=files.length){
       try{ if(typeof picsRender==='function' && document.getElementById('ofv-pics') && document.getElementById('ofv-pics').classList.contains('active')) picsRender(); }catch(e){}
+      if(ok){ try{ showNotif('✓ '+ok+(total>1?'/'+total:'')+' Foto'+(ok>1?'s':'')+' → '+(type==='warehouse'?'Warehouse':'Delivery')+' · '+id); }catch(e){} }
+      if(ok<total){ alert('❌ '+(total-ok)+' / '+total+' Upload failed / อัปโหลดไม่สำเร็จ'); }
+      return;
+    }
+    compressPhotoFile(files[i], function(dataUrl){
+      addOrderPhoto(id, type, dataUrl, by, function(success){
+        done++; if(success) ok++;
+        next(i+1);
+      });
     });
-  });
+  })(0);
 }
 
 // ── Quick payment on an order card (full via checkbox, partial via amount) ──
@@ -11190,7 +11199,7 @@ function payOrderCard(o) {
         +'</div>'
        :'')
       +'<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">'
-      +'<input type="file" id="payphoto_'+safeOrderId(oid)+'" accept="image/*" style="display:none" onchange="ofUploadOrderPhoto(this)">'
+      +'<input type="file" id="payphoto_'+safeOrderId(oid)+'" accept="image/*" multiple style="display:none" onchange="ofUploadOrderPhoto(this)">'
       +'<button type="button" class="btnsm" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe" onclick="ofPickOrderPhoto(\''+oid+'\',\'delivery\',\'payphoto_'+safeOrderId(oid)+'\')" title="Add delivery photo / เพิ่มรูปส่ง">📷 Delivery</button>'
       +'<button type="button" class="btnsm" style="background:#f0fdf4;color:#16a34a;border-color:#bbf7d0" onclick="ofPickOrderPhoto(\''+oid+'\',\'warehouse\',\'payphoto_'+safeOrderId(oid)+'\')" title="Add warehouse photo / เพิ่มรูปคลัง">📦 Warehouse</button>'
       +'</div>'
