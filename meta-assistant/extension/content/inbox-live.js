@@ -46,19 +46,27 @@ function kpLiveTrailingSamples() {
 }
 
 // Scrape the open conversation into ordered {dir, text} bubbles using x-position.
+// Bounds are viewport-RELATIVE (the old fixed 430/1300px broke on other window sizes —
+// e.g. a wide screen clipped the right-aligned staff replies → no "out" bubbles).
 function kpLiveBubbles() {
   const vw = window.innerWidth;
-  // conversation column sits between the thread list (~430px) and the info pane (~1300px)
-  const midX = vw * 0.52;
+  // Skip the thread list (left ~25% of width) and a small right margin; keep the rest.
+  const leftMin = Math.min(360, vw * 0.24);   // thread-list width, capped
+  const rightMax = vw - 16;
   const leaves = [...document.querySelectorAll('div, span')].filter(n => {
     if (n.children.length) return false;
     const t = (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim();
     if (t.length < 2 || KP_NOISE_RE.test(t)) return false;
     const r = n.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && r.left > 430 && r.right < 1300 && r.top > 200;
+    return r.width > 0 && r.height > 0 && r.left > leftMin && r.right < rightMax && r.top > 120;
   });
-  // sort top-to-bottom, then classify by horizontal center
+  if (!leaves.length) return [];
   leaves.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  // Dynamic split: divider = midpoint of the actual horizontal span of the bubbles,
+  // so left/right (customer/staff) classification adapts to any layout / info-pane state.
+  let minL = Infinity, maxR = -Infinity;
+  leaves.forEach(n => { const r = n.getBoundingClientRect(); if (r.left < minL) minL = r.left; if (r.right > maxR) maxR = r.right; });
+  const midX = (minL + maxR) / 2;
   return leaves.map(n => {
     const r = n.getBoundingClientRect();
     return { dir: (r.left + r.width / 2) > midX ? 'out' : 'in', text: (n.innerText || n.textContent).replace(/\s+/g, ' ').trim() };

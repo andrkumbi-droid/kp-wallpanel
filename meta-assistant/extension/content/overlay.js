@@ -183,8 +183,17 @@ const KPUI = {
   // collect every pair regardless of who wrote it. Scroll up first to load more history.
   async collectHistory() {
     if (typeof kpLiveBubbles !== 'function') { this.status('kein Posteingang erkannt'); return; }
-    const pairs = kpPairConversation(kpLiveBubbles());
-    if (!pairs.length) { this.status('keine Paare im Verlauf'); return; }
+    const bubbles = kpLiveBubbles();
+    const pairs = kpPairConversation(bubbles);
+    if (!pairs.length) {
+      // Diagnostic: show what the scraper actually saw so we can tune detection.
+      const ins = bubbles.filter(x => x.dir === 'in').length;
+      const outs = bubbles.filter(x => x.dir === 'out').length;
+      const thai = bubbles.filter(x => x.dir === 'out' && KP_THAI_RE.test(x.text)).length;
+      this.status(`keine Paare — gesehen: ${bubbles.length} Blasen (${ins} Kunde, ${outs} Antwort, ${thai} Thai-Antwort)`);
+      console.log('[KP] kpLiveBubbles:', bubbles);
+      return;
+    }
     const staff = (typeof kpLiveStaff === 'function' && kpLiveStaff()) || 'team';
     this.status('⏳ lerne ' + pairs.length + ' Paare aus dem Verlauf…');
     const r = await this.api({ action: 'saveStyleSamples', staff, samples: pairs.map(p => ({ in: kpMask(p.in), out: kpMask(p.out) })) });
