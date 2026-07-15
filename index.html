@@ -460,15 +460,13 @@ textarea{resize:none}
     margin:0!important;height:100vh!important;width:420px!important;max-width:420px!important;
     border-radius:16px 0 0 16px!important}
 }
-/* Requested-delivery alerts: yellow glow the day before, red flash on the day. */
+/* Requested-delivery cues: yellow glow the day before, red flash on the day. */
 @keyframes kpReqYellow{0%,100%{box-shadow:0 0 0 0 rgba(234,179,8,.15)}50%{box-shadow:0 0 13px 3px rgba(234,179,8,.85)}}
 .req-soon{border:1.5px solid #eab308!important;animation:kpReqYellow 1.5s ease-in-out infinite}
 @keyframes kpReqRed{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.2);border-color:#dc2626}50%{box-shadow:0 0 18px 5px rgba(220,38,38,.9);border-color:#ef4444}}
-.req-today{border:2px solid #dc2626!important;animation:kpReqRed .8s ease-in-out infinite}
-@keyframes kpAlarmFlash{0%,49%{background:rgba(220,38,38,.55)}50%,100%{background:rgba(120,0,0,.25)}}
-#kp-alarm-overlay{position:fixed;inset:0;z-index:3000;display:none;align-items:center;justify-content:center;padding:16px;animation:kpAlarmFlash .5s steps(1,end) infinite}
-@keyframes kpAlarmSiren{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
-#kp-alarm-overlay .sir{animation:kpAlarmSiren .5s ease-in-out infinite}
+.req-today{border:2px solid #dc2626!important;animation:kpReqRed .9s ease-in-out infinite}
+/* Login reminder: calm centered modal, no flashing. */
+#kp-alarm-overlay{position:fixed;inset:0;z-index:3000;display:none;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.55)}
 </style>
 
   <!-- Firebase Compat (global scope) -->
@@ -2050,15 +2048,14 @@ textarea{resize:none}
 
 </div></div>
 
-<!-- REQUESTED-DELIVERY ALARM (due today) -->
+<!-- REQUESTED-DELIVERY REMINDER (shown once on login) -->
 <div id="kp-alarm-overlay">
-  <canvas id="kp-alarm-fx" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
-  <div class="sir" style="position:relative;background:var(--bg);border:3px solid #dc2626;border-radius:16px;padding:20px 18px;max-width:440px;width:92%;text-align:center;box-shadow:0 0 45px rgba(220,38,38,.85)">
-    <div style="font-size:44px;line-height:1">🚨</div>
-    <div style="font-size:19px;font-weight:800;color:#dc2626;margin:6px 0 2px">ส่งวันนี้! / DELIVERY DUE TODAY</div>
+  <div style="background:var(--bg);border:2px solid #dc2626;border-radius:16px;padding:20px 18px;max-width:440px;width:92%;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.35)">
+    <div style="font-size:40px;line-height:1">📌</div>
+    <div style="font-size:18px;font-weight:800;color:#dc2626;margin:6px 0 2px">ส่งวันนี้ / Delivery due today</div>
     <div style="font-size:12px;color:var(--text2);margin-bottom:10px">ออเดอร์ที่ลูกค้าต้องการรับวันนี้ / Orders the customer wants today</div>
-    <div id="kp-alarm-list" style="text-align:left;max-height:42vh;overflow:auto"></div>
-    <button type="button" onclick="kpAlarmAck()" style="margin-top:14px;width:100%;padding:14px;border:none;border-radius:12px;background:#16a34a;color:#fff;font-size:16px;font-weight:800;cursor:pointer">✓ เห็นแล้ว / SEEN — Accept &amp; stop alarm</button>
+    <div id="kp-alarm-list" style="text-align:left;max-height:46vh;overflow:auto"></div>
+    <button type="button" onclick="kpAlarmAck()" style="margin-top:14px;width:100%;padding:13px;border:none;border-radius:12px;background:#16a34a;color:#fff;font-size:15px;font-weight:800;cursor:pointer">✓ เห็นแล้ว / Seen</button>
   </div>
 </div>
 
@@ -2567,6 +2564,7 @@ function _enterOffice(s){
   ofRenderInc();
   ofRenderStock();
   try{ kpcInit(); }catch(e){}
+  try{ ofShowReqReminder(); }catch(e){}
 }
 // SSO: from the menu, enter an area. Logged in already → no PIN; else normal login.
 function goArea(area){
@@ -5708,9 +5706,10 @@ function ofToggleAllZones(btn){
   if(btn) btn.innerHTML = anyOpen ? '<i class="ti ti-chevrons-down"></i> Expand all' : '<i class="ti ti-chevrons-up"></i> Collapse all';
 }
 
-// ── REQUESTED-DELIVERY ALARMS ───────────────────────────────────────
-// reqDate == tomorrow → card glows yellow. reqDate == today → card flashes red
-// AND the whole page blinks red with a siren until the office acknowledges.
+// ── REQUESTED-DELIVERY REMINDER ─────────────────────────────────────
+// reqDate == tomorrow → card glows yellow. reqDate == today → card flashes red.
+// A calm reminder pops once on login (click "Seen"); each red card also has an
+// "Accept" button that stops just that card blinking (o.reqAck = today's date).
 function kpTodayStr(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function kpReqDayDiff(reqDate){
   if(!reqDate) return null;
@@ -5721,7 +5720,7 @@ function kpReqDayDiff(reqDate){
 function ofReqAlertClass(o){
   if(!o||!o.reqDate||o.status==='delivered'||o.status==='cancelled') return '';
   var d=kpReqDayDiff(o.reqDate);
-  if(d===0) return 'req-today';
+  if(d===0) return (o.reqAck===kpTodayStr())?'':'req-today';   // accepted today → stop blinking
   if(d===1) return 'req-soon';
   return '';
 }
@@ -5729,73 +5728,18 @@ function ofReqDueOrders(){
   if(typeof orders==='undefined') return [];
   return orders.filter(function(o){ return o.reqDate && o.status!=='delivered' && o.status!=='cancelled' && kpReqDayDiff(o.reqDate)===0; });
 }
-var _kpSiren=null, _kpSirenTimer=null;
-function kpAlarmStartSiren(){
-  try{
-    if(_kpSiren) return;
-    var Ctx=window.AudioContext||window.webkitAudioContext; if(!Ctx) return;
-    var ctx=new Ctx();
-    if(ctx.state==='suspended'){ ctx.resume(); }
-    var osc=ctx.createOscillator(), gain=ctx.createGain();
-    osc.type='sawtooth'; gain.gain.value=0.14;
-    osc.connect(gain); gain.connect(ctx.destination); osc.start();
-    _kpSiren={ctx:ctx, osc:osc};
-    var sweep=function(){
-      try{ var n=ctx.currentTime; osc.frequency.cancelScheduledValues(n);
-        osc.frequency.setValueAtTime(600,n);
-        osc.frequency.linearRampToValueAtTime(1150,n+0.5);
-        osc.frequency.linearRampToValueAtTime(600,n+1.0);
-      }catch(e){}
-    };
-    sweep(); _kpSirenTimer=setInterval(sweep,1000);
-  }catch(e){}
+// Per-order "Accept" from a red card → stop that card blinking (persisted + synced).
+function ofAckReq(id){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  o.reqAck=kpTodayStr(); o.reqAckBy=(currentStaffName||'Office');
+  try{ syncOrders(); }catch(e){}
+  try{ ofRenderOrders(); }catch(e){}
 }
-function kpAlarmStopSiren(){
-  try{ if(_kpSirenTimer){clearInterval(_kpSirenTimer);_kpSirenTimer=null;} }catch(e){}
-  try{ if(_kpSiren){ _kpSiren.osc.stop(); _kpSiren.osc.disconnect(); _kpSiren.ctx.close(); _kpSiren=null; } }catch(e){}
-}
-// Alarm fireworks — red/orange bursts over the whole page (menacing, not a party).
-var _kpFx=null;
-function kpAlarmStartFx(){
-  var cv=document.getElementById('kp-alarm-fx'); if(!cv||_kpFx) return;
-  var ctx=cv.getContext('2d'); if(!ctx) return;
-  function resize(){ cv.width=window.innerWidth; cv.height=window.innerHeight; }
-  resize();
-  var particles=[], rockets=[], last=0, spawn=0, running=true;
-  var COLORS=['#ff1a1a','#ff3b00','#ff5e00','#b30000','#ffae00'];   // alarm reds/oranges only
-  function burst(x,y){
-    var n=30+Math.floor(Math.random()*22), c=COLORS[Math.floor(Math.random()*COLORS.length)];
-    for(var i=0;i<n;i++){ var a=Math.random()*6.283, sp=1.5+Math.random()*5.5;
-      particles.push({x:x,y:y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,col:c,sz:1.4+Math.random()*2.2}); }
-  }
-  function frame(t){
-    if(!running) return;
-    if(!last) last=t; var dt=Math.min(3,(t-last)/16.67); last=t;
-    ctx.globalCompositeOperation='source-over';
-    ctx.fillStyle='rgba(18,0,0,0.30)'; ctx.fillRect(0,0,cv.width,cv.height);   // dark-red trailing fade
-    ctx.globalCompositeOperation='lighter';
-    spawn-=dt; if(spawn<=0){ rockets.push({x:Math.random()*cv.width, y:cv.height, vy:-(7.5+Math.random()*3.5), ty:cv.height*(0.12+Math.random()*0.33)}); spawn=9+Math.random()*13; }
-    for(var i=rockets.length-1;i>=0;i--){ var r=rockets[i]; r.y+=r.vy*dt; r.vy+=0.09*dt;
-      if(r.y<=r.ty||r.vy>=0){ burst(r.x,r.y); rockets.splice(i,1); }
-      else { ctx.fillStyle='#ffd000'; ctx.fillRect(r.x-1,r.y-4,2.2,7); } }
-    for(var j=particles.length-1;j>=0;j--){ var p=particles[j];
-      p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=0.07*dt; p.vx*=0.99; p.life-=0.013*dt;
-      if(p.life<=0){ particles.splice(j,1); continue; }
-      ctx.globalAlpha=Math.max(0,p.life); ctx.fillStyle=p.col;
-      ctx.beginPath(); ctx.arc(p.x,p.y,p.sz,0,6.283); ctx.fill(); }
-    ctx.globalAlpha=1;
-    requestAnimationFrame(frame);
-  }
-  window.addEventListener('resize',resize);
-  _kpFx={stop:function(){ running=false; try{window.removeEventListener('resize',resize);}catch(e){} try{ctx.clearRect(0,0,cv.width,cv.height);}catch(e){} }};
-  requestAnimationFrame(frame);
-}
-function kpAlarmStopFx(){ if(_kpFx){ _kpFx.stop(); _kpFx=null; } }
-var _kpAlarmAcked={};
-function ofCheckReqAlarms(){
+// Login reminder: show due-today orders once, dismiss with "Seen". No siren, no flashing.
+function ofShowReqReminder(){
   var ov=document.getElementById('kp-alarm-overlay'); if(!ov) return;
   var due=ofReqDueOrders();
-  if(!due.length){ ov.style.display='none'; kpAlarmStopSiren(); kpAlarmStopFx(); return; }
+  if(!due.length){ ov.style.display='none'; return; }
   document.getElementById('kp-alarm-list').innerHTML=due.map(function(o){
     return '<div style="border-bottom:1px solid var(--border);padding:7px 0">'
       +'<div style="font-size:14px;font-weight:800">'+o.id+' <span style="font-weight:600;color:var(--text2)">· '+(o.zone||'')+'</span></div>'
@@ -5804,22 +5748,9 @@ function ofCheckReqAlarms(){
       +(o.reqNote?'<div style="font-size:11px;color:#c2410c">'+o.reqNote+'</div>':'')
     +'</div>';
   }).join('');
-  var key=kpTodayStr()+'|'+due.map(function(o){return o.id;}).sort().join(',');
-  if(_kpAlarmAcked[key]) return;         // already acknowledged this exact set today
   ov.style.display='flex';
-  kpAlarmStartSiren();
-  kpAlarmStartFx();
 }
-function kpAlarmAck(){
-  var due=ofReqDueOrders();
-  _kpAlarmAcked[kpTodayStr()+'|'+due.map(function(o){return o.id;}).sort().join(',')]=true;
-  var ov=document.getElementById('kp-alarm-overlay'); if(ov) ov.style.display='none';
-  kpAlarmStopSiren();
-  kpAlarmStopFx();
-}
-// Re-check every minute so the alarm fires on date rollover / new due orders even
-// without a manual refresh. The card glow refreshes whenever the list re-renders.
-setInterval(function(){ try{ ofCheckReqAlarms(); }catch(e){} }, 60000);
+function kpAlarmAck(){ var ov=document.getElementById('kp-alarm-overlay'); if(ov) ov.style.display='none'; }
 function ofOrderCard(o){
   var logHTML = '';
   if(o.statusLog && o.statusLog.length>0){
@@ -5859,6 +5790,12 @@ function ofOrderCard(o){
   if(o.contact) s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-message-circle" style="font-size:12px;vertical-align:-1px"></i> '+o.contact+'</div>';
   if(o.deliveryRound) s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-calendar" style="font-size:12px;vertical-align:-1px"></i> '+o.deliveryRound+'</div>';
   if(o.reqDate||o.reqNote) s += '<div style="font-size:12px;color:#c2410c;font-weight:600;margin-bottom:2px"><i class="ti ti-calendar-event" style="font-size:12px;vertical-align:-1px"></i> ต้องการรับ / Requested: '+(o.reqDate?fmtD(o.reqDate):'')+(o.reqNote?(o.reqDate?' · ':'')+o.reqNote:'')+'</div>';
+  // Due today → "Accept" button to stop this card blinking (or a "seen" note once accepted)
+  if(o.reqDate && o.status!=='delivered' && o.status!=='cancelled' && kpReqDayDiff(o.reqDate)===0){
+    s += (o.reqAck===kpTodayStr())
+      ? '<div style="font-size:11px;color:#16a34a;font-weight:700;margin-bottom:4px">✓ เห็นแล้ว / Accepted'+(o.reqAckBy?' · '+o.reqAckBy:'')+'</div>'
+      : '<button type="button" onclick="ofAckReq(\''+o.id+'\')" style="font-size:11px;font-weight:700;padding:4px 10px;border:none;border-radius:var(--rs);background:#16a34a;color:#fff;cursor:pointer;margin-bottom:5px">✓ รับทราบ ส่งวันนี้ / Accept (stop blinking)</button>';
+  }
   // At-shipper orders: show WHICH shipper the goods are currently with.
   if(o.status==='shipped'){ var _shp=(o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:'ส่งเอง / self'+(o.driver?' ('+o.driver+')':''); s += '<div style="font-size:12px;color:#4f46e5;font-weight:700;margin-bottom:2px;background:#eef2ff;border-radius:var(--rs);padding:4px 8px;display:inline-block"><i class="ti ti-truck" style="font-size:12px;vertical-align:-1px"></i> ที่ขนส่ง / At shipper: '+_shp+'</div>'; }
   var _clipPacks=(o.lineItems||[]).reduce(function(a,i){return i.type==='clips'?a+(parseInt(i.qty)||0):a;},0);
@@ -6172,7 +6109,6 @@ function ofRenderOrders(){
   });
   if(_grouped && _lastZone!==null) html += '</div></div>'; // close final body + group
   document.getElementById('of-olist').innerHTML = html;
-  try{ ofCheckReqAlarms(); }catch(e){}
 }
 
 function ofFilt(f,btn){ofFilt_=f;ofTodayOnly_=false;document.querySelectorAll('#ofv-orders .fbtn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');ofRenderOrders();}
