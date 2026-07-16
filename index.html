@@ -5627,6 +5627,14 @@ function quickStatus(btn) {
   addStatusLog(o, newStatus, byName);
   o.editedBy = byName;
   o.status = newStatus;
+  // Cancelling → route the order into the Warehouse so staff acknowledge it (no sound).
+  // If it was already packed (ready/loaded) it needs physical unpacking → goes via
+  // Packing with an "Unpacked" step; otherwise a simple "Seen" acknowledgement in To Pack.
+  if(newStatus==='cancelled'){
+    o.cancelWasPacked = (old==='ready'||old==='loaded');
+    o.whCancelStage = 'new';   // 'new' → To Pack list, 'unpack' → Packing list, 'done' → cleared
+    o.whCancelAck = false;
+  }
   // Order moving to ready/loaded/delivered auto-confirms a still-pending change (keeps it as a record)
   if((newStatus==='ready'||newStatus==='loaded'||newStatus==='delivered') && o.changeReq && o.changeReq.status==='pending'){ o.changeReq.status='confirmed'; o.changeReq.confirmedBy=byName; o.changeReq.confirmedAt=Date.now(); }
   // Sync warehouse status
@@ -7047,6 +7055,11 @@ function kpcDmId(a,b){ return 'dm_'+[String(a),String(b)].sort().join('__'); }
 // any Driver channel, or a Direct message even when that channel isn't the one
 // currently open. The active channel is handled by kpcListen (dot + toast), so
 // it's skipped here to avoid double alerts.
+// Driver group chats to hide (these people are reached via DM / no group needed).
+// Matched by driver name, case-insensitive — the drivers themselves stay untouched.
+var KPC_HIDE_DRV_NAMES = ['andre','bobby','lalamove'];
+function kpcDrvChatVisible(d){ return !!d && KPC_HIDE_DRV_NAMES.indexOf((d.name||'').trim().toLowerCase()) < 0; }
+
 var kpcBgRefs={}, kpcBgSig='', _kpcBgStart=0;
 function kpcBgChannels(){
   var role=kpcCurrentRole(); if(!role) return [];
@@ -7061,7 +7074,7 @@ function kpcBgChannels(){
   }
   // office / manager
   list.push('office','wh');
-  drv.forEach(function(d){ if(d) list.push('drv_'+d.id); });
+  drv.forEach(function(d){ if(d && kpcDrvChatVisible(d)) list.push('drv_'+d.id); });
   staff.forEach(function(s){ if(s&&s.id!==currentStaffId) list.push(kpcDmId(currentStaffId,s.id)); });
   return list;
 }
@@ -7124,7 +7137,7 @@ function kpcBuildChannels(){
     h='<option value="wh">🏭 Warehouse + Office / คลัง</option>'+dmOpts;
   } else {
     h='<optgroup label="👥 Group chats / กลุ่ม"><option value="office">👥 Office only / เฉพาะออฟฟิศ</option><option value="wh">🏭 Office + Warehouse / คลัง</option></optgroup>';
-    var drv=(typeof drivers!=='undefined'?drivers:[])||[];
+    var drv=((typeof drivers!=='undefined'?drivers:[])||[]).filter(kpcDrvChatVisible);
     if(drv.length){ h+='<optgroup label="🚚 Office + Drivers / คนขับ">'+drv.map(function(d){return '<option value="drv_'+d.id+'">🚚 Office + '+kpcEsc(d.name||'')+'</option>';}).join('')+'</optgroup>'; }
     h+=dmOpts;
   }
@@ -7494,6 +7507,8 @@ function emCalc(){
   var el=document.getElementById('em-total'); if(el) el.textContent='Total / รวม: '+(sum+other-disc).toLocaleString('en-US')+' ฿';
 }
 function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o.status;o.customer=document.getElementById('em-cust').value;o.phone=document.getElementById('em-phone').value;o.address=document.getElementById('em-addr').value;o.location=document.getElementById('em-loc').value;o.contact=document.getElementById('em-contact').value;o.deliveryRound=document.getElementById('em-deliveround').value;o.reqDate=document.getElementById('em-reqdate').value;o.reqNote=(document.getElementById('em-reqnote').value||'').trim();o.shippingBill=document.getElementById('em-shipbill').value;o.ctn=parseInt(document.getElementById('em-ctn').value)||0;o.bundle=parseInt(document.getElementById('em-bundle').value)||0;o.deposit=parseFloat(document.getElementById('em-deposit').value)||0;try{var _dao=dAllOrders.find(function(x){return x.id===o.id;});if(_dao){_dao.ctn=o.ctn;_dao.bundle=o.bundle;}}catch(e){}o.packStatus=document.getElementById('em-packstatus').value;o.notes=document.getElementById('em-notes').value;o.status=document.getElementById('em-status').value;var newDate=document.getElementById('em-date').value;if(newDate)o.date=newDate;const editorMember=staffList.find(x=>x.id===currentStaffId);if(editorMember)o.editedBy=editorMember.name;o._editTs=Date.now();
+  // Cancelling via the edit modal → same warehouse acknowledgement flow as quickStatus
+  if(o.status==='cancelled' && old!=='cancelled'){ o.cancelWasPacked=(old==='ready'||old==='loaded'); o.whCancelStage='new'; o.whCancelAck=false; }
   // Rebuild products from the edited lines (give old stock back first, re-deduct after)
   try{ if(o._stockDeducted){ addOrderStock(o); o._stockDeducted=false; } }catch(e){}
   var emItems=[], emPa=[], emLa=[], emTq=0;
@@ -7762,7 +7777,13 @@ var WHTX = {
   cartons:       {th:'cartons / ลัง', en:'cartons', my:'ကာတွန်း'},
   bundles_unit:  {th:'มัด', en:'bundles', my:'ထုပ်'},
   ph_ctn:        {th:'กี่ลัง?', en:'how many?', my:'ဘယ်နှစ်ခု?'},
-  ph_bundle:     {th:'กี่มัด?', en:'how many?', my:'ဘယ်နှစ်ထုပ်?'}
+  ph_bundle:     {th:'กี่มัด?', en:'how many?', my:'ဘယ်နှစ်ထုပ်?'},
+  tag_cancelled: {th:'✕ CANCELLED / ยกเลิก', en:'✕ CANCELLED', my:'✕ ပယ်ဖျက်ပြီး'},
+  cancel_note_packed:{th:'ออเดอร์ถูกยกเลิก — แกะของออกแล้วเก็บเข้าสต็อก / Order cancelled — unpack & return to stock', en:'Order cancelled — unpack & return to stock', my:'အော်ဒါ ပယ်ဖျက်ပြီး — ပြန်ဖြုတ်၍ စတော့သို့ ပြန်ထည့်ပါ'},
+  cancel_note_new:{th:'ออเดอร์ถูกยกเลิก — ยังไม่ได้แพ็ค แค่รับทราบ / Order cancelled — nothing packed, just acknowledge', en:'Order cancelled — nothing packed, just acknowledge', my:'အော်ဒါ ပယ်ဖျက်ပြီး — မထုပ်ရသေးပါ၊ သိမှတ်ရုံ'},
+  cancel_accept: {th:'รับทราบ / Accept', en:'Accept', my:'လက်ခံမည်'},
+  cancel_unpack: {th:'แกะออกแล้ว / Unpacked', en:'Unpacked ✓', my:'ပြန်ဖြုတ်ပြီး ✓'},
+  cancel_seen:   {th:'เห็นแล้ว / Seen', en:'Seen ✓', my:'တွေ့ပြီး ✓'}
 };
 function wtx(k){ var e=WHTX[k]; if(!e) return k; return e[WH_LANG]||e.th; }
 function whApplyLang(){
@@ -7777,15 +7798,17 @@ function whRender() {
   var pendingChanges = orders.filter(function(o){ return o.changeReq && o.changeReq.status==='pending'; });
   var toPack = orders.filter(function(o){ return o.status==='new' && !(o.changeReq && o.changeReq.status==='pending'); }).sort(function(a,b){ return (b.priority?1:0)-(a.priority?1:0); });  // priority orders first — pack these first
   var packed = orders.filter(function(o){ return o.status==='ready' || o.status==='loaded'; });
+  // Cancelled orders awaiting warehouse acknowledgement (shown in To Pack, no sound)
+  var cancelNew = orders.filter(function(o){ return o.status==='cancelled' && o.whCancelStage==='new' && !o.whCancelAck; });
 
   // Update count
   var tpEl = document.getElementById('wh-tp');
-  if(tpEl) tpEl.textContent = toPack.length + pendingChanges.length;
+  if(tpEl) tpEl.textContent = toPack.length + pendingChanges.length + cancelNew.length;
   var pkEl = document.getElementById('wh-pk');
   if(pkEl) pkEl.textContent = packed.length;
 
-  // Update packing count
-  var pkgCnt = orders.filter(function(o){return o.status==='packing';}).length;
+  // Update packing count (incl. cancelled orders being unpacked)
+  var pkgCnt = orders.filter(function(o){return o.status==='packing';}).length + orders.filter(function(o){return o.status==='cancelled' && o.whCancelStage==='unpack' && !o.whCancelAck;}).length;
   var pkgEl = document.getElementById('wh-pkgcnt');
   if(pkgEl) pkgEl.textContent = pkgCnt;
 
@@ -7793,7 +7816,11 @@ function whRender() {
   var whQ = (document.getElementById('wh-search')||{}).value||'';
   whQ = whQ.trim().toLowerCase();
   if(whQ){ toPack = toPack.filter(function(o){ return (o.id||'').toLowerCase().indexOf(whQ)>=0||(o.customer||'').toLowerCase().indexOf(whQ)>=0||(o.zone||'').toLowerCase().indexOf(whQ)>=0||(o.panels||'').toLowerCase().indexOf(whQ)>=0; });
-    pendingChanges = pendingChanges.filter(function(o){ return (o.id||'').toLowerCase().indexOf(whQ)>=0||(o.customer||'').toLowerCase().indexOf(whQ)>=0; }); }
+    pendingChanges = pendingChanges.filter(function(o){ return (o.id||'').toLowerCase().indexOf(whQ)>=0||(o.customer||'').toLowerCase().indexOf(whQ)>=0; });
+    cancelNew = cancelNew.filter(function(o){ return (o.id||'').toLowerCase().indexOf(whQ)>=0||(o.customer||'').toLowerCase().indexOf(whQ)>=0||(o.zone||'').toLowerCase().indexOf(whQ)>=0; }); }
+
+  // Cancelled-order cards (red, need warehouse acknowledgement — appear silently in To Pack)
+  var cancelHTML = cancelNew.map(function(o){ return whCancelCard(o, o.cancelWasPacked ? 'accept' : 'seen'); }).join('');
 
   // Change-request cards (highlighted, need warehouse confirmation)
   var changeHTML = pendingChanges.map(function(o){
@@ -7817,10 +7844,10 @@ function whRender() {
   // Render To Pack list
   var tpList = document.getElementById('wh-tplist');
   if(tpList) {
-    if(toPack.length === 0 && !changeHTML) {
+    if(toPack.length === 0 && !changeHTML && !cancelHTML) {
       tpList.innerHTML = '<div class="empty"><i class="ti ti-checks" style="font-size:40px;display:block;margin-bottom:8px;color:var(--green)"></i>'+wtx('all_packed')+'</div>';
     } else {
-      tpList.innerHTML = changeHTML + toPack.map(function(o) {
+      tpList.innerHTML = cancelHTML + changeHTML + toPack.map(function(o) {
         var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
         var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
         var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
@@ -7904,6 +7931,48 @@ function wht(t){
 
 function whPack(id){const o=wOrders.find(x=>x.id===id);if(!o)return;const ord=orders.find(x=>x.id===id);if(ord&&ord.status==='new'){alert('Please accept order first / กดรับออเดอร์ก่อน');return;}const now=new Date();o.packed=false;o.packing=true;o.packingAt='Today '+now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');if(ord)ord.status='packing';if(!dAllOrders.find(x=>x.id===id)){const src=orders.find(x=>x.id===id);if(src){dAllOrders.push({id:src.id,customer:src.customer,phone:src.phone,address:src.address,boxes:src.boxes,panels:src.panels,lcorner:src.lcorner,clips:src.clips});dAllOrders.sort((a,b)=>reg(a.id).s-reg(b.id).s);}}if(!dStatus[id])dStatus[id]='ready';addLog('Order '+id+' packing','+');if(ord){addStatusLog(ord,'packing','Warehouse');}whRender();ofRenderOrders();syncOrders();syncWOrders();}
 function whUnpack(id){const o=wOrders.find(x=>x.id===id);if(!o)return;o.packed=false;o.packedAt=null;const ord=orders.find(x=>x.id===id);if(ord)ord.status='new';whRender();ofRenderOrders();syncOrders();syncWOrders();try{ if(ord) sheetsSyncOrder(ord); }catch(e){}}
+
+// ── CANCELLED-ORDER WAREHOUSE ACKNOWLEDGEMENT ──
+// A cancelled order surfaces (silently, no sound) in the warehouse so staff can act
+// on the physical goods. mode: 'accept' (was packed → move to Packing to unpack),
+// 'unpack' (in Packing → confirm unpacked), 'seen' (never packed → just acknowledge).
+function whCancelCard(o, mode){
+  var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
+  var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
+  var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
+  var note = (mode==='seen') ? wtx('cancel_note_new') : wtx('cancel_note_packed');
+  var bStyle = 'background:#dc2626;color:#fff;border:none;margin-top:10px;width:100%;min-height:52px;font-size:15px;font-weight:700;-webkit-tap-highlight-color:transparent;touch-action:manipulation';
+  var btn = (mode==='accept')
+    ? '<button type="button" class="btn" style="'+bStyle+'" onclick="whCancelAccept(this)" data-id="'+o.id+'"><i class="ti ti-hand-stop"></i> '+wtx('cancel_accept')+'</button>'
+    : (mode==='unpack')
+      ? '<button type="button" class="btn" style="'+bStyle+'" onclick="whCancelDone(this)" data-id="'+o.id+'"><i class="ti ti-package-off"></i> '+wtx('cancel_unpack')+'</button>'
+      : '<button type="button" class="btn" style="'+bStyle+'" onclick="whCancelDone(this)" data-id="'+o.id+'"><i class="ti ti-eye-check"></i> '+wtx('cancel_seen')+'</button>';
+  return '<div class="card" style="background:#fef2f2;border:2px solid #dc2626">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
+    '<span style="font-size:18px;font-weight:700;text-decoration:line-through;color:#991b1b">'+o.id+'</span>'+
+    '<span class="badge" style="background:#dc2626;color:#fff">'+wtx('tag_cancelled')+'</span></div>'+
+    '<div style="font-size:12px;color:var(--text2);margin-bottom:8px">'+(o.customer||'')+' '+zoneBadge(o.zone)+'</div>'+
+    '<div style="background:#fff;border-radius:var(--rs);padding:7px 10px;font-size:12px;color:#991b1b;font-weight:600;margin-bottom:8px">'+note+'</div>'+
+    '<div class="pklist">'+
+    '<div class="pkrow"><span class="pklbl">'+wtx('lbl_panels')+'</span><span class="pkval">'+panels+'</span></div>'+
+    '<div class="pkrow"><span class="pklbl">'+wtx('lbl_edges')+'</span><span class="pkval">'+edges+'</span></div>'+
+    '<div class="pkrow"><span class="pklbl">'+wtx('lbl_clips')+'</span><span class="pkval">'+clips.toLocaleString()+'</span></div>'+
+    '</div>'+ btn +'</div>';
+}
+// Warehouse accepts a cancelled+packed order → move it to Packing to be unpacked
+function whCancelAccept(btn){
+  var id=btn.getAttribute('data-id'); var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  o.whCancelStage='unpack';
+  try{whRender();}catch(e){} try{whRenderPacking();}catch(e){} syncOrders();
+}
+// Warehouse confirms a cancelled order handled (unpacked or just seen) → clears it
+function whCancelDone(btn){
+  var id=btn.getAttribute('data-id'); var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  o.whCancelAck=true; o.whCancelStage='done';
+  o.whCancelAckBy=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Warehouse'; o.whCancelAckAt=Date.now();
+  try{addLog('Cancelled order '+id+' acknowledged in warehouse','~');}catch(e){}
+  try{whRender();}catch(e){} try{whRenderPacking();}catch(e){} syncOrders();
+}
 
 // DRIVER
 function drLoginRender(){
@@ -10654,27 +10723,31 @@ function toggleWhStock() {
 
 function whRenderPacking() {
   var packingOrders = orders.filter(function(o){ return o.status==='packing'; });
+  // Cancelled orders that were packed and now need physical unpacking
+  var cancelUnpack = orders.filter(function(o){ return o.status==='cancelled' && o.whCancelStage==='unpack' && !o.whCancelAck; });
   var cnt = document.getElementById('wh-pkgcnt');
-  if(cnt) cnt.textContent = packingOrders.length;  // tab badge = total being packed (unfiltered)
+  if(cnt) cnt.textContent = packingOrders.length + cancelUnpack.length;  // tab badge = total being packed (unfiltered)
 
   var el = document.getElementById('wh-packinglist');
   if(!el) return;
 
-  if(packingOrders.length === 0) {
+  if(packingOrders.length === 0 && cancelUnpack.length === 0) {
     el.innerHTML = '<div class="empty"><i class="ti ti-package" style="font-size:40px;display:block;margin-bottom:8px"></i>No orders being packed / ไม่มีออเดอร์ที่กำลังแพ็ค</div>';
     return;
   }
 
   // Apply search filter (id / customer / zone / panels)
   var pkQ = ((document.getElementById('wh-search-pk')||{}).value||'').trim().toLowerCase();
-  if(pkQ){ packingOrders = packingOrders.filter(function(o){ return (o.id||'').toLowerCase().indexOf(pkQ)>=0||(o.customer||'').toLowerCase().indexOf(pkQ)>=0||(o.zone||'').toLowerCase().indexOf(pkQ)>=0||(o.panels||'').toLowerCase().indexOf(pkQ)>=0; }); }
+  if(pkQ){ packingOrders = packingOrders.filter(function(o){ return (o.id||'').toLowerCase().indexOf(pkQ)>=0||(o.customer||'').toLowerCase().indexOf(pkQ)>=0||(o.zone||'').toLowerCase().indexOf(pkQ)>=0||(o.panels||'').toLowerCase().indexOf(pkQ)>=0; });
+    cancelUnpack = cancelUnpack.filter(function(o){ return (o.id||'').toLowerCase().indexOf(pkQ)>=0||(o.customer||'').toLowerCase().indexOf(pkQ)>=0||(o.zone||'').toLowerCase().indexOf(pkQ)>=0; }); }
 
-  if(packingOrders.length === 0) {
+  if(packingOrders.length === 0 && cancelUnpack.length === 0) {
     el.innerHTML = '<div class="empty"><i class="ti ti-search-off" style="font-size:40px;display:block;margin-bottom:8px"></i>No match / ไม่พบ “'+pkQ+'”</div>';
     return;
   }
 
-  el.innerHTML = packingOrders.map(function(o) {
+  var cancelUnpackHTML = cancelUnpack.map(function(o){ return whCancelCard(o, 'unpack'); }).join('');
+  el.innerHTML = cancelUnpackHTML + packingOrders.map(function(o) {
     var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
     var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
     var totalClips = ((o.lineItems||[]).filter(function(i){return i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips';}).reduce(function(a,i){return a+(parseInt(i.qty)||0);},0)) || (parseInt(o.clips)||0);
