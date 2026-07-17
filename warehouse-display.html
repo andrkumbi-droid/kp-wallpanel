@@ -4,6 +4,51 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KP Wallpanel — Warehouse Display</title>
+
+<!-- ── SMART-TV COMPAT ───────────────────────────────────────────────────
+     Old TV browsers (Tizen / webOS / older Android TV) often lack ES2017
+     helpers; one missing method blanks the whole screen with no way to see
+     why (no devtools on a TV). Polyfill the few we use, and show any real
+     error on-screen so it can be photographed instead of a black screen. -->
+<script>
+(function(){
+  // --- polyfills ---
+  if(!String.prototype.padStart){
+    String.prototype.padStart=function(len,pad){
+      var s=String(this); pad=pad===undefined?' ':String(pad);
+      if(!pad) return s;
+      while(s.length<len) s=pad+s;
+      return s.length>len?s.slice(s.length-len):s;
+    };
+  }
+  if(!Object.values){
+    Object.values=function(o){ var r=[]; for(var k in o){ if(Object.prototype.hasOwnProperty.call(o,k)) r.push(o[k]); } return r; };
+  }
+  if(!Array.prototype.find){
+    Array.prototype.find=function(fn){ for(var i=0;i<this.length;i++){ if(fn(this[i],i,this)) return this[i]; } };
+  }
+  if(!Array.prototype.includes){
+    Array.prototype.includes=function(v){ return this.indexOf(v)>=0; };
+  }
+  // --- on-screen error reporter (TVs have no devtools) ---
+  function showErr(msg){
+    var d=document.getElementById('tv-err');
+    if(!d){
+      d=document.createElement('div'); d.id='tv-err';
+      d.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#7f1d1d;color:#fff;font:14px/1.5 monospace;padding:12px 16px;max-height:45%;overflow:auto;white-space:pre-wrap;border-top:3px solid #fca5a5';
+      (document.body||document.documentElement).appendChild(d);
+    }
+    d.textContent='⚠ Display error (send a photo of this to Andre):\n'+msg;
+  }
+  window.addEventListener('error',function(e){
+    showErr((e.message||'script error')+(e.filename?'\n'+e.filename+':'+(e.lineno||'?'):''));
+  });
+  window.addEventListener('unhandledrejection',function(e){
+    showErr('promise: '+((e.reason&&(e.reason.message||e.reason))||'unknown'));
+  });
+  window.__tvShowErr=showErr;
+})();
+</script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #0f1117; color: #fff; font-family: Arial, sans-serif; min-height: 100vh; overflow: hidden; }
@@ -147,9 +192,11 @@
   </div>
 </div>
 
-<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js" onerror="window.__tvShowErr&&window.__tvShowErr('Cannot load Firebase (firebase-app.js). The TV browser is blocking gstatic.com or has no internet / outdated certificates.')"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js" onerror="window.__tvShowErr&&window.__tvShowErr('Cannot load Firebase (firebase-database.js) from gstatic.com.')"></script>
 <script>
+if(typeof firebase==='undefined'){ window.__tvShowErr&&window.__tvShowErr('Firebase did not load — the display cannot show live orders. Check the TV browser internet / try a newer browser or a streaming stick.'); }
+else {
 firebase.initializeApp({
   apiKey: "AIzaSyBhUzwMR28dvulez9q6AZ4gZS80Y9VK0qQ",
   authDomain: "kp-wallpanel.firebaseapp.com",
@@ -339,6 +386,7 @@ function render(orders) {
 }
 
 db.ref('orders').on('value', function(snap){ render(snap.val()||{}); });
+}
 </script>
 
 <!-- Fullscreen kept in its own block so it works even if Firebase is slow/blocked -->

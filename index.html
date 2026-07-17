@@ -854,6 +854,10 @@ textarea{resize:none}
     <button type="button" class="menu-btn" onclick="go('count')" style="background:linear-gradient(135deg,rgba(220,38,38,0.13),var(--bg2));border:1.5px solid #dc2626"><i class="ti ti-list-numbers mi" style="color:#dc2626"></i><span class="mn" style="color:#dc2626">Counting</span><span class="mt">นับจำนวน</span></button>
     <button type="button" class="menu-btn" onclick="openPayInfo()" style="background:linear-gradient(135deg,rgba(109,40,217,0.15),var(--bg2));border:1.5px solid #6d28d9"><i class="ti ti-building-bank mi" style="color:#6d28d9"></i><span class="mn" style="color:#6d28d9">Payment</span><span class="mt">ช่องทางโอนเงิน</span></button>
   </div>
+  <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:18px">
+    <a href="https://www.kp-wallpanel.com" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text2);text-decoration:none;background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:7px 14px"><i class="ti ti-world" style="font-size:15px;color:var(--blue)"></i> Website</a>
+    <a href="https://andrkumbi-droid.github.io/kp-wallpanel/warehouse-display.html" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text2);text-decoration:none;background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:7px 14px"><i class="ti ti-device-tv" style="font-size:15px;color:#ea580c"></i> Warehouse Display / จอคลัง</a>
+  </div>
 </div>
 
 <!-- PAYMENT INFO OVERLAY — the transfer graphic staff show the customer -->
@@ -5635,6 +5639,7 @@ function ofCreate(){
   priority:_ofPriority,priorityReason:_ofPriorityReason,priorityBy:_ofPriority?createdBy:'',priorityAt:_ofPriority?Date.now():0,
   statusLog:[{status:'new',time:ts,by:createdBy}]};
   orders.unshift(o);wOrders.unshift({id:no,zone,boxes:o.boxes,panels:panStr,lcorner:lcStr,clips,packed:false,packedAt:null});
+  try{ picsSeedSlots(o); }catch(e){}   // show the order (empty) in all Pictures tabs right away
   // Instore direct sale → order is immediately delivered + fully paid.
   if(_ofDirectSold && zone==='Instore'){
     var _dsNum=parseFloat(String(grand).replace(/[^0-9]/g,''))||0;
@@ -6066,6 +6071,27 @@ function ofCopyPack(id, btn){
 }
 function _ofCopyFallback(text){
   try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }catch(e){}
+}
+// Office flips a delivered order's payment method (cash ⇄ online) from the tour tab.
+// Used when the driver tapped the wrong button. Keeps the amount, swaps the method,
+// and writes an explicit paidCash/paidOnline split so ofPayCO reflects it everywhere.
+function ofTourFlipPay(id){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  var co=ofPayCO(o); var tot=co.cash+co.online;
+  if(tot<=0) return;                         // nothing paid → nothing to flip
+  var toOnline = co.cash>=co.online;         // currently cash-dominant → make it online
+  o.paidCash   = toOnline ? 0   : tot;
+  o.paidOnline = toOnline ? tot : 0;
+  o.payMethod  = toOnline ? 'online' : 'cash';
+  if(o.paidAmount==null||o.paidAmount==='') o.paidAmount=tot;
+  var who=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName
+    :((staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office');
+  try{ addLog('Payment method of '+o.id+' → '+(toOnline?'online':'cash')+' (by '+who+')','~'); }catch(e){}
+  try{ syncOrders(); }catch(e){}
+  try{ sheetsSyncOrder(o); }catch(e){}
+  try{ ofRenderOrders(); }catch(e){}
+  try{ payUpdateBadge(); }catch(e){}
+  try{ if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow(); }catch(e){}
 }
 function ofPayMethodSel(id, m){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
@@ -6536,7 +6562,13 @@ function ofRenderTour(){
           var _pp=[];
           if(_pc>0) _pp.push('<span style="color:#166534">💵'+_pc.toLocaleString()+'</span>');
           if(_po>0) _pp.push('<span style="color:#1d4ed8">🏦'+_po.toLocaleString()+'</span>'+(ofSlipBadge(ord)||''));
-          payInline='<span style="font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0">'+_pp.join('')+'</span>';
+          // Office fix: the driver sometimes taps the wrong method (cash instead of
+          // online). Offer a one-tap flip when it's a single-method payment (not a
+          // real cash+online split, where flipping would be meaningless).
+          var _flip = ((_pc>0&&_po<=0)||(_po>0&&_pc<=0))
+            ? ' <span onclick="event.stopPropagation();ofTourFlipPay(\''+String(id).replace(/['\\]/g,'')+'\')" title="Switch cash ⇄ online / สลับเงินสด-โอน" style="cursor:pointer;color:var(--text2);font-size:13px">⇄</span>'
+            : '';
+          payInline='<span style="font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0">'+_pp.join('')+_flip+'</span>';
         } else {
           payInline='<span style="font-size:10px;font-weight:700;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px;white-space:nowrap;flex-shrink:0">⏳ ค้าง / unpaid</span>';
         }
@@ -9194,6 +9226,22 @@ function addOrderPhoto(orderId, type, dataUrl, by, done){
   });
 }
 
+// Seed EMPTY photo slots (n:0) for a fresh order in all three Pictures tabs so the
+// order shows up in Warehouse / Delivery / Slips immediately after creation. The
+// slots get filled automatically as warehouse/driver upload photos; office can also
+// add photos manually. Uses a transaction so an existing entry (already has photos)
+// is never overwritten.
+function picsSeedSlots(o){
+  if(!window.fbDB || !o || !o.id) return;
+  var sid = safeOrderId(o.id);
+  ['warehouse','delivery','slip'].forEach(function(tab){
+    window.fbDB.ref('photoIndex/'+tab+'/'+sid).transaction(function(cur){
+      if(cur) return cur;   // keep any existing entry (has photos or already seeded)
+      return { id:o.id, n:0, ts:Date.now(), zone:o.zone||'', customer:o.customer||'' };
+    });
+  });
+}
+
 // Count how many photos an order already has (from the index).
 function orderPhotoCount(orderId, type){
   var idx = getPhotoIndex()[type]||{};
@@ -9219,7 +9267,9 @@ function picsRender(){
   var idx = getPhotoIndex()[picsTab] || {};
   var q = ((document.getElementById('pics-search')||{}).value||'').trim().toLowerCase();
   var rows = Object.keys(idx).map(function(sid){ var e=idx[sid]||{}; e._sid=sid; return e; })
-    .filter(function(e){ return (parseInt(e.n)||0) > 0; })
+    // Show every order slot, including empty ones (n:0) seeded at creation, so the
+    // order appears here from the start and fills in as photos are added.
+    .filter(function(e){ return !!(e.id||e._sid); })
     .filter(function(e){ if(!q) return true; return (String(e.id||'').toLowerCase().indexOf(q)>=0)||(String(e.customer||'').toLowerCase().indexOf(q)>=0); })
     .sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
   if(!rows.length){ list.innerHTML='<div class="empty" style="padding:1.5rem"><i class="ti ti-photo-off" style="font-size:36px;display:block;margin-bottom:8px"></i>No photos yet / ยังไม่มีรูป</div>'; return; }
@@ -9235,7 +9285,9 @@ function picsRender(){
           picsTotalLine(e)+
         '</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">'+
-          '<span style="font-size:12px;font-weight:700;color:var(--blue);background:var(--bg2);border-radius:12px;padding:2px 10px;white-space:nowrap">📷 '+(parseInt(e.n)||0)+'</span>'+
+          ((parseInt(e.n)||0)>0
+            ? '<span style="font-size:12px;font-weight:700;color:var(--blue);background:var(--bg2);border-radius:12px;padding:2px 10px;white-space:nowrap">📷 '+(parseInt(e.n)||0)+'</span>'
+            : '<span style="font-size:11px;font-weight:700;color:var(--text3);background:var(--bg2);border-radius:12px;padding:2px 10px;white-space:nowrap">⏳ รอรูป</span>')+
           (whenTime?'<span style="font-size:10px;color:var(--text2);white-space:nowrap">'+whenTime+'</span>':'')+
         '</div>'+
         '<i class="ti ti-chevron-down" id="pics-chev-'+e._sid+'" style="font-size:18px;color:var(--text2);flex-shrink:0"></i>'+
