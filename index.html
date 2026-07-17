@@ -6072,26 +6072,70 @@ function ofCopyPack(id, btn){
 function _ofCopyFallback(text){
   try{ var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }catch(e){}
 }
-// Office flips a delivered order's payment method (cash ⇄ online) from the tour tab.
-// Used when the driver tapped the wrong button. Keeps the amount, swaps the method,
-// and writes an explicit paidCash/paidOnline split so ofPayCO reflects it everywhere.
-function ofTourFlipPay(id){
+// Office edits a delivered order's payment from the tour tab (tap the amount chip).
+// Small dialog with a Cash box + an Online box (and quick "all cash / all online"
+// presets), so the office can fix a wrong cash/online choice AND correct the amount.
+function ofTourPayEdit(id){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
-  var co=ofPayCO(o); var tot=co.cash+co.online;
-  if(tot<=0) return;                         // nothing paid → nothing to flip
-  var toOnline = co.cash>=co.online;         // currently cash-dominant → make it online
-  o.paidCash   = toOnline ? 0   : tot;
-  o.paidOnline = toOnline ? tot : 0;
-  o.payMethod  = toOnline ? 'online' : 'cash';
-  if(o.paidAmount==null||o.paidAmount==='') o.paidAmount=tot;
+  var co=ofPayCO(o);
+  var ordTot=(function(){ try{ return ofOrderTotalNum(o)||0; }catch(e){ return 0; } })();
+  var esc=String(id).replace(/['\\]/g,'');
+  var html='<div id="tpe-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)ofTourPayClose()">'
+    +'<div style="background:var(--bg);border-radius:14px;max-width:340px;width:100%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,0.4)">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">'
+        +'<div style="font-weight:800;font-size:15px">💳 แก้ไขการชำระเงิน</div>'
+        +'<button type="button" onclick="ofTourPayClose()" style="border:none;background:var(--bg2);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:16px;color:var(--text)">✕</button>'
+      +'</div>'
+      +'<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Order '+id+' · Edit payment</div>'
+      +'<div style="display:flex;gap:8px;margin-bottom:12px">'
+        +'<button type="button" onclick="ofTourPayPreset(\'cash\')" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:#166534;font-size:12px;font-weight:700;cursor:pointer">💵 ทั้งหมดเงินสด</button>'
+        +'<button type="button" onclick="ofTourPayPreset(\'online\')" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer">🏦 ทั้งหมดโอน</button>'
+      +'</div>'
+      +'<label style="display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:13px;font-weight:600;color:#166534">💵 Cash / เงินสด'
+        +'<input id="tpe-cash" type="number" min="0" value="'+(co.cash||'')+'" oninput="ofTourPayRecalc()" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:15px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)"> ฿</label>'
+      +'<label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;font-weight:600;color:#1d4ed8">🏦 Online / โอน'
+        +'<input id="tpe-online" type="number" min="0" value="'+(co.online||'')+'" oninput="ofTourPayRecalc()" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:15px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)"> ฿</label>'
+      +'<div id="tpe-total" style="font-size:12px;color:var(--text2);text-align:right;margin-bottom:14px"></div>'
+      +'<div style="display:flex;gap:8px">'
+        +'<button type="button" onclick="ofTourPayClose()" style="flex:1;padding:10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:13px;font-weight:700;cursor:pointer">ยกเลิก</button>'
+        +'<button type="button" onclick="ofTourPaySave(\''+esc+'\')" style="flex:1;padding:10px;border:none;border-radius:var(--rs);background:var(--green);color:#fff;font-size:13px;font-weight:700;cursor:pointer">บันทึก / Save</button>'
+      +'</div>'
+    +'</div></div>';
+  var wrap=document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap.firstChild);
+  window._tpeOrdTot=ordTot;
+  ofTourPayRecalc();
+}
+function ofTourPayClose(){ var m=document.getElementById('tpe-modal'); if(m) m.remove(); }
+function ofTourPayPreset(which){
+  var tot=(parseFloat((document.getElementById('tpe-cash')||{}).value)||0)+(parseFloat((document.getElementById('tpe-online')||{}).value)||0);
+  if(tot<=0) tot=window._tpeOrdTot||0;
+  var c=document.getElementById('tpe-cash'), o=document.getElementById('tpe-online');
+  if(!c||!o) return;
+  if(which==='cash'){ c.value=tot; o.value=0; } else { o.value=tot; c.value=0; }
+  ofTourPayRecalc();
+}
+function ofTourPayRecalc(){
+  var cash=parseFloat((document.getElementById('tpe-cash')||{}).value)||0;
+  var online=parseFloat((document.getElementById('tpe-online')||{}).value)||0;
+  var el=document.getElementById('tpe-total');
+  if(el){ el.innerHTML='รวม / Total: <b style="color:var(--text)">'+(cash+online).toLocaleString()+' ฿</b>'+(window._tpeOrdTot?' · ยอดออเดอร์ '+window._tpeOrdTot.toLocaleString()+' ฿':''); }
+}
+function ofTourPaySave(id){
+  var o=orders.find(function(x){return x.id===id;}); if(!o){ ofTourPayClose(); return; }
+  var cash=Math.max(0, parseFloat((document.getElementById('tpe-cash')||{}).value)||0);
+  var online=Math.max(0, parseFloat((document.getElementById('tpe-online')||{}).value)||0);
+  o.paidCash=cash; o.paidOnline=online; o.paidAmount=cash+online;
+  o.payMethod=(cash>0&&online>0)?'split':(online>0?'online':(cash>0?'cash':''));
   var who=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName
     :((staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office');
-  try{ addLog('Payment method of '+o.id+' → '+(toOnline?'online':'cash')+' (by '+who+')','~'); }catch(e){}
+  try{ addLog('Payment of '+o.id+' set: 💵'+cash.toLocaleString()+' / 🏦'+online.toLocaleString()+' (by '+who+')','~'); }catch(e){}
   try{ syncOrders(); }catch(e){}
   try{ sheetsSyncOrder(o); }catch(e){}
+  try{ ofRenderTour(); }catch(e){}
   try{ ofRenderOrders(); }catch(e){}
   try{ payUpdateBadge(); }catch(e){}
   try{ if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow(); }catch(e){}
+  ofTourPayClose();
 }
 function ofPayMethodSel(id, m){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
@@ -6561,14 +6605,13 @@ function ofRenderTour(){
         if(_pc>0||_po>0){
           var _pp=[];
           if(_pc>0) _pp.push('<span style="color:#166534">💵'+_pc.toLocaleString()+'</span>');
-          if(_po>0) _pp.push('<span style="color:#1d4ed8">🏦'+_po.toLocaleString()+'</span>'+(ofSlipBadge(ord)||''));
-          // Office fix: the driver sometimes taps the wrong method (cash instead of
-          // online). Offer a one-tap flip when it's a single-method payment (not a
-          // real cash+online split, where flipping would be meaningless).
-          var _flip = ((_pc>0&&_po<=0)||(_po>0&&_pc<=0))
-            ? ' <span onclick="event.stopPropagation();ofTourFlipPay(\''+String(id).replace(/['\\]/g,'')+'\')" title="Switch cash ⇄ online / สลับเงินสด-โอน" style="cursor:pointer;color:var(--text2);font-size:13px">⇄</span>'
-            : '';
-          payInline='<span style="font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0">'+_pp.join('')+_flip+'</span>';
+          if(_po>0) _pp.push('<span style="color:#1d4ed8">🏦'+_po.toLocaleString()+'</span>');
+          // Tap the amount(s) to open the payment editor — office can fix a wrong
+          // cash/online choice or correct the amount there.
+          payInline='<span style="font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0">'
+            +'<span onclick="event.stopPropagation();ofTourPayEdit(\''+String(id).replace(/['\\]/g,'')+'\')" title="Edit payment / แก้ไขการชำระเงิน — tap to change cash/online or amount" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;border-bottom:1px dotted var(--text3)">'+_pp.join('')+'</span>'
+            +(_po>0?(ofSlipBadge(ord)||''):'')
+            +'</span>';
         } else {
           payInline='<span style="font-size:10px;font-weight:700;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px;white-space:nowrap;flex-shrink:0">⏳ ค้าง / unpaid</span>';
         }
