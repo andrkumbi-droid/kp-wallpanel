@@ -80,6 +80,25 @@
   .alert-box.show { opacity: 1; animation: boxPulse 0.8s infinite; }
   @keyframes boxPulse { 0%,100%{transform:translate(-50%,-50%) scale(1)} 50%{transform:translate(-50%,-50%) scale(1.04)} }
   .alert-sub { font-size: 16px; font-weight: 400; margin-top: 4px; }
+
+  /* Fullscreen toggle button — for wall-TV / phone-mirroring */
+  #fsbtn {
+    position: fixed; bottom: 18px; right: 18px; z-index: 200;
+    width: 54px; height: 54px; border-radius: 50%;
+    border: none; background: rgba(0,184,148,0.92); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+    -webkit-tap-highlight-color: transparent;
+    transition: opacity .4s ease, transform .15s ease;
+  }
+  #fsbtn:active { transform: scale(0.92); }
+  #fsbtn.hide { opacity: 0; pointer-events: none; }
+  #fstip {
+    position: fixed; bottom: 82px; right: 18px; z-index: 200;
+    background: #1a1d27; color: #fff; border: 1px solid #2a2d3a;
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; max-width: 240px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5); display: none; line-height: 1.5;
+  }
 </style>
 </head>
 <body>
@@ -89,6 +108,9 @@
   🔔 ออเดอร์ใหม่เข้า!
   <div class="alert-sub">กรุณารับออเดอร์ผ่านมือถือ</div>
 </div>
+
+<button id="fsbtn" type="button" onclick="toggleFs()" title="Fullscreen / เต็มจอ (F)"></button>
+<div id="fstip"></div>
 
 <div class="header">
   <div>
@@ -317,6 +339,57 @@ function render(orders) {
 }
 
 db.ref('orders').on('value', function(snap){ render(snap.val()||{}); });
+</script>
+
+<!-- Fullscreen kept in its own block so it works even if Firebase is slow/blocked -->
+<script>
+// ── FULLSCREEN (PC + phone → mirror to TV) ─────────────────────────────
+var ICON_EXPAND='<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/></svg>';
+var ICON_COMPRESS='<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h5V3M21 8h-5V3M16 21v-5h5M8 21v-5H3"/></svg>';
+var fsbtn=document.getElementById('fsbtn');
+var wakeLock=null, fsHideTimer=null;
+
+function fsSupported(){ var d=document.documentElement; return !!(d.requestFullscreen||d.webkitRequestFullscreen||d.mozRequestFullScreen||d.msRequestFullscreen); }
+function isFs(){ return !!(document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement); }
+function enterFs(){ var d=document.documentElement; var fn=d.requestFullscreen||d.webkitRequestFullscreen||d.mozRequestFullScreen||d.msRequestFullscreen; return fn?fn.call(d):Promise.reject(); }
+function exitFs(){ var fn=document.exitFullscreen||document.webkitExitFullscreen||document.mozCancelFullScreen||document.msExitFullscreen; if(fn) fn.call(document); }
+
+// Keep the wall display awake while shown
+function requestWake(){ try{ if('wakeLock' in navigator){ navigator.wakeLock.request('screen').then(function(w){ wakeLock=w; }).catch(function(){}); } }catch(e){} }
+document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible' && isFs()) requestWake(); });
+
+function showTip(msg){ var t=document.getElementById('fstip'); if(!t) return; t.textContent=msg; t.style.display='block'; setTimeout(function(){ t.style.display='none'; }, 5000); }
+
+function toggleFs(){
+  if(isFs()){ exitFs(); return; }
+  if(!fsSupported()){
+    // iOS Safari has no element fullscreen — guide the user to the OS-level options.
+    showTip('📱 iPhone: use AirPlay to mirror the whole screen to the TV / ใช้ AirPlay สะท้อนหน้าจอทั้งหมดขึ้นทีวี');
+    return;
+  }
+  var p=enterFs();
+  if(p && p.then) p.then(requestWake).catch(function(){ showTip('Fullscreen blocked by browser / เบราว์เซอร์บล็อกเต็มจอ'); });
+  else requestWake();
+}
+
+function updateFsUi(){
+  if(!fsbtn) return;
+  fsbtn.innerHTML = isFs() ? ICON_COMPRESS : ICON_EXPAND;
+  fsbtn.title = isFs() ? 'Exit fullscreen / ออกจากเต็มจอ (F)' : 'Fullscreen / เต็มจอ (F)';
+  if(isFs()) scheduleHide(); else { clearTimeout(fsHideTimer); fsbtn.classList.remove('hide'); }
+}
+['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','msfullscreenchange'].forEach(function(ev){ document.addEventListener(ev, updateFsUi); });
+
+// On the wall display, fade the button out when idle; reveal on any activity
+function scheduleHide(){ clearTimeout(fsHideTimer); if(isFs()){ fsHideTimer=setTimeout(function(){ if(fsbtn) fsbtn.classList.add('hide'); }, 3500); } }
+function revealBtn(){ if(fsbtn) fsbtn.classList.remove('hide'); scheduleHide(); }
+document.addEventListener('pointermove', revealBtn);
+document.addEventListener('touchstart', revealBtn, {passive:true});
+
+// Keyboard shortcut: F toggles (handy on a PC display)
+document.addEventListener('keydown', function(e){ if((e.key==='f'||e.key==='F') && !e.ctrlKey && !e.metaKey && !e.altKey){ toggleFs(); } });
+
+updateFsUi();
 </script>
 </body>
 </html>
