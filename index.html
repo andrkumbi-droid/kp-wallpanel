@@ -7280,6 +7280,8 @@ function kpcBubble(m){
   var pinCtrl = m.pinned
     ? '<span onclick="event.stopPropagation();kpcUnpin(\''+m._id+'\')" title="Unpin / เลิกปักหมุด" style="cursor:pointer;font-size:11px">📌✕</span>'
     : '<span onclick="event.stopPropagation();kpcPin(\''+m._id+'\')" title="Pin / ปักหมุด" style="cursor:pointer;font-size:12px;opacity:.45">📌</span>';
+  // Tap 🌐 to translate this message to English (shown only for you, on demand).
+  var trCtrl = m.text ? '<span onclick="event.stopPropagation();kpcTranslateMsg(\''+m._id+'\',this)" title="Translate / แปล" style="cursor:pointer;font-size:12px;opacity:'+(kpcTrCache[m._id]?'.9':'.45')+'">🌐</span>' : '';
   return '<div style="display:flex;justify-content:'+(mine?'flex-end':'flex-start')+';margin-bottom:8px">'
     +'<div style="max-width:80%;background:'+(mine?'var(--blue)':'var(--bg)')+';color:'+(mine?'#fff':'var(--text)')+';border:1px solid '+(mine?'transparent':'var(--border)')+';border-radius:14px;padding:7px 11px">'
     +(mine?'':'<div style="font-size:11px;font-weight:700;color:var(--blue);margin-bottom:2px">'+kpcEsc(m.byName||'')+'</div>')
@@ -7287,7 +7289,8 @@ function kpcBubble(m){
     +(m.ref?'<div style="margin-top:'+((m.text)?'6px':'0')+'">'+kpcRefChip(m.ref,true)+'</div>':'')
     +(m.img?'<div style="margin-top:'+((m.text||m.ref)?'6px':'0')+'"><img src="'+m.img+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="max-width:200px;max-height:220px;border-radius:10px;cursor:pointer;display:block"></div>':'')
     +(m.tr&&m.tr.text?'<div style="font-size:13px;white-space:pre-wrap;word-break:break-word;margin-top:5px;padding-top:5px;border-top:1px dashed '+(mine?'rgba(255,255,255,.4)':'var(--border)')+';opacity:.92">🌐 '+kpcEsc(m.tr.text)+'</div>':'')
-    +'<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:3px"><span style="font-size:10px;opacity:.7">'+t+'</span>'+pinCtrl+'</div>'
+    +(kpcTrCache[m._id]?'<div style="font-size:13px;white-space:pre-wrap;word-break:break-word;margin-top:5px;padding-top:5px;border-top:1px dashed '+(mine?'rgba(255,255,255,.4)':'var(--border)')+';opacity:.92">🌐 '+kpcEsc(kpcTrCache[m._id])+'</div>':'')
+    +'<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:3px"><span style="font-size:10px;opacity:.7">'+t+'</span>'+trCtrl+pinCtrl+'</div>'
     +'</div></div>';
 }
 // Auto-translate helpers (Thai ↔ Burmese) for the Warehouse chat + DMs.
@@ -7349,6 +7352,48 @@ function kpcMarkSeen(){
   kpcLastSeen = last?(last.ts||Date.now()):Date.now();
   try{ localStorage.setItem('kpc-seen-'+kpcChannel, String(kpcLastSeen)); }catch(e){}
   kpcSetDot(false);
+}
+// ── Emoji picker for the message bar ──────────────────────────────────
+var KPC_EMOJIS=('😀 😁 😂 🤣 😊 😍 😘 😎 🥳 😅 😭 😢 😡 🤔 😴 🙄 😇 🤗 '
+  +'👍 👎 👌 🙏 💪 👏 🙌 🤝 👀 🫡 ✌️ 🤙 '
+  +'❤️ 🧡 💛 💚 💙 💜 🔥 ✨ 💯 ⭐ 🎉 🎊 '
+  +'✅ ❌ ⚠️ ❓ ❗ ⏳ 🆗 🔔 📌 '
+  +'📦 🚚 💵 🏦 🧾 💰 📸 📍 💬 📞 🕐 ☀️ 🌧️').trim().split(/\s+/);
+function kpcToggleEmoji(){
+  var p=document.getElementById('kpc-emoji'); if(!p) return;
+  if(p.style.display==='flex'){ p.style.display='none'; return; }
+  if(!p.getAttribute('data-built')){
+    p.innerHTML=KPC_EMOJIS.map(function(e){ return '<span onclick="kpcInsertEmoji(\''+e+'\')" style="font-size:22px;cursor:pointer;padding:4px 6px;border-radius:8px;line-height:1;-webkit-tap-highlight-color:transparent">'+e+'</span>'; }).join('');
+    p.setAttribute('data-built','1');
+  }
+  p.style.display='flex';
+}
+function kpcInsertEmoji(e){
+  var i=document.getElementById('kpc-input'); if(!i) return;
+  i.value=(i.value||'')+e; i.focus();
+}
+// ── On-demand translation to English (any language a colleague wrote) ──
+// Uses a free client-side endpoint — no backend to deploy. The translation is
+// shown only for the reader who tapped 🌐 (cached locally, not written to chat).
+var KPC_TR_TARGET='en';
+var kpcTrCache={};
+function kpGtxTranslate(text, target, cb){
+  try{
+    var url='https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl='+encodeURIComponent(target)+'&dt=t&q='+encodeURIComponent(text);
+    fetch(url).then(function(r){ return r.json(); }).then(function(j){
+      var out=''; try{ (j[0]||[]).forEach(function(s){ if(s&&s[0]) out+=s[0]; }); }catch(e){}
+      cb(out||null);
+    }).catch(function(){ cb(null); });
+  }catch(e){ cb(null); }
+}
+function kpcTranslateMsg(msgId, btn){
+  var m=kpcMsgs.find(function(x){return x._id===msgId;}); if(!m||!m.text) return;
+  if(kpcTrCache[msgId]){ delete kpcTrCache[msgId]; kpcRender(); return; }   // tap again → hide
+  if(btn){ btn.textContent='⏳'; }
+  kpGtxTranslate(m.text, KPC_TR_TARGET, function(tr){
+    kpcTrCache[msgId]= tr || '⚠ translate failed / แปลไม่สำเร็จ';
+    kpcRender();
+  });
 }
 function kpcSend(){
   var i=document.getElementById('kpc-input'); if(!i) return;
@@ -15593,11 +15638,13 @@ document.addEventListener('change', function(e){
     <div id="kpc-list" style="flex:1;overflow-y:auto;padding:12px 14px;background:var(--bg2)"></div>
     <div style="border-top:1px solid var(--border)">
       <div id="kpc-pending" style="display:none;padding:8px 12px 0"></div>
+      <div id="kpc-emoji" style="display:none;flex-wrap:wrap;gap:2px;padding:8px 12px;max-height:140px;overflow-y:auto;border-bottom:1px solid var(--border)"></div>
       <div style="display:flex;gap:8px;padding:10px 12px;align-items:center">
         <button type="button" onclick="kpcOpenPick()" title="Attach order / tour · แนบออเดอร์" style="border:none;background:var(--bg2);color:var(--text);border-radius:50%;width:38px;height:38px;font-size:17px;cursor:pointer;flex-shrink:0">📎</button>
         <button type="button" onclick="document.getElementById('kpc-file').click()" title="Photo / รูป" style="border:none;background:var(--bg2);color:var(--text);border-radius:50%;width:38px;height:38px;font-size:17px;cursor:pointer;flex-shrink:0">📷</button>
         <input type="file" id="kpc-file" accept="image/*" style="display:none" onchange="kpcPickImage(this)">
         <input id="kpc-input" type="text" placeholder="Message / ข้อความ…" onkeydown="if(event.key==='Enter'){event.preventDefault();kpcSend();}" style="flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:22px;background:var(--bg);color:var(--text);font-size:14px">
+        <button type="button" onclick="kpcToggleEmoji()" title="Emoji / อีโมจิ" style="border:none;background:var(--bg2);color:var(--text);border-radius:50%;width:38px;height:38px;font-size:18px;cursor:pointer;flex-shrink:0">😊</button>
         <button type="button" onclick="kpcSend()" title="Send / ส่ง" style="border:none;background:var(--blue);color:#fff;border-radius:22px;padding:0 18px;font-size:16px;font-weight:700;cursor:pointer">➤</button>
       </div>
     </div>
