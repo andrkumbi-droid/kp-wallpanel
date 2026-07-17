@@ -1478,6 +1478,7 @@ textarea{resize:none}
     <button type="button" class="abtn abtn-e" onclick="ofAddE()"><i class="ti ti-plus"></i> Add edge strip / เพิ่มขอบ</button>
     <div class="clipbox">
       <div class="clip-row"><span style="font-size:13px"><i class="ti ti-tool" style="font-size:14px;vertical-align:-2px;margin-right:4px"></i>Free clips / คลิปฟรี</span><span style="font-size:13px;font-weight:600" id="of-free">0</span></div>
+      <div class="clip-extra" style="margin-bottom:6px"><span style="font-size:12px;color:var(--text2)">Deduct free clips (−)<br>หักคลิปฟรี</span><input type="number" id="of-free-minus" min="0" placeholder="0" oninput="ofCalc()"><span style="font-size:12px;color:var(--text2);text-align:right">หัก</span></div>
       <div class="clip-extra" style="margin-bottom:6px"><span style="font-size:12px;color:var(--text2)">Free clips 🎁 (ฟรี)<br>คลิปของขวัญ</span><input type="number" id="of-free-clips" min="0" placeholder="0" oninput="ofCalc()"><span style="font-size:12px;color:var(--text2);text-align:right">ฟรี</span></div>
       <div class="clip-extra"><span style="font-size:12px;color:var(--text2)">Clip packs (199 ฿/pack)<br>คลิปแพ็ค</span><input type="number" id="of-clip-packs" min="0" placeholder="0" oninput="ofCalc()"><span style="font-size:12px;color:var(--text2);text-align:right" id="of-clipcost">0 ฿</span></div>
     </div>
@@ -5409,6 +5410,9 @@ function ofCalc(){
   document.querySelectorAll('#of-panels .pline').forEach(l=>{const i=l.querySelectorAll('input');pp+=(parseFloat(i[2].value)||0)*(parseInt(i[1].value)||0);pq+=parseInt(i[1].value)||0;});
   document.querySelectorAll('#of-edges .eline').forEach(l=>{const i=l.querySelectorAll('input');ep+=(parseFloat(i[2].value)||0)*(parseInt(i[1].value)||0);});
   const freeAuto=pq*10;
+  // Office can deduct from the auto free clips (customer wants fewer / none)
+  const freeDeduct=Math.min(freeAuto, parseInt((document.getElementById('of-free-minus')||{}).value)||0);
+  const freeNet=Math.max(0, freeAuto-freeDeduct);
   const clipPacksEl=document.getElementById('of-clip-packs');
   const freeGiftEl=document.getElementById('of-free-clips');
   const clipPacks=parseInt(clipPacksEl?clipPacksEl.value:0)||0;
@@ -5419,7 +5423,7 @@ function ofCalc(){
   const grand=pp+ep+cc+extraPrice;
   // Update free clips display
   const freeEl=document.getElementById('of-free');
-  if(freeEl) freeEl.textContent=freeAuto.toLocaleString();
+  if(freeEl) freeEl.textContent=freeNet.toLocaleString()+(freeDeduct>0?' (−'+freeDeduct.toLocaleString()+')':'');
   // Update clip cost display
   const ccEl=document.getElementById('of-clipcost');
   if(ccEl) ccEl.textContent=cc>0?cc.toLocaleString()+' ฿':'0 ฿';
@@ -5432,7 +5436,7 @@ function ofCalc(){
     sb.style.display='block';
     document.getElementById('of-sp').textContent=pp>0?pp.toLocaleString()+' ฿':'—';
     document.getElementById('of-se').textContent=ep>0?ep.toLocaleString()+' ฿':'—';
-    document.getElementById('of-sf').textContent=freeAuto.toLocaleString()+' pcs';
+    document.getElementById('of-sf').textContent=freeNet.toLocaleString()+' pcs';
     // Show clip packs cost
     const sxEl=document.getElementById('of-sx');
     if(sxEl) sxEl.textContent=cc>0?cc.toLocaleString()+' ฿':'—';
@@ -5605,13 +5609,15 @@ function ofCreate(){
   });
   const clipPacks=parseInt((document.getElementById('of-clip-packs')||{}).value)||0;
   const freeGiftClips=parseInt((document.getElementById('of-free-clips')||{}).value)||0;
-  const clips=tq*10+freeGiftClips;
+  const freeDeduct=Math.min(tq*10, parseInt((document.getElementById('of-free-minus')||{}).value)||0);
+  const freeAutoNet=Math.max(0, tq*10-freeDeduct);
+  const clips=freeAutoNet+freeGiftClips;
   const discount=parseInt((document.getElementById('of-discount')||{}).value)||0;
   const grand=document.getElementById('of-st').textContent||'—';
   const zone=document.getElementById('of-zone').value;
   if(clipPacks>0) lineItems.push({type:'clips',code:'Clip Pack / คลิปแพ็ค',qty:clipPacks,unitPrice:199,amount:clipPacks*199});
   if(freeGiftClips>0) lineItems.push({type:'free-gift-clips',code:'Free Clips 🎁 / ของขวัญ',qty:freeGiftClips,unitPrice:0,amount:0});
-  if(tq>0) lineItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)',qty:tq*10,unitPrice:0,amount:0});
+  if(freeAutoNet>0) lineItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)'+(freeDeduct>0?' −'+freeDeduct:''),qty:freeAutoNet,unitPrice:0,amount:0});
   if(discount>0) lineItems.push({type:'discount',code:'Discount / ส่วนลด',qty:1,unitPrice:-discount,amount:-discount});
   const delivery=parseInt((document.getElementById('of-delivery')||{}).value)||0;
   if(delivery>0) lineItems.push({type:'delivery',code:'Delivery / ค่าจัดส่ง',qty:1,unitPrice:delivery,amount:delivery});
@@ -5640,7 +5646,7 @@ function ofCreate(){
   }
   {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;stockBucketDeduct(li.code,_q,li.grade);addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
   var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';ofUpdPrioCnt();addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order'});}catch(e){}
-  ['of-no','of-cust','of-phone','of-province','of-loc','of-contact','of-deliveround','of-reqdate','of-reqnote','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='none';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').valueAsDate=new Date();
+  ['of-no','of-cust','of-phone','of-province','of-loc','of-contact','of-deliveround','of-reqdate','of-reqnote','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='none';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').valueAsDate=new Date();
   if(_ofPriority){ try{ pushSend('warehouse','⭐ Priority order: '+no, _ofPriorityReason||'Important order', {tag:'priority'}); }catch(e){} }
   _ofPriority=false;_ofPriorityReason='';try{ofUpdatePriorityBtn();}catch(e){}
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
