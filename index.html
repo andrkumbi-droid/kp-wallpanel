@@ -7399,6 +7399,36 @@ function kpcInsertEmoji(e){
   var i=document.getElementById('kpc-input'); if(!i) return;
   i.value=(i.value||'')+e; i.focus();
 }
+// ── Compose translate: type EN/DE → AI (Claude) translates to Thai/Burmese ──
+// Uses the KP_TRANSLATE_URL Claude backend (translate.gs), NOT Google Translate.
+// The bar only appears when you type latin text and the backend URL is set.
+var kpcTrOriginal=null;
+function kpcComposeBar(){
+  var i=document.getElementById('kpc-input'), bar=document.getElementById('kpc-trbar'); if(!i||!bar) return;
+  var t=(i.value||'').trim();
+  var show = !!KP_TRANSLATE_URL && t.length>1 && /[A-Za-z]/.test(t);
+  bar.style.display = show ? 'flex' : 'none';
+  if(!show){ kpcTrOriginal=null; var u=document.getElementById('kpc-trundo'); if(u) u.style.display='none'; }
+}
+function kpcComposeTr(target){
+  var i=document.getElementById('kpc-input'); if(!i) return;
+  var t=(i.value||'').trim(); if(!t) return;
+  if(!KP_TRANSLATE_URL){ alert('AI translator not set up yet / ยังไม่ได้ตั้งค่าตัวแปล AI'); return; }
+  kpcTrOriginal=i.value;
+  var bar=document.getElementById('kpc-trbar'); if(bar) bar.style.opacity='.5';
+  kpcTranslate(t, target, function(tr){
+    if(bar) bar.style.opacity='';
+    if(!tr){ alert('Translation failed / แปลไม่สำเร็จ'); kpcTrOriginal=null; return; }
+    i.value=tr; i.focus();
+    var u=document.getElementById('kpc-trundo'); if(u) u.style.display='inline';
+  });
+}
+function kpcComposeUndo(){
+  var i=document.getElementById('kpc-input'); if(!i||kpcTrOriginal==null) return;
+  i.value=kpcTrOriginal; kpcTrOriginal=null;
+  var u=document.getElementById('kpc-trundo'); if(u) u.style.display='none';
+  i.focus();
+}
 // ── On-demand translation to English (any language a colleague wrote) ──
 // Uses a free client-side endpoint — no backend to deploy. The translation is
 // shown only for the reader who tapped 🌐 (cached locally, not written to chat).
@@ -7435,7 +7465,7 @@ function kpcSend(){
   var _ref=window.fbDB.ref('chat/channels/'+_ch+'/messages').push(msg);
   // Auto-translate TH↔MY in Warehouse/DM channels — patched onto the message async.
   if(text) try{ kpcMaybeTranslate(_ch, _ref.key, text); }catch(e){}
-  i.value=''; kpcClearPending(); kpcClearImg(); i.focus();
+  i.value=''; kpcClearPending(); kpcClearImg(); kpcTrOriginal=null; try{ kpcComposeBar(); }catch(e){} i.focus();
 }
 // ── Stage 4: pin / unpin. Anyone can pin; only the pinner OR office staff can unpin.
 function kpcPin(msgId){
@@ -15666,11 +15696,17 @@ document.addEventListener('change', function(e){
     <div style="border-top:1px solid var(--border)">
       <div id="kpc-pending" style="display:none;padding:8px 12px 0"></div>
       <div id="kpc-emoji" style="display:none;flex-wrap:wrap;gap:2px;padding:8px 12px;max-height:140px;overflow-y:auto;border-bottom:1px solid var(--border)"></div>
+      <div id="kpc-trbar" style="display:none;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);font-size:12px;flex-wrap:wrap">
+        <span style="color:var(--text2)">🌐 แปลด้วย AI / AI translate →</span>
+        <button type="button" onclick="kpcComposeTr('th')" style="border:1px solid var(--border);background:var(--bg2);color:var(--text);border-radius:14px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer">🇹🇭 ไทย</button>
+        <button type="button" onclick="kpcComposeTr('my')" style="border:1px solid var(--border);background:var(--bg2);color:var(--text);border-radius:14px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer">🇲🇲 မြန်မာ</button>
+        <span id="kpc-trundo" style="display:none;cursor:pointer;color:var(--blue);font-weight:600" onclick="kpcComposeUndo()">↩ ต้นฉบับ / undo</span>
+      </div>
       <div style="display:flex;gap:8px;padding:10px 12px;align-items:center">
         <button type="button" onclick="kpcOpenPick()" title="Attach order / tour · แนบออเดอร์" style="border:none;background:var(--bg2);color:var(--text);border-radius:50%;width:38px;height:38px;font-size:17px;cursor:pointer;flex-shrink:0">📎</button>
         <button type="button" onclick="document.getElementById('kpc-file').click()" title="Photo / รูป" style="border:none;background:var(--bg2);color:var(--text);border-radius:50%;width:38px;height:38px;font-size:17px;cursor:pointer;flex-shrink:0">📷</button>
         <input type="file" id="kpc-file" accept="image/*" style="display:none" onchange="kpcPickImage(this)">
-        <input id="kpc-input" type="text" placeholder="Message / ข้อความ…" onkeydown="if(event.key==='Enter'){event.preventDefault();kpcSend();}" style="flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:22px;background:var(--bg);color:var(--text);font-size:14px">
+        <input id="kpc-input" type="text" placeholder="Message / ข้อความ…" oninput="kpcComposeBar()" onkeydown="if(event.key==='Enter'){event.preventDefault();kpcSend();}" style="flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:22px;background:var(--bg);color:var(--text);font-size:14px">
         <button type="button" onclick="kpcToggleEmoji()" title="Emoji / อีโมจิ" style="border:none;background:var(--bg2);color:var(--text);border-radius:50%;width:38px;height:38px;font-size:18px;cursor:pointer;flex-shrink:0">😊</button>
         <button type="button" onclick="kpcSend()" title="Send / ส่ง" style="border:none;background:var(--blue);color:#fff;border-radius:22px;padding:0 18px;font-size:16px;font-weight:700;cursor:pointer">➤</button>
       </div>
