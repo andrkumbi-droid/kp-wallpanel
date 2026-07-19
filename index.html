@@ -6501,6 +6501,24 @@ function ofBackfillTourDrivers(){
 function ofRenderTour(){
   ofUpdTourDot();
   try{ ofBackfillTourDrivers(); }catch(e){}
+  // Reconcile tour-stop status with the order's own status. An order marked
+  // delivered at ORDER level (e.g. via the order card) but still loaded/ready
+  // inside the tour would otherwise be dropped from the tour's slip count AND
+  // payment totals, while the row already shows "delivered" (no ✓ to fix it) —
+  // exactly the "Slips 2/2 despite 3 online" case. Pull the tour status up.
+  try{
+    var _recon=false;
+    (activeTours||[]).forEach(function(t){
+      if(!t||!t.orders||!t.status) return;
+      t.orders.forEach(function(id){
+        var st=t.status[id]||'loaded';
+        if(st==='delivered'||st==='cancelled'||st==='shipped') return;
+        var o=orders.find(function(x){return x.id===id;});
+        if(o && o.status==='delivered'){ t.status[id]='delivered'; _recon=true; }
+      });
+    });
+    if(_recon) syncTours();
+  }catch(e){}
   // OVERVIEW: all ready + loaded orders with driver assignment
   var overviewEl = document.getElementById('of-tour-overview');
   if(overviewEl) {
@@ -6884,10 +6902,14 @@ function ofRenderLala(){
     var ords=(t.orders||[]).map(function(id){ return (orders.find(function(x){return x.id===id;}))||{id:id,customer:'—',address:'—',panels:'—'}; })
       .filter(function(o){ return ((t.status||{})[o.id]||'loaded')!=='cancelled'; });
     var ordHTML=ords.map(function(o){
+      var shipHTML=(o.shipper && o.shipper!=='ส่งเอง')
+        ? '<div style="font-size:12px;color:#4f46e5;font-weight:700;margin-top:1px"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> Shipper / ขนส่ง: '+esc(o.shipper)+'</div>'
+        : '';
       return '<div style="padding:6px 0;border-top:1px solid var(--border)">'
         +'<div style="font-size:13px;font-weight:700">'+esc(o.id)+' <span style="font-weight:500;color:var(--text2)">· '+esc(o.customer||'—')+zoneBadge(o.zone)+'</span></div>'
         +'<div style="font-size:12px;color:var(--text2)"><i class="ti ti-map-pin" style="font-size:11px;vertical-align:-1px"></i> '+esc(o.address||'—')+'</div>'
         +'<div style="font-size:12px">'+esc(ofLalaProdSummary(o))+'</div>'
+        +shipHTML
         +'</div>';
     }).join('');
     var photos=(t.carPhotos||[]).map(function(src,pi){
