@@ -693,13 +693,14 @@ textarea{resize:none}
           t.status=ns; t.checks=nc;
         });
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
-        try{if(document.getElementById('s-office').classList.contains('active')){ofRenderTour();ofLalaUpdBadge();if(document.getElementById('ofv-lala').classList.contains('active'))ofRenderLala();if(document.getElementById('ofv-home').classList.contains('active'))ofRenderDashboard();}}catch(e){}
+        try{if(document.getElementById('s-office').classList.contains('active')){ofRenderTour();ofLalaUpdBadge();if(document.getElementById('ofv-lala').classList.contains('active'))ofRenderLala();if(document.getElementById('ofv-drivers').classList.contains('active'))ofDriversRender();if(document.getElementById('ofv-home').classList.contains('active'))ofRenderDashboard();}}catch(e){}
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
         try{if(document.getElementById('s-driver-tour').classList.contains('active')){drRenderTourSwitch();drReady();}}catch(e){}
       });
       db.ref('tourHistory').on('value', function(snap) {
         tourHistory = snap.val() || {};
         try{ if(document.getElementById('ofv-drivers') && document.getElementById('ofv-drivers').classList.contains('active')) ofDriversRender(); }catch(e){}
+        try{ if(document.getElementById('ofv-lala') && document.getElementById('ofv-lala').classList.contains('active')) ofRenderLala(); }catch(e){}
       });
       db.ref('revOrders').on('value', function(snap) {
         // Dedup by order id on load — one revenue entry per delivered order. Guards
@@ -6769,7 +6770,10 @@ function ofRenderTour(){
       '<span style="font-size:12px;color:var(--text2);white-space:nowrap">💰 Tour pay / ค่าทัวร์:</span>'+
       '<input type="number" min="0" value="'+(t.driverPay!=null&&t.driverPay!==''?t.driverPay:'')+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourPay(\''+t.id+'\',this.value)" style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
       '<span style="font-size:12px;color:var(--text2)">฿</span>'+
+      '<input type="file" accept="image/*" capture="environment" id="tourload-'+t.id+'" style="display:none" onchange="ofTourAddLoadPhoto(this,\''+t.id+'\')">'+
+      '<button type="button" onclick="event.stopPropagation();document.getElementById(\'tourload-'+t.id+'\').click()" title="Photo of loaded vehicle / รูปรถที่โหลดแล้ว" style="flex-shrink:0;padding:6px 9px;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:var(--rs);cursor:pointer;font-size:13px;font-weight:600">📷</button>'+
       '</div>'+
+      (t.carPhotos&&t.carPhotos.length?'<div style="margin-bottom:8px;display:flex;gap:4px;flex-wrap:wrap">'+t.carPhotos.map(function(src,pi){return '<div style="position:relative;display:inline-block"><img src="'+src+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:56px;height:56px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer"><button type="button" onclick="event.stopPropagation();ofTourDelLoadPhoto(\''+t.id+'\','+pi+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:11px;cursor:pointer;line-height:1">×</button></div>';}).join('')+'</div>':'')+
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'+
       '<span style="font-size:12px;color:var(--text2);white-space:nowrap">🤝 Advance / เบิกก่อนออกทัวร์:</span>'+
       '<input type="number" min="0" value="'+(t.driverAdvance!=null&&t.driverAdvance!==''?t.driverAdvance:'')+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourAdvance(\''+t.id+'\',this.value)" style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
@@ -6905,18 +6909,22 @@ function ofRenderLala(){
   ofLalaUpdBadge();
   var el=document.getElementById('of-lala-list'); if(!el) return;
   var list=ofLalaTours();
-  if(!list.length){ el.innerHTML='<div class="empty" style="padding:24px"><i class="ti ti-truck" style="font-size:40px;display:block;margin-bottom:10px"></i>No active Lalamove tour / ยังไม่มีทัวร์ลาลามูฟ<br><span style="font-size:12px">Create a tour with driver "Lalamove" in the Tour tab / สร้างทัวร์คนขับ "Lalamove" ในแท็บ Tour</span></div>'; return; }
   var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
-  el.innerHTML=list.map(function(rec){
+  var activeHTML=list.length?list.map(function(rec){
     var t=rec.t, ti=rec.idx;
     var ords=(t.orders||[]).map(function(id){ return (orders.find(function(x){return x.id===id;}))||{id:id,customer:'—',address:'—',panels:'—'}; })
       .filter(function(o){ return ((t.status||{})[o.id]||'loaded')!=='cancelled'; });
     var ordHTML=ords.map(function(o){
-      var shipHTML=(o.shipper && o.shipper!=='ส่งเอง')
-        ? '<div style="font-size:12px;color:#4f46e5;font-weight:700;margin-top:1px"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> Shipper / ขนส่ง: '+esc(o.shipper)+'</div>'
+      // Only show a shipper line when the goods go to a DIFFERENT carrier than this
+      // tour's own carrier (Lalamove). "Lalamove"/self on a Lalamove tour is redundant.
+      var _sh=(o.shipper||'').trim();
+      var showShip=_sh && _sh!=='ส่งเอง' && _sh.toLowerCase()!==String(t.driverName||'').toLowerCase();
+      var shipHTML=showShip
+        ? '<div style="font-size:12px;color:#4f46e5;font-weight:700;margin-top:1px"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> Shipper / ขนส่ง: '+esc(_sh)+'</div>'
         : '';
+      var _amt=(ofCanonTotal(o)!=null?ofCanonTotal(o).toLocaleString()+' ฿':(o.total||''));
       return '<div style="padding:6px 0;border-top:1px solid var(--border)">'
-        +'<div style="font-size:13px;font-weight:700">'+esc(o.id)+' <span style="font-weight:500;color:var(--text2)">· '+esc(o.customer||'—')+zoneBadge(o.zone)+'</span></div>'
+        +'<div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:13px;font-weight:700">'+esc(o.id)+' <span style="font-weight:500;color:var(--text2)">· '+esc(o.customer||'—')+zoneBadge(o.zone)+'</span></span>'+(_amt?'<span style="font-size:13px;font-weight:800;color:#111;white-space:nowrap">'+_amt+'</span>':'')+'</div>'
         +'<div style="font-size:12px;color:var(--text2)"><i class="ti ti-map-pin" style="font-size:11px;vertical-align:-1px"></i> '+esc(o.address||'—')+'</div>'
         +'<div style="font-size:12px">'+esc(ofLalaProdSummary(o))+'</div>'
         +shipHTML
@@ -6940,6 +6948,12 @@ function ofRenderLala(){
         +'<div style="flex:1;min-width:140px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">🚗 Plate / ทะเบียนรถ</label>'
           +'<input type="text" value="'+esc(t.plate||'')+'" placeholder="กข 1234" onchange="ofLalaSetField('+ti+',\'plate\',this.value)" style="width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;background:var(--bg);color:var(--text)"></div>'
       +'</div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">'
+        +'<div style="flex:1;min-width:140px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">📞 Phone / เบอร์คนขับ</label>'
+          +'<input type="tel" value="'+esc(t.driverPhone||'')+'" placeholder="08x xxx xxxx" onchange="ofLalaSetField('+ti+',\'driverPhone\',this.value)" style="width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;background:var(--bg);color:var(--text)"></div>'
+        +'<div style="flex:1;min-width:140px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">💵 Car fee / ค่ารถ</label>'
+          +'<input type="number" min="0" value="'+esc(t.carFee||'')+'" placeholder="0" onchange="ofLalaSetField('+ti+',\'carFee\',this.value)" style="width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)"></div>'
+      +'</div>'
       +'<div style="margin-bottom:8px">'
         +'<input type="file" accept="image/*" capture="environment" id="lala-carfile-'+ti+'" style="display:none" onchange="ofLalaUploadCarPhoto(this,'+ti+')">'
         +'<button type="button" class="btnsm" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe" onclick="document.getElementById(\'lala-carfile-'+ti+'\').click()">📷 Photo of car + load / ถ่ายรูปรถ</button>'
@@ -6952,7 +6966,40 @@ function ofRenderLala(){
         +(departed?'':'<button type="button" class="btnsm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:600" onclick="ofLalaDeparted('+ti+')">🚀 Departed</button>')
       +'</div>'
       +'</div>';
+  }).join(''):'<div class="empty" style="padding:24px"><i class="ti ti-truck" style="font-size:40px;display:block;margin-bottom:10px"></i>No active Lalamove tour / ยังไม่มีทัวร์ลาลามูฟ<br><span style="font-size:12px">Create a tour with driver "Lalamove" in the Tour tab / สร้างทัวร์คนขับ "Lalamove" ในแท็บ Tour</span></div>';
+  el.innerHTML=activeHTML+ofLalaHistoryHTML();
+}
+// Completed Lalamove tours (archived to tourHistory under the Lalamove driver key),
+// as a collapsible History with per-tour dropdown showing info, orders + car photos.
+function ofLalaHistoryHTML(){
+  var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+  var lalaDrv=(drivers||[]).find(function(d){return /lalamove/i.test(d.name||'');});
+  var key=lalaDrv?String(lalaDrv.id||'').replace(/[^a-zA-Z0-9_-]/g,'_'):'';
+  var arr=(key && tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).map(function(k){var r=tourHistory[key][k]||{}; r._k=k; return r;}) : [];
+  if(!arr.length) return '';
+  arr.sort(function(a,b){return (b.ts||0)-(a.ts||0);});
+  var rows=arr.map(function(t){
+    var bid='lalah_'+t._k;
+    var dateStr=t.endedDate?fmtD(t.endedDate):(t.departedDate?fmtD(t.departedDate):'');
+    var infoBits=[];
+    if(t.lalaDriver) infoBits.push('👤 '+esc(t.lalaDriver));
+    if(t.plate) infoBits.push('🚗 '+esc(t.plate));
+    if(t.driverPhone) infoBits.push('📞 '+esc(t.driverPhone));
+    if(t.carFee>0) infoBits.push('💵 ค่ารถ '+Number(t.carFee).toLocaleString()+' ฿');
+    var infoHTML=infoBits.length?'<div style="font-size:11px;color:var(--text2);padding:4px 0">'+infoBits.join(' · ')+'</div>':'';
+    var photoHTML=(t.carPhotos&&t.carPhotos.length)?'<div style="display:flex;gap:4px;flex-wrap:wrap;padding:4px 0">'+t.carPhotos.map(function(src){return '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:64px;height:64px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';}).join('')+'</div>':'';
+    var ordersHTML=(t.orders||[]).map(function(o){
+      return '<div style="padding:5px 0;border-top:1px solid var(--border);font-size:12px"><div style="display:flex;justify-content:space-between;gap:6px"><span style="font-weight:700">'+esc(o.id)+' <span style="font-weight:500;color:var(--text2)">· '+esc(o.customer||'—')+'</span></span><span style="font-weight:700">'+esc(o.total||'')+'</span></div>'+(o.address&&o.address!=='—'?'<div style="color:var(--text2)">📍 '+esc(o.address)+'</div>':'')+'</div>';
+    }).join('');
+    return '<div style="border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px">'
+      +'<div onclick="ofToggleMore(\''+bid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">'
+        +'<span style="font-weight:700">🚚 Tour '+(t.tourNo||'?')+' <span style="font-size:11px;color:var(--text2);font-weight:500">· '+dateStr+'</span></span>'
+        +'<span style="font-size:11px;color:var(--text2)">'+(t.orderCount||(t.orders||[]).length)+' orders ▾</span>'
+      +'</div>'
+      +'<div id="'+bid+'" style="display:none;padding:0 11px 9px">'+infoHTML+photoHTML+ordersHTML+'</div>'
+      +'</div>';
   }).join('');
+  return '<div style="margin-top:16px"><div onclick="ofToggleMore(\'lala-hist-body\')" style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:800;color:var(--text);margin-bottom:8px"><i class="ti ti-history"></i> History / ประวัติ ('+arr.length+') <span style="color:var(--text2);font-size:11px">▾</span></div><div id="lala-hist-body" style="display:none">'+rows+'</div></div>';
 }
 function ofLalaSetField(ti,field,val){
   var t=activeTours[ti]; if(!t) return;
@@ -7000,6 +7047,7 @@ function archiveTour(t){
     created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
     endedDate:now.toISOString().slice(0,10), endedAt:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0, driverPayNet:tourNetPay(t),
+    carPhotos:(t.carPhotos||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now() };
   try{ window.fbDB.ref('tourHistory/'+key).push(rec); }catch(e){ console.error('archiveTour failed',e); }
 }
@@ -7011,6 +7059,24 @@ function ofSetTourPay(tourId, val){
   t.driverPay = (val===''||val==null) ? '' : (parseFloat(val)||0);
   syncTours();
   try{ ofRenderTour(); }catch(e){}   // refresh the "pay at end" net hint
+}
+// Photo of the loaded tour vehicle — stored on the tour (t.carPhotos, shared with the
+// Lalamove tab) so it also shows in the Drivers tab + Lalamove history.
+function ofTourAddLoadPhoto(input, tourId){
+  var f=input.files&&input.files[0]; if(!f) return;
+  compressPhotoFile(f, function(dataUrl){
+    var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+    if(!t.carPhotos) t.carPhotos=[];
+    t.carPhotos.push(dataUrl);
+    syncTours(); try{ ofRenderTour(); }catch(e){}
+  });
+  input.value='';
+}
+function ofTourDelLoadPhoto(tourId, pi){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t||!t.carPhotos) return;
+  if(!confirm('Remove photo? / ลบรูป?')) return;
+  t.carPhotos.splice(pi,1);
+  syncTours(); try{ ofRenderTour(); }catch(e){}
 }
 // Advance the driver got at the START of the tour (cash up front). Deducted from the
 // tour pay when the tour is ended, so payroll only books the remaining amount.
@@ -7051,14 +7117,34 @@ function endTourPayroll(t){
   if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
 }
 // DRIVERS tab — list drivers → their past tours (Tour 1,2,… + date) → orders in each.
+// Shape a live (departed, not-yet-ended) tour like an archived tourHistory record so
+// the Drivers tab can list it at the top before the tour is ended.
+function ofActiveTourRec(t){
+  var ordersSnap=(t.orders||[]).map(function(id){
+    var o=orders.find(function(x){return x.id===id;})||{};
+    return { id:id, customer:o.customer||'', phone:o.phone||'', address:o.address||'', contact:o.contact||'', zone:o.zone||'',
+      total:o.total||'', status:(t.status&&t.status[id])||o.status||'', panels:o.panels||'', lcorner:o.lcorner||'',
+      clips:parseInt(o.clips)||0, shipper:o.shipper||'', location:o.location||'' };
+  });
+  return { tourNo:null, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
+    created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
+    driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0,
+    carPhotos:(t.carPhotos||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
+    orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now(), _active:true };
+}
 function ofDriversRender(){
   var el=document.getElementById('of-drivers-list'); if(!el) return;
   var drv=(drivers||[]);
   if(!drv.length){ el.innerHTML='<div class="empty" style="padding:1rem">No drivers / ยังไม่มีคนขับ</div>'; return; }
   el.innerHTML = drv.map(function(d){
     var key=String(d.id||'').replace(/[^a-zA-Z0-9_-]/g,'_');
+    var esc=function(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
     var hist=(tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).map(function(k){var t=tourHistory[key][k]||{}; t._k=k; return t;}) : [];
     hist.sort(function(a,b){return (b.ts||0)-(a.ts||0);});
+    // Departed-but-not-yet-ended tours for this driver show live at the top.
+    var active=(activeTours||[]).filter(function(t){return t&&t.driving&&t.driverId===d.id;})
+      .map(function(t){var r=ofActiveTourRec(t); r._k='active_'+(t.id||''); return r;});
+    hist=active.concat(hist);
     var wid='drvh_'+key;
     var toursHtml = hist.length ? hist.map(function(t){
       var otid='drvt_'+key+'_'+t._k;
@@ -7076,12 +7162,19 @@ function ofDriversRender(){
           +'</div>';
       }).join('')||'<div style="font-size:11px;color:var(--text2);padding:6px 0">No orders</div>';
       var dateStr=t.departedDate?fmtD(t.departedDate):(t.endedDate?fmtD(t.endedDate):'');
-      return '<div style="border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px">'
+      var infoBits=[];
+      if(t.lalaDriver) infoBits.push('👤 '+esc(t.lalaDriver));
+      if(t.plate) infoBits.push('🚗 '+esc(t.plate));
+      if(t.driverPhone) infoBits.push('📞 '+esc(t.driverPhone));
+      if(t.carFee>0) infoBits.push('💵 ค่ารถ '+Number(t.carFee).toLocaleString()+' ฿');
+      var infoHTML=infoBits.length?'<div style="font-size:11px;color:var(--text2);padding:6px 0 0">'+infoBits.join(' · ')+'</div>':'';
+      var photoHTML=(t.carPhotos&&t.carPhotos.length)?'<div style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 0 2px">'+t.carPhotos.map(function(src){return '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:64px;height:64px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';}).join('')+'</div>':'';
+      return '<div style="border:1px solid '+(t._active?'#16a34a':'var(--border)')+';'+(t._active?'background:#f0fdf4;':'')+'border-radius:var(--rs);margin-bottom:6px">'
         +'<div onclick="ofToggleMore(\''+otid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">'
-          +'<span style="font-weight:700">🚚 Tour '+(t.tourNo||'?')+' <span style="font-size:11px;color:var(--text2);font-weight:500">· '+dateStr+(t.departedAt?' '+t.departedAt:'')+'</span></span>'
+          +'<span style="font-weight:700">'+(t._active?'🚚 On tour / กำลังส่ง':'🚚 Tour '+(t.tourNo||'?'))+' <span style="font-size:11px;color:var(--text2);font-weight:500">· '+dateStr+(t.departedAt?' '+t.departedAt:'')+'</span></span>'
           +'<span style="font-size:11px;color:var(--text2)">'+(t.orderCount||(t.orders||[]).length)+' orders'+(t.driverPay>0?' · 💰'+t.driverPay.toLocaleString():'')+' ▾</span>'
         +'</div>'
-        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+ordersHtml+'</div>'
+        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+infoHTML+photoHTML+ordersHtml+'</div>'
         +'</div>';
     }).join('') : '<div style="font-size:12px;color:var(--text2);padding:6px 2px">No past tours yet / ยังไม่มีทัวร์เก่า</div>';
     return '<div class="card" style="margin-bottom:8px">'
