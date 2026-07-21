@@ -77,6 +77,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
    keeps them centered when they fit but scrolls normally (no clipped edges) on overflow */
 #s-office .tabs{justify-content:safe center!important}
 #s-office .tabs .tab{padding-left:9px;padding-right:9px}
+/* Pin the office header + BOTH tab rows together so they stay on screen while
+   scrolling. Each .tabs row used position:sticky but lived inside a short wrapper
+   (its containing block), so it un-stuck the moment that wrapper scrolled past.
+   Wrapping them in one sticky bar (containing block = the tall .pb) and making the
+   inner pieces static keeps both rows fixed at the top. */
+#s-office #of-topbar{position:sticky;top:0;z-index:50;background:var(--bg)}
+#s-office #of-topbar .header{position:static;top:auto;z-index:auto}
+#s-office #of-topbar .tabs{position:static;top:auto;z-index:auto}
 #s-office .tabs .tab:nth-child(odd){color:var(--text)}
 #s-office .tabs .tab:nth-child(even){color:var(--text2)}
 #s-office .tabs .tab.active{color:#16a34a!important}
@@ -1359,6 +1367,7 @@ textarea{resize:none}
 
 <!-- OFFICE -->
 <div class="screen" id="s-office"><div class="pb">
+  <div id="of-topbar">
   <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div style="flex:1"><div class="h-title">Office / Sales</div><div class="h-sub" id="of-logged-in-name">KP Wallpanel</div></div><button type="button" onclick="ofLogout()" style="background:none;border:0.5px solid var(--border);border-radius:var(--rs);padding:6px 10px;font-size:12px;font-weight:500;cursor:pointer;color:var(--text2);display:flex;align-items:center;gap:4px;flex-shrink:0"><i class="ti ti-logout" style="font-size:14px"></i> Logout</button></div>
   <div style="border-bottom:1px solid var(--border)">
     <div class="tabs" style="display:flex;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;border-bottom:1px solid var(--border);justify-content:center">
@@ -1382,6 +1391,7 @@ textarea{resize:none}
       <button type="button" class="tab" onclick="oft('bills')" id="oft-bills" style="display:none;flex-shrink:0">Bills <span class="tc" id="oft-bills-cnt" style="background:#fef3c7;color:#92400e;display:none"></span></button>
     </div>
   </div>
+  </div><!-- /#of-topbar -->
   <!-- DASHBOARD -->
   <div class="view active" id="ofv-home"><div class="sec">
     <!-- Greeting -->
@@ -2417,7 +2427,7 @@ textarea{resize:none}
 
 <div class="modal-overlay" id="tour-add-modal"><div class="modal">
   <div class="mhdr"><span class="mtit" id="tour-add-title">Add order / เพิ่มออเดอร์</span><button type="button" class="mclose" onclick="closeTourAdd()"><i class="ti ti-x"></i></button></div>
-  <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Tap a ready order, then confirm / แตะออเดอร์ที่พร้อมส่ง แล้วยืนยัน</div>
+  <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Tap orders to select, then confirm / แตะเลือกออเดอร์ (เลือกได้หลายอัน) แล้วยืนยัน</div>
   <div id="tour-add-list" style="max-height:55vh;overflow-y:auto"></div>
   <button type="button" class="btn btng" id="tour-add-confirm" style="margin-top:12px;opacity:.45;pointer-events:none" onclick="ofAddConfirm()"><i class="ti ti-check"></i> Add to tour / เพิ่มเข้าทัวร์</button>
 </div></div>
@@ -5263,6 +5273,51 @@ function tdmSetNote(id, val){
   try{ syncOrders(); }catch(e){}
 }
 
+// Full order details popup — opened by tapping an order number inside an active
+// tour card. Shows customer, address, products (qty/unit/amount), totals, notes.
+function ofOrderInfo(orderId){
+  var o = orders.find(function(x){return x.id===orderId;});
+  if(!o){ alert('Order not found / ไม่พบออเดอร์'); return; }
+  var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var stMeta={ 'new':{l:'New / ใหม่',c:'#3730a3',bg:'#e0e7ff'}, packing:{l:'Packing / แพ็ค',c:'#92400e',bg:'#fef3c7'}, ready:{l:'Ready / พร้อม',c:'#166534',bg:'#dcfce7'}, loaded:{l:'Loaded / ขึ้นรถ',c:'#0369a1',bg:'#e0f2fe'}, shipped:{l:'At shipper / ถึงขนส่ง',c:'#6d28d9',bg:'#ede9fe'}, delivered:{l:'Delivered ✓',c:'#166534',bg:'#dcfce7'}, cancelled:{l:'Cancelled ✗',c:'#991b1b',bg:'#fee2e2'} };
+  var sm=stMeta[o.status]||{l:o.status||'—',c:'#555',bg:'#eee'};
+  document.getElementById('oim-id').textContent = (o.priority?'⭐ ':'')+o.id;
+  document.getElementById('oim-sub').innerHTML = '<span class="badge" style="background:'+sm.bg+';color:'+sm.c+'">'+sm.l+'</span> <span style="font-size:12px;color:var(--text2)">'+esc(o.zone||'')+(o.province?' · '+esc(o.province):'')+'</span>';
+  var row=function(icon,label,val){ if(val==null||val==='') return ''; return '<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><span style="width:20px;flex-shrink:0">'+icon+'</span><span style="color:var(--text2);width:104px;flex-shrink:0;font-size:12px">'+label+'</span><span style="flex:1;font-size:13px;font-weight:600;color:var(--text);word-break:break-word">'+val+'</span></div>'; };
+  var mapsUrl='https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(o.address||'');
+  var addrHtml = (o.address&&o.address!=='—') ? '<a href="'+mapsUrl+'" target="_blank" style="color:var(--blue);text-decoration:none">'+esc(o.address)+' 📍</a>' : '';
+  var notesHtml=[(o.reqNote||'').trim(),(o.notes||'').trim()].filter(Boolean).map(esc).join(' · ');
+  var items=buildReceiptItems(o);
+  var prodRows = items.length ? items.map(function(it){
+    return '<tr><td style="padding:4px 6px;text-align:center;white-space:nowrap;border-bottom:1px solid var(--border)">'+((it.qty||0)>0?(it.qty).toLocaleString():'')+'</td>'+
+      '<td style="padding:4px 6px;border-bottom:1px solid var(--border)">'+esc(it.desc)+'</td>'+
+      '<td style="padding:4px 6px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--border)">'+esc(it.unitPrice||'')+'</td>'+
+      '<td style="padding:4px 6px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--border)">'+esc(it.amount||'')+'</td></tr>';
+  }).join('') : '<tr><td colspan="4" style="padding:8px;text-align:center;color:var(--text2)">—</td></tr>';
+  var _tot=parseFloat(String(o.total||'').replace(/[^0-9.]/g,''))||0;
+  var _dep=parseFloat(o.deposit)||0;
+  var body =
+    '<div style="margin-bottom:6px">'+
+      row('👤','ชื่อ / Name', esc(o.customer||''))+
+      row('📞','เบอร์ / Phone', (o.phone&&o.phone!=='—')?esc(o.phone):'')+
+      (o.contact?row('💬','ติดต่อ / Contact', esc(o.contact)):'')+
+      row('📍','ที่อยู่ / Address', addrHtml)+
+      row('🧾','เลขออเดอร์ / Order', esc(o.id))+
+      (notesHtml?row('📝','โน้ต / Notes', '<span style="color:#b45309">'+notesHtml+'</span>'):'')+
+    '</div>'+
+    '<div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin:10px 0 4px">📦 สินค้า / Products</div>'+
+    '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1.5px solid var(--border);color:var(--text2)">'+
+      '<th style="padding:4px 6px;text-align:center;font-weight:700">จำนวน<br>Qty</th><th style="padding:4px 6px;text-align:left;font-weight:700">รายการ<br>Item</th><th style="padding:4px 6px;text-align:right;font-weight:700">หน่วยละ<br>Unit</th><th style="padding:4px 6px;text-align:right;font-weight:700">รวม<br>Amount</th>'+
+    '</tr></thead><tbody>'+prodRows+'</tbody></table>'+
+    ((o.ctn||o.bundle)?'<div style="font-size:12px;color:var(--text2);margin-top:6px">'+(o.ctn?'<span style="color:var(--green);font-weight:700">📦 '+o.ctn+' CTN</span> ':'')+(o.bundle?'<span style="color:#ea580c;font-weight:700">🧶 '+o.bundle+' มัด</span>':'')+'</div>':'')+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:8px;border-top:1.5px solid var(--border)"><span style="font-size:13px;font-weight:700">รวมเงิน / TOTAL</span><span style="font-size:17px;font-weight:800;color:var(--text)">'+esc(o.total||(_tot?_tot.toLocaleString()+' ฿':'—'))+'</span></div>'+
+    (_dep>0?'<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:12px"><span style="color:var(--text2)">มัดจำ / Deposit</span><span style="font-weight:700;color:#ea580c">-'+_dep.toLocaleString()+' ฿</span></div>'+
+      '<div style="display:flex;justify-content:space-between;margin-top:2px;font-size:12px"><span style="color:var(--text2)">คงเหลือ / Remaining</span><span style="font-weight:800;color:#16a34a">'+Math.max(0,_tot-_dep).toLocaleString()+' ฿</span></div>':'');
+  document.getElementById('oim-body').innerHTML = body;
+  document.getElementById('order-info-modal').classList.add('open');
+}
+function closeOrderInfo(){ var m=document.getElementById('order-info-modal'); if(m) m.classList.remove('open'); }
+
 // Security gate for destructive actions (delete order / end tour): the person
 // must enter a valid staff PIN before the action proceeds. Accepts any active
 // staff member's PIN and returns the authorizing staff name (or null if
@@ -6744,7 +6799,7 @@ function ofRenderTour(){
       }
       return '<div style="padding:4px 0">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;flex-wrap:nowrap;gap:8px">'+
-        '<span '+(ro?'':'onclick="ofTourShipToggle(\''+wrapId+'\')" ')+'title="Set shipper / กำหนดขนส่ง" style="font-weight:600;'+(ro?'':'cursor:pointer;')+'white-space:nowrap;flex-shrink:0">'+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+(ro?'':' <span style="color:var(--text2);font-size:10px">▾</span>')+'</span>'+
+        '<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/[\'\\]/g,'')+'\')" title="Order info / ข้อมูลออเดอร์" style="font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">'+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+(ro?'':' <span onclick="event.stopPropagation();ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="color:var(--text2);font-size:12px;cursor:pointer;padding:0 3px">▾</span>')+'</span>'+
         '<div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;justify-content:flex-end">'+
         '<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+(ord?((ord.province||'').trim()||ord.zone||''):'')+'</span>'+
         payInline+
@@ -7423,10 +7478,10 @@ function ofMoveOrder(fromTourId, orderId){
 // Add a ready order to an ALREADY-EXISTING tour (incl. one that already left) —
 // e.g. an order came in after the driver departed, driver returned and loaded it.
 // Opens a popup listing every ready order (not yet in a tour) to tap + confirm.
-var ofAddTourId=null, ofAddSelId=null;
+var ofAddTourId=null, ofAddSelIds=[];
 function ofAddOrderToTour(tourId){
   var t = activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
-  ofAddTourId = tourId; ofAddSelId = null;
+  ofAddTourId = tourId; ofAddSelIds = [];
   var ttl=document.getElementById('tour-add-title'); if(ttl) ttl.textContent='Add order → '+t.driverName+' / เพิ่มออเดอร์';
   ofRenderTourAddList();
   document.getElementById('tour-add-modal').classList.add('open');
@@ -7442,7 +7497,7 @@ function ofRenderTourAddList(){
     wrap.innerHTML='<div style="font-size:13px;color:var(--text2);padding:16px;text-align:center">No orders available / ไม่มีออเดอร์</div>';
   } else {
     wrap.innerHTML = avail.map(function(o,i){
-      var sel = ofAddSelId===o.id;
+      var sel = ofAddSelIds.indexOf(o.id)>=0;
       var m=_m[o.status]||{l:o.status,bg:'#eee',c:'#555'};
       return '<div class="avrow" onclick="ofAddPick(\''+o.id+'\')" style="cursor:pointer;margin-bottom:4px;align-items:flex-start;'+(sel?'background:var(--blue-l);border-color:var(--blue)':'')+'">'+
         '<span style="font-size:12px;color:var(--text2);width:22px;flex-shrink:0;padding-top:1px">'+(i+1)+'.</span>'+
@@ -7459,29 +7514,41 @@ function ofRenderTourAddList(){
     }).join('');
   }
   var btn=document.getElementById('tour-add-confirm');
-  if(btn){ var on=!!ofAddSelId; btn.style.opacity=on?'1':'.45'; btn.style.pointerEvents=on?'':'none'; }
+  if(btn){
+    var n=ofAddSelIds.length, on=n>0;
+    btn.style.opacity=on?'1':'.45'; btn.style.pointerEvents=on?'':'none';
+    btn.innerHTML='<i class="ti ti-check"></i> Add'+(n>0?' '+n:'')+' to tour / เพิ่ม'+(n>0?' '+n:'')+'เข้าทัวร์';
+  }
 }
-function ofAddPick(orderId){ ofAddSelId = (ofAddSelId===orderId ? null : orderId); ofRenderTourAddList(); }
-function closeTourAdd(){ var m=document.getElementById('tour-add-modal'); if(m) m.classList.remove('open'); ofAddTourId=null; ofAddSelId=null; }
+function ofAddPick(orderId){
+  var i=ofAddSelIds.indexOf(orderId);
+  if(i>=0) ofAddSelIds.splice(i,1); else ofAddSelIds.push(orderId);
+  ofRenderTourAddList();
+}
+function closeTourAdd(){ var m=document.getElementById('tour-add-modal'); if(m) m.classList.remove('open'); ofAddTourId=null; ofAddSelIds=[]; }
 function ofAddConfirm(){
   var t = activeTours.find(function(x){return x.id===ofAddTourId;});
-  var o = orders.find(function(x){return x.id===ofAddSelId;});
-  if(!t || !o){ closeTourAdd(); return; }
-  // Planned New/Packing orders keep their packing status (warehouse still packs
-  // them). Ready ones: driver already out → loaded onto truck; still loading → ready.
-  var keepPack = (o.status==='new'||o.status==='packing');
-  var newSt = keepPack ? o.status : (t.driving ? 'loaded' : 'ready');
-  if(t.orders.indexOf(o.id)<0) t.orders.push(o.id);
-  t.status = t.status||{}; t.status[o.id] = newSt;
-  if(!keepPack && o.status!==newSt){ o.status=newSt; try{ addStatusLog(o,newSt,'Office'); }catch(e){} }
-  // Make the driver app aware of the order (mirror what ofCreateTour does).
-  try{ if(!dAllOrders.find(function(x){return x.id===o.id;})){ dAllOrders.push({id:o.id,customer:o.customer,phone:o.phone,address:o.address,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:o.clips,ctn:o.ctn,bundle:o.bundle}); dAllOrders.sort(function(a,b){return reg(a.id).s-reg(b.id).s;}); } }catch(e){}
-  try{ dStatus[o.id]=newSt; }catch(e){}
-  var d = drivers.find(function(x){return x.id===t.driverId;});
-  if(d){ o.deliveredBy=d.name; }
-  try{ sheetsSyncOrder(o); }catch(e){}
-  try{ pushSend('driver_'+t.driverId,'➕ Order added to your tour / เพิ่มออเดอร์', o.id+' — '+(o.customer||''), {tag:'tour'}); }catch(e){}
-  try{ addLog('Order '+o.id+' added to '+t.driverName+"'s tour",'+'); }catch(e){}
+  if(!t || !ofAddSelIds.length){ closeTourAdd(); return; }
+  // Add every selected order in one go. Per order: planned New/Packing orders keep
+  // their packing status (warehouse still packs them); Ready ones become loaded (if
+  // the driver already left) or ready (still loading).
+  ofAddSelIds.forEach(function(oid){
+    var o = orders.find(function(x){return x.id===oid;});
+    if(!o) return;
+    var keepPack = (o.status==='new'||o.status==='packing');
+    var newSt = keepPack ? o.status : (t.driving ? 'loaded' : 'ready');
+    if(t.orders.indexOf(o.id)<0) t.orders.push(o.id);
+    t.status = t.status||{}; t.status[o.id] = newSt;
+    if(!keepPack && o.status!==newSt){ o.status=newSt; try{ addStatusLog(o,newSt,'Office'); }catch(e){} }
+    // Make the driver app aware of the order (mirror what ofCreateTour does).
+    try{ if(!dAllOrders.find(function(x){return x.id===o.id;})){ dAllOrders.push({id:o.id,customer:o.customer,phone:o.phone,address:o.address,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:o.clips,ctn:o.ctn,bundle:o.bundle}); dAllOrders.sort(function(a,b){return reg(a.id).s-reg(b.id).s;}); } }catch(e){}
+    try{ dStatus[o.id]=newSt; }catch(e){}
+    var d = drivers.find(function(x){return x.id===t.driverId;});
+    if(d){ o.deliveredBy=d.name; }
+    try{ sheetsSyncOrder(o); }catch(e){}
+    try{ pushSend('driver_'+t.driverId,'➕ Order added to your tour / เพิ่มออเดอร์', o.id+' — '+(o.customer||''), {tag:'tour'}); }catch(e){}
+    try{ addLog('Order '+o.id+' added to '+t.driverName+"'s tour",'+'); }catch(e){}
+  });
   closeTourAdd();
   ofRenderTour(); ofRenderOrders(); mgRender(); syncTours(); syncOrders();
 }
@@ -13792,22 +13859,40 @@ function calcViz() {
 <!-- TOUR DETAIL MODAL -->
 <div class="modal-overlay" id="tour-detail-modal">
   <div class="modal">
-    <div class="mhdr">
-      <div>
-        <span class="mtit" id="tdm-driver-name">Driver Tour</span>
-        <div style="font-size:12px;color:var(--text2);margin-top:2px" id="tdm-stats"></div>
+    <!-- Sticky top bar: name + stats + the two tour actions stay pinned while the
+         stops list scrolls underneath. Negative margins cover the modal's padding. -->
+    <div style="position:sticky;top:0;background:var(--bg);z-index:3;margin:-16px -16px 0;padding:16px 16px 0">
+      <div class="mhdr" style="margin-bottom:10px">
+        <div>
+          <span class="mtit" id="tdm-driver-name">Driver Tour</span>
+          <div style="font-size:12px;color:var(--text2);margin-top:2px" id="tdm-stats"></div>
+        </div>
+        <button type="button" class="mclose" onclick="closeTourDetail()"><i class="ti ti-x"></i></button>
       </div>
-      <button type="button" class="mclose" onclick="closeTourDetail()"><i class="ti ti-x"></i></button>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+        <button type="button" class="btn btng" style="margin-top:0" onclick="printDeliverySheet()">
+          <i class="ti ti-clipboard-list"></i> Delivery sheet / ใบส่งของ
+        </button>
+        <button type="button" class="btn btnr" style="margin-top:0" onclick="ofEndTourFromDetail()">
+          <i class="ti ti-flag-check"></i> End tour / จบทัวร์
+        </button>
+      </div>
     </div>
     <div id="tdm-stops"></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
-      <button type="button" class="btn btng" style="margin-top:0" onclick="printDeliverySheet()">
-        <i class="ti ti-clipboard-list"></i> Delivery sheet / ใบส่งของ
-      </button>
-      <button type="button" class="btn btnr" style="margin-top:0" onclick="ofEndTourFromDetail()">
-        <i class="ti ti-flag-check"></i> End tour / จบทัวร์
-      </button>
+  </div>
+</div>
+
+<!-- ORDER INFO MODAL (full order details from a tour row) -->
+<div class="modal-overlay" id="order-info-modal">
+  <div class="modal">
+    <div class="mhdr">
+      <div>
+        <span class="mtit" id="oim-id">Order</span>
+        <div style="margin-top:3px" id="oim-sub"></div>
+      </div>
+      <button type="button" class="mclose" onclick="closeOrderInfo()"><i class="ti ti-x"></i></button>
     </div>
+    <div id="oim-body"></div>
   </div>
 </div>
 
