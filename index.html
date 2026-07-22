@@ -5132,10 +5132,14 @@ function printTourReceipts(ti) {
 }
 // Receipt CSS mirrored from the main stylesheet, inlined into the print-iframe document
 // so the pages render standalone (parent @font-face / rules do NOT reach the iframe).
-var RECEIPT_PRINT_CSS = '@page{size:145mm 200mm;margin:0}'
+// NOTE: no fixed `size:` on @page. Forcing a non-standard 145×200mm size makes iOS
+// AirPrint blank the output once a real A4 printer is selected (preview w/o printer
+// looked fine because iOS ignores the custom size there). Letting the printer use its
+// own paper (A4) prints reliably; the receipt keeps its 145mm width top-left on the sheet.
+var RECEIPT_PRINT_CSS = '@page{margin:0}'
   +'*{box-sizing:border-box}'
   +"html,body{margin:0;padding:0;font-family:'Sarabun',Arial,sans-serif;color:#000;background:#fff}"
-  +".rcpt-page{font-family:'Sarabun',Arial,sans-serif;color:#000;background:#fff;padding:4mm;width:145mm;min-height:200mm;max-height:200mm;font-size:9.5pt;box-sizing:border-box;overflow:hidden;page-break-after:always}"
+  +".rcpt-page{font-family:'Sarabun',Arial,sans-serif;color:#000;background:#fff;padding:4mm;width:145mm;min-height:200mm;font-size:9.5pt;box-sizing:border-box;overflow:hidden;page-break-after:always}"
   +'.rcpt-page:last-child{page-break-after:auto}'
   +'.rcpt-header{display:flex;align-items:flex-start;gap:6px;margin-bottom:2mm;border-bottom:1px solid #000;padding-bottom:2mm}'
   +'.rcpt-logo{font-size:22pt;font-weight:900;color:#000;line-height:1;flex-shrink:0;border:2px solid #000;padding:2px 6px}'
@@ -5179,10 +5183,11 @@ function printReceiptDoc(bodyHTML){
   function fire(){
     if(done) return; done=true;
     var iw=f.contentWindow;
-    var kill=function(){ if(f&&f.parentNode) f.parentNode.removeChild(f); };
-    try{ iw.addEventListener('afterprint', function(){ setTimeout(kill,300); }); }catch(e){}
-    window.addEventListener('afterprint', function(){ setTimeout(kill,300); });
-    setTimeout(kill, 60000); // fallback for browsers that never fire afterprint
+    // Do NOT remove the iframe on `afterprint`. Android Chrome fires that event the
+    // instant the job is handed to the system print service — BEFORE it finishes
+    // rasterizing — so removing the iframe then prints a blank page. Leave it in place;
+    // it's cleaned up at the start of the next print, plus a long safety-net fallback.
+    setTimeout(function(){ if(f&&f.parentNode) f.parentNode.removeChild(f); }, 120000);
     try{ iw.focus(); iw.print(); }catch(e){ try{ window.print(); }catch(_){} }
   }
   // Give the iframe a beat to lay out (fonts/tables) before printing.
