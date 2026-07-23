@@ -639,6 +639,9 @@ textarea{resize:none}
       });
       db.ref('orders').on('value', function(snap) {
         orders = snap.val() ? Object.values(snap.val()) : [];
+        // Record the remote snapshot so syncOrders() only pushes THIS device's own deltas
+        // (see syncOrders) — this is what stops a stale client clobbering others' changes.
+        try{ _ordSnap = {}; orders.forEach(function(o){ _ordSnap[_ordKey(o)] = JSON.stringify(o); }); }catch(e){}
         // Safeguard: keep each order's stored total in sync with its line items.
         // If total drifted (e.g. items removed without recalc), fix it from the
         // items. Skips orders with no priced items so imported totals stay intact.
@@ -1312,12 +1315,17 @@ textarea{resize:none}
         <button type="button" onclick="auditRender()" style="padding:6px 10px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg2);font-size:12px;cursor:pointer;color:var(--text2)"><i class="ti ti-refresh"></i></button>
       </div>
     </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px" id="audit-filter-bar">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="audit-filter-bar">
       <button type="button" class="fbtn active" onclick="auditFilt('all',this)">All</button>
       <button type="button" class="fbtn" onclick="auditFilt('status',this)">Status</button>
       <button type="button" class="fbtn" onclick="auditFilt('payment',this)">Payment</button>
       <button type="button" class="fbtn" onclick="auditFilt('delete',this)">Deleted</button>
       <button type="button" class="fbtn" onclick="auditFilt('claim',this)">Claims</button>
+    </div>
+    <div style="position:relative;margin-bottom:12px">
+      <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text2);font-size:14px"></i>
+      <input type="text" id="audit-search" oninput="auditSearchFn(this.value)" placeholder="Search order / ค้นหาออเดอร์ (e.g. 4-074)" autocomplete="off" style="width:100%;box-sizing:border-box;padding:9px 34px 9px 32px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">
+      <i class="ti ti-x" id="audit-search-clear" onclick="document.getElementById('audit-search').value='';auditSearchFn('')" style="display:none;position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--text2);font-size:15px;cursor:pointer"></i>
     </div>
     <div id="audit-list"></div>
   </div></div>
@@ -2699,7 +2707,24 @@ function syncDrivers() { if(window.fbDB) { const obj = {}; drivers.forEach((d,i)
 // didn't know about — that's how app-created orders (e.g. 2-013/2-014) vanished
 // from Firebase while surviving in the sheet. update() only overwrites the keys
 // this client actually has; deletions are handled explicitly in deleteOrder().
-function syncOrders() { if(window.fbDB) { const obj = {}; orders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('orders').update(obj); } }
+// Per-order diff sync. Only writes orders that actually changed on THIS device since the
+// last remote snapshot. The old version rewrote the ENTIRE orders array on every action,
+// so a device holding a stale copy would clobber another user's concurrent change to an
+// unrelated order (last-write-wins across all ~400 orders). That is exactly how a delivered
+// order could silently jump back to "ready". _ordSnap is refreshed from every remote load
+// (see the orders listener), so a client only pushes its own true deltas.
+var _ordSnap = {};
+function _ordKey(o){ return ((o&&o.id)||'').replace(/[^a-zA-Z0-9]/g,'_'); }
+function syncOrders() {
+  if(!window.fbDB) return;
+  const upd = {};
+  orders.forEach(function(o){
+    const k = _ordKey(o); if(!k) return;
+    const j = JSON.stringify(o);
+    if(_ordSnap[k] !== j){ upd[k] = o; _ordSnap[k] = j; }
+  });
+  if(Object.keys(upd).length) window.fbDB.ref('orders').update(upd);
+}
 // Explicitly remove one order key from Firebase (deletion no longer implicit).
 function fbRemoveOrder(id){ try{ if(window.fbDB) window.fbDB.ref('orders/'+String(id).replace(/[^a-zA-Z0-9]/g,'_')).remove(); }catch(e){} }
 function syncWOrders() { if(window.fbDB) { const obj = {}; wOrders.forEach((o,i) => obj[o.id.replace(/[^a-zA-Z0-9]/g,'_')] = o); window.fbDB.ref('wOrders').set(obj); } }
@@ -5868,6 +5893,7 @@ function ofCreate(){
     var _dsToday=new Date().toISOString().split('T')[0];
     o.status='delivered'; o.paidAmount=_dsNum; o.payMethod='cash'; o.payDate=_dsToday; o.paidBy=createdBy; o.deliveredBy=createdBy;
     try{ addStatusLog(o,'delivered',createdBy); }catch(e){}
+    try{ auditStatus(o.id,'new','delivered',createdBy); }catch(e){}
     if(wOrders[0]&&wOrders[0].id===o.id){ wOrders[0].packed=true; wOrders[0].packedAt=Date.now(); }
     if(_dsNum>0){ try{ revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt:_dsNum,date:_dsToday,zone:o.zone,month:mkey(new Date().toISOString())}); addLog('Direct sale '+o.id+': '+_dsNum.toLocaleString()+' ฿','+'); syncRevOrders(); }catch(e){} }
   }
@@ -7568,7 +7594,7 @@ function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.
   delete t.status[orderId];
   // Set order back to ready
   var ord = orders.find(function(x){return x.id===orderId;});
-  if(ord) { ord.status='ready'; addStatusLog(ord,'ready','Office'); }
+  if(ord) { var _o=ord.status; ord.status='ready'; addStatusLog(ord,'ready','Office'); auditStatus(orderId,_o,'ready','Office'); }
   // If tour is now empty, remove it
   if(t.orders.length===0) {
     activeTours = activeTours.filter(function(x){return x.id!==tourId;});
@@ -7587,8 +7613,10 @@ function ofTourDeliver(tourId, orderId){
   if(!confirm('Mark '+orderId+' as delivered? / ยืนยันว่าส่งแล้ว?')) return;
   t.status[orderId]='delivered';
   if(ord){
+    var _oldSt=ord.status;
     addStatusLog(ord,'delivered','Office');
     ord.status='delivered';
+    auditStatus(orderId,_oldSt,'delivered','Office');
     var amt=parseFloat((ord.total+'').replace(/[^0-9]/g,''))||0;
     if(amt>0 && !revOrders.find(function(r){return r.id===ord.id;})){
       revOrders.push({rid:'r'+Date.now(),id:ord.id,cust:ord.customer,amt:amt,date:new Date().toISOString().split('T')[0],zone:ord.zone,month:mkey(new Date().toISOString())});
@@ -7689,7 +7717,7 @@ function ofAddConfirm(){
     var newSt = keepPack ? o.status : (t.driving ? 'loaded' : 'ready');
     if(t.orders.indexOf(o.id)<0) t.orders.push(o.id);
     t.status = t.status||{}; t.status[o.id] = newSt;
-    if(!keepPack && o.status!==newSt){ o.status=newSt; try{ addStatusLog(o,newSt,'Office'); }catch(e){} }
+    if(!keepPack && o.status!==newSt){ var _o=o.status; o.status=newSt; try{ addStatusLog(o,newSt,'Office'); }catch(e){} auditStatus(o.id,_o,newSt,'Office'); }
     // Make the driver app aware of the order (mirror what ofCreateTour does).
     try{ if(!dAllOrders.find(function(x){return x.id===o.id;})){ dAllOrders.push({id:o.id,customer:o.customer,phone:o.phone,address:o.address,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:o.clips,ctn:o.ctn,bundle:o.bundle}); dAllOrders.sort(function(a,b){return reg(a.id).s-reg(b.id).s;}); } }catch(e){}
     try{ dStatus[o.id]=newSt; }catch(e){}
@@ -8285,7 +8313,7 @@ function ofCreateTour(){
     }
     dStatus[id]=status[id];
     // Ready order stays "ready" so it shows in the driver's Ready-to-Load.
-    if(src && !keepPack && src.status!=='ready'){ src.status='ready'; addStatusLog(src,'ready','Office'); }
+    if(src && !keepPack && src.status!=='ready'){ var _o=src.status; src.status='ready'; addStatusLog(src,'ready','Office'); auditStatus(src.id,_o,'ready','Office'); }
   });
   var _tourId;
   if(existingTour && !existingTour.driving){
@@ -8296,7 +8324,7 @@ function ofCreateTour(){
       var keepPack=_o&&(_o.status==='new'||_o.status==='packing');
       existingTour.status[id]=keepPack?_o.status:'ready';
       dStatus[id]=existingTour.status[id];
-      if(_o && !keepPack && _o.status!=='ready'){ _o.status='ready'; addStatusLog(_o,'ready','Office'); }
+      if(_o && !keepPack && _o.status!=='ready'){ var _os=_o.status; _o.status='ready'; addStatusLog(_o,'ready','Office'); auditStatus(_o.id,_os,'ready','Office'); }
     });
     existingTour.orders=optimizeTourOrder(existingTour.orders); // initial sort by whatever coords we already have
     _tourId=existingTour.id;
@@ -8387,7 +8415,7 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   // Already-delivered order whose total changed (e.g. a discount added at payment):
   // keep the recorded revenue in sync so Sales/Pay reflect the discounted amount.
   if(o.status==='delivered'){ var _nt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0; var _r=revOrders.find(function(x){return x.id===o.id;}); if(_r && _r.amt!==_nt){ _r.amt=_nt; try{ syncRevOrders(); }catch(e){} } }
-  try{ deductOrderStock(o); }catch(e){}if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}try{sheetsUpdateMaster(o);}catch(e){console.error('Master update failed (non-blocking):',e);}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
+  try{ deductOrderStock(o); }catch(e){}if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}try{sheetsUpdateMaster(o);}catch(e){console.error('Master update failed (non-blocking):',e);}try{ if(o.status!==old) auditStatus(o.id,old,o.status,o.editedBy); else auditAdd({type:'edit',orderId:o.id,by:o.editedBy}); }catch(e){}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
 
 // CHANGE ORDER (customer adds/removes items; warehouse confirms)
 var coId=null;
@@ -8578,9 +8606,11 @@ function whConfirmChange(id){
   // Send it into Packing and require a NEW photo of the re-packed order: record the
   // current photo count as a baseline so whDonePacking demands at least one more.
   o._repackPhotoBase = (typeof orderPhotoCount==='function')?orderPhotoCount(id,'warehouse'):0;
+  var _oldSt=o.status;
   o.status='packing';
   try{ whPackerSel[o.id]=[]; }catch(e){}   // re-pick who did the re-pack
   addStatusLog(o,'packing',who);
+  auditStatus(o.id,_oldSt,'packing',who);
   o._editTs=Date.now();
   syncOrders();ofRenderOrders();whRender();try{whRenderPacking();}catch(e){}try{mgRender();}catch(e){}
 }
@@ -9009,7 +9039,7 @@ function drReady(){
   }
 }
 function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=drGetTour();if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();syncOrders();syncTours();}
-function drUnload(id){dStatus[id]='ready';if(!dTour.includes(id))dTour.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord)ord.status='ready';const tour=drGetTour();if(tour)tour.status[id]='ready';drTour();drReady();syncOrders();syncTours();}
+function drUnload(id){dStatus[id]='ready';if(!dTour.includes(id))dTour.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='ready';addStatusLog(ord,'ready','Driver');auditStatus(id,_o,'ready','Driver');}const tour=drGetTour();if(tour)tour.status[id]='ready';drTour();drReady();syncOrders();syncTours();}
 
 function drRenderStatusBar(){
   var bar=document.getElementById('dr-status-bar');
@@ -11320,9 +11350,11 @@ function drDoDeliver(id, photoUrl){
   try{var drName=drivers.find(function(d){return d.id===currentDriverId;});pushSend('office','✅ Delivered: '+id,(drName?drName.name+' · ':'')+(ord?ord.customer:''),{tag:'delivered'});}catch(e){}
   if(ord){
     var _drNm=((typeof currentDriverId!=='undefined' ? (drivers.find(function(d){return d.id===currentDriverId;})||{}).name : '')||'Driver');
+    var _oldSt=ord.status;
     ord.deliveredBy=_drNm;
     addStatusLog(ord,'delivered',_drNm);
     ord.status='delivered';
+    auditStatus(id,_oldSt,'delivered',_drNm);
     // photo is stored in the separate orderPhotos node (see confirmDelivery),
     // not on the order object, to keep the orders payload small.
     const amt=parseFloat((ord.total+'').replace(/[^0-9]/g,''))||0;
@@ -11334,7 +11366,7 @@ function drDoDeliver(id, photoUrl){
   ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();try{payUpdateBadge();}catch(e){}
   try{ if(ord) sheetsSyncOrder(ord); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
 }
-function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';revOrders=revOrders.filter(x=>x.id!==id);const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
+function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded','Driver');auditStatus(id,_o,'loaded','Driver');}revOrders=revOrders.filter(x=>x.id!==id);const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
 // Shipper handover: driver dropped the goods at a carrier company. The order is done
 // for the driver/tour (counts as complete), but is NOT delivered to the customer yet —
 // no revenue is booked here; office finalises to "delivered" once the customer receives it.
@@ -11345,9 +11377,11 @@ function drDoShip(id){
   var _drNm=((typeof currentDriverId!=='undefined' ? (drivers.find(function(d){return d.id===currentDriverId;})||{}).name : '')||'Driver');
   try{ pushSend('office','🚚 At shipper: '+id,(_drNm?_drNm+' · ':'')+((ord?ord.customer:'')||'')+((ord&&ord.shipper)?' → '+ord.shipper:''),{tag:'shipped',orderId:id}); }catch(e){}
   if(ord){
+    var _oldSt=ord.status;
     ord.shippedBy=_drNm;
     addStatusLog(ord,'shipped',_drNm);
     ord.status='shipped';
+    auditStatus(id,_oldSt,'shipped',_drNm);
   }
   const tour=drGetTour();
   if(tour)tour.status[id]='shipped';
@@ -11360,12 +11394,12 @@ function drCancel(id){
   const name=ord?ord.id:id;
   if(!confirm('Cancel order '+name+'?\nThis cannot be undone / ยืนยันการยกเลิก?')) return;
   dStatus[id]='cancelled';dTour=dTour.filter(x=>x!==id);if(!dDone.includes(id))dDone.push(id);delete dChecks[id];
-  if(ord){ord.status='cancelled';addStatusLog(ord,'cancelled','Driver');}
+  if(ord){var _oc=ord.status;ord.status='cancelled';addStatusLog(ord,'cancelled','Driver');auditStatus(id,_oc,'cancelled','Driver');}
   const tour=drGetTour();
   if(tour)tour.status[id]='cancelled';
   drTour();drReady();ofRenderOrders();syncOrders();syncTours();
 }
-function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();}
+function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded','Driver');auditStatus(id,_o,'loaded','Driver');}const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();syncOrders();}
 
 // ── STAFF MODAL FUNCTIONS ──
 // Drivers are derived from staffList (staff flagged isDriver). Old driver ids are
@@ -11761,8 +11795,10 @@ function whBackToPacking(btn) {
   var id = btn.getAttribute('data-id');
   var ord = orders.find(function(x){return x.id===id;});
   if(!ord) return;
+  var _oldSt=ord.status;
   ord.status = 'packing';
   addStatusLog(ord, 'packing', 'Warehouse');
+  auditStatus(id,_oldSt,'packing','Warehouse');
   addLog('Order '+id+' back to packing', '-');
   whRender();
   whRenderPacking();
@@ -11774,8 +11810,10 @@ function whBackToNew(btn) {
   var id = btn.getAttribute('data-id');
   var ord = orders.find(function(x){return x.id===id;});
   if(!ord) return;
+  var _oldSt=ord.status;
   ord.status = 'new';
   addStatusLog(ord,'new','Warehouse');
+  auditStatus(id,_oldSt,'new','Warehouse');
   whRender();
   whRenderPacking();
   ofRenderOrders();
@@ -11809,6 +11847,7 @@ function whDonePacking(btn) {
   var bundleInput = document.getElementById('bundle-'+id);
   var bundleVal = bundleInput ? (parseInt(bundleInput.value)||0) : 0;
   ord.bundle = bundleVal;
+  var _oldSt=ord.status;
   ord.status = 'ready';
   var o = wOrders.find(function(x){return x.id===id;});
   if(o) { o.packed=true; o.packing=false; if(ctnVal>0) o.ctn=ctnVal; o.bundle=bundleVal; }
@@ -11819,7 +11858,8 @@ function whDonePacking(btn) {
   } else { daoEntry.ctn = ctnVal>0?ctnVal:daoEntry.ctn; daoEntry.bundle = bundleVal; }
   if(!dStatus[id]) dStatus[id]='ready';
   addLog('Order '+id+' packed/ready','+');
-  addStatusLog(ord,'packing','Warehouse');
+  addStatusLog(ord,'ready',ord.packedBy||'Warehouse');
+  auditStatus(id,_oldSt,'ready',ord.packedBy||'Warehouse');
   whRender();
   whRenderPacking();
   ofRenderOrders();
@@ -11841,15 +11881,17 @@ function whAcceptBtnSafe(btn) {
     // Orders might not be loaded yet — retry once after short delay
     setTimeout(function(){
       var ord2=orders.find(function(x){return x.id===id;});
-      if(ord2){ord2.status='packing';addStatusLog(ord2,'packing','Warehouse');addLog('Order '+id+' accepted','+');whRender();ofRenderOrders();syncOrders();}
+      if(ord2){var _o2=ord2.status;ord2.status='packing';addStatusLog(ord2,'packing','Warehouse');auditStatus(id,_o2,'packing','Warehouse');addLog('Order '+id+' accepted','+');whRender();ofRenderOrders();syncOrders();}
       else{alert('Order not found. Please refresh / โปรดรีเฟรช');}
     },600);
     return;
   }
   var _by = (typeof currentStaffName!=='undefined' && currentStaffName) ? currentStaffName : 'Warehouse';
+  var _oldSt=ord.status;
   ord.status = 'packing';
   ord.acceptedBy = _by; ord.acceptedAt = Date.now();
   addStatusLog(ord, 'packing', _by);
+  auditStatus(id,_oldSt,'packing',_by);
   addLog('Order '+id+' accepted', '+');
   whRender();
   ofRenderOrders();
@@ -15253,6 +15295,7 @@ function deleteCLcurrent() {
 // ── AUDIT LOG ──
 
 var _auditFilt = 'all';
+var _auditSearch = '';
 
 function auditAdd(entry) {
   if(!window.fbDB) return;
@@ -15263,10 +15306,22 @@ function auditAdd(entry) {
   window.fbDB.ref('auditLog').push(entry);
 }
 
+// Log a status change to the audit log (skips no-op changes). Used by every path that
+// mutates an order's status so the Audit Log is complete, not just the office buttons.
+function auditStatus(id, from, to, by){ if(!id || from===to) return; try{ auditAdd({type:'status',orderId:id,from:from,to:to,by:by||'—'}); }catch(e){} }
+
 function auditFilt(type, btn) {
   _auditFilt = type;
   document.querySelectorAll('#audit-filter-bar .fbtn').forEach(function(b){ b.classList.remove('active'); });
   btn.classList.add('active');
+  _auditRenderNow();
+}
+
+// Search the audit log by order id (or staff name). Filters the already-loaded entries.
+function auditSearchFn(q) {
+  _auditSearch = (q||'').trim().toLowerCase();
+  var x = document.getElementById('audit-search-clear');
+  if(x) x.style.display = _auditSearch ? '' : 'none';
   _auditRenderNow();
 }
 
@@ -15427,20 +15482,26 @@ function _auditRenderNow() {
   var list = document.getElementById('audit-list');
   if(!list) return;
   var filtered = auditLog.filter(function(e) {
-    if(_auditFilt === 'all') return true;
-    if(_auditFilt === 'status') return e.type === 'status' || e.type === 'create';
-    if(_auditFilt === 'payment') return e.type === 'payment';
-    if(_auditFilt === 'delete') return e.type === 'delete';
-    if(_auditFilt === 'claim') return e.type === 'claim';
+    if(_auditFilt === 'all') {}
+    else if(_auditFilt === 'status') { if(!(e.type === 'status' || e.type === 'create' || e.type === 'edit')) return false; }
+    else if(_auditFilt === 'payment') { if(e.type !== 'payment') return false; }
+    else if(_auditFilt === 'delete') { if(e.type !== 'delete') return false; }
+    else if(_auditFilt === 'claim') { if(e.type !== 'claim') return false; }
+    // Free-text search across order id + staff name (case-insensitive).
+    if(_auditSearch) {
+      var hay = ((e.orderId||'') + ' ' + (e.by||'')).toLowerCase();
+      if(hay.indexOf(_auditSearch) < 0) return false;
+    }
     return true;
   });
   if(filtered.length === 0) {
-    list.innerHTML = '<div class="empty" style="padding:20px;font-size:13px">No entries yet</div>';
+    list.innerHTML = '<div class="empty" style="padding:20px;font-size:13px">'
+      + (_auditSearch ? 'No entries for "'+_esc(_auditSearch)+'" / ไม่พบ' : 'No entries yet') + '</div>';
     return;
   }
-  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>'};
-  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2'};
-  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b'};
+  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', edit:'<i class="ti ti-pencil" style="color:var(--blue)"></i>', 'change-request':'<i class="ti ti-edit" style="color:var(--orange)"></i>', 'change-confirmed':'<i class="ti ti-check" style="color:var(--green)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>'};
+  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', edit:'var(--blue-l)', 'change-request':'var(--orange-l)', 'change-confirmed':'var(--green-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2'};
+  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', edit:'var(--blue-t)', 'change-request':'var(--orange-t)', 'change-confirmed':'var(--green-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b'};
   list.innerHTML = filtered.map(function(e) {
     var icon = typeIcon[e.type] || '<i class="ti ti-info-circle"></i>';
     var bg = typeBg[e.type] || 'var(--bg2)';
@@ -15448,6 +15509,9 @@ function _auditRenderNow() {
     var detail = '';
     if(e.type === 'create') detail = 'New order created';
     else if(e.type === 'status') detail = (e.from||'?') + ' → ' + (e.to||'?');
+    else if(e.type === 'edit') detail = 'Order edited';
+    else if(e.type === 'change-request') detail = '📝 Change requested' + (e.detail?': '+e.detail:'');
+    else if(e.type === 'change-confirmed') detail = '✅ Change confirmed' + (e.detail?': '+e.detail:'');
     else if(e.type === 'payment') detail = 'Paid: ' + (e.method||'');
     else if(e.type === 'delete') detail = 'Order deleted';
     else if(e.type === 'claim') detail = '⚠️ Claim filed';
