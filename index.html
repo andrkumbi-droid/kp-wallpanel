@@ -85,6 +85,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 #s-office #of-topbar{position:sticky;top:0;z-index:50;background:var(--bg)}
 #s-office #of-topbar .header{position:static;top:auto;z-index:auto}
 #s-office #of-topbar .tabs{position:static;top:auto;z-index:auto}
+/* Orders search bar sticks just below the office topbar while the list scrolls (like the tabs). --of-topbar-h is measured in JS. */
+#ofv-orders .of-searchwrap{position:sticky;top:var(--of-topbar-h,148px);z-index:30;background:var(--bg);padding:8px 0;margin-bottom:2px}
 #s-office .tabs .tab:nth-child(odd){color:var(--text)}
 #s-office .tabs .tab:nth-child(even){color:var(--text2)}
 #s-office .tabs .tab.active{color:#16a34a!important}
@@ -1575,7 +1577,7 @@ textarea{resize:none}
   </div>
   </div></div>
   <div class="view" id="ofv-orders"><div class="sec">
-    <div style="position:relative;margin-bottom:10px">
+    <div class="of-searchwrap">
       <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--text2)"></i>
       <input type="text" id="of-search" placeholder="Search order, customer, phone... / ค้นหา" oninput="ofRenderOrders()" style="width:100%;padding:9px 10px 9px 34px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">
     </div>
@@ -4257,7 +4259,11 @@ function closeRM(){document.getElementById('rm-modal').classList.remove('open');
 function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id){alert('Enter order number');return;}const amt=parseFloat(document.getElementById('rm-amt').value)||0,date=document.getElementById('rm-date').value;revOrders.push({rid:'r'+Date.now(),id,cust:document.getElementById('rm-cust').value||'—',amt,date,zone:document.getElementById('rm-zone').value,month:mkey(date)});addLog('Order '+id+': '+amt.toLocaleString()+' ฿ delivered','+');closeRM();mgRevenue();syncRevOrders();}
 
 // OFFICE
-function oft(t){document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='drivers')ofDriversRender();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='stock')ofStockCatalog();if(t==='lala')ofRenderLala();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();if(t==='attend')ofAttRender();if(t==='bills')billsRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
+// Measure the sticky office topbar so the orders search bar can stick right below it
+// (CSS var --of-topbar-h). Re-run on tab switch + resize since the topbar height varies.
+function ofSyncStickyTop(){ try{ var tb=document.getElementById('of-topbar'); if(tb&&tb.offsetHeight) document.documentElement.style.setProperty('--of-topbar-h', tb.offsetHeight+'px'); }catch(e){} }
+try{ window.addEventListener('resize', ofSyncStickyTop); }catch(e){}
+function oft(t){ if(t==='orders') setTimeout(ofSyncStickyTop,0); document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='drivers')ofDriversRender();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='stock')ofStockCatalog();if(t==='lala')ofRenderLala();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();if(t==='attend')ofAttRender();if(t==='bills')billsRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
 function custBlockToggle(){
   var b=document.getElementById('cust-block-body'), ch=document.getElementById('cust-block-chev');
   if(!b) return;
@@ -11813,10 +11819,25 @@ function whCapturePackPhoto(input, id){
   });
 }
 
+// True (and warns) when a warehouse action would drag an order BACKWARD from a state it
+// has already progressed past: it got loaded on a truck, a tour was finished, or the
+// office delivered/shipped/cancelled it. This is exactly how a delivered order could
+// bounce back to "ready" — the packer, still on their (stale) packing list, hits Done.
+function _whMovedOn(ord){
+  if(!ord) return false;
+  if(['loaded','delivered','shipped','cancelled'].indexOf(ord.status)>=0){
+    alert('⚠ Order '+ord.id+' is already "'+ord.status+'" — it has moved on.\nRefresh the screen / รีเฟรชหน้าจอ (ห้ามตั้งค่าใหม่)');
+    try{ whRender(); whRenderPacking(); ofRenderOrders(); }catch(e){}
+    return true;
+  }
+  return false;
+}
+
 function whBackToPacking(btn) {
   var id = btn.getAttribute('data-id');
   var ord = orders.find(function(x){return x.id===id;});
   if(!ord) return;
+  if(_whMovedOn(ord)) return;
   var _oldSt=ord.status;
   ord.status = 'packing';
   addStatusLog(ord, 'packing', 'Warehouse');
@@ -11832,6 +11853,7 @@ function whBackToNew(btn) {
   var id = btn.getAttribute('data-id');
   var ord = orders.find(function(x){return x.id===id;});
   if(!ord) return;
+  if(_whMovedOn(ord)) return;
   var _oldSt=ord.status;
   ord.status = 'new';
   addStatusLog(ord,'new','Warehouse');
@@ -11846,6 +11868,7 @@ function whDonePacking(btn) {
   var id = btn.getAttribute('data-id');
   var ord = orders.find(function(x){return x.id===id;});
   if(!ord) return;
+  if(_whMovedOn(ord)) return;
   // Require a pack photo before finishing. For a re-pack after a change, require at
   // least one NEW photo (count must exceed the baseline captured at confirm time).
   var _base = (typeof ord._repackPhotoBase==='number') ? ord._repackPhotoBase : null;
@@ -11903,11 +11926,12 @@ function whAcceptBtnSafe(btn) {
     // Orders might not be loaded yet — retry once after short delay
     setTimeout(function(){
       var ord2=orders.find(function(x){return x.id===id;});
-      if(ord2){var _o2=ord2.status;ord2.status='packing';addStatusLog(ord2,'packing','Warehouse');auditStatus(id,_o2,'packing','Warehouse');addLog('Order '+id+' accepted','+');whRender();ofRenderOrders();syncOrders();}
+      if(ord2){if(_whMovedOn(ord2))return;var _o2=ord2.status;ord2.status='packing';addStatusLog(ord2,'packing','Warehouse');auditStatus(id,_o2,'packing','Warehouse');addLog('Order '+id+' accepted','+');whRender();ofRenderOrders();syncOrders();}
       else{alert('Order not found. Please refresh / โปรดรีเฟรช');}
     },600);
     return;
   }
+  if(_whMovedOn(ord)) return;
   var _by = (typeof currentStaffName!=='undefined' && currentStaffName) ? currentStaffName : 'Warehouse';
   var _oldSt=ord.status;
   ord.status = 'packing';
