@@ -15500,6 +15500,109 @@ function claimDelete(cid) {
   claimsRender();
 }
 
+// ── REPLACEMENT DELIVERY (Ersatzlieferung) ─────────────────────────────
+// Customer got the order but some panels arrived broken. Send the broken items again
+// for FREE: deduct stock once, create a NEW linked order (id "<orig>-R<n>") holding ONLY
+// the broken items at price 0, status 'new' so the warehouse packs it and it flows into a
+// tour normally. The original (paid, delivered) order is untouched; total 0 → no revenue;
+// payMethod 'free' → it never shows as unpaid. Filed as a 'replaced' claim for the record.
+var _replOrigId = null;
+function openReplacement(orderId){
+  var o = orders.find(function(x){return x.id===orderId;});
+  if(!o){ alert('Order not found'); return; }
+  _replOrigId = orderId;
+  document.getElementById('repl-orig').textContent = orderId + ' · ' + (o.customer||'');
+  document.getElementById('repl-reason').value = '';
+  var wrap = document.getElementById('repl-lines');
+  wrap.innerHTML = '';
+  var PROD = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  (o.lineItems||[]).forEach(function(li){
+    if(!PROD[li.type]) return;
+    var maxq = parseInt(li.qty)||0; if(maxq<=0) return;
+    var gtag = (li.grade==='B'?' (B)':'');
+    var row = document.createElement('div');
+    row.style.cssText = 'display:grid;grid-template-columns:1fr 74px;gap:10px;align-items:center;margin-bottom:8px';
+    row.setAttribute('data-code', li.code);
+    row.setAttribute('data-type', li.type);
+    row.setAttribute('data-grade', li.grade||'');
+    row.innerHTML = '<div style="font-size:13px">'+_esc(li.code)+gtag+' <span style="color:var(--text2)">(max '+maxq+')</span></div>'
+      + '<input type="number" min="0" max="'+maxq+'" value="0" style="padding:7px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);text-align:center">';
+    wrap.appendChild(row);
+  });
+  if(!wrap.children.length){ wrap.innerHTML = '<div style="font-size:12px;color:var(--text2)">No panel/edge items on this order.</div>'; }
+  document.getElementById('m-repl').style.display = 'flex';
+}
+function closeReplacement(){ document.getElementById('m-repl').style.display='none'; _replOrigId=null; }
+
+function saveReplacement(){
+  var o = orders.find(function(x){return x.id===_replOrigId;});
+  if(!o){ alert('Order not found'); return; }
+  var reason = (document.getElementById('repl-reason').value||'').trim();
+  var items = [], pa = [], la = [], tq = 0;
+  document.querySelectorAll('#repl-lines > div[data-code]').forEach(function(row){
+    var inp = row.querySelector('input'); if(!inp) return;
+    var qty = parseInt(inp.value)||0; if(qty<=0) return;
+    var maxq = parseInt(inp.getAttribute('max'))||0; if(maxq>0 && qty>maxq) qty=maxq;
+    var code = row.getAttribute('data-code'), type = row.getAttribute('data-type');
+    var grade = row.getAttribute('data-grade')||undefined;
+    items.push({type:type, code:code, qty:qty, unitPrice:0, amount:0, grade:grade});
+    if(type==='panel'){ pa.push(code+' × '+qty+gradeTag(grade)); tq+=qty; }
+    else la.push(code+' × '+qty);
+  });
+  if(!items.length){ alert('Choose at least one broken item / เลือกอย่างน้อย 1 ชิ้น'); return; }
+
+  // Unique linked id: "#100" → "#100-R1", "-R2", …
+  var n = 1; while(orders.find(function(x){return x.id===o.id+'-R'+n;})) n++;
+  var repId = o.id + '-R' + n;
+
+  // Deduct stock once (same buckets as a normal order).
+  items.forEach(function(it){ try{ stockBucketDeduct(it.code, it.qty, it.grade); }catch(e){} addLog(it.code+' -'+it.qty+' pcs (replacement '+repId+')','-'); });
+  try{ syncStockItems(); }catch(e){}
+
+  var byName = ((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name || 'Office';
+  var _n = new Date();
+  var ts = _n.getHours().toString().padStart(2,'0')+':'+_n.getMinutes().toString().padStart(2,'0');
+  var today = _n.toISOString().split('T')[0];
+  var rep = {
+    id: repId, date: today, zone: o.zone,
+    customer: o.customer, phone: o.phone, address: o.address, province: o.province||'',
+    location: o.location||'', contact: o.contact||'', deliveryRound: o.deliveryRound||'',
+    reqDate: today, reqNote: '',
+    panels: pa.length?pa.join(' · '):'—', lcorner: la.length?la.join(' · '):'—',
+    clips: 0, boxes: Math.max(1, Math.ceil(tq/10)),
+    total: '0 ฿', status: 'new',
+    notes: 'Ersatzlieferung / เคลมฟรี — Original '+o.id+(reason?' · '+reason:''),
+    createdBy: byName, editedBy: '',
+    lineItems: items,
+    isReplacement:true, replacementOf:o.id, free:true, replacementReason:reason,
+    payMethod:'free', paidAmount:0, payDate:today, paidBy:byName,
+    _stockDeducted:true, _editTs:Date.now(),
+    priority:false,
+    statusLog:[{status:'new', time:ts, by:byName}]
+  };
+  orders.unshift(rep);
+  try{ wOrders.unshift({id:repId, zone:o.zone, boxes:rep.boxes, panels:rep.panels, lcorner:rep.lcorner, clips:0, packed:false, packedAt:null}); }catch(e){}
+
+  // Record a 'replaced' claim entry for the Claims history, linked to the new order.
+  try{
+    var cid='cl'+Date.now();
+    var centry={cid:cid, orderId:o.id, date:today, reason:reason||'Broken on delivery', items:items.map(function(i){return {code:i.code,qty:i.qty};}), by:byName, status:'replaced', createdAt:Date.now(), replacementId:repId};
+    if(window.fbDB) window.fbDB.ref('claims/'+cid).set(centry);
+  }catch(e){}
+
+  try{ auditAdd({type:'claim', orderId:o.id, by:byName}); }catch(e){}
+  try{ auditAdd({type:'create', orderId:repId, by:byName}); }catch(e){}
+
+  syncOrders();
+  try{ syncWOrders(); }catch(e){}
+  try{ sheetsSyncOrder(rep); }catch(e){}
+  closeReplacement();
+  ofRenderOrders(); mgRender();
+  try{ whRender(); }catch(e){}
+  try{ pushSend('warehouse','🔁 Ersatzlieferung: '+repId, (o.customer||'')+' · '+pa.concat(la).join(', '), {tag:'replacement'}); }catch(e){}
+  try{ showNotif('✓ Ersatzlieferung '+repId+' → Warehouse'); }catch(e){}
+}
+
 function _auditRenderNow() {
   var list = document.getElementById('audit-list');
   if(!list) return;
