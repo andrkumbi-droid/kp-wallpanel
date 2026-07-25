@@ -4625,8 +4625,8 @@ function ofRenderDashboard() {
     if(el) el.textContent = orders.filter(function(o){return o.status===s;}).length;
   });
 
-  // Unpaid
-  var unpaid = orders.filter(function(o){return o.status==='delivered'&&!o.payMethod;});
+  // Unpaid (free replacements / 0 ฿ claims owe nothing → never counted as unpaid)
+  var unpaid = orders.filter(function(o){return o.status==='delivered'&&!o.payMethod&&!payIrrelevant(o);});
   var unpaidWrap = document.getElementById('db-unpaid-wrap');
   if(unpaidWrap) {
     if(unpaid.length>0){
@@ -12212,10 +12212,18 @@ function drVerify(){const res=document.getElementById('dr-vres');res.style.displ
 var payFilt_ = 'unpaid';
 var payShipperFilt_ = '';
 
+// Payment-irrelevant orders: free replacements / claims and anything with a 0 ฿ total.
+// Nothing to collect → they must never appear as "unpaid" in the Pay tab, badge or alerts.
+function payIrrelevant(o){
+  if(!o) return true;
+  if(o.free || o.isReplacement) return true;
+  var amt = parseFloat(((o.total||0)+'').replace(/[^0-9]/g,''))||0;
+  return amt<=0;
+}
 function payUpdateBadge() {
   var cnt = document.getElementById('oft-pay-cnt');
   if(!cnt) return;
-  var unpaid = orders.filter(function(o){ return o.status==='delivered' && !o.payMethod; });
+  var unpaid = orders.filter(function(o){ return o.status==='delivered' && !o.payMethod && !payIrrelevant(o); });
   if(unpaid.length > 0) { cnt.textContent = unpaid.length; cnt.style.display='inline-flex'; }
   else { cnt.style.display='none'; }
 }
@@ -12340,7 +12348,7 @@ function _payRenderNow() {
     sf.innerHTML = '<option value="">🚚 All shippers</option>'
       + shippers.map(function(s){return '<option value="'+s+'"'+(cur===s?' selected':'')+'>'+s+'</option>';}).join('');
   }
-  var delivered = orders.filter(function(o){ return o.status==='delivered'; });
+  var delivered = orders.filter(function(o){ return o.status==='delivered' && !payIrrelevant(o); });
   delivered.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
 
   // ── Totals banner ──
@@ -12383,7 +12391,7 @@ function _payRenderNow() {
   // ── Not-yet-delivered UNPAID orders → separate section under "Unpaid", with status ──
   var payPendingHtml='';
   if(payFilt_==='unpaid' && !payShipperFilt_){
-    var pending = orders.filter(function(o){ return o.status!=='delivered' && o.status!=='cancelled' && !o.payMethod; });
+    var pending = orders.filter(function(o){ return o.status!=='delivered' && o.status!=='cancelled' && !o.payMethod && !payIrrelevant(o); });
     if(pq) pending = pending.filter(function(o){ var hay=((o.id||'')+' '+(o.customer||'')+' '+(o.phone||'')+' '+(o.address||'')+' '+(o.zone||'')).toLowerCase(); return hay.indexOf(pq)>=0; });
     if(pending.length){
       var pRk={Bangkok:0,Northern:1,Northeastern:2,Eastern:3,Southern:4,Instore:5};
