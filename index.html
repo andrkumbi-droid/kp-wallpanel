@@ -1462,6 +1462,8 @@ textarea{resize:none}
   </div></div>
 
   <div class="view" id="ofv-new"><div class="sec"><div class="card">
+    <div id="of-instore-banner" style="display:none;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:var(--rs);padding:10px 12px;margin-bottom:10px;font-size:13px;font-weight:700;color:#047857">🏪 In-store sale / ขายหน้าร้าน · Zone 5</div>
+    <div id="of-zone-wrap">
     <label class="fl">Zone / โซน</label>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px" id="of-zone-btns">
       <button type="button" onclick="selectZone('Bangkok')" id="oz-Bangkok" style="padding:10px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg);font-size:13px;font-weight:500;cursor:pointer;color:var(--text);-webkit-tap-highlight-color:transparent"># Bangkok / กรุงเทพ</button>
@@ -1471,6 +1473,7 @@ textarea{resize:none}
       <button type="button" onclick="selectZone('Southern')" id="oz-Southern" style="padding:10px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg);font-size:13px;font-weight:500;cursor:pointer;color:var(--text);-webkit-tap-highlight-color:transparent">4- Southern / ภาคใต้</button>
       <button type="button" onclick="selectZone('Instore')" id="oz-Instore" style="padding:10px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg);font-size:13px;font-weight:500;cursor:pointer;color:var(--text);-webkit-tap-highlight-color:transparent">5- In-store / ขายในร้าน</button>
     </div>
+    </div><!-- /of-zone-wrap -->
     <input type="hidden" id="of-zone" value="">
     <div class="g2" style="margin-top:8px">
       <div>
@@ -2644,6 +2647,18 @@ function _enterOffice(s){
   document.getElementById('of-date').valueAsDate = new Date();
   const nameEl = document.getElementById('of-logged-in-name');
   if(nameEl) nameEl.textContent = 'Logged in: ' + s.name + ' / เข้าสู่ระบบ';
+  // Reset all office tabs to visible first, so a previous restricted session (e.g. Shop)
+  // does not leave tabs hidden for the next login. Per-staff access is applied below.
+  document.querySelectorAll('#s-office .tabs .tab').forEach(function(t){ t.style.display=''; });
+  // Instore-seller accounts: Milk (front-of-shop walk-in sales) + Shop. Their New Order
+  // form is locked to Instore / zone 5 (no other zones). Shop is further restricted below.
+  var _nm=(s.name||'').trim().toLowerCase();
+  var instoreOnly = !!s.instoreOnly || _nm==='milk' || _nm==='shop';
+  var shopMode = !!s.shopMode || _nm==='shop';
+  window.ofInstoreOnly = instoreOnly;
+  window.ofShopMode = shopMode;
+  var _zw=document.getElementById('of-zone-wrap'); if(_zw) _zw.style.display = instoreOnly ? 'none' : '';
+  var _ib=document.getElementById('of-instore-banner'); if(_ib) _ib.style.display = instoreOnly ? '' : 'none';
   const salesTab = document.getElementById('oft-sales');
   if(salesTab) salesTab.style.display = s.salesAccess ? '' : 'none';
   const payTab = document.getElementById('oft-pay');
@@ -2661,7 +2676,9 @@ function _enterOffice(s){
   try{ poUpdateBadge(); }catch(e){}
   // Logistics/Mittelsmann (e.g. Milk): Orders read-only, no revenue/home, only
   // Orders/Stock/Incoming/Lalamove. Lalamove tab is shown to ALL office staff.
-  var logi = !!s.logisticsMode;
+  // Instore sellers (Milk/Shop) are never treated as logistics — they must be able to
+  // create orders. Shop gets its own read-only restriction via shopMode below.
+  var logi = !!s.logisticsMode && !instoreOnly;
   window.ofReadOnly = logi;
   var lalaTab = document.getElementById('oft-lala');
   if(lalaTab) lalaTab.style.display = '';
@@ -2675,10 +2692,19 @@ function _enterOffice(s){
   });
   try{ ofLalaUpdBadge(); }catch(e){}
   window.canDeleteOrders = (s.deleteAccess && !logi) || false;
+  // Shop account: sees Orders (read-only) + creates Instore orders + Lalamove + Quotation.
+  // Everything else is hidden. (Milk keeps her normal office tabs; only her New Order is
+  // Instore-locked, handled above.)
+  if(shopMode){
+    window.ofReadOnly = true;
+    window.canDeleteOrders = false;
+    var _shopShow = {'oft-new':1,'oft-orders':1,'oft-lala':1,'oft-quote':1};
+    document.querySelectorAll('#s-office .tabs .tab').forEach(function(t){ t.style.display = _shopShow[t.id] ? '' : 'none'; });
+  }
   try{ pushRequestPermission('office', s.id, function(granted){
     if(granted) showInAppNotif('🔔 Notifications on', 'You\'ll be notified of new orders & deliveries');
   }); }catch(e){}
-  oft(logi ? 'orders' : 'home');
+  oft(instoreOnly ? 'new' : (logi ? 'orders' : 'home'));
   ofRenderOrders();
   ofRenderInc();
   ofRenderStock();
@@ -2976,6 +3002,13 @@ function back(){quoteReturn='menu';document.querySelectorAll('.screen').forEach(
 // quotation still backs out to the menu.
 var quoteReturn='menu';
 function ofGoQuote(){ quoteReturn='office'; go('quote'); }
+// Instore-only accounts (e.g. Milk, Shop): lock the New Order form to zone Instore/5 —
+// hide the zone picker, show the in-store banner, and preselect Instore.
+function ofApplyInstoreLock(){
+  var w=document.getElementById('of-zone-wrap'); if(w) w.style.display='none';
+  var b=document.getElementById('of-instore-banner'); if(b) b.style.display='';
+  try{ selectZone('Instore'); }catch(e){}
+}
 function qtBack(){
   if(quoteReturn==='office'){
     quoteReturn='menu';
@@ -4263,7 +4296,7 @@ function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id)
 // (CSS var --of-topbar-h). Re-run on tab switch + resize since the topbar height varies.
 function ofSyncStickyTop(){ try{ var tb=document.getElementById('of-topbar'); if(tb&&tb.offsetHeight) document.documentElement.style.setProperty('--of-topbar-h', tb.offsetHeight+'px'); }catch(e){} }
 try{ window.addEventListener('resize', ofSyncStickyTop); }catch(e){}
-function oft(t){ if(t==='orders') setTimeout(ofSyncStickyTop,0); document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='drivers')ofDriversRender();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='stock')ofStockCatalog();if(t==='lala')ofRenderLala();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();if(t==='attend')ofAttRender();if(t==='bills')billsRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
+function oft(t){ if(t==='orders') setTimeout(ofSyncStickyTop,0); if(t==='new' && window.ofInstoreOnly) ofApplyInstoreLock(); document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='drivers')ofDriversRender();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='new')ofRenderStock();if(t==='stock')ofStockCatalog();if(t==='lala')ofRenderLala();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='claims')claimsRender();if(t==='attend')ofAttRender();if(t==='bills')billsRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
 function custBlockToggle(){
   var b=document.getElementById('cust-block-body'), ch=document.getElementById('cust-block-chev');
   if(!b) return;
