@@ -1562,7 +1562,7 @@ textarea{resize:none}
     <div class="sumbox" id="of-sum-dummy" style="display:none">
     </div>
     <button type="button" id="of-priority-btn" onclick="ofTogglePriorityNew()" style="width:100%;margin-top:8px;padding:11px;border-radius:var(--rs);border:1.5px dashed #c084fc;background:#faf5ff;color:#7c3aed;font-size:14px;font-weight:700;cursor:pointer"><i class="ti ti-star"></i> Mark as Priority / ตั้งเป็นสำคัญมาก</button>
-    <button type="button" id="of-directsold-btn" onclick="ofDirectSale()" style="display:none;width:100%;margin-top:8px;padding:13px;border-radius:var(--rs);border:none;background:#16a34a;color:#fff;font-size:14px;font-weight:700;cursor:pointer"><i class="ti ti-cash"></i> ✓ Direct sale — create now / ขายหน้าร้าน (จ่ายแล้ว-ส่งแล้ว)</button>
+    <button type="button" id="of-directsold-btn" onclick="ofDirectSale()" style="display:none;width:100%;margin-top:8px;padding:13px;border-radius:var(--rs);border:none;background:#16a34a;color:#fff;font-size:14px;font-weight:700;cursor:pointer"><i class="ti ti-cash"></i> ✓ Instore sale — paid, to packing / ขายหน้าร้าน (จ่ายแล้ว → แพ็ค)</button>
     <div class="btn-row">
       <button type="button" class="btn" onclick="ofCheck()" style="border-color:var(--blue-l);color:var(--blue)"><i class="ti ti-search"></i> Check stock / เช็คสต็อก</button>
       <button type="button" class="btn btng" onclick="ofCreate()"><i class="ti ti-circle-check"></i> Create order / สร้างออเดอร์</button>
@@ -5798,7 +5798,7 @@ var _ofDirectSold=false;
 function ofDirectSale(){
   var zone=(document.getElementById('of-zone')||{}).value;
   if(zone!=='Instore'){ alert('Direct sale is for Instore only / เฉพาะขายหน้าร้าน'); return; }
-  if(!confirm('Create direct sale now — PAID + DELIVERED? / สร้างขายหน้าร้าน (จ่ายแล้ว-ส่งแล้ว)?')) return;
+  if(!confirm('Create instore sale now — PAID, send to packing? / สร้างขายหน้าร้าน (จ่ายแล้ว → แพ็ค)?')) return;
   _ofDirectSold=true;
   ofCreate();   // reads _ofDirectSold → delivered+paid, then resets the flag
 }
@@ -5942,15 +5942,17 @@ function ofCreate(){
   statusLog:[{status:'new',time:ts,by:createdBy}]};
   orders.unshift(o);wOrders.unshift({id:no,zone,boxes:o.boxes,panels:panStr,lcorner:lcStr,clips,packed:false,packedAt:null});
   try{ picsSeedSlots(o); }catch(e){}   // show the order (empty) in all Pictures tabs right away
-  // Instore direct sale → order is immediately delivered + fully paid.
+  // Instore walk-in sale → PAID immediately (cash at the counter), but goes to PACKING —
+  // not delivered — so the warehouse still records who packed it, a photo, CTN count etc.
+  // The order then flows through the normal packing → ready warehouse steps.
   if(_ofDirectSold && zone==='Instore'){
     var _dsNum=parseFloat(String(grand).replace(/[^0-9]/g,''))||0;
     var _dsToday=new Date().toISOString().split('T')[0];
-    o.status='delivered'; o.paidAmount=_dsNum; o.payMethod='cash'; o.payDate=_dsToday; o.paidBy=createdBy; o.deliveredBy=createdBy;
-    try{ addStatusLog(o,'delivered',createdBy); }catch(e){}
-    try{ auditStatus(o.id,'new','delivered',createdBy); }catch(e){}
-    if(wOrders[0]&&wOrders[0].id===o.id){ wOrders[0].packed=true; wOrders[0].packedAt=Date.now(); }
-    if(_dsNum>0){ try{ revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt:_dsNum,date:_dsToday,zone:o.zone,month:mkey(new Date().toISOString())}); addLog('Direct sale '+o.id+': '+_dsNum.toLocaleString()+' ฿','+'); syncRevOrders(); }catch(e){} }
+    o.status='packing'; o.paidAmount=_dsNum; o.payMethod='cash'; o.payDate=_dsToday; o.paidBy=createdBy;
+    try{ addStatusLog(o,'packing',createdBy); }catch(e){}
+    try{ auditStatus(o.id,'new','packing',createdBy); }catch(e){}
+    // leave wOrders[0].packed = false so it shows in the warehouse packing queue
+    if(_dsNum>0){ try{ revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt:_dsNum,date:_dsToday,zone:o.zone,month:mkey(new Date().toISOString())}); addLog('Instore sale '+o.id+': '+_dsNum.toLocaleString()+' ฿','+'); syncRevOrders(); }catch(e){} }
   }
   {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;stockBucketDeduct(li.code,_q,li.grade);addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
   var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';ofUpdPrioCnt();addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order'});}catch(e){}
