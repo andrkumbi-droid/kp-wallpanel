@@ -190,9 +190,13 @@ textarea{resize:none}
 .ttop{padding:12px 14px}
 .thdr{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .tnum{font-size:16px;font-weight:600;color:var(--text);flex:1}
-.mvbtns{display:flex;gap:4px}
+.mvbtns{display:flex;gap:4px;align-items:center}
 .mvbtn{background:var(--bg2);border:none;border-radius:6px;padding:5px 9px;cursor:pointer;font-size:14px;color:var(--text2)}
 .mvbtn:disabled{opacity:.3;cursor:default}
+/* Drag-to-reorder handle for driver tour cards (touch-action:none so dragging it never scrolls the page). */
+.drag-handle{touch-action:none;cursor:grab;font-size:19px;line-height:1;padding:5px 10px;border-radius:6px;background:var(--blue-l);color:var(--blue-t);user-select:none;-webkit-user-select:none}
+.drag-handle:active{cursor:grabbing}
+.tcard.dragging{opacity:.95;box-shadow:0 10px 26px rgba(0,0,0,.28);border:1.5px solid var(--blue);position:relative;z-index:5}
 .crow{display:flex;align-items:center;gap:8px;margin-bottom:3px}
 .clink{font-size:12px;color:var(--blue);text-decoration:none}
 .chklist{border-top:1px solid var(--border);background:var(--bg2)}
@@ -1323,6 +1327,7 @@ textarea{resize:none}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="audit-filter-bar">
       <button type="button" class="fbtn active" onclick="auditFilt('all',this)">All</button>
       <button type="button" class="fbtn" onclick="auditFilt('status',this)">Status</button>
+      <button type="button" class="fbtn" onclick="auditFilt('tour',this)">Tour</button>
       <button type="button" class="fbtn" onclick="auditFilt('payment',this)">Payment</button>
       <button type="button" class="fbtn" onclick="auditFilt('delete',this)">Deleted</button>
       <button type="button" class="fbtn" onclick="auditFilt('claim',this)">Claims</button>
@@ -2321,6 +2326,11 @@ textarea{resize:none}
         <button type="button" onclick="drVerify()" style="background:var(--blue-l);color:var(--blue-t);border:none;border-radius:var(--rs);padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-list-check"></i> Verify / ตรวจสอบ</button>
       </div>
     </div>
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <button type="button" onclick="drOptimizeRoute('near')" style="flex:1;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;border-radius:var(--rs);padding:9px;font-size:13px;font-weight:700;cursor:pointer">🧭 ใกล้สุดก่อน / Nearest first</button>
+      <button type="button" onclick="drOptimizeRoute('far')" style="flex:1;background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;border-radius:var(--rs);padding:9px;font-size:13px;font-weight:700;cursor:pointer">🚩 ไกลสุดก่อน / Farthest first</button>
+    </div>
+    <div style="font-size:11px;color:var(--text2);margin:-4px 0 10px">↕ ลากที่ ☰ เพื่อจัดลำดับ · ปุ่มด้านบนจัดเส้นทางอัตโนมัติจากตำแหน่งคุณ / Drag the ☰ handle to reorder; the buttons auto-route from your GPS.</div>
     <div id="dr-vres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-bottom:10px;font-size:13px"></div>
     <div id="dr-tlist"></div>
     <div id="dr-donesec" style="display:none"><div class="donesep"><span>Done / เสร็จแล้ว</span></div><div id="dr-donelist"></div></div>
@@ -4289,7 +4299,7 @@ function openDM(id){editDM=id;document.getElementById('dm-title').textContent=id
 function closeDM(){document.getElementById('dm-modal').classList.remove('open');editDM=null;}
 function saveDM(){const name=document.getElementById('dm-name').value.trim();if(!name){alert('Enter a name');return;}const phone=document.getElementById('dm-phone').value.trim(),vehicle=document.getElementById('dm-vehicle').value.trim();if(editDM){const d=drivers.find(x=>x.id===editDM);d.name=name;d.phone=phone;d.vehicle=vehicle;}else drivers.push({id:'d'+Date.now(),name,phone,vehicle});closeDM();mgRender();syncDrivers();}
 function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filter(x=>x.id!==editDM);closeDM();mgRender();syncDrivers();}
-function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)))return;if(!ofSlipGuard(t))return;try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').valueAsDate=new Date();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -5513,6 +5523,7 @@ function ofEndTourFromDetail() {
   var _pinBy = requireStaffPin('End tour / จบทัวร์ · ' + t.driverName);
   if(!_pinBy) return;
   try{ addLog('Tour '+(t.driverName||'')+' ended (PIN: '+_pinBy+')','-'); }catch(e){}
+  try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders', _pinBy); }catch(e){}
   try{ archiveTour(t); }catch(e){}
   try{ endTourPayroll(t); }catch(e){}
   var _rid = t && t.id;
@@ -7668,6 +7679,7 @@ function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.
   // Remove order from tour
   t.orders = t.orders.filter(function(id){return id!==orderId;});
   delete t.status[orderId];
+  auditTour('remove', orderId, 'Removed from '+(t.driverName||'tour')+"'s tour");
   // Set order back to ready
   var ord = orders.find(function(x){return x.id===orderId;});
   if(ord) { var _o=ord.status; ord.status='ready'; addStatusLog(ord,'ready','Office'); auditStatus(orderId,_o,'ready','Office'); }
@@ -7726,6 +7738,7 @@ function ofMoveOrder(fromTourId, orderId){
   target.status=target.status||{}; target.status[orderId]=st;
   // remove now-empty source tour
   if(from.orders.length===0){ activeTours=activeTours.filter(function(x){return x.id!==fromTourId;}); fbRemoveTour(fromTourId); }
+  auditTour('move', orderId, 'Moved: '+(from.driverName||'?')+' → '+(target.driverName||'?'));
   ofRenderTour(); syncTours();
 }
 
@@ -7783,6 +7796,7 @@ function closeTourAdd(){ var m=document.getElementById('tour-add-modal'); if(m) 
 function ofAddConfirm(){
   var t = activeTours.find(function(x){return x.id===ofAddTourId;});
   if(!t || !ofAddSelIds.length){ closeTourAdd(); return; }
+  var _addedIds = ofAddSelIds.slice(), _addDrv = t.driverName;
   // Add every selected order in one go. Per order: planned New/Packing orders keep
   // their packing status (warehouse still packs them); Ready ones become loaded (if
   // the driver already left) or ready (still loading).
@@ -7803,6 +7817,7 @@ function ofAddConfirm(){
     try{ pushSend('driver_'+t.driverId,'➕ Order added to your tour / เพิ่มออเดอร์', o.id+' — '+(o.customer||''), {tag:'tour'}); }catch(e){}
     try{ addLog('Order '+o.id+' added to '+t.driverName+"'s tour",'+'); }catch(e){}
   });
+  auditTour('add','🚚 '+_addDrv, '+'+_addedIds.length+' order'+(_addedIds.length!==1?'s':'')+': '+_addedIds.join(', '));
   closeTourAdd();
   ofRenderTour(); ofRenderOrders(); mgRender(); syncTours(); syncOrders();
 }
@@ -8405,10 +8420,12 @@ function ofCreateTour(){
     existingTour.orders=optimizeTourOrder(existingTour.orders); // initial sort by whatever coords we already have
     _tourId=existingTour.id;
     res.style.background=GL;res.style.color=GT;res.textContent='✓ '+ofSelOrders.length+' orders added to '+d.name+"'s tour!";
+    auditTour('add','🚚 '+d.name, '+'+ofSelOrders.length+' order'+(ofSelOrders.length!==1?'s':'')+': '+ofSelOrders.join(', '));
   } else {
     // Driver is driving (or no tour) — create a new tour, orders pre-sorted into an optimal route
     const now=new Date();_tourId='t'+Date.now();activeTours.push({id:_tourId,driverId:ofSelDriver,driverName:d.name,orders:optimizeTourOrder([...ofSelOrders]),status,checks:{},created:now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')});
     res.style.background=GL;res.style.color=GT;res.textContent='✓ New tour sent to '+d.name+'! '+ofSelOrders.length+' orders';
+    auditTour('create','🚚 '+d.name, 'New tour · '+ofSelOrders.length+' order'+(ofSelOrders.length!==1?'s':'')+': '+ofSelOrders.join(', '));
     try{pushSend('driver_'+ofSelDriver,'🚚 New Tour Ready!',ofSelOrders.length+' order'+(ofSelOrders.length!==1?'s':'')+' assigned to you',{tag:'tour'});}catch(e){}
   }
   // Stamp the assigned driver into "Delivered by" (sheet col AC) immediately on
@@ -9180,9 +9197,9 @@ function drTour(){
       const _navUrl=orderNavUrl(o);
       const murl=_locUrl||('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(o.address));
       const ck=(f,v)=>'<div class="chkrow" onclick="drChkBtn(this)" data-id="'+id+'" data-field="'+f+'"><div class="chkbox '+(v?'on':'')+'">'+( v?'<i class="ti ti-check" style="font-size:12px;color:var(--green)"></i>':''  )+'</div>';
-      return '<div class="tcard"'+(loaded?'':' style="opacity:0.45"')+'>'+
+      return '<div class="tcard" data-oid="'+id+'"'+(loaded?'':' style="opacity:0.45"')+'>'+
         '<div class="ttop">'+
-        '<div class="thdr"><span class="tnum">'+(idx+1)+'. '+o.id+(_locUrl?' <a href="'+_locUrl+'" target="_blank" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(loaded?'':(isPacking?' <span style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap">📦 กำลังแพ็ค / Packing</span>':' <span style="font-size:10px;font-weight:700;color:#6b7280;background:rgba(0,0,0,0.06);border-radius:8px;padding:1px 6px;white-space:nowrap">⬜ ยังไม่ขึ้นรถ</span>'))+'</span> '+kpcOrderBubble(o.id)+'<div class="mvbtns"><button type="button" class="mvbtn" onclick="drUp('+idx+')" '+(idx===0?'disabled':'')+'>↑</button><button type="button" class="mvbtn" onclick="drDn('+idx+')" '+(idx===myTour.length-1?'disabled':'')+'>↓</button><input type="number" min="1" max="'+myTour.length+'" value="'+(idx+1)+'" onchange="drMoveTo(this,'+idx+')" style="width:42px;padding:3px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;text-align:center;background:var(--bg);color:var(--text)"></div></div>'+
+        '<div class="thdr"><span class="tnum">'+(idx+1)+'. '+o.id+(_locUrl?' <a href="'+_locUrl+'" target="_blank" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(loaded?'':(isPacking?' <span style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap">📦 กำลังแพ็ค / Packing</span>':' <span style="font-size:10px;font-weight:700;color:#6b7280;background:rgba(0,0,0,0.06);border-radius:8px;padding:1px 6px;white-space:nowrap">⬜ ยังไม่ขึ้นรถ</span>'))+'</span> '+kpcOrderBubble(o.id)+'<div class="mvbtns"><span class="drag-handle" onpointerdown="drDragStart(event,this)" title="Drag to reorder / ลากเพื่อจัดลำดับ">☰</span><button type="button" class="mvbtn" onclick="drUp('+idx+')" '+(idx===0?'disabled':'')+'>↑</button><button type="button" class="mvbtn" onclick="drDn('+idx+')" '+(idx===myTour.length-1?'disabled':'')+'>↓</button></div></div>'+
         '<div style="font-size:13px;margin-bottom:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' &middot; '+o.lcorner:'')+(o.clips&&o.clips>0?' &middot; 📎 '+o.clips+' clips':'')+(o.ctn?' &middot; <span style="color:var(--green);font-weight:700">📦 '+o.ctn+' CTN</span>':'')+(o.bundle?' &middot; <span style="color:#ea580c;font-weight:700">🧶 '+o.bundle+' มัด</span>':'')+'</div>'+
         '<div class="crow"><i class="ti ti-user" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.customer+'</span></div>'+
         '<div class="crow"><i class="ti ti-phone" style="font-size:13px;color:var(--text2)"></i><span>'+phoneLinks(o.phone,'var(--blue)')+'</span></div>'+
@@ -9290,6 +9307,93 @@ function drSyncTourOrder(){
   syncTours();
   var btn=document.querySelector('[onclick="drSyncTourOrder()"]');
   if(btn){var orig=btn.innerHTML;btn.innerHTML='<i class="ti ti-check"></i> Saved! / บันทึกแล้ว';setTimeout(function(){btn.innerHTML=orig;},1500);}
+}
+
+// ── DRIVER TOUR: drag-to-reorder (touch + mouse via pointer events) ──
+var _drDragCard=null, _drDragList=null, _drDragHandle=null;
+function drDragStart(e, handle){
+  if(e.button!=null && e.button>0) return;   // primary button / touch only
+  var card=handle.closest('.tcard'); if(!card) return;
+  var list=document.getElementById('dr-tlist'); if(!list) return;
+  _drDragCard=card; _drDragList=list; _drDragHandle=handle;
+  card.classList.add('dragging');
+  e.preventDefault();
+  try{ handle.setPointerCapture(e.pointerId); handle._kpPid=e.pointerId; }catch(_){}
+  handle.addEventListener('pointermove', drDragMove);
+  handle.addEventListener('pointerup', drDragEnd);
+  handle.addEventListener('pointercancel', drDragEnd);
+}
+function _drAfter(list, y){
+  var els=Array.prototype.slice.call(list.querySelectorAll('.tcard:not(.dragging)'));
+  var best=null, bestOff=-Infinity;
+  els.forEach(function(ch){ var b=ch.getBoundingClientRect(); var off=y-(b.top+b.height/2); if(off<0 && off>bestOff){ bestOff=off; best=ch; } });
+  return best;
+}
+function drDragMove(e){
+  if(!_drDragCard||!_drDragList) return;
+  e.preventDefault();
+  var after=_drAfter(_drDragList, e.clientY);
+  if(after==null) _drDragList.appendChild(_drDragCard);
+  else if(after!==_drDragCard.nextSibling) _drDragList.insertBefore(_drDragCard, after);
+}
+function drDragEnd(e){
+  var handle=_drDragHandle;
+  if(handle){
+    try{ handle.releasePointerCapture(handle._kpPid); }catch(_){}
+    handle.removeEventListener('pointermove', drDragMove);
+    handle.removeEventListener('pointerup', drDragEnd);
+    handle.removeEventListener('pointercancel', drDragEnd);
+  }
+  if(_drDragCard) _drDragCard.classList.remove('dragging');
+  if(_drDragList){
+    // New visible order = the tcards in their current DOM order.
+    var newOrder=Array.prototype.slice.call(_drDragList.querySelectorAll('.tcard'))
+      .map(function(c){return c.getAttribute('data-oid');}).filter(Boolean);
+    var inMt={}; newOrder.forEach(function(x){inMt[x]=1;});
+    var rest=dTour.filter(function(x){return !inMt[x];});
+    dTour.length=0; newOrder.forEach(function(x){dTour.push(x);}); rest.forEach(function(x){dTour.push(x);});
+    try{ drPersistOrder(); }catch(_){}
+  }
+  _drDragCard=null; _drDragList=null; _drDragHandle=null;
+  try{ drTour(); }catch(_){}   // re-render to refresh the 1./2./3. numbers
+}
+
+// ── DRIVER TOUR: one-tap route optimize from the driver's GPS location ──
+// dir 'near' = nearest stop first · 'far' = farthest stop first (reverse route).
+function _drRoute(start, ids){
+  var withC=[], without=[];
+  ids.forEach(function(id){
+    var o=dAllOrders.find(function(x){return x.id===id;})||orders.find(function(x){return x.id===id;});
+    var c=orderLatLng(o);
+    if(c && geoSane(c.lat,c.lng)){ withC.push({lat:c.lat,lng:c.lng,id:id}); } else { without.push(id); }
+  });
+  var routed=[], used=new Array(withC.length).fill(false), last=start;
+  for(var k=0;k<withC.length;k++){
+    var bi=-1,bd=Infinity;
+    for(var j=0;j<withC.length;j++){ if(used[j])continue; var d=_routeD2(last,withC[j]); if(d<bd){bd=d;bi=j;} }
+    if(bi<0)break; used[bi]=true; routed.push(withC[bi].id); last=withC[bi];
+  }
+  return {routed:routed, without:without};
+}
+function drOptimizeRoute(dir){
+  var mt=dTour.filter(function(id){return dAllOrders.find(function(x){return x.id===id;});});
+  if(mt.length<2){ alert('Need at least 2 stops / ต้องมีอย่างน้อย 2 จุด'); return; }
+  if(!navigator.geolocation){ alert('GPS not available on this device / อุปกรณ์ไม่รองรับ GPS'); return; }
+  try{ showNotif('📍 Getting your location… / กำลังหาตำแหน่ง'); }catch(e){}
+  navigator.geolocation.getCurrentPosition(function(pos){
+    var start={lat:pos.coords.latitude, lng:pos.coords.longitude};
+    var r=_drRoute(start, mt);
+    if(r.routed.length<2){ alert('Not enough saved locations to optimize.\nOnly stops with a saved pin/coords can be sorted. / ตำแหน่งที่บันทึกไม่พอ'); return; }
+    var seq = (dir==='far') ? r.routed.slice().reverse().concat(r.without) : r.routed.concat(r.without);
+    var inMt={}; mt.forEach(function(x){inMt[x]=1;});
+    var rest=dTour.filter(function(x){return !inMt[x];});
+    dTour.length=0; seq.forEach(function(x){dTour.push(x);}); rest.forEach(function(x){dTour.push(x);});
+    try{ drTour(); }catch(e){}
+    try{ drPersistOrder(); }catch(e){}
+    try{ showNotif((dir==='far'?'🚩 Farthest first / ไกลสุดก่อน':'🧭 Nearest first / ใกล้สุดก่อน')+' · '+r.routed.length+' stops'+(r.without.length?' ('+r.without.length+' no pin)':'')); }catch(e){}
+  }, function(err){
+    alert('Could not get your location / เปิด GPS ไม่ได้: '+(err&&err.message||''));
+  }, {enableHighAccuracy:true, timeout:10000, maximumAge:60000});
 }
 var _deliveryId = null;
 var _deliveryPhoto = null;
@@ -10478,6 +10582,7 @@ function poCreate(){
   } else {
     data.id='po'+Date.now(); data.status='open'; data.createdBy=(typeof currentStaffName!=='undefined'?currentStaffName:'')||'Office'; data.createdAt=Date.now();
     preOrders.push(data);
+    try{ auditAdd({type:'preorder', action:'create', orderId:'📝 '+(data.customer||''), by:data.createdBy, detail:'Pre-order created · '+(data.zone||'')}); }catch(e){}
   }
   syncPreOrders();
   // Save the customer in the CRM from the start (phone-based).
@@ -10533,8 +10638,10 @@ function poRender(){
 }
 function poDelete(id){
   if(!confirm('Delete this pre-order permanently? / ลบถาวร?')) return;
+  var _p=preOrders.find(function(x){return x.id===id;});
   preOrders = preOrders.filter(function(x){return x.id!==id;});
   if(window.fbDB) window.fbDB.ref('preOrders/'+id).remove();
+  try{ var _by=((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||(typeof currentStaffName!=='undefined'&&currentStaffName)||'Office'; auditAdd({type:'preorder', action:'delete', orderId:'📝 '+((_p&&_p.customer)||id), by:_by, detail:'Pre-order deleted'}); }catch(e){}
   poRender();
 }
 function poCancel(id){
@@ -10572,6 +10679,7 @@ function poConvert(id){
   li.forEach(function(x){ if(['panel','lcorner','tedge','uedge','ttrim','utrim'].indexOf(x.type)>=0){ var st=stockItems.find(function(s){return s.code===x.code;}); if(st){ st.qty=Math.max(0,st.qty-(parseInt(x.qty)||0)); addLog(x.code+' -'+x.qty+' pcs (order '+no+')','-'); } } });
   // mark pre-order converted (kept for history)
   p.status='converted'; p.convertedId=no; p.convertedAt=Date.now();
+  try{ auditAdd({type:'preorder', action:'convert', orderId:'📝 '+(p.customer||''), by:createdBy, detail:'Pre-order → '+no}); }catch(e){}
   addLog('Pre-Order → '+no+' created','+');
   syncOrders(); syncWOrders(); syncStockItems(); syncPreOrders();
   try{ sheetsSyncToMaster(o); }catch(e){ console.error('Master sync failed (non-blocking):', e); }
@@ -15499,6 +15607,13 @@ function auditAdd(entry) {
 // Log a status change to the audit log (skips no-op changes). Used by every path that
 // mutates an order's status so the Audit Log is complete, not just the office buttons.
 function auditStatus(id, from, to, by){ if(!id || from===to) return; try{ auditAdd({type:'status',orderId:id,from:from,to:to,by:by||'—'}); }catch(e){} }
+// Log a tour-planning event (create/add/remove/move/end). `by` optional → current staff.
+function auditTour(action, label, detail, by){
+  try{
+    var who = by || ((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name || (typeof currentStaffName!=='undefined'&&currentStaffName) || 'Office';
+    auditAdd({type:'tour', action:action, orderId:label, detail:detail, by:who});
+  }catch(e){}
+}
 
 function auditFilt(type, btn) {
   _auditFilt = type;
@@ -15779,6 +15894,7 @@ function _auditRenderNow() {
     else if(_auditFilt === 'status') { if(!(e.type === 'status' || e.type === 'create' || e.type === 'edit')) return false; }
     else if(_auditFilt === 'payment') { if(e.type !== 'payment') return false; }
     else if(_auditFilt === 'delete') { if(e.type !== 'delete') return false; }
+    else if(_auditFilt === 'tour') { if(e.type !== 'tour') return false; }
     else if(_auditFilt === 'claim') { if(e.type !== 'claim') return false; }
     // Free-text search across order id + staff name (case-insensitive).
     if(_auditSearch) {
@@ -15792,9 +15908,9 @@ function _auditRenderNow() {
       + (_auditSearch ? 'No entries for "'+_esc(_auditSearch)+'" / ไม่พบ' : 'No entries yet') + '</div>';
     return;
   }
-  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', edit:'<i class="ti ti-pencil" style="color:var(--blue)"></i>', 'change-request':'<i class="ti ti-edit" style="color:var(--orange)"></i>', 'change-confirmed':'<i class="ti ti-check" style="color:var(--green)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>'};
-  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', edit:'var(--blue-l)', 'change-request':'var(--orange-l)', 'change-confirmed':'var(--green-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2'};
-  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', edit:'var(--blue-t)', 'change-request':'var(--orange-t)', 'change-confirmed':'var(--green-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b'};
+  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', edit:'<i class="ti ti-pencil" style="color:var(--blue)"></i>', tour:'<i class="ti ti-map-route" style="color:#7c3aed"></i>', preorder:'<i class="ti ti-bookmark" style="color:#0891b2"></i>', 'change-request':'<i class="ti ti-edit" style="color:var(--orange)"></i>', 'change-confirmed':'<i class="ti ti-check" style="color:var(--green)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>'};
+  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', edit:'var(--blue-l)', tour:'#f3e8ff', preorder:'#cffafe', 'change-request':'var(--orange-l)', 'change-confirmed':'var(--green-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2'};
+  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', edit:'var(--blue-t)', tour:'#7c3aed', preorder:'#0e7490', 'change-request':'var(--orange-t)', 'change-confirmed':'var(--green-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b'};
   list.innerHTML = filtered.map(function(e) {
     var icon = typeIcon[e.type] || '<i class="ti ti-info-circle"></i>';
     var bg = typeBg[e.type] || 'var(--bg2)';
@@ -15803,6 +15919,8 @@ function _auditRenderNow() {
     if(e.type === 'create') detail = 'New order created';
     else if(e.type === 'status') detail = (e.from||'?') + ' → ' + (e.to||'?');
     else if(e.type === 'edit') detail = 'Order edited';
+    else if(e.type === 'tour') detail = e.detail || 'Tour';
+    else if(e.type === 'preorder') detail = e.detail || 'Pre-order';
     else if(e.type === 'change-request') detail = '📝 Change requested' + (e.detail?': '+e.detail:'');
     else if(e.type === 'change-confirmed') detail = '✅ Change confirmed' + (e.detail?': '+e.detail:'');
     else if(e.type === 'payment') detail = 'Paid: ' + (e.method||'');
@@ -16603,7 +16721,7 @@ function billsRender(){
   function whenStr(b){ var t=''; if(b.ts){ var d=new Date(b.ts); t=' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); } return (b.date||'')+t; }
   listEl.innerHTML = filtered.map(function(b){
     var title=b.subcatLabel||b.cat||b.what||'—';
-    var sub=(b.what?_esc(b.what)+' · ':'')+whenStr(b)+(b.section?' · '+secLbl(b.section):'');
+    var sub=(b.what?_esc(b.what)+' · ':'')+whenStr(b)+(b.section?' · '+secLbl(b.section):'')+(b.by?' · 👤 '+_esc(b.by):'');
     return '<div class="card" style="padding:10px 12px;margin-bottom:8px">'
       +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
       +'<div style="flex:1;min-width:0">'
@@ -16616,6 +16734,22 @@ function billsRender(){
       +'<button type="button" onclick="billsDeletePin(\''+b.id+'\')" title="Delete (PIN)" style="margin-top:6px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer"><i class="ti ti-trash"></i></button>'
       +'</div></div></div>';
   }).join('');
+  // Deleted receipts of this month (from the audit log) → who deleted what, when.
+  try{
+    var _del=(typeof auditLog!=='undefined'?auditLog:[]).filter(function(e){
+      return e && e.type==='delete' && String(e.orderId||'').indexOf('Bill:')===0 && billsMKey(e.date)===selMon;
+    }).sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+    if(_del.length){
+      listEl.innerHTML += '<div style="font-size:11px;font-weight:700;color:var(--text2);margin:10px 0 4px">🗑️ Deleted this month / ลบเดือนนี้</div>'
+        + _del.map(function(e){
+            var lbl=String(e.orderId||'').replace(/^Bill:\s*/,'');
+            return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:6px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;opacity:.85">'
+              +'<span style="min-width:0;text-decoration:line-through;color:var(--text2)">'+_esc(lbl)+'</span>'
+              +'<span style="white-space:nowrap;color:var(--text2)">'+(e.date||'')+' '+(e.time||'')+(e.by?' · 👤 '+_esc(e.by):'')+'</span>'
+            +'</div>';
+          }).join('');
+    }
+  }catch(e){}
 }
 
 // Receipt entry (top of Bills tab): pick section → sub-category, amount, photo.
