@@ -197,6 +197,18 @@ textarea{resize:none}
 .drag-handle{touch-action:none;cursor:grab;font-size:19px;line-height:1;padding:5px 10px;border-radius:6px;background:var(--blue-l);color:var(--blue-t);user-select:none;-webkit-user-select:none}
 .drag-handle:active{cursor:grabbing}
 .tcard.dragging{opacity:.95;box-shadow:0 10px 26px rgba(0,0,0,.28);border:1.5px solid var(--blue);position:relative;z-index:5}
+/* Driver two-column route arranger (compact draggable cards). */
+#dr-arrange{display:flex;gap:8px;margin-bottom:14px}
+.arr-col{flex:1;min-width:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px;min-height:90px}
+.arr-col.arr-right{background:var(--blue-l);border-color:var(--blue)}
+.arr-col h4{font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.02em;margin:0 0 8px;text-align:center}
+.acard{background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);padding:7px 9px;margin-bottom:6px;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+.acard:active{cursor:grabbing}
+.acard.dragging{opacity:.97;box-shadow:0 8px 20px rgba(0,0,0,.26);border:1.5px solid var(--blue);position:relative;z-index:6}
+.acard.arr-unloaded{opacity:.82}
+.acard .aid{font-size:12px;font-weight:800;color:var(--text)}
+.acard .aaddr{font-size:12.5px;color:var(--text);line-height:1.3;margin-top:2px}
+.acard .aname{font-size:10px;color:var(--text2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .crow{display:flex;align-items:center;gap:8px;margin-bottom:3px}
 .clink{font-size:12px;color:var(--blue);text-decoration:none}
 .chklist{border-top:1px solid var(--border);background:var(--bg2)}
@@ -2326,12 +2338,9 @@ textarea{resize:none}
         <button type="button" onclick="drVerify()" style="background:var(--blue-l);color:var(--blue-t);border:none;border-radius:var(--rs);padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-list-check"></i> Verify / ตรวจสอบ</button>
       </div>
     </div>
-    <div style="display:flex;gap:6px;margin-bottom:10px">
-      <button type="button" onclick="drOptimizeRoute('near')" style="flex:1;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;border-radius:var(--rs);padding:9px;font-size:13px;font-weight:700;cursor:pointer">🧭 ใกล้สุดก่อน / Nearest first</button>
-      <button type="button" onclick="drOptimizeRoute('far')" style="flex:1;background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;border-radius:var(--rs);padding:9px;font-size:13px;font-weight:700;cursor:pointer">🚩 ไกลสุดก่อน / Farthest first</button>
-    </div>
-    <div style="font-size:11px;color:var(--text2);margin:-4px 0 10px">↕ ลากที่ ☰ เพื่อจัดลำดับ · ปุ่มด้านบนจัดเส้นทางอัตโนมัติจากตำแหน่งคุณ / Drag the ☰ handle to reorder; the buttons auto-route from your GPS.</div>
     <div id="dr-vres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-bottom:10px;font-size:13px"></div>
+    <div id="dr-arr-hint" style="display:none;font-size:11px;color:var(--text2);margin-bottom:6px">↔ ลากการ์ดจากซ้ายไปขวาเพื่อจัดลำดับส่ง / Drag cards left → right to set your delivery order.</div>
+    <div id="dr-arrange" style="display:none"></div>
     <div id="dr-tlist"></div>
     <div id="dr-donesec" style="display:none"><div class="donesep"><span>Done / เสร็จแล้ว</span></div><div id="dr-donelist"></div></div>
   </div></div>
@@ -2962,6 +2971,7 @@ var bills=[];
 var costFixed={};                     // Bills: {"YYYY-MM":[{id,label,amount}]} per-month fixed costs (manual, carried over)
 var costCats={utilities:[],other:[]}; // Bills: sub-category defs for utilities/other (office add/remove); amounts come from receipts
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
+let dArranged=[]; // driver route-arranger: ids placed in the RIGHT column (in order); persisted as tour.arranged
 let ofFilt_='all',ofSelDriver=null,ofSelOrders=[],currentDriverId=null;
 // A driver can have several planned tours at once. currentDriverTourId picks which
 // one the driver app is currently working on (switcher at the top of the screen).
@@ -9013,7 +9023,20 @@ function drLoadTourData(){
       }
     });
     dAllOrders.sort((a,b)=>reg(a.id).s-reg(b.id).s);
-  }
+    // Restore the saved route-arranger split (right column = tour.arranged) and put the
+    // placed stops first in dTour so the full delivery list matches the arranged order.
+    dArranged=(tour.arranged||[]).filter(function(id){return dTour.indexOf(id)>=0;});
+    var _rest=dTour.filter(function(id){return dArranged.indexOf(id)<0;});
+    dTour=dArranged.concat(_rest);
+  } else { dArranged=[]; }
+}
+// Persist the driver's two-column route arrangement (right = ordered delivery sequence).
+function drPersistArrange(){
+  var tour=drGetTour(); if(!tour) return;
+  var mt=dTour.filter(function(id){return dAllOrders.find(function(x){return x.id===id;});});
+  tour.orders=mt.concat(tour.orders.filter(function(x){return mt.indexOf(x)<0;}));
+  tour.arranged=dArranged.filter(function(id){return mt.indexOf(id)>=0;});
+  try{ syncTours(); }catch(e){}
 }
 // Tour switcher shown at the top of the driver screen when there is >1 tour.
 function drRenderTourSwitch(){
@@ -9183,6 +9206,23 @@ function drBackFree(){
 function drTour(){
   const myTour=dTour.filter(id=>dAllOrders.find(x=>x.id===id));
   document.getElementById('dr-t-cnt').textContent=myTour.length;
+  // Two-column route arranger: left = stops, right = ordered delivery sequence.
+  (function(){
+    var arrEl=document.getElementById('dr-arrange'), hintEl=document.getElementById('dr-arr-hint');
+    if(!arrEl) return;
+    if(myTour.length<2){ arrEl.style.display='none'; arrEl.innerHTML=''; if(hintEl) hintEl.style.display='none'; return; }
+    var rightIds=dArranged.filter(function(id){return myTour.indexOf(id)>=0;});
+    var leftIds=myTour.filter(function(id){return rightIds.indexOf(id)<0;});
+    var col=function(side,label,ids,numbered){
+      return '<div class="arr-col arr-'+side+'" id="dr-arr-'+side+'"><h4>'+label+'</h4>'+
+        (ids.length?ids.map(function(id,i){var o=dAllOrders.find(function(x){return x.id===id;});return o?drArrCard(o, numbered?(i+1):null):'';}).join('')
+                   :'<div style="font-size:11px;color:var(--text2);text-align:center;padding:14px 4px">'+(side==='right'?'ลากมาที่นี่ / Drag here':'—')+'</div>')+
+      '</div>';
+    };
+    arrEl.style.display='flex';
+    if(hintEl) hintEl.style.display='';
+    arrEl.innerHTML = col('left','📋 จุดส่ง / Stops ('+leftIds.length+')',leftIds,false) + col('right','🚚 ลำดับส่ง / Route ('+rightIds.length+')',rightIds,true);
+  })();
   if(myTour.length===0){
     document.getElementById('dr-tlist').innerHTML='<div class="empty"><i class="ti ti-route" style="font-size:40px;display:block;margin-bottom:8px"></i>No orders in tour yet / ยังไม่มีออเดอร์<br>Load from Ready tab first</div>';
   } else {
@@ -9197,9 +9237,9 @@ function drTour(){
       const _navUrl=orderNavUrl(o);
       const murl=_locUrl||('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(o.address));
       const ck=(f,v)=>'<div class="chkrow" onclick="drChkBtn(this)" data-id="'+id+'" data-field="'+f+'"><div class="chkbox '+(v?'on':'')+'">'+( v?'<i class="ti ti-check" style="font-size:12px;color:var(--green)"></i>':''  )+'</div>';
-      return '<div class="tcard" data-oid="'+id+'"'+(loaded?'':' style="opacity:0.45"')+'>'+
+      return '<div class="tcard" data-oid="'+id+'"'+(loaded?'':' style="opacity:0.72"')+'>'+
         '<div class="ttop">'+
-        '<div class="thdr"><span class="tnum">'+(idx+1)+'. '+o.id+(_locUrl?' <a href="'+_locUrl+'" target="_blank" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(loaded?'':(isPacking?' <span style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap">📦 กำลังแพ็ค / Packing</span>':' <span style="font-size:10px;font-weight:700;color:#6b7280;background:rgba(0,0,0,0.06);border-radius:8px;padding:1px 6px;white-space:nowrap">⬜ ยังไม่ขึ้นรถ</span>'))+'</span> '+kpcOrderBubble(o.id)+'<div class="mvbtns"><span class="drag-handle" onpointerdown="drDragStart(event,this)" title="Drag to reorder / ลากเพื่อจัดลำดับ">☰</span><button type="button" class="mvbtn" onclick="drUp('+idx+')" '+(idx===0?'disabled':'')+'>↑</button><button type="button" class="mvbtn" onclick="drDn('+idx+')" '+(idx===myTour.length-1?'disabled':'')+'>↓</button></div></div>'+
+        '<div class="thdr"><span class="tnum">'+(idx+1)+'. '+o.id+(_locUrl?' <a href="'+_locUrl+'" target="_blank" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(loaded?'':(isPacking?' <span style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap">📦 กำลังแพ็ค / Packing</span>':' <span style="font-size:10px;font-weight:700;color:#6b7280;background:rgba(0,0,0,0.06);border-radius:8px;padding:1px 6px;white-space:nowrap">⬜ ยังไม่ขึ้นรถ</span>'))+'</span> '+kpcOrderBubble(o.id)+'</div>'+
         '<div style="font-size:13px;margin-bottom:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' &middot; '+o.lcorner:'')+(o.clips&&o.clips>0?' &middot; 📎 '+o.clips+' clips':'')+(o.ctn?' &middot; <span style="color:var(--green);font-weight:700">📦 '+o.ctn+' CTN</span>':'')+(o.bundle?' &middot; <span style="color:#ea580c;font-weight:700">🧶 '+o.bundle+' มัด</span>':'')+'</div>'+
         '<div class="crow"><i class="ti ti-user" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.customer+'</span></div>'+
         '<div class="crow"><i class="ti ti-phone" style="font-size:13px;color:var(--text2)"></i><span>'+phoneLinks(o.phone,'var(--blue)')+'</span></div>'+
@@ -9356,6 +9396,68 @@ function drDragEnd(e){
   }
   _drDragCard=null; _drDragList=null; _drDragHandle=null;
   try{ drTour(); }catch(_){}   // re-render to refresh the 1./2./3. numbers
+}
+
+// ── DRIVER TOUR: two-column compact route arranger (drag left↔right) ──
+// Compact card: order-id + ADDRESS (primary, more important than name) + small name.
+function drArrCard(o, pos){
+  var liveO=orders.find(function(x){return x.id===o.id;});
+  var isPacking=liveO&&(liveO.status==='new'||liveO.status==='packing');
+  var dot = isPacking?'📦':(dStatus[o.id]==='loaded'?'✅':'⬜');
+  var addr=(o.address&&o.address!=='—')?o.address:'—';
+  return '<div class="acard'+(dStatus[o.id]==='loaded'?'':' arr-unloaded')+'" data-oid="'+o.id+'" onpointerdown="drArrDragStart(event,this)">'+
+    '<div class="aid">'+(pos!=null?pos+'. ':'')+dot+' '+o.id+'</div>'+
+    '<div class="aaddr">'+addr+'</div>'+
+    (o.customer?'<div class="aname">'+o.customer+'</div>':'')+
+  '</div>';
+}
+var _arrCard=null;
+function drArrDragStart(e, card){
+  if(e.button!=null && e.button>0) return;
+  _arrCard=card; card.classList.add('dragging');
+  e.preventDefault();
+  try{ card.setPointerCapture(e.pointerId); card._kpPid=e.pointerId; }catch(_){}
+  card.addEventListener('pointermove', drArrDragMove);
+  card.addEventListener('pointerup', drArrDragEnd);
+  card.addEventListener('pointercancel', drArrDragEnd);
+}
+function _drArrAfter(col, y){
+  var els=Array.prototype.slice.call(col.querySelectorAll('.acard:not(.dragging)'));
+  var best=null, bo=-Infinity;
+  els.forEach(function(ch){ var b=ch.getBoundingClientRect(); var off=y-(b.top+b.height/2); if(off<0 && off>bo){ bo=off; best=ch; } });
+  return best;
+}
+function drArrDragMove(e){
+  if(!_arrCard) return; e.preventDefault();
+  var leftCol=document.getElementById('dr-arr-left'), rightCol=document.getElementById('dr-arr-right');
+  if(!leftCol||!rightCol) return;
+  var lr=leftCol.getBoundingClientRect(), rr=rightCol.getBoundingClientRect();
+  var col = (e.clientX >= (lr.right+rr.left)/2) ? rightCol : leftCol;
+  var after=_drArrAfter(col, e.clientY);
+  if(after==null){ if(_arrCard.parentElement!==col || _arrCard!==col.lastElementChild) col.appendChild(_arrCard); }
+  else if(after!==_arrCard.nextSibling) col.insertBefore(_arrCard, after);
+}
+function drArrDragEnd(e){
+  var card=_arrCard;
+  if(card){
+    try{ card.releasePointerCapture(card._kpPid); }catch(_){}
+    card.removeEventListener('pointermove', drArrDragMove);
+    card.removeEventListener('pointerup', drArrDragEnd);
+    card.removeEventListener('pointercancel', drArrDragEnd);
+    card.classList.remove('dragging');
+  }
+  var leftCol=document.getElementById('dr-arr-left'), rightCol=document.getElementById('dr-arr-right');
+  if(leftCol&&rightCol){
+    var pick=function(col){ return Array.prototype.slice.call(col.querySelectorAll('.acard')).map(function(c){return c.getAttribute('data-oid');}).filter(Boolean); };
+    var rightIds=pick(rightCol), leftIds=pick(leftCol);
+    dArranged=rightIds.slice();
+    var visible=rightIds.concat(leftIds);
+    var rest=dTour.filter(function(x){return visible.indexOf(x)<0;});
+    dTour=visible.concat(rest);
+    try{ drPersistArrange(); }catch(_){}
+  }
+  _arrCard=null;
+  try{ drTour(); }catch(_){}
 }
 
 // ── DRIVER TOUR: one-tap route optimize from the driver's GPS location ──
