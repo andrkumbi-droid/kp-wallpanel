@@ -16453,6 +16453,22 @@ function _catTotal(section,catId,mk){ return bills.reduce(function(a,b){ return 
 // Shipper cost section (Bills): collapse state per shipper + toggle by index.
 var _billShipOpen={};
 function billShipToggle(idx){ var keys=window._billShipKeys||[]; var k=keys[idx]; if(k==null) return; _billShipOpen[k]=!_billShipOpen[k]; costsRender(); }
+// Bucket a payroll person into Driver / Warehouse / Lalamove / Other for the Bills split.
+// Lalamove (a carrier logged as a payroll line) is always its own group, regardless of role.
+function _billStaffGroup(who, name){
+  if(/lalamove/i.test(name||'')) return 'Lalamove';
+  if(who && who.indexOf('driver:')===0) return 'Driver';
+  var role='';
+  if(who && who.indexOf('staff:')===0){
+    var id=who.slice(6);
+    var s=(staffList||[]).find(function(x){return x.id===id;});
+    role=(s&&s.role)||'';
+  }
+  role=role.toLowerCase();
+  if(/driver/.test(role)) return 'Driver';
+  if(/warehouse/.test(role)) return 'Warehouse';
+  return 'Other';
+}
 function costsRender(){
   var el=document.getElementById('bills-costs'); if(!el) return;
   var mk=_costMonthKey();
@@ -16528,20 +16544,26 @@ function costsRender(){
   });
   html+='</div>';
 
-  // 4) Staff — net per person from the payroll log (payLog) for this month
+  // 4) Staff — net per person from the payroll log (payLog) for this month, SPLIT into
+  //    Driver / Warehouse / Lalamove (separate) / Other so each cost type is visible.
   var _perP={};
   (typeof payLog!=='undefined'?payLog:[]).forEach(function(e){
     if(billsMKey(e.date)!==mk) return;
     var amt=(typeof payCatMeta==='function'?payCatMeta(e.cat).sign:1)*(parseFloat(e.amount)||0);
-    if(!_perP[e.who]) _perP[e.who]={name:e.whoName||e.who, net:0};
+    if(!_perP[e.who]) _perP[e.who]={who:e.who, name:e.whoName||e.who, net:0};
     _perP[e.who].net+=amt;
   });
-  var _pKeys=Object.keys(_perP); var staffTot=0; _pKeys.forEach(function(k){ staffTot+=_perP[k].net; }); grand+=staffTot;
-  html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">👤 Staff / พนักงาน</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+staffTot.toLocaleString()+' ฿</span></div>';
-  if(_pKeys.length===0){ html+='<div style="font-size:11px;color:var(--text2)">No payroll this month / ยังไม่มีเงินเดือน</div>'; }
-  _pKeys.forEach(function(k){ var p=_perP[k]; html+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 9px;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px"><span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(p.name)+'</span><span style="font-weight:700">'+p.net.toLocaleString()+' ฿</span></div>'; });
-  html+='</div>';
+  var _sg={Driver:{tot:0,rows:[]},Warehouse:{tot:0,rows:[]},Lalamove:{tot:0,rows:[]},Other:{tot:0,rows:[]}};
+  Object.keys(_perP).forEach(function(k){ var p=_perP[k]; var g=_billStaffGroup(p.who,p.name); _sg[g].tot+=p.net; _sg[g].rows.push(p); });
+  Object.keys(_sg).forEach(function(g){ _sg[g].rows.sort(function(a,b){return b.net-a.net;}); grand+=_sg[g].tot; });
+  [['Driver','🚗 Driver / คนขับ',true],['Warehouse','🏭 Warehouse / คลัง',true],['Lalamove','🛺 Lalamove',true],['Other','👤 Other / อื่นๆ',false]].forEach(function(p){
+    var g=_sg[p[0]]; if(!p[2] && g.rows.length===0) return;   // Other only shows when it has entries
+    html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">'+p[1]+'</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+g.tot.toLocaleString()+' ฿</span></div>';
+    if(g.rows.length===0){ html+='<div style="font-size:11px;color:var(--text2)">—</div>'; }
+    g.rows.forEach(function(r){ html+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 9px;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px"><span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(r.name)+'</span><span style="font-weight:700">'+r.net.toLocaleString()+' ฿</span></div>'; });
+    html+='</div>';
+  });
 
   html+='<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);font-weight:800"><span style="font-size:13px">Total monthly / รวมต่อเดือน</span><span style="font-size:15px;color:var(--blue)">'+grand.toLocaleString()+' ฿</span></div>';
   el.innerHTML=html;
