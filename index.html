@@ -16450,6 +16450,9 @@ function catRemove(section,id){ var c=(costCats[section]||[]).find(function(x){r
 // Sum of receipts (bills tagged with section+subcatId) for a category in a month.
 function _catTotal(section,catId,mk){ return bills.reduce(function(a,b){ return (b.section===section&&b.subcatId===catId&&billsMKey(b.date)===mk)?a+(parseFloat(b.amount)||0):a; },0); }
 
+// Shipper cost section (Bills): collapse state per shipper + toggle by index.
+var _billShipOpen={};
+function billShipToggle(idx){ var keys=window._billShipKeys||[]; var k=keys[idx]; if(k==null) return; _billShipOpen[k]=!_billShipOpen[k]; costsRender(); }
 function costsRender(){
   var el=document.getElementById('bills-costs'); if(!el) return;
   var mk=_costMonthKey();
@@ -16490,6 +16493,40 @@ function costsRender(){
     });
     html+='<button type="button" onclick="catAdd(\''+section+'\')" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add category / เพิ่มหมวด</button></div>';
   });
+
+  // 3.5) Shipper — carrier shipping costs (o.shipCost) grouped by shipper, this month.
+  // Two-level accordion: shipper → total, expand → the matching orders with amount + info.
+  var _shipGroups={}, shipTot=0;
+  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
+    var amt=parseFloat(o.shipCost)||0; if(amt<=0) return;
+    if(billsMKey(o.shipCostDate||o.date)!==mk) return;
+    var sh=o.shipper||'— ไม่ระบุ / unset —';
+    if(!_shipGroups[sh]) _shipGroups[sh]={tot:0,orders:[]};
+    _shipGroups[sh].tot+=amt; _shipGroups[sh].orders.push(o);
+  });
+  var _shKeys=Object.keys(_shipGroups).sort(function(a,b){return _shipGroups[b].tot-_shipGroups[a].tot;});
+  window._billShipKeys=_shKeys;
+  _shKeys.forEach(function(k){ shipTot+=_shipGroups[k].tot; }); grand+=shipTot;
+  html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">🚚 Shipper / ค่าส่ง</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+shipTot.toLocaleString()+' ฿</span></div>';
+  if(_shKeys.length===0){ html+='<div style="font-size:11px;color:var(--text2)">No shipping costs this month / ยังไม่มีค่าส่งเดือนนี้</div>'; }
+  _shKeys.forEach(function(k,idx){
+    var g=_shipGroups[k], open=!!_billShipOpen[k];
+    html+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
+      '<div onclick="billShipToggle('+idx+')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 9px;cursor:pointer">'+
+        '<span style="min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(k)+' <span style="color:var(--text2);font-size:11px;font-weight:400">('+g.orders.length+')</span></span>'+
+        '<span style="font-size:13px;font-weight:800;white-space:nowrap">'+g.tot.toLocaleString()+' ฿</span>'+
+      '</div>'+
+      (open ? '<div style="padding:0 9px 8px">'+g.orders.map(function(o){
+        var amt=parseFloat(o.shipCost)||0;
+        return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:5px 8px;background:var(--bg2);border-radius:var(--rs);margin-top:5px">'+
+          '<span style="min-width:0;flex:1"><b>'+_esc(o.id)+'</b> <span style="color:var(--text2)">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</span>'+(o.shipCostDate?'<span style="color:var(--text2)"> · '+fmtD(o.shipCostDate)+'</span>':'')+'</span>'+
+          '<span style="font-weight:700;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'+
+        '</div>';
+      }).join('')+'</div>' : '')+
+    '</div>';
+  });
+  html+='</div>';
 
   // 4) Staff — net per person from the payroll log (payLog) for this month
   var _perP={};
