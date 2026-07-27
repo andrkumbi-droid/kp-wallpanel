@@ -5,7 +5,15 @@ Google hat das per Mail gemeldet: *„Jeder Nutzer kann Ihre gesamte Datenbank l
 Die `databaseURL` steht im Klartext in der öffentlich gehosteten `index.html` — es reichte
 also der Aufruf einer URL, um Orders, Kunden, Payroll und Staff-PINs zu lesen oder zu löschen.
 
-## Stufe 1 (dieser Commit): Zugriff nur noch mit Auth
+## Stufe 1 — **aktiv seit 2026-07-27**
+
+Nachgemessen direkt nach dem Veröffentlichen: unauthentifizierter Zugriff auf
+`/v2`, `/v2/orders`, `/v2/staffList`, `/v2/payroll` sowie ein Schreibversuch
+liefern **HTTP 401**; `/pub/soldOut` + `/pub/webCatalog` weiterhin **200**;
+Live-App liest angemeldet durch. App, TV-Display, Master-Sheet, LINE-Bot,
+Landingpage und Order Builder vom Benutzer gegengetestet — alles läuft.
+
+### Zugriff nur noch mit Auth
 
 **Regeln:** [`firebase-rules.json`](firebase-rules.json) — alles braucht `auth != null`,
 Ausnahme `pub/` (öffentlich lesbar, weil die Landingpage `pub/soldOut` + `pub/webCatalog`
