@@ -40,6 +40,15 @@ var KP_SUM_HEADERS = [
 // Firebase season root (bump to v3/... when a new season starts).
 var KP_FB = 'https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app/v2/';
 
+// The DB rules require auth. Apps Script authenticates with the legacy database
+// secret, stored in Script Properties (key: FIREBASE_SECRET) — never hardcoded.
+function kpFbAuth_() {
+  try {
+    var s = PropertiesService.getScriptProperties().getProperty('FIREBASE_SECRET');
+    return s ? ('?auth=' + encodeURIComponent(s)) : '';
+  } catch (e) { return ''; }
+}
+
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('KP')
     .addItem('Build / Update master', 'kpBuildMaster')
@@ -47,10 +56,10 @@ function onOpen() {
     .addToUi();
 }
 
-// Pull a node from the Firebase REST API (open read rules). Returns object or {}.
+// Pull a node from the Firebase REST API (authenticated). Returns object or {}.
 function kpFetchFb_(node) {
   try {
-    var res = UrlFetchApp.fetch(KP_FB + node + '.json', { muteHttpExceptions: true });
+    var res = UrlFetchApp.fetch(KP_FB + node + '.json' + kpFbAuth_(), { muteHttpExceptions: true });
     if (res.getResponseCode() !== 200) return {};
     return JSON.parse(res.getContentText()) || {};
   } catch (e) { return {}; }

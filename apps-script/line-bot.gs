@@ -7,7 +7,9 @@
 // ── CONFIG ─────────────────────────────────────────────────
 var LINE_TOKEN   = 'PUT_LINE_CHANNEL_ACCESS_TOKEN';
 var FIREBASE_URL = 'https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app';
-var FIREBASE_SECRET = '';
+// DB rules require auth — put the legacy database secret in Script Properties
+// (key: FIREBASE_SECRET), never in this file.
+var FIREBASE_SECRET = (function(){ try { return PropertiesService.getScriptProperties().getProperty('FIREBASE_SECRET') || ''; } catch(e){ return ''; } })();
 var ANTHROPIC_API_KEY = '';
 var MODEL = 'claude-3-5-haiku-latest';
 var TZ = 'Asia/Bangkok';

@@ -17,7 +17,9 @@ var OPENAI_API_KEY    = '';        // optional alternative provider
 var PROVIDER = 'claude';           // 'claude' | 'openai' — see PROVIDERS below
 var MODELS = { claude: 'claude-sonnet-5', openai: 'gpt-4o' };
 var FIREBASE_URL = 'https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app';
-var FIREBASE_SECRET = '';
+// DB rules require auth — put the legacy database secret in Script Properties
+// (key: FIREBASE_SECRET), never in this file.
+var FIREBASE_SECRET = (function(){ try { return PropertiesService.getScriptProperties().getProperty('FIREBASE_SECRET') || ''; } catch(e){ return ''; } })();
 var SHARED_TOKEN = 'kp-meta-CHANGE-ME';   // extension must send this in every request
 var TZ = 'Asia/Bangkok';
 

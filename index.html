@@ -503,6 +503,7 @@ textarea{resize:none}
 
   <!-- Firebase Compat (global scope) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
@@ -523,6 +524,21 @@ textarea{resize:none}
     };
 
     const app = firebase.initializeApp(firebaseConfig);
+
+    // ── ANONYMOUS AUTH (required by the security rules) ──────────
+    // The DB rules are no longer wide open: every read/write needs `auth != null`.
+    // Every client therefore signs in anonymously first — no UI change, the
+    // staff PIN login stays exactly as it is. NOTHING may touch the DB before
+    // this promise resolves: a listener attached pre-auth gets PERMISSION_DENIED
+    // and the SDK does NOT retry it once auth arrives.
+    const fbAuthReady = firebase.auth().signInAnonymously()
+      .then(function(){ return true; })
+      .catch(function(e){
+        console.error('[FB] anonymous sign-in failed — DB access will be denied:', e && e.code, e && e.message);
+        return false;
+      });
+    window.fbAuthReady = fbAuthReady;
+
     // ── SEASON ROOT ─────────────────────────────────────────────
     // New billing month / new master sheet = fresh data under 'v2/'.
     // Every db.ref('x') / fbDB.ref('x') below is auto-scoped to v2/x, so
@@ -854,11 +870,13 @@ textarea{resize:none}
       });
     }
 
-    // Defer until app JS is loaded
+    // Defer until app JS is loaded AND anonymous auth has completed — listeners
+    // attached before the auth token exists are rejected for good (see fbAuthReady).
+    function startWhenReady(){ fbAuthReady.then(function(){ setTimeout(startListeners, 200); }); }
     if(document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', function(){ setTimeout(startListeners, 200); });
+      document.addEventListener('DOMContentLoaded', startWhenReady);
     } else {
-      setTimeout(startListeners, 200);
+      startWhenReady();
     }
   })();
   </script>
