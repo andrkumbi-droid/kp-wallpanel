@@ -197,14 +197,14 @@ textarea{resize:none}
 .drag-handle{touch-action:none;cursor:grab;font-size:19px;line-height:1;padding:5px 10px;border-radius:6px;background:var(--blue-l);color:var(--blue-t);user-select:none;-webkit-user-select:none}
 .drag-handle:active{cursor:grabbing}
 .tcard.dragging{opacity:.95;box-shadow:0 10px 26px rgba(0,0,0,.28);border:1.5px solid var(--blue);position:relative;z-index:5}
-/* Driver two-column route arranger (compact draggable cards). */
-#dr-arrange{display:flex;gap:8px;margin-bottom:14px}
+/* Driver two-column route arranger (tap a card to move it between columns). */
+#dr-arrange{margin-bottom:14px}
+.arr-cols{display:flex;gap:8px;margin-bottom:8px}
 .arr-col{flex:1;min-width:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px;min-height:90px}
 .arr-col.arr-right{background:var(--blue-l);border-color:var(--blue)}
 .arr-col h4{font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.02em;margin:0 0 8px;text-align:center}
-.acard{background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);padding:7px 9px;margin-bottom:6px;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
-.acard:active{cursor:grabbing}
-.acard.dragging{opacity:.97;box-shadow:0 8px 20px rgba(0,0,0,.26);border:1.5px solid var(--blue);position:relative;z-index:6}
+.acard{background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);padding:7px 9px;margin-bottom:6px;cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;transition:transform .05s}
+.acard:active{transform:scale(.97)}
 .acard.arr-unloaded{opacity:.82}
 .acard .aid{font-size:12px;font-weight:800;color:var(--text)}
 .acard .aaddr{font-size:12.5px;color:var(--text);line-height:1.3;margin-top:2px}
@@ -2339,7 +2339,7 @@ textarea{resize:none}
       </div>
     </div>
     <div id="dr-vres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-bottom:10px;font-size:13px"></div>
-    <div id="dr-arr-hint" style="display:none;font-size:11px;color:var(--text2);margin-bottom:6px">↔ ลากการ์ดจากซ้ายไปขวาเพื่อจัดลำดับส่ง / Drag cards left → right to set your delivery order.</div>
+    <div id="dr-arr-hint" style="display:none;font-size:11px;color:var(--text2);margin-bottom:6px">👉 แตะออเดอร์ทางซ้ายตามลำดับที่จะส่ง (แตะทางขวาเพื่อเอาออก) แล้วกดออกรถ / Tap stops on the left in delivery order (tap right to remove), then Depart.</div>
     <div id="dr-arrange" style="display:none"></div>
     <div id="dr-tlist"></div>
     <div id="dr-donesec" style="display:none"><div class="donesep"><span>Done / เสร็จแล้ว</span></div><div id="dr-donelist"></div></div>
@@ -9206,22 +9206,28 @@ function drBackFree(){
 function drTour(){
   const myTour=dTour.filter(id=>dAllOrders.find(x=>x.id===id));
   document.getElementById('dr-t-cnt').textContent=myTour.length;
-  // Two-column route arranger: left = stops, right = ordered delivery sequence.
+  // Two-column route arranger: tap a stop on the left → it joins the route on the right (in
+  // tap order). Hidden once the driver has departed (tour.driving) → only full cards remain.
   (function(){
     var arrEl=document.getElementById('dr-arrange'), hintEl=document.getElementById('dr-arr-hint');
     if(!arrEl) return;
-    if(myTour.length<2){ arrEl.style.display='none'; arrEl.innerHTML=''; if(hintEl) hintEl.style.display='none'; return; }
+    var tour=drGetTour();
+    if(myTour.length<2 || (tour && tour.driving)){ arrEl.style.display='none'; arrEl.innerHTML=''; if(hintEl) hintEl.style.display='none'; return; }
     var rightIds=dArranged.filter(function(id){return myTour.indexOf(id)>=0;});
     var leftIds=myTour.filter(function(id){return rightIds.indexOf(id)<0;});
     var col=function(side,label,ids,numbered){
       return '<div class="arr-col arr-'+side+'" id="dr-arr-'+side+'"><h4>'+label+'</h4>'+
         (ids.length?ids.map(function(id,i){var o=dAllOrders.find(function(x){return x.id===id;});return o?drArrCard(o, numbered?(i+1):null):'';}).join('')
-                   :'<div style="font-size:11px;color:var(--text2);text-align:center;padding:14px 4px">'+(side==='right'?'ลากมาที่นี่ / Drag here':'—')+'</div>')+
+                   :'<div style="font-size:11px;color:var(--text2);text-align:center;padding:14px 4px">'+(side==='right'?'แตะทางซ้าย / tap left':'—')+'</div>')+
       '</div>';
     };
-    arrEl.style.display='flex';
+    arrEl.style.display='block';
     if(hintEl) hintEl.style.display='';
-    arrEl.innerHTML = col('left','📋 จุดส่ง / Stops ('+leftIds.length+')',leftIds,false) + col('right','🚚 ลำดับส่ง / Route ('+rightIds.length+')',rightIds,true);
+    arrEl.innerHTML = '<div class="arr-cols">'
+        + col('left','📋 จุดส่ง / Stops ('+leftIds.length+')',leftIds,false)
+        + col('right','🚚 ลำดับส่ง / Route ('+rightIds.length+')',rightIds,true)
+      + '</div>'
+      + '<button type="button" onclick="drArrDepart()" style="width:100%;padding:12px;border:none;border-radius:var(--rs);font-weight:800;font-size:15px;cursor:pointer;'+(rightIds.length?'background:var(--green,#059669);color:#fff':'background:var(--bg2);color:var(--text2)')+'"><i class="ti ti-truck"></i> 🚀 ออกรถ / Depart'+(rightIds.length?' ('+rightIds.length+')':'')+'</button>';
   })();
   if(myTour.length===0){
     document.getElementById('dr-tlist').innerHTML='<div class="empty"><i class="ti ti-route" style="font-size:40px;display:block;margin-bottom:8px"></i>No orders in tour yet / ยังไม่มีออเดอร์<br>Load from Ready tab first</div>';
@@ -9405,11 +9411,48 @@ function drArrCard(o, pos){
   var isPacking=liveO&&(liveO.status==='new'||liveO.status==='packing');
   var dot = isPacking?'📦':(dStatus[o.id]==='loaded'?'✅':'⬜');
   var addr=(o.address&&o.address!=='—')?o.address:'—';
-  return '<div class="acard'+(dStatus[o.id]==='loaded'?'':' arr-unloaded')+'" data-oid="'+o.id+'" onpointerdown="drArrDragStart(event,this)">'+
-    '<div class="aid">'+(pos!=null?pos+'. ':'')+dot+' '+o.id+'</div>'+
+  var inRight = pos!=null;   // right column card → tap removes it
+  var cue = inRight ? '<span style="float:right;color:#dc2626;font-weight:800;font-size:13px">✕</span>'
+                    : '<span style="float:right;color:var(--blue);font-weight:800;font-size:14px">＋</span>';
+  return '<div class="acard'+(dStatus[o.id]==='loaded'?'':' arr-unloaded')+'" data-oid="'+o.id+'" onclick="drArrTap(\''+o.id+'\')">'+
+    '<div class="aid">'+cue+(pos!=null?pos+'. ':'')+dot+' '+o.id+'</div>'+
     '<div class="aaddr">'+addr+'</div>'+
     (o.customer?'<div class="aname">'+o.customer+'</div>':'')+
   '</div>';
+}
+// Tap handling: left card → append to the route (right, in tap order); right card → remove.
+function drArrTap(id){
+  var i=dArranged.indexOf(id);
+  if(i>=0) dArranged.splice(i,1); else dArranged.push(id);
+  var mt=dTour.filter(function(x){return dAllOrders.find(function(y){return y.id===x;});});
+  var right=dArranged.filter(function(x){return mt.indexOf(x)>=0;});
+  var left=mt.filter(function(x){return right.indexOf(x)<0;});
+  var visible=right.concat(left);
+  var rest=dTour.filter(function(x){return visible.indexOf(x)<0;});
+  dArranged=right; dTour=visible.concat(rest);
+  try{ drPersistArrange(); }catch(e){}
+  drTour();
+}
+// Depart from the arranger: everything arranged (right, ready) goes on the truck, then the
+// tour is marked driving → the two arranger columns disappear, only the full cards remain.
+function drArrDepart(){
+  var tour=drGetTour(); if(!tour) return;
+  var mt=dTour.filter(function(id){return dAllOrders.find(function(x){return x.id===id;});});
+  var arranged=dArranged.filter(function(id){return mt.indexOf(id)>=0;});
+  if(arranged.length===0){ alert('แตะออเดอร์ทางซ้ายเพื่อจัดลำดับก่อน / Tap orders on the left to build your route first'); return; }
+  if(!confirm('ออกรถเลย? / Depart now?')) return;
+  arranged.forEach(function(id){
+    var o=orders.find(function(x){return x.id===id;});
+    if(o && o.status==='ready'){ o.status='loaded'; dStatus[id]='loaded'; tour.status=tour.status||{}; tour.status[id]='loaded'; try{ addStatusLog(o,'loaded','Driver'); auditStatus(id,'ready','loaded','Driver'); }catch(e){} }
+  });
+  tour.driving=true;
+  var now=new Date();
+  tour.departedAt=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  if(!tour.departedDate) tour.departedDate=now.toISOString().slice(0,10);
+  try{ drPersistArrange(); }catch(e){}
+  try{ syncOrders(); }catch(e){}
+  try{ syncTours(); }catch(e){}
+  try{ drTour(); drRenderStatusBar(); ofRenderOrders(); }catch(e){}
 }
 var _arrCard=null;
 function drArrDragStart(e, card){
