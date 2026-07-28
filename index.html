@@ -1743,7 +1743,7 @@ textarea{resize:none}
           </div>
         </div>
         <div onclick="openRevDetail('year')" style="background:#7b1fa2;border-radius:var(--r);padding:14px 16px;cursor:pointer;color:#fff;text-align:center">
-          <div style="font-size:11px;opacity:0.8;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em">Year / ปีนี้ <span style="text-transform:none;opacity:0.95;font-weight:700">· since Jun 2026</span></div>
+          <div style="font-size:11px;opacity:0.8;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em">Year / ปีนี้ <span id="of-rev-year-since" style="text-transform:none;opacity:0.95;font-weight:700"></span></div>
           <div style="font-size:22px;font-weight:800;line-height:1" id="of-rev-year">0</div>
           <div style="font-size:11px;opacity:0.8;margin-top:4px">฿</div>
           <div style="font-size:10px;opacity:0.65;margin-top:2px">✓ Paid / จ่ายแล้ว <span class="rev-year-all">0</span> ฿</div>
@@ -4755,6 +4755,14 @@ function ofRenderRevenue() {
   if(el('of-rev-month-cnt')) el('of-rev-month-cnt').textContent = monthAllO.length + ' orders';
   if(el('of-rev-year')) el('of-rev-year').textContent = yearAll.toLocaleString();
   if(el('of-rev-year-cnt')) el('of-rev-year-cnt').textContent = yearAllO.length + ' orders';
+  // "since <first month with data>" — derived, so it stays right every year.
+  if(el('of-rev-year-since')){
+    var _fst='';
+    yearAllO.forEach(function(o){ if(o.date && (!_fst || o.date < _fst)) _fst=o.date; });
+    el('of-rev-year-since').textContent = _fst
+      ? '· since '+_mn[parseInt(_fst.slice(5,7),10)-1]+' '+_fst.slice(0,4)
+      : '· '+yearStr;
+  }
 }
 
 function ofRenderSales() {
@@ -7364,7 +7372,7 @@ function ofLalaHistoryHTML(){
   var arr=(key && tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).map(function(k){var r=tourHistory[key][k]||{}; r._k=k; return r;}) : [];
   if(!arr.length) return '';
   arr.sort(function(a,b){return (b.ts||0)-(a.ts||0);});
-  var rows=arr.map(function(t){
+  var renderRow=function(t){
     var bid='lalah_'+t._k;
     var dateStr=t.endedDate?fmtD(t.endedDate):(t.departedDate?fmtD(t.departedDate):'');
     var infoBits=[];
@@ -7385,8 +7393,32 @@ function ofLalaHistoryHTML(){
       +'</div>'
       +'<div id="'+bid+'" style="display:none;padding:0 11px 9px">'+infoHTML+photoHTML+slipHTML+ordersHTML+'</div>'
       +'</div>';
+  };
+  // Same month split as the Drivers tab: running month flat, finished months in
+  // their own dropdown — so the History count restarts at 0 on the 1st.
+  var curMK=kpNowMK();
+  var cur=[], past={};
+  arr.forEach(function(t){
+    var mk=kpMKey(t.endedDate)||kpMKey(t.departedDate)||kpMKey(t.ts);
+    if(!mk||mk===curMK) cur.push(t); else (past[mk]=past[mk]||[]).push(t);
+  });
+  var curHTML=cur.length ? cur.map(renderRow).join('')
+    : '<div style="font-size:12px;color:var(--text2);padding:6px 2px">No tours this month / ยังไม่มีทัวร์เดือนนี้</div>';
+  var pastHTML=Object.keys(past).sort().reverse().map(function(mk){
+    var g=past[mk], gid='lalam_'+mk.replace(/-/g,'_');
+    var fee=g.reduce(function(a,t){return a+(Number(t.carFee)||0);},0);
+    return '<div style="border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;background:var(--bg2)">'
+      +'<div onclick="ofToggleMore(\''+gid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">'
+        +'<span style="font-weight:700"><i class="ti ti-calendar" style="font-size:13px;vertical-align:-2px;margin-right:4px;color:var(--text2)"></i>'+kpMLabel(mk)+'</span>'
+        +'<span style="font-size:11px;color:var(--text2)">'+g.length+' tour'+(g.length!==1?'s':'')+(fee>0?' · 💵'+fee.toLocaleString():'')+' ▾</span>'
+      +'</div>'
+      +'<div id="'+gid+'" style="display:none;padding:0 8px 8px">'+g.map(renderRow).join('')+'</div>'
+      +'</div>';
   }).join('');
-  return '<div style="margin-top:16px"><div onclick="ofToggleMore(\'lala-hist-body\')" style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:800;color:var(--text);margin-bottom:8px"><i class="ti ti-history"></i> History / ประวัติ ('+arr.length+') <span style="color:var(--text2);font-size:11px">▾</span></div><div id="lala-hist-body" style="display:none">'+rows+'</div></div>';
+  var body=curHTML+(pastHTML
+    ? '<div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px">Past months / เดือนก่อน</div>'+pastHTML
+    : '');
+  return '<div style="margin-top:16px"><div onclick="ofToggleMore(\'lala-hist-body\')" style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:800;color:var(--text);margin-bottom:8px"><i class="ti ti-history"></i> History / ประวัติ ('+cur.length+' · '+kpMLabel(curMK)+') <span style="color:var(--text2);font-size:11px">▾</span></div><div id="lala-hist-body" style="display:none">'+body+'</div></div>';
 }
 // ── LALAMOVE DRIVER INFO (shared by the Tour tab popup and the Lalamove tab) ──
 // Same fields on the same tour object → editing in either tab shows up in the other.
@@ -7660,6 +7692,53 @@ function ofDrvAddTourPhoto(input, driverKey, tourKey, tourId){
   });
   input.value='';
 }
+// ── MONTH VIEW HELPERS ───────────────────────────────────────────
+// The monthly restart of the Drivers / Payroll / Lalamove views is pure DISPLAY
+// filtering — nothing is moved, copied or deleted in Firebase. At 00:00 on the
+// 1st the current-month lists are simply empty (every counter back to 0) and the
+// finished month drops into its own dropdown, still fully readable.
+var KP_MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function kpMKey(v){
+  if(v==null||v==='') return '';
+  if(typeof v==='number'){ var d=new Date(v); return isNaN(d)?'':d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+  var s=String(v), m=s.match(/^(\d{4})-(\d{2})/);
+  if(m) return m[1]+'-'+m[2];
+  var d2=new Date(s); return isNaN(d2)?'':d2.getFullYear()+'-'+String(d2.getMonth()+1).padStart(2,'0');
+}
+function kpNowMK(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+function kpMLabel(mk){ var p=String(mk||'').split('-'); return (KP_MON[parseInt(p[1],10)-1]||'?')+' '+(p[0]||''); }
+
+// A tab left open overnight must flip on its own, so one timer re-renders the
+// month-based views just after midnight and re-arms itself.
+var _kpDayMK=kpNowMK();
+function kpRefreshMonthViews(){
+  var act=function(id){ var e=document.getElementById(id); return e&&e.classList.contains('active'); };
+  try{ if(act('ofv-drivers')) ofDriversRender(); }catch(e){}
+  try{ if(act('ofv-lala'))    ofRenderLala(); }catch(e){}
+  try{ if(act('ofv-attend'))  ofAttRender(); }catch(e){}
+  try{ if(act('ofv-sales'))   ofRenderSales(); }catch(e){}
+  try{ if(act('ofv-bills')){ billsRender();
+    var bm=document.getElementById('bills-filter-month');
+    if(bm && bm.value!==kpNowMK()){ bm.value=kpNowMK(); billsRender(); }
+  } }catch(e){}
+  try{ ofRenderRevenue(); }catch(e){}
+}
+function kpScheduleMidnight(){
+  var n=new Date(), next=new Date(n.getFullYear(),n.getMonth(),n.getDate()+1,0,0,30);
+  setTimeout(function(){
+    try{
+      if(kpNowMK()!==_kpDayMK){
+        _kpDayMK=kpNowMK();
+        try{ ofSalesMonth=''; }catch(e){}   // re-defaults to the newest month
+        try{ payViewMK=''; }catch(e){}
+        kpRefreshMonthViews();
+      }
+    }catch(e){}
+    kpScheduleMidnight();
+  }, Math.max(1000, next-n));
+}
+kpScheduleMidnight();
+
 function ofDriversRender(){
   var el=document.getElementById('of-drivers-list'); if(!el) return;
   var drv=(drivers||[]);
@@ -7674,7 +7753,7 @@ function ofDriversRender(){
       .map(function(t){var r=ofActiveTourRec(t); r._k='active_'+(t.id||''); return r;});
     hist=active.concat(hist);
     var wid='drvh_'+key;
-    var toursHtml = hist.length ? hist.map(function(t){
+    var renderTour=function(t){
       var otid='drvt_'+key+'_'+t._k;
       var ordersHtml=(t.orders||[]).map(function(o){
         var rowId='dro_'+key+'_'+t._k+'_'+safeOrderId(o.id);
@@ -7716,11 +7795,38 @@ function ofDriversRender(){
         +'</div>'
         +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+photoHTML+uploadHTML+ordersHtml+'</div>'
         +'</div>';
-    }).join('') : '<div style="font-size:12px;color:var(--text2);padding:6px 2px">No past tours yet / ยังไม่มีทัวร์เก่า</div>';
+    };
+    // Month split: the running month is listed flat (starts empty on the 1st),
+    // every finished month becomes its own dropdown. A tour that is still on the
+    // road always counts towards the current month.
+    var curMK=kpNowMK();
+    var tourPay=function(t){ return Number(t.driverPay)||0; };
+    var cur=[], past={};
+    hist.forEach(function(t){
+      var mk=t._active?curMK:(kpMKey(t.departedDate)||kpMKey(t.endedDate)||kpMKey(t.ts));
+      if(!mk||mk===curMK) cur.push(t); else (past[mk]=past[mk]||[]).push(t);
+    });
+    var curPay=cur.reduce(function(a,t){return a+tourPay(t);},0);
+    var curHTML=cur.length ? cur.map(renderTour).join('')
+      : '<div style="font-size:12px;color:var(--text2);padding:6px 2px">No tours this month / ยังไม่มีทัวร์เดือนนี้</div>';
+    var pastHTML=Object.keys(past).sort().reverse().map(function(mk){
+      var g=past[mk], gid='drvm_'+key+'_'+mk.replace(/-/g,'_');
+      var gp=g.reduce(function(a,t){return a+tourPay(t);},0);
+      return '<div style="border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;background:var(--bg2)">'
+        +'<div onclick="ofToggleMore(\''+gid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">'
+          +'<span style="font-weight:700"><i class="ti ti-calendar" style="font-size:13px;vertical-align:-2px;margin-right:4px;color:var(--text2)"></i>'+kpMLabel(mk)+'</span>'
+          +'<span style="font-size:11px;color:var(--text2)">'+g.length+' tour'+(g.length!==1?'s':'')+(gp>0?' · 💰'+gp.toLocaleString():'')+' ▾</span>'
+        +'</div>'
+        +'<div id="'+gid+'" style="display:none;padding:0 8px 8px">'+g.map(renderTour).join('')+'</div>'
+        +'</div>';
+    }).join('');
+    var toursHtml=curHTML+(pastHTML
+      ? '<div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px"><i class="ti ti-history" style="font-size:12px;vertical-align:-1px"></i> Past months / เดือนก่อน</div>'+pastHTML
+      : '');
     return '<div class="card" style="margin-bottom:8px">'
       +'<div onclick="ofToggleMore(\''+wid+'\')" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">'
         +'<div style="font-weight:700;font-size:15px"><i class="ti ti-truck" style="color:var(--blue);vertical-align:-2px"></i> '+(d.name||'')+'</div>'
-        +'<span style="font-size:12px;color:var(--text2)">'+hist.length+' tour'+(hist.length!==1?'s':'')+' ▾</span>'
+        +'<span style="font-size:12px;color:var(--text2);text-align:right">'+cur.length+' tour'+(cur.length!==1?'s':'')+(curPay>0?' · 💰'+curPay.toLocaleString()+' ฿':'')+' <span style="font-size:10px;opacity:.75">'+kpMLabel(curMK)+'</span> ▾</span>'
       +'</div>'
       +'<div id="'+wid+'" style="display:none;margin-top:10px">'+toursHtml+'</div>'
       +'</div>';
@@ -16348,6 +16454,21 @@ var DEFAULT_PAYCATS=[
 ];
 var payCatsData=[]; // office-editable categories (Firebase 'payCats'); falls back to defaults
 function payCats(){ return (payCatsData&&payCatsData.length)?payCatsData:DEFAULT_PAYCATS; }
+// ── Payroll month view ──
+// Summary and log show ONE month. The rest is paid out at month end, so the 1st
+// starts everyone at 0; older months stay readable through the dropdown. The
+// payLog itself is never filtered on write — only the view.
+var payViewMK='';
+function payMonths(){
+  var s={};
+  (payLog||[]).forEach(function(e){ var mk=kpMKey(e.date||e.ts); if(mk) s[mk]=1; });
+  var now=new Date();
+  for(var i=0;i<6;i++){ var d=new Date(now.getFullYear(),now.getMonth()-i,1); s[d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')]=1; }
+  return Object.keys(s).sort().reverse();
+}
+function payViewMonth(){ var ms=payMonths(); if(!payViewMK||ms.indexOf(payViewMK)<0) payViewMK=kpNowMK(); return payViewMK; }
+function paySetViewMonth(mk){ payViewMK=mk; try{ payBreakdownRender(); }catch(e){} try{ payRenderNameLog(); }catch(e){} }
+function payInMonth(e, mk){ return kpMKey(e && (e.date||e.ts))===mk; }
 function syncPayCats(){ if(window.fbDB) window.fbDB.ref('payCats').set(payCats()); }
 function payFillCats(){ var sel=document.getElementById('pay-e-cat'); if(!sel)return; var p=sel.value; sel.innerHTML=payCats().map(function(c){return '<option value="'+c.key+'">'+_esc(c.label)+'</option>';}).join(''); if(p)sel.value=p; }
 function payCatAdd(){
@@ -16453,7 +16574,8 @@ function payBreakdownRender(){
   var names=payNames();
   if(names.length===0){ el.innerHTML='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;font-size:12px;color:var(--text2);text-align:center">No staff enabled for payroll — enable them in Management / เปิดใช้ใน Management</div>'; return; }
   var cats=payCats();
-  function calc(who){ var inc=0,ded=0,byCat={}; (payLog||[]).forEach(function(e){ if(e.who!==who)return; var amt=parseFloat(e.amount)||0; byCat[e.cat]=(byCat[e.cat]||0)+amt; if(payCatMeta(e.cat).sign<0) ded+=amt; else inc+=amt; }); return {inc:inc,ded:ded,tot:inc-ded,byCat:byCat}; }
+  var vmk=payViewMonth();
+  function calc(who){ var inc=0,ded=0,byCat={}; (payLog||[]).forEach(function(e){ if(e.who!==who)return; if(!payInMonth(e,vmk))return; var amt=parseFloat(e.amount)||0; byCat[e.cat]=(byCat[e.cat]||0)+amt; if(payCatMeta(e.cat).sign<0) ded+=amt; else inc+=amt; }); return {inc:inc,ded:ded,tot:inc-ded,byCat:byCat}; }
   var gInc=0,gDed=0;
   var rows=names.map(function(n){
     var c=calc(n.key); gInc+=c.inc; gDed+=c.ded;
@@ -16467,8 +16589,12 @@ function payBreakdownRender(){
       +'<div style="padding:4px 12px 8px;background:var(--bg)">'+detail+'</div>'
       +'</details>';
   }).join('');
+  var msel='<select onchange="paySetViewMonth(this.value)" style="flex:0 0 auto;width:auto;max-width:130px;padding:5px 8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:12px;font-weight:700;cursor:pointer">'
+    +payMonths().map(function(m){ return '<option value="'+m+'"'+(m===vmk?' selected':'')+'>'+kpMLabel(m)+'</option>'; }).join('')+'</select>';
   el.innerHTML='<div style="background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);overflow:hidden">'
-    +'<div style="padding:8px 10px;font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;background:var(--bg)">💰 Payroll summary / สรุปเงินเดือน</div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 10px;background:var(--bg)">'
+      +'<span style="flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em">💰 Payroll / สรุปเงินเดือน</span>'+msel
+    +'</div>'
     +rows
     +'<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 10px;font-weight:900;background:var(--bg)"><span style="font-size:13px">Total / รวมทั้งหมด</span><span style="font-size:15px;color:var(--blue)">'+(gInc-gDed).toLocaleString()+' ฿</span></div>'
     +'</div>';
@@ -16479,8 +16605,10 @@ function payRenderNameLog(){
   var who=sel.value;
   function whenStr(e){ var t=''; if(e.ts){var d=new Date(e.ts);t=' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');} return (e.date||'')+t; }
   if(!who){ list.innerHTML='<div class="empty" style="padding:14px;font-size:13px">Select a name to see their log / เลือกชื่อ</div>'; return; }
-  var entries=(payLog||[]).filter(function(e){return e.who===who;}).sort(function(a,b){return (b.ts||0)-(a.ts||0);});
-  if(entries.length===0){ list.innerHTML='<div class="empty" style="padding:14px;font-size:13px">No entries yet / ยังไม่มีรายการ</div>'; return; }
+  // Same month as the summary above (dropdown there switches both).
+  var vmk=payViewMonth();
+  var entries=(payLog||[]).filter(function(e){return e.who===who && payInMonth(e,vmk);}).sort(function(a,b){return (b.ts||0)-(a.ts||0);});
+  if(entries.length===0){ list.innerHTML='<div class="empty" style="padding:14px;font-size:13px">No entries in '+kpMLabel(vmk)+' / ไม่มีรายการ</div>'; return; }
   list.innerHTML=entries.map(function(e){
     var m=payCatMeta(e.cat), neg=m.sign<0;
     return '<div class="card" style="padding:10px 12px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
