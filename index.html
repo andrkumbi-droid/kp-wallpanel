@@ -2801,13 +2801,32 @@ var _ordSnap = {};
 function _ordKey(o){ return ((o&&o.id)||'').replace(/[^a-zA-Z0-9]/g,'_'); }
 function syncOrders() {
   if(!window.fbDB) return;
-  const upd = {};
+  const upd = {}, prev = {};
   orders.forEach(function(o){
     const k = _ordKey(o); if(!k) return;
     const j = JSON.stringify(o);
-    if(_ordSnap[k] !== j){ upd[k] = o; _ordSnap[k] = j; }
+    // Write the JSON round-trip, not the live object: stringify drops undefined
+    // values, and Firebase THROWS on undefined — one such field (claim grade)
+    // used to abort the whole batch. This also keeps the written data identical
+    // to the snapshot we remember below.
+    if(_ordSnap[k] !== j){ upd[k] = JSON.parse(j); prev[k] = _ordSnap[k]; _ordSnap[k] = j; }
   });
-  if(Object.keys(upd).length) window.fbDB.ref('orders').update(upd);
+  const keys = Object.keys(upd);
+  if(!keys.length) return;
+  // The snapshot is set optimistically above, so a failed write must roll it
+  // back — otherwise the order counts as synced and is never retried (that is
+  // how a whole batch could silently disappear).
+  const rollback = function(e){
+    keys.forEach(function(k){ if(prev[k] === undefined) delete _ordSnap[k]; else _ordSnap[k] = prev[k]; });
+    console.error('[syncOrders] write failed — snapshot rolled back:', e);
+  };
+  try {
+    const p = window.fbDB.ref('orders').update(upd);
+    if(p && p.catch) p.catch(rollback);
+  } catch(e) {
+    rollback(e);
+    throw e;   // callers decide what to do; they must not act as if it was saved
+  }
 }
 // Explicitly remove one order key from Firebase (deletion no longer implicit).
 function fbRemoveOrder(id){ try{ if(window.fbDB) window.fbDB.ref('orders/'+String(id).replace(/[^a-zA-Z0-9]/g,'_')).remove(); }catch(e){} }
@@ -16054,6 +16073,14 @@ function auditClearAll() {
 // single "extra" line item, so the card total, receipt and revenue stay correct.
 var _replOrigId = null;
 var _replChargeManual = false; // office typed its own amount → stop auto-filling
+var _replSaving = false;       // one press = one claim (see saveReplacement)
+// Re-arm the save button. Called on every exit of saveReplacement — success
+// closes the modal, failure leaves it open so the user can try again.
+function _replRelease(){
+  _replSaving = false;
+  var b = document.getElementById('repl-save');
+  if(b){ b.disabled = false; b.style.opacity = ''; }
+}
 // Catalog price of a product code (0 when unknown).
 function replCatPrice(code){
   var p = (typeof QT_PRODUCTS!=='undefined'?QT_PRODUCTS:[]).find(function(x){return x.code===code;});
@@ -16121,6 +16148,7 @@ function openReplacement(orderId){
   var o = orders.find(function(x){return x.id===orderId;});
   if(!o){ alert('Order not found'); return; }
   _replOrigId = orderId; _replChargeManual = false;
+  _replRelease();   // never open with a button left disabled by an earlier run
   replFillDatalist();
   document.getElementById('repl-order').innerHTML = replOrderHTML(o);
   document.getElementById('repl-reqdate').value = kpTodayStr();
@@ -16156,7 +16184,7 @@ function openReplacement(orderId){
   replCalc();
   document.getElementById('m-repl').classList.add('open');
 }
-function closeReplacement(){ document.getElementById('m-repl').classList.remove('open'); _replOrigId=null; }
+function closeReplacement(){ document.getElementById('m-repl').classList.remove('open'); _replOrigId=null; _replRelease(); }
 // Ticking a product enables its qty (starts at 1) and its note.
 function replBrokenToggle(cb){
   var row = cb.closest('div[data-code]'); if(!row) return;
@@ -16264,8 +16292,11 @@ function saveReplacement(){
     var mx = parseInt(row.getAttribute('data-max'))||0; if(mx>0 && q>mx) q=mx;
     if(q<=0) return;
     var note = ((row.querySelector('.repl-bnote')||{}).value||'').trim();
+    // grade MUST NOT become undefined: it ends up in the order object, and
+    // Firebase throws on undefined ("contains undefined in property …"), which
+    // aborted the whole save. '' behaves identically in stockBucketAdd.
     broken.push({code:row.getAttribute('data-code'), qty:q, type:row.getAttribute('data-type'),
-                 grade:row.getAttribute('data-grade')||undefined, unitPrice:parseFloat(row.getAttribute('data-unit'))||0, note:note});
+                 grade:row.getAttribute('data-grade')||'', unitPrice:parseFloat(row.getAttribute('data-unit'))||0, note:note});
     brokenTxt.push(row.getAttribute('data-code')+' ×'+q+(note?' ('+note+')':''));
   });
   // what goes out
@@ -16290,15 +16321,17 @@ function saveReplacement(){
   var charge = Math.max(0, Math.round(parseFloat((document.getElementById('repl-charge')||{}).value)||0));
   if(charge>0) items.push({type:'extra', code:'เคลม-เปลี่ยนสินค้า / Claim charge', qty:1, unitPrice:charge, amount:charge});
 
+  // One press = one claim. Without this a second click while the first save is
+  // running creates another order (that is how 2-074 became -C, -C2, -C3).
+  if(_replSaving) return;
+  _replSaving = true;
+  var _svBtn = document.getElementById('repl-save');
+  if(_svBtn){ _svBtn.disabled = true; _svBtn.style.opacity = '.6'; }
+
   // Unique linked id: "#100" → "#100-C", then "-C2", "-C3", … (C = claim)
   var repId = o.id + '-C';
   var n = 2; while(orders.find(function(x){return x.id===repId;})) { repId = o.id + '-C' + n; n++; }
-
-  // Stock: the goods going out are deducted once; broken goods return only if ticked.
-  items.forEach(function(it){ if(it.type==='extra') return; try{ stockBucketDeduct(it.code, it.qty); }catch(e){} addLog(it.code+' -'+it.qty+' pcs (claim '+repId+')','-'); });
   var restock = !!(document.getElementById('repl-restock')||{}).checked;
-  if(restock) broken.forEach(function(b){ try{ stockBucketAdd(b.code, b.qty, b.grade); }catch(e){} addLog(b.code+' +'+b.qty+' pcs (returned '+repId+')','+'); });
-  try{ syncStockItems(); }catch(e){}
 
   var byName = ((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name || 'Office';
   var _n = new Date();
@@ -16339,6 +16372,26 @@ function saveReplacement(){
   orders.unshift(rep);
   try{ wOrders.unshift({id:repId, zone:o.zone, boxes:rep.boxes, panels:rep.panels, lcorner:rep.lcorner, clips:0, packed:false, packedAt:null}); }catch(e){}
 
+  // WRITE FIRST, then book stock and the claim record. If the write fails the
+  // order exists only in this browser — the warehouse display and every other
+  // device would never see it — so undo everything and let the user retry
+  // instead of leaving a half-created claim behind.
+  try{
+    syncOrders();
+  }catch(err){
+    orders.splice(orders.indexOf(rep), 1);
+    try{ var wi=wOrders.findIndex(function(w){return w&&w.id===repId;}); if(wi>=0) wOrders.splice(wi,1); }catch(e){}
+    _replRelease();
+    console.error('[claim] order write failed', err);
+    alert('บันทึกไม่สำเร็จ — ออเดอร์ยังไม่ถูกส่ง / Save failed — nothing was sent. Please try again.');
+    return;
+  }
+
+  // Stock: the goods going out are deducted once; broken goods return only if ticked.
+  items.forEach(function(it){ if(it.type==='extra') return; try{ stockBucketDeduct(it.code, it.qty); }catch(e){} addLog(it.code+' -'+it.qty+' pcs (claim '+repId+')','-'); });
+  if(restock) broken.forEach(function(b){ try{ stockBucketAdd(b.code, b.qty, b.grade); }catch(e){} addLog(b.code+' +'+b.qty+' pcs (returned '+repId+')','+'); });
+  try{ syncStockItems(); }catch(e){}
+
   // Keep a claim record in the database (history / reporting), linked to the new order.
   try{
     var cid='cl'+Date.now();
@@ -16352,9 +16405,8 @@ function saveReplacement(){
   try{ auditAdd({type:'claim', orderId:o.id, by:byName}); }catch(e){}
   try{ auditAdd({type:'create', orderId:repId, by:byName}); }catch(e){}
 
-  // syncOrders() writes it to Firebase → the warehouse app and the warehouse
-  // display (both read the same 'orders' node) pick it up as a new order.
-  syncOrders();
+  // The order itself already went to Firebase above (that is what the warehouse
+  // app and the TV display read); these are the side channels.
   try{ syncWOrders(); }catch(e){}
   try{ sheetsSyncOrder(rep); }catch(e){}
   closeReplacement();
