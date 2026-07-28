@@ -15952,7 +15952,8 @@ function replTypeForCode(code, fb){
 function replProdOptions(sel){
   var all = (typeof QT_PRODUCTS!=='undefined'?QT_PRODUCTS:[]);
   var grp = {WPC:'WPC', PVC:'PVC', ACC:'Accessories / อุปกรณ์'};
-  var s = '<option value="">— choose / เลือกสินค้า —</option>';
+  var s = '<option value="">— choose / เลือกสินค้า —</option>'
+    + '<option value="__other__">✏️ Type it myself / กรอกเอง</option>';
   ['WPC','PVC','ACC'].forEach(function(m){
     var arr = all.filter(function(p){return (p.mat||'WPC')===m;});
     if(!arr.length) return;
@@ -15963,6 +15964,13 @@ function replProdOptions(sel){
     s += '</optgroup>';
   });
   return s;
+}
+// The code actually chosen for a line: either the picked catalog code or, with
+// "Type it myself", whatever the office typed (products not in the catalog yet).
+function replRowCode(row){
+  var sel = row.querySelector('.repl-new'); if(!sel) return '';
+  if(sel.value==='__other__') return ((row.querySelector('.repl-code')||{}).value||'').trim().toUpperCase();
+  return sel.value||'';
 }
 function openReplacement(orderId){
   var o = orders.find(function(x){return x.id===orderId;});
@@ -15990,9 +15998,12 @@ function openReplacement(orderId){
       + '<div style="font-size:13px">'+_esc(li.code)+gtag+' <span style="color:var(--text2)">(max '+maxq+(unit?' · '+unit+' ฿':'')+')</span></div>'
       + '<input type="number" class="repl-q" min="0" max="'+maxq+'" value="0" oninput="replCalc()" style="padding:7px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);text-align:center">'
       + '</div>'
-      + '<div class="repl-ex" style="display:none;grid-template-columns:18px 1fr 92px;gap:8px;align-items:center;margin-top:7px">'
-      + '<div style="font-size:14px;color:var(--text2);text-align:center">→</div>'
-      + '<select class="repl-new" onchange="replPickNew(this)" style="padding:7px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text);min-width:0">'+opts+'</select>'
+      + '<div class="repl-ex" style="display:none;grid-template-columns:18px 1fr 92px;gap:8px;align-items:start;margin-top:7px">'
+      + '<div style="font-size:14px;color:var(--text2);text-align:center;padding-top:8px">→</div>'
+      + '<div style="min-width:0">'
+      +   '<select class="repl-new" onchange="replPickNew(this)" style="width:100%;box-sizing:border-box;padding:7px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text);min-width:0">'+opts+'</select>'
+      +   '<input type="text" class="repl-code" placeholder="Code / รหัสสินค้า" oninput="this.value=this.value.toUpperCase();replCalc()" style="display:none;width:100%;box-sizing:border-box;margin-top:5px;padding:7px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
+      + '</div>'
       + '<input type="number" class="repl-price" min="0" placeholder="฿/pcs" oninput="replCalc()" style="padding:7px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);text-align:center">'
       + '</div>';
     wrap.appendChild(row);
@@ -16024,10 +16035,17 @@ function replSetMode(m){
   replCalc();
 }
 // Picking a new product prefills its catalog price (office can still overwrite it).
+// "Type it myself" opens a free code field instead — price is typed by hand.
 function replPickNew(sel){
   var row = sel.closest('div[data-code]'); if(!row) return;
-  var pi = row.querySelector('.repl-price');
-  if(pi && sel.value) pi.value = replCatPrice(sel.value)||'';
+  var pi = row.querySelector('.repl-price'), ci = row.querySelector('.repl-code');
+  var other = (sel.value==='__other__');
+  if(ci){
+    ci.style.display = other?'block':'none';
+    if(!other) ci.value = '';
+    else setTimeout(function(){ ci.focus(); }, 0);
+  }
+  if(pi && !other) pi.value = sel.value ? (replCatPrice(sel.value)||'') : '';
   replCalc();
 }
 // Exchange maths: value of what comes back vs. value of the new goods.
@@ -16037,7 +16055,7 @@ function replCalc(){
   var oldV=0, newV=0, n=0;
   document.querySelectorAll('#repl-lines > div[data-code]').forEach(function(row){
     var q = parseInt((row.querySelector('.repl-q')||{}).value)||0; if(q<=0) return;
-    var code = (row.querySelector('.repl-new')||{}).value||'';
+    var code = replRowCode(row);
     var pr = parseFloat((row.querySelector('.repl-price')||{}).value)||0;
     oldV += q*(parseFloat(row.getAttribute('data-unit'))||0);
     if(code){ newV += q*pr; n++; }
@@ -16070,7 +16088,7 @@ function saveReplacement(){
     var unit = parseFloat(row.getAttribute('data-unit'))||0;
     if(isEx){
       // Exchange: this line goes back, a (possibly different) product goes out instead.
-      var nCode = ((row.querySelector('.repl-new')||{}).value||'').trim();
+      var nCode = replRowCode(row);
       if(!nCode){ bad = true; return; }
       var nPrice = parseFloat((row.querySelector('.repl-price')||{}).value)||0;
       var nType = replTypeForCode(nCode, type);
