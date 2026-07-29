@@ -10737,8 +10737,10 @@ function compressPhotoFile(file, cb){
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
       cb(canvas.toDataURL('image/jpeg', 0.6));
     };
+    img.onerror = function(){ cb(''); };   // unreadable picture must not stall the caller
     img.src = e.target.result;
   };
+  reader.onerror = function(){ cb(''); };
   reader.readAsDataURL(file);
 }
 
@@ -17658,20 +17660,36 @@ function foodSubmit(){
     var sel=document.getElementById('food-e-cat');
     if(sel && sel.value){ catId=sel.value; var o=sel.options[sel.selectedIndex]; if(o) catLabel=o.text; }
     var me=_foodMe();
+    function unlock(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="ti ti-plus"></i> Save / บันทึก'; } }
     function persist(url){
       var id='bill-'+Date.now();
       var rec={ id:id, section:'food', subcatId:catId, subcatLabel:catLabel, what:what,
                 amount:amt, date:date, ts:Date.now(), by:me.name||'—', photoUrl:url||'',
                 log:[_foodStamp('add', amt.toLocaleString()+' ฿'+(what?' · '+what:''))] };
-      if(window.fbDB) window.fbDB.ref('bills/'+id).set(rec);
-      try{ auditAdd({ type:'food', orderId:'Food: '+catLabel+(what?' · '+what:'')+' ('+amt.toLocaleString()+'฿)', detail:'added / เพิ่ม', by:me.name||'—' }); }catch(e){}
-      if(aEl)aEl.value=''; if(wEl)wEl.value=''; if(pEl)pEl.value='';
-      if(btn){ btn.disabled=false; btn.innerHTML='<i class="ti ti-plus"></i> Save / บันทึก'; }
-      try{ if(window.showInAppNotif) window.showInAppNotif('🍜 Saved / บันทึกแล้ว', amt.toLocaleString()+' ฿'+(what?' · '+what:'')); }catch(e){}
+      var settled=false;
+      function ok(){
+        if(settled) return; settled=true;
+        try{ auditAdd({ type:'food', orderId:'Food: '+catLabel+(what?' · '+what:'')+' ('+amt.toLocaleString()+'฿)', detail:'added / เพิ่ม', by:me.name||'—' }); }catch(e){}
+        if(aEl)aEl.value=''; if(wEl)wEl.value=''; if(pEl)pEl.value='';
+        unlock();
+        try{ if(window.showInAppNotif) window.showInAppNotif('🍜 Saved / บันทึกแล้ว', amt.toLocaleString()+' ฿'+(what?' · '+what:'')); }catch(e){}
+      }
+      function fail(){ if(settled) return; settled=true; unlock(); alert('Not saved — check the connection and try again. / ยังไม่บันทึก ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'); }
+      if(!window.fbDB){ fail(); return; }
+      // A phone on a weak signal can take a while to get the server ack — the write
+      // is queued by Firebase either way, so free the button instead of hanging.
+      setTimeout(ok, 12000);
+      window.fbDB.ref('bills/'+id).set(rec).then(ok, fail);
     }
-    if(file && window.fbStorage){
-      window.fbStorage.ref('bills/'+Date.now()+'_'+file.name).put(file).then(function(s){return s.ref.getDownloadURL();}).then(persist).catch(function(){persist('');});
-    } else if(file){ var r=new FileReader(); r.onload=function(e){persist(e.target.result);}; r.readAsDataURL(file); }
+    // Phone photos are 3–8 MB. Uploading them raw kept the Save button stuck on
+    // "กำลังบันทึก" (Storage retries a stalled upload silently for minutes), so shrink
+    // the picture first — same helper the order photos use — and store it with the
+    // record. ~150 KB, no dependency on Storage being reachable.
+    if(file){
+      var handled=false, take=function(u){ if(handled) return; handled=true; persist(u||''); };
+      setTimeout(function(){ take(''); }, 20000);   // photo may fail, the entry must not
+      try{ compressPhotoFile(file, take); }catch(e){ take(''); }
+    }
     else persist('');
   });
 }
