@@ -10030,7 +10030,12 @@ function openDeliveryModal(id, shipMode){
   var _paySec=document.getElementById('dl-pay-section'); if(_paySec) _paySec.style.display=_shipModeOn?'none':'';
   var _locSec=document.getElementById('dl-loc-section'); if(_locSec) _locSec.style.display=_shipModeOn?'none':'';
   var _slipSec=document.getElementById('dl-slip-section'); if(_shipModeOn && _slipSec) _slipSec.style.display='none';
-  var _photoLbl=document.querySelector('#delivery-modal label.fl'); if(_photoLbl) _photoLbl.textContent=_shipModeOn?'📷 Receipt from shipper (optional) / ใบรับจากขนส่ง':'📷 Delivery photo (optional)';
+  // Handover proof is mandatory: a photo of the goods AND the carrier's receipt.
+  var _photoLbl=document.querySelector('#delivery-modal label.fl'); if(_photoLbl) _photoLbl.innerHTML=_shipModeOn?'📦 รูปสินค้าที่ส่งขนส่ง / Photo of the goods <span style="color:#dc2626">*</span>':'📷 Delivery photo (optional)';
+  var _shipSec=document.getElementById('dl-ship-section'); if(_shipSec) _shipSec.style.display=_shipModeOn?'':'none';
+  var _shipInp=document.getElementById('dl-ship-input'); if(_shipInp) _shipInp.value='';
+  var _shipProg=document.getElementById('dl-ship-progress'); if(_shipProg) _shipProg.style.display='none';
+  dlShipPhotoRefresh();
   var _confBtn=document.getElementById('delivery-confirm-btn');
   if(_confBtn) _confBtn.innerHTML = _shipModeOn ? '<i class="ti ti-package"></i> Confirm handover / ยืนยันส่งขนส่ง' : '<i class="ti ti-check"></i> Confirm Delivered / ยืนยัน';
   document.getElementById('delivery-modal').classList.add('open');
@@ -10416,6 +10421,41 @@ function handleDeliveryPhoto(input){
         if(pending<=0){ input.value=''; if(prog) prog.style.display='none'; dlPhotoRefresh(); }
       });
     });
+  });
+}
+// Shipper handover: the receipt the carrier hands back. Goes into the order's
+// 'shipreceipt' node — the same one the office 🧾 button, Bills and
+// Pictures → 🚚 Shipper read, so the photo shows up everywhere at once.
+function handleShipHandoverPhoto(input){
+  if(!input.files||!input.files.length||!_deliveryId) return;
+  var files = Array.prototype.slice.call(input.files);
+  var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
+  var prog = document.getElementById('dl-ship-progress');
+  if(prog) prog.style.display='block';
+  var pending = files.length;
+  var step = function(){ pending--; if(pending<=0){ input.value=''; if(prog) prog.style.display='none'; dlShipPhotoRefresh(); } };
+  files.forEach(function(f){
+    compressPhotoFile(f, function(dataUrl){
+      if(!dataUrl){ step(); return; }
+      addOrderPhoto(_deliveryId, 'shipreceipt', dataUrl, drName, step);
+    });
+  });
+}
+function dlShipPhotoRefresh(){
+  var box = document.getElementById('dl-ship-upload'); if(!box) return;
+  var n = _deliveryId ? orderPhotoCount(_deliveryId,'shipreceipt') : 0;
+  var t = box.querySelector('div');
+  if(t) t.textContent = n>0 ? ('🧾 '+n+' photo'+(n!==1?'s':'')+' · add more / เพิ่มอีก') : 'Tap to photograph the receipt / ถ่ายรูปใบเสร็จ';
+  box.style.background = n>0 ? '#dcfce7' : 'var(--bg2)';
+  var prev = document.getElementById('dl-ship-preview'); if(!prev) return;
+  if(!_deliveryId || !window.fbDB || !n){ prev.style.display='none'; prev.innerHTML=''; return; }
+  window.fbDB.ref('orderPhotos/shipreceipt/'+safeOrderId(_deliveryId)).once('value', function(snap){
+    var data=snap.val()||{}, keys=Object.keys(data).sort(function(a,b){ return (data[a].ts||0)-(data[b].ts||0); });
+    if(!keys.length){ prev.style.display='none'; prev.innerHTML=''; return; }
+    prev.style.display='block';
+    prev.innerHTML='<div style="display:flex;gap:6px;flex-wrap:wrap">'+keys.map(function(k){
+      return '<img src="'+data[k].data+'" onclick="openPhotoLightbox(this.src)" style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:zoom-in">';
+    }).join('')+'</div>';
   });
 }
 function dlPhotoRefresh(){
@@ -12064,9 +12104,18 @@ function mirrorImportPreview(list, totalCand, dups, updateN){
 function confirmDelivery(){
   if(!_deliveryId) return;
   var id = _deliveryId;
-  // Shipper handover: no payment / photo requirement — just record the handover and
-  // mark the order "shipped" (office finalises to delivered once the customer receives it).
+  // Shipper handover: no payment, but proof is mandatory — a photo of the goods that
+  // went to the carrier AND the receipt they handed back. The order is then marked
+  // "shipped" (office finalises to delivered once the customer receives it).
   if(_deliveryShipMode){
+    if(orderPhotoCount(id,'delivery') < 1){
+      alert('📦 ถ่ายรูปสินค้าที่ส่งขนส่งก่อน\nPlease photograph the goods you handed over.');
+      return;
+    }
+    if(orderPhotoCount(id,'shipreceipt') < 1){
+      alert('🧾 ถ่ายรูปใบเสร็จจากขนส่งก่อน\nPlease photograph the receipt from the carrier.');
+      return;
+    }
     closeDeliveryModal();
     drDoShip(id);
     try{ syncOrders(); }catch(e){}
@@ -15121,6 +15170,18 @@ function calcViz() {
       <div id="delivery-upload-progress" style="display:none;font-size:12px;color:var(--blue);margin-top:6px;text-align:center"><i class="ti ti-loader"></i> Uploading...</div>
     </div>
 
+    <!-- Shipper handover only: the receipt the carrier hands back (required) -->
+    <div id="dl-ship-section" style="display:none;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:6px">🧾 ใบเสร็จจากขนส่ง / Receipt from the carrier <span style="color:#dc2626">*</span></div>
+      <div id="dl-ship-preview" style="display:none;margin-bottom:8px"></div>
+      <div id="dl-ship-upload" style="border:2px dashed var(--border);border-radius:var(--rs);padding:20px;text-align:center;cursor:pointer;background:var(--bg2)" onclick="document.getElementById('dl-ship-input').click()">
+        <i class="ti ti-receipt" style="font-size:28px;color:var(--text2);display:block;margin-bottom:6px"></i>
+        <div style="font-size:13px;color:var(--text2)">Tap to photograph the receipt / ถ่ายรูปใบเสร็จ</div>
+      </div>
+      <input type="file" id="dl-ship-input" accept="image/*" multiple style="display:none" onchange="handleShipHandoverPhoto(this)">
+      <div id="dl-ship-progress" style="display:none;font-size:12px;color:var(--blue);margin-top:6px;text-align:center"><i class="ti ti-loader"></i> Uploading...</div>
+    </div>
+
     <!-- Save delivery location (per customer / phone) -->
     <div id="dl-loc-section" style="margin-bottom:14px">
       <label class="fl" style="margin-top:0">📍 Customer location / ตำแหน่งลูกค้า</label>
@@ -17470,9 +17531,17 @@ function costsRender(){
       '</div>'+
       (open ? '<div style="padding:0 9px 8px">'+g.orders.map(function(o){
         var amt=parseFloat(o.shipCost)||0;
-        return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:5px 8px;background:var(--bg2);border-radius:var(--rs);margin-top:5px">'+
-          '<span style="min-width:0;flex:1"><b>'+_esc(o.id)+'</b> <span style="color:var(--text2)">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</span>'+(o.shipCostDate?'<span style="color:var(--text2)"> · '+fmtD(o.shipCostDate)+'</span>':'')+'</span>'+
-          '<span style="font-weight:700;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'+
+        // The driver's handover proof, straight on the cost row: goods + carrier receipt.
+        var gid='bshipg_'+idx+'_'+safeOrderId(o.id), eid=String(o.id).replace(/['\\]/g,'');
+        var nG=0,nR=0; try{ nG=orderPhotoCount(o.id,'delivery'); nR=orderPhotoCount(o.id,'shipreceipt'); }catch(e){}
+        var pb=function(type,label,n){ return '<button type="button" onclick="ofDrvLoadPhotos(\''+eid+'\',\''+type+'\',\''+gid+'\')" style="flex:1;padding:5px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:600;cursor:pointer">'+label+' <span style="color:'+(n>0?'var(--blue)':'var(--text3)')+';font-weight:800">'+n+'</span></button>'; };
+        return '<div style="background:var(--bg2);border-radius:var(--rs);padding:5px 8px;margin-top:5px">'+
+          '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px">'+
+            '<span style="min-width:0;flex:1"><b>'+_esc(o.id)+'</b> <span style="color:var(--text2)">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</span>'+(o.shipCostDate?'<span style="color:var(--text2)"> · '+fmtD(o.shipCostDate)+'</span>':'')+'</span>'+
+            '<span style="font-weight:700;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'+
+          '</div>'+
+          '<div style="display:flex;gap:6px;margin-top:5px">'+pb('delivery','📦 สินค้า / Goods',nG)+pb('shipreceipt','🧾 ใบเสร็จ / Receipt',nR)+'</div>'+
+          '<div id="'+gid+'" style="display:none;margin-top:6px" data-type=""></div>'+
         '</div>';
       }).join('')+'</div>' : '')+
     '</div>';
