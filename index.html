@@ -7248,7 +7248,11 @@ function ofRenderTour(){
           ? '<span class="badge" style="font-size:10px;background:var(--green-bg);color:var(--green)">'+(st==='shipped'?'🚚 At shipper':st)+'</span>'
           : (st==='loaded'||st==='ready'
           ? (_multiTour?'<button type="button" onclick="ofMoveOrder(\''+t.id+'\',\''+id+'\')" title="Move to another tour" style="font-size:11px;padding:2px 8px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">⇄</button>':'')
-            +'<button type="button" onclick="ofTourDeliver(\''+t.id+'\',\''+id+'\')" style="font-size:11px;padding:2px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">✓ Delivered</button>'
+            // A carrier is set → the driver hands over, they don't deliver: same slot,
+            // but it books "at shipper" instead of "delivered".
+            +(isCompany
+              ? '<button type="button" onclick="ofTourShip(\''+t.id+'\',\''+id+'\')" title="Handed over to the carrier / ส่งให้ขนส่งแล้ว" style="font-size:11px;padding:2px 8px;border:none;background:#4f46e5;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚚 At shipper</button>'
+              : '<button type="button" onclick="ofTourDeliver(\''+t.id+'\',\''+id+'\')" style="font-size:11px;padding:2px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">✓ Delivered</button>')
             +'<button type="button" data-tid="'+t.id+'" data-oid="'+id+'" onclick="rmFromTour(this)" style="font-size:11px;padding:2px 8px;border:1px solid #dc2626;background:#fee2e2;color:#dc2626;border-radius:var(--rs);cursor:pointer">✕ ลบ</button>'
           : (st==='new'||st==='packing'
             ? '<span class="badge" style="font-size:10px;background:'+(st==='new'?'#e0e7ff':'#fef3c7')+';color:'+(st==='new'?'#3730a3':'#92400e')+'">'+(st==='new'?'⏳ New / รอแพ็ค':'📦 Packing / แพ็ค')+'</span>'
@@ -8123,6 +8127,28 @@ function ofTourDeliver(tourId, orderId){
   ofRenderTour();ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();
   try{ payUpdateBadge(); }catch(e){}
   try{ if(ord) sheetsSyncOrder(ord); }catch(e){}
+}
+
+// Same slot as "✓ Delivered", but for an order that travels on with a carrier:
+// the goods left the tour, the customer has not received them yet. No revenue is
+// booked here — that happens when the office confirms with ofFinalizeShipped.
+function ofTourShip(tourId, orderId){
+  var t = activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var ord = orders.find(function(x){return x.id===orderId;});
+  var shp = (ord && ord.shipper && ord.shipper!=='ส่งเอง') ? ord.shipper : 'shipper';
+  if(!confirm('ส่งให้ '+shp+' แล้ว? / Handed over to '+shp+'?\n\n'+orderId+' — ลูกค้ายังไม่ได้รับ ยืนยันทีหลัง / customer receipt is confirmed later')) return;
+  t.status[orderId]='shipped';
+  var byName=((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+  if(ord){
+    var _oldSt=ord.status;
+    ord.shippedBy=byName;
+    addStatusLog(ord,'shipped',byName);
+    ord.status='shipped';
+    auditStatus(orderId,_oldSt,'shipped',byName);
+  }
+  ofRenderTour();ofRenderOrders();mgRender();syncOrders();syncTours();
+  try{ payUpdateBadge(); }catch(e){}
+  try{ if(ord) sheetsSyncOrder(ord); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
 }
 
 // Move an order from one active tour to another (e.g. driver came back for it)
