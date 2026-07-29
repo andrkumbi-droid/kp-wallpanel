@@ -762,7 +762,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
         try{if(document.getElementById('s-office').classList.contains('active')){ofRenderTour();ofLalaUpdBadge();if(document.getElementById('ofv-lala').classList.contains('active'))ofRenderLala();if(document.getElementById('ofv-drivers').classList.contains('active'))ofDriversRender();if(document.getElementById('ofv-home').classList.contains('active'))ofRenderDashboard();}}catch(e){}
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
-        try{if(document.getElementById('s-driver-tour').classList.contains('active')){drRenderTourSwitch();drReady();}}catch(e){}
+        try{if(document.getElementById('s-driver-tour').classList.contains('active')){drRenderTourSwitch();drReady();drKmSyncSeq();drKmRender();}}catch(e){}
       });
       db.ref('tourHistory').on('value', function(snap) {
         tourHistory = snap.val() || {};
@@ -2369,6 +2369,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div id="dr-vres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-bottom:10px;font-size:13px"></div>
     <div id="dr-arr-hint" style="display:none;font-size:11px;color:var(--text2);margin-bottom:6px">👉 แตะออเดอร์ทางซ้ายตามลำดับที่จะส่ง (แตะทางขวาเพื่อเอาออก) แล้วกดออกรถ / Tap stops on the left in delivery order (tap right to remove), then Depart.</div>
     <div id="dr-arrange" style="display:none"></div>
+    <!-- KM-based tour: odometer photo before departing + after every stop -->
+    <div id="dr-kmbox" style="display:none;margin-bottom:10px"></div>
     <div id="dr-tlist"></div>
     <div id="dr-arrange-bottom" style="display:none"></div>
     <div id="dr-donesec" style="display:none"><div class="donesep"><span>Done / เสร็จแล้ว</span></div><div id="dr-donelist"></div></div>
@@ -7202,7 +7204,8 @@ function ofRenderTour(){
     var slipFlag=slipOrds.filter(function(o){return o.slipReview&&o.slipReview.status==='flag';}).length;
     var slipBtnBg=slipFlag>0?'#dc2626':(slipDone<slipOrds.length?'#d97706':'#16a34a');
     // Order list with remove button
-    var orderList = t.orders.map(function(id) {
+    var _kmOn = !!t.kmMode, _kmMap = _kmOn ? kmByOrder(t) : {};
+    var orderList = t.orders.map(function(id, _oi) {
       var ord = orders.find(function(x){return x.id===id;});
       var rawSt = t.status[id]||'loaded';
       // Reflect the live packing status for planned-but-unready orders so the tour
@@ -7238,9 +7241,20 @@ function ofRenderTour(){
           payInline='<span style="font-size:10px;font-weight:700;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px;white-space:nowrap;flex-shrink:0">⏳ ค้าง / unpaid</span>';
         }
       }
+      // KM mode: odometer reading recorded by the driver after this stop (+ km driven),
+      // and up/down buttons so the office fixes the driving sequence.
+      var _kmInfo = _kmOn ? _kmMap[id] : null;
+      var kmChip = _kmInfo
+        ? ' <span title="เลขไมล์หลังส่งจุดนี้ / odometer after this stop" style="font-size:10px;font-weight:700;color:#1d4ed8;background:#dbeafe;border-radius:8px;padding:1px 6px;white-space:nowrap">🛣️ '+kmFmt(_kmInfo.km)+' กม.'+(_kmInfo.dist?' (+'+kmFmt(_kmInfo.dist)+')':'')+'</span>'
+        : (_kmOn ? ' <span title="ยังไม่ได้บันทึกเลขไมล์ / no odometer reading yet" style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap">🛣️ —</span>' : '');
+      var kmMove = (_kmOn && !ro) ? '<span style="display:inline-flex;flex-direction:column;gap:1px;flex-shrink:0">'
+          +'<button type="button" title="เลื่อนขึ้น / move up" onclick="event.stopPropagation();ofKmMove(\''+t.id+'\',\''+String(id).replace(/['\\]/g,'')+'\',-1)" style="line-height:1;font-size:9px;padding:1px 5px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:3px;cursor:pointer">▲</button>'
+          +'<button type="button" title="เลื่อนลง / move down" onclick="event.stopPropagation();ofKmMove(\''+t.id+'\',\''+String(id).replace(/['\\]/g,'')+'\',1)" style="line-height:1;font-size:9px;padding:1px 5px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:3px;cursor:pointer">▼</button>'
+        +'</span>' : '';
       return '<div style="padding:4px 0">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;flex-wrap:nowrap;gap:8px">'+
-        '<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/[\'\\]/g,'')+'\')" title="Order info / ข้อมูลออเดอร์" style="font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">'+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+(ro?'':' <span onclick="event.stopPropagation();ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="color:var(--text2);font-size:12px;cursor:pointer;padding:0 3px">▾</span>')+'</span>'+
+        kmMove+
+        '<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/[\'\\]/g,'')+'\')" title="Order info / ข้อมูลออเดอร์" style="font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">'+(_kmOn?'<b style="color:#1d4ed8">'+(_oi+1)+'.</b> ':'')+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+kmChip+(ro?'':' <span onclick="event.stopPropagation();ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="color:var(--text2);font-size:12px;cursor:pointer;padding:0 3px">▾</span>')+'</span>'+
         '<div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;justify-content:flex-end">'+
         '<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+(ord?((ord.province||'').trim()||ord.zone||''):'')+'</span>'+
         payInline+
@@ -7277,6 +7291,22 @@ function ofRenderTour(){
       var o=orders.find(function(x){return x.id===id;}); if(!o) return;
       var _co=ofPayCO(o); tourCash+=_co.cash; tourOnline+=_co.online;
     });
+    // KM mode: one row under the stops — total km · ฿ per km · payout.
+    var kmRow = '';
+    if(_kmOn){
+      var _kmT=kmTotal(t), _kmR=kmRateOf(t), _kmP=kmPayAmount(t), _kmLog=kmLogOf(t), _kmStart=_kmLog[0];
+      kmRow='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 4px;padding:8px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--rs);font-size:12px">'
+        +'<span style="font-weight:800;color:#1d4ed8;white-space:nowrap">🛣️ รวม / Total: '+kmFmt(_kmT)+' กม.</span>'
+        +'<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap">×<input type="number" min="0" step="0.5" value="'+_kmR+'" onclick="event.stopPropagation()" onchange="ofSetKmRate(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="width:62px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">฿/กม.</span>'
+        +'<span style="margin-left:auto;font-weight:800;color:var(--green);white-space:nowrap">= '+_kmP.toLocaleString()+' ฿</span>'
+        +(ro?'':'<button type="button" onclick="event.stopPropagation();ofKmUsePay(\''+t.id+'\')" title="ใส่เป็นค่าทัวร์ / use as tour pay" style="font-size:10px;padding:3px 7px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:700">→ ค่าทัวร์</button>')
+        +'<div style="width:100%;font-size:10px;color:'+(_kmStart?'var(--text2)':'#92400e')+'">'
+          +(_kmStart?'🏁 Start '+kmFmt(_kmStart.km)+' กม.'+(_kmStart.photo?' 📷':''):'⏳ รอคนขับถ่ายรูปเลขไมล์ก่อนออกรถ / waiting for the start odometer photo')
+          +(_kmLog.length?' · <span onclick="event.stopPropagation();ofToggleMore(\'kmlog_'+t.id+'\')" style="cursor:pointer;color:#1d4ed8;font-weight:700">📷 รูปเลขไมล์ ('+_kmLog.length+') ▾</span>':'')
+        +'</div>'
+        +'<div id="kmlog_'+t.id+'" style="display:none;width:100%">'+kmSummaryHTML(t)+'</div>'
+        +'</div>';
+    }
     var payTotals = (tourCash>0||tourOnline>0)
       ? '<div style="display:flex;justify-content:space-between;gap:8px;margin:8px 0 4px;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);font-size:12px">'
         +'<span style="color:#166534;font-weight:700">💵 Cash / เงินสด: '+tourCash.toLocaleString()+' ฿</span>'
@@ -7291,6 +7321,7 @@ function ofRenderTour(){
       '<button type="button" onclick="event.stopPropagation();printTourReceipts('+ti+')" title="Customer receipts / ใบเสร็จลูกค้า" style="font-size:11px;padding:3px 8px;border:none;background:#1D4ED8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600"><i class="ti ti-receipt"></i> Print receipts / พิมพ์ใบเสร็จ</button>'+
       (ro?'<button type="button" onclick="event.stopPropagation();currentTourDetailIdx='+ti+';printDeliverySheet()" title="Driver delivery sheet / ใบส่งของคนขับ" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600"><i class="ti ti-clipboard-list"></i> Delivery sheet / ใบส่งของ</button>':'')+
       (!ro && slipOrds.length>0?'<button type="button" onclick="event.stopPropagation();ofReviewTourSlips(\''+t.id+'\')" title="Check online-payment slips / ตรวจสลิปโอน" style="font-size:11px;padding:3px 8px;border:none;background:'+slipBtnBg+';color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🧾 Slips '+slipDone+'/'+slipOrds.length+(slipFlag>0?' ⚠':'')+'</button>':'')+
+      (ro?'':'<button type="button" onclick="event.stopPropagation();ofToggleKmMode(\''+t.id+'\')" title="คิดค่าจ้างตามกิโลเมตร — กำหนดลำดับส่ง + คนขับถ่ายรูปเลขไมล์ / Pay this tour per kilometre" style="font-size:11px;padding:3px 8px;border:none;background:'+(_kmOn?'#1d4ed8':'#94a3b8')+';color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🛣️ KM '+(_kmOn?'ON':'OFF')+'</button>')+
       (ro?'':'<button type="button" onclick="event.stopPropagation();ofAddOrderToTour(\''+t.id+'\')" title="Add a ready order to this tour / เพิ่มออเดอร์เข้าทัวร์" style="font-size:11px;padding:3px 8px;border:none;background:#0ea5e9;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">➕ Add</button>')+
       (!t.driving?'<button type="button" onclick="event.stopPropagation();ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 ออกรถ / Departed</button>':'<span style="font-size:11px;color:var(--green);font-weight:600">🚚 กำลังส่ง / Driving '+(t.departedDate?fmtD(t.departedDate)+' ':'')+t.departedAt+'</span>')+
       '<span class="badge bactive">'+t.orders.length+' orders</span>'+
@@ -7315,6 +7346,7 @@ function ofRenderTour(){
       })())+
       // ── MIDDLE: orders + totals + progress ──
       '<div style="margin-bottom:8px">'+orderList+'</div>'+
+      kmRow+
       payTotals+
       '<div style="height:6px;background:var(--bg2);border-radius:3px;overflow:hidden">'+
       '<div style="height:100%;background:var(--green);border-radius:3px;width:'+pct+'%"></div>'+
@@ -7755,6 +7787,7 @@ function archiveTour(t){
     endedDate:now.toISOString().slice(0,10), endedAt:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0, driverPayNet:tourNetPay(t),
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
+    kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now() };
   try{ window.fbDB.ref('tourHistory/'+key).push(rec); }catch(e){ console.error('archiveTour failed',e); }
 }
@@ -7771,6 +7804,98 @@ function ofSetTourPay(tourId, val){
   try{ ofRenderTour(); }catch(e){}   // refresh the "pay at end" net hint
   try{ ofRenderLala(); }catch(e){}
 }
+// ════════════════════════════════════════════════════════════
+//  KM-BASED DRIVER PAY (per-kilometre tours)
+//  Office switches a tour to "KM mode" → office fixes the stop sequence, the driver
+//  photographs the odometer BEFORE departing (start reading) and again after every
+//  delivery. A reading always belongs to the stop just finished: km for stop N =
+//  reading(N) − reading(N-1); the start reading itself does not count.
+//  Data on the tour: t.kmMode, t.kmRate (฿/km), t.kmLog = [{km,photo,orderId,ts,by}]
+//  (index 0 = start, orderId empty).
+// ════════════════════════════════════════════════════════════
+var KM_RATE_DEFAULT = 10;
+function kmLogOf(t){
+  var l = t && t.kmLog;
+  if(!l) return [];
+  var arr = Array.isArray(l) ? l.slice() : Object.keys(l).map(function(k){return l[k];});
+  return arr.filter(Boolean).sort(function(a,b){return (a.ts||0)-(b.ts||0);});
+}
+function kmRateOf(t){ var r=parseFloat(t&&t.kmRate); return (isFinite(r)&&r>0)?r:KM_RATE_DEFAULT; }
+// orderId -> {km:<odometer reading>, dist:<km driven for this stop>}
+function kmByOrder(t){
+  var log=kmLogOf(t), map={};
+  for(var i=1;i<log.length;i++){
+    if(!log[i] || !log[i].orderId) continue;
+    var d=(parseFloat(log[i].km)||0)-(parseFloat(log[i-1].km)||0);
+    map[log[i].orderId]={ km:parseFloat(log[i].km)||0, dist:(d>0?d:0), photo:log[i].photo||'' };
+  }
+  return map;
+}
+function kmTotal(t){
+  var log=kmLogOf(t); if(log.length<2) return 0;
+  var d=(parseFloat(log[log.length-1].km)||0)-(parseFloat(log[0].km)||0);
+  return d>0?Math.round(d*10)/10:0;
+}
+function kmPayAmount(t){ return Math.round(kmTotal(t)*kmRateOf(t)); }
+function kmFmt(n){ n=parseFloat(n)||0; return (Math.round(n*10)/10).toLocaleString(); }
+
+function ofToggleKmMode(tourId){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  t.kmMode = !t.kmMode;
+  if(t.kmMode && (t.kmRate==null||t.kmRate==='')) t.kmRate=KM_RATE_DEFAULT;
+  t.kmOrderTs = Date.now();   // tells the driver app to reload the office sequence
+  syncTours();
+  try{ ofRenderTour(); }catch(e){}
+}
+function ofSetKmRate(tourId, val){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  t.kmRate = (val===''||val==null) ? KM_RATE_DEFAULT : (parseFloat(val)||0);
+  syncTours();
+  try{ ofRenderTour(); }catch(e){}
+}
+// Office fixes the driving sequence: move a stop up/down inside t.orders.
+function ofKmMove(tourId, oid, dir){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t||!t.orders) return;
+  var i=t.orders.indexOf(oid); if(i<0) return;
+  var j=i+(dir<0?-1:1); if(j<0||j>=t.orders.length) return;
+  var tmp=t.orders[i]; t.orders[i]=t.orders[j]; t.orders[j]=tmp;
+  t.arranged=null;            // office order wins over the driver's own arrangement
+  t.kmOrderTs=Date.now();
+  syncTours();
+  try{ ofRenderTour(); }catch(e){}
+}
+// Take the calculated km payout over into the normal "Tour pay" field.
+function ofKmUsePay(tourId){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var amt=kmPayAmount(t);
+  if(!amt){ alert('No km recorded yet / ยังไม่มีเลขไมล์'); return; }
+  ofSetTourPay(tourId, amt);
+}
+// Shared read-only km block (office tour card, Drivers tab, driver app).
+function kmSummaryHTML(t, opts){
+  opts=opts||{};
+  var log=kmLogOf(t); if(!log.length && !opts.always) return '';
+  var tot=kmTotal(t), rate=kmRateOf(t), pay=kmPayAmount(t);
+  var rows=log.map(function(e,i){
+    var prev=i>0?(parseFloat(log[i-1].km)||0):null;
+    var d=prev==null?null:Math.max(0,(parseFloat(e.km)||0)-prev);
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--border);font-size:11px">'
+      +(e.photo?'<img src="'+e.photo+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:38px;height:38px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer;flex-shrink:0">':'<span style="width:38px;text-align:center;flex-shrink:0">—</span>')
+      +'<span style="flex:1;min-width:0">'+(i===0?'🏁 Start':('📍 '+(e.orderId||'—')))+'</span>'
+      +'<span style="font-weight:700;white-space:nowrap">'+kmFmt(e.km)+' กม.</span>'
+      +'<span style="color:var(--text2);white-space:nowrap;width:56px;text-align:right">'+(d==null?'':'+'+kmFmt(d))+'</span>'
+      +'</div>';
+  }).join('');
+  return '<div style="margin-top:8px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:var(--rs);padding:8px 10px">'
+    +'<div style="font-size:11px;font-weight:800;color:#1d4ed8;margin-bottom:2px">🛣️ KM / กิโลเมตร</div>'
+    +rows
+    +'<div style="display:flex;justify-content:space-between;gap:8px;margin-top:6px;padding-top:6px;border-top:1px solid #bfdbfe;font-size:12px;font-weight:700">'
+      +'<span>รวม / Total: '+kmFmt(tot)+' กม.</span>'
+      +'<span>× '+kmFmt(rate)+' ฿ = <span style="color:var(--green)">'+pay.toLocaleString()+' ฿</span></span>'
+    +'</div>'
+    +'</div>';
+}
+
 // Photo of the loaded tour vehicle — stored on the tour (t.carPhotos, shared with the
 // Lalamove tab) so it also shows in the Drivers tab + Lalamove history.
 function ofTourAddLoadPhoto(input, tourId){
@@ -7865,6 +7990,7 @@ function ofActiveTourRec(t){
     created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0,
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
+    kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now(), _active:true };
 }
 // Add a vehicle photo to a tour from the Drivers tab. Live (still active) tours write
@@ -7951,11 +8077,14 @@ function ofDriversRender(){
     var wid='drvh_'+key;
     var renderTour=function(t){
       var otid='drvt_'+key+'_'+t._k;
+      var _kmMapH=kmByOrder(t);
       var ordersHtml=(t.orders||[]).map(function(o){
         var rowId='dro_'+key+'_'+t._k+'_'+safeOrderId(o.id);
+        var _kmI=_kmMapH[o.id];
+        var _kmC=_kmI?' <span style="font-size:10px;font-weight:700;color:#1d4ed8;background:#dbeafe;border-radius:8px;padding:1px 5px;white-space:nowrap">🛣️ '+kmFmt(_kmI.km)+(_kmI.dist?' (+'+kmFmt(_kmI.dist)+')':'')+'</span>':'';
         return '<div style="padding:6px 0;border-top:1px solid var(--border);font-size:11px">'
           +'<div onclick="ofDrvToggleOrder(\''+rowId+'\')" style="cursor:pointer">'
-            +'<div style="display:flex;justify-content:space-between;gap:6px"><span style="font-weight:700">'+o.id+' <i class="ti ti-chevron-down" id="'+rowId+'_chev" style="font-size:12px;color:var(--text2);vertical-align:-1px"></i></span><span style="font-weight:700">'+(o.total||'')+'</span></div>'
+            +'<div style="display:flex;justify-content:space-between;gap:6px"><span style="font-weight:700">'+o.id+_kmC+' <i class="ti ti-chevron-down" id="'+rowId+'_chev" style="font-size:12px;color:var(--text2);vertical-align:-1px"></i></span><span style="font-weight:700">'+(o.total||'')+'</span></div>'
             +'<div style="color:var(--text);font-weight:600;margin-top:1px">'+(o.customer||'—')+' <span style="color:var(--text2);font-weight:500">· '+(o.zone||'')+'</span></div>'
             +(o.status?'<div style="color:var(--text2);margin-top:1px">'+o.status+((o.shipper&&o.shipper!=='ส่งเอง')?' · 🚚 '+o.shipper:'')+'</div>':'')
             +(o.phone&&o.phone!=='—'?'<div style="color:var(--text2);margin-top:1px">📞 '+o.phone+'</div>':'')
@@ -7987,9 +8116,9 @@ function ofDriversRender(){
       return '<div style="border:1px solid '+(t._active?'#16a34a':'var(--border)')+';'+(t._active?'background:#f0fdf4;':'')+'border-radius:var(--rs);margin-bottom:6px">'
         +'<div onclick="ofToggleMore(\''+otid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">'
           +'<span style="font-weight:700">'+(t._active?'🚚 On tour / กำลังส่ง':'🚚 Tour '+(t.tourNo||'?'))+' <span style="font-size:11px;color:var(--text2);font-weight:500">· '+dateStr+(t.departedAt?' '+t.departedAt:'')+'</span></span>'
-          +'<span style="font-size:11px;color:var(--text2)">'+(t.orderCount||(t.orders||[]).length)+' orders'+(t.driverPay>0?' · 💰'+t.driverPay.toLocaleString():'')+' ▾</span>'
+          +'<span style="font-size:11px;color:var(--text2)">'+(t.orderCount||(t.orders||[]).length)+' orders'+(t.driverPay>0?' · 💰'+t.driverPay.toLocaleString():'')+(t.kmMode?' · 🛣️'+kmFmt(kmTotal(t))+'กม.':'')+' ▾</span>'
         +'</div>'
-        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+photoHTML+uploadHTML+ordersHtml+'</div>'
+        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+photoHTML+uploadHTML+((t.kmMode||kmLogOf(t).length)?kmSummaryHTML(t):'')+ordersHtml+'</div>'
         +'</div>';
     };
     // Month split: the running month is listed flat (starts empty on the 1st),
@@ -9453,6 +9582,7 @@ function drLoadTourData(){
     dArranged=(tour.arranged||[]).filter(function(id){return dTour.indexOf(id)>=0;});
     var _rest=dTour.filter(function(id){return dArranged.indexOf(id)<0;});
     dTour=dArranged.concat(_rest);
+    try{ _drKmSeqSeen=tour.kmOrderTs||0; }catch(e){}
   } else { dArranged=[]; }
 }
 // Persist the driver's two-column route arrangement (right = ordered delivery sequence).
@@ -9611,6 +9741,12 @@ function drDepart(){
   if(!tour)return;
   var loaded=orders.filter(function(o){return tour.orders.includes(o.id)&&o.status==="loaded";});
   if(loaded.length===0){alert('Load orders onto truck first!');return;}
+  // KM tour: the start odometer reading must exist before leaving the yard.
+  if(tour.kmMode && !kmLogOf(tour).length){
+    alert('🏁 ถ่ายรูปเลขไมล์ก่อนออกรถ\nPhotograph the odometer before departing.');
+    try{ drKmOpen(''); }catch(e){}
+    return;
+  }
   var now=new Date();
   tour.driving=true;
   tour.departedAt=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
@@ -9633,13 +9769,15 @@ function drBackFree(){
 function drTour(){
   const myTour=dTour.filter(id=>dAllOrders.find(x=>x.id===id));
   document.getElementById('dr-t-cnt').textContent=myTour.length;
+  try{ drKmRender(); }catch(e){}
   // Two-column route arranger: tap a stop on the left → it joins the route on the right (in
   // tap order). Rendered BOTH above and below the full order cards (#dr-arrange +
   // #dr-arrange-bottom). Hidden once the driver has departed → only full cards remain.
   (function(){
     var top=document.getElementById('dr-arrange'), bot=document.getElementById('dr-arrange-bottom'), hintEl=document.getElementById('dr-arr-hint');
     var tour=drGetTour();
-    if(myTour.length<2 || (tour && tour.driving)){
+    // KM tours: the office fixes the stop sequence — the driver just follows 1., 2., 3.
+    if(myTour.length<2 || (tour && tour.driving) || (tour && tour.kmMode)){
       [top,bot].forEach(function(el){ if(el){ el.style.display='none'; el.innerHTML=''; } });
       if(hintEl) hintEl.style.display='none'; return;
     }
@@ -9711,6 +9849,112 @@ function drTour(){
       '<button type="button" class="btnundo" style="margin-top:6px" onclick="drUndoBtn(this)" data-id="'+id+'" data-done="'+((done||shipped)?'1':'0')+'"><i class="ti ti-arrow-back-up"></i> Undo</button>'+
       '</div>';
   }).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+//  DRIVER · KM MODE — odometer photo + reading before departing and after each stop.
+//  A reading always closes the stop just delivered (see kmByOrder above).
+// ════════════════════════════════════════════════════════════
+function drKmRender(){
+  var box=document.getElementById('dr-kmbox'); if(!box) return;
+  var t=drGetTour();
+  if(!t || !t.kmMode){ box.style.display='none'; box.innerHTML=''; return; }
+  box.style.display='block';
+  var log=kmLogOf(t), start=log[0], last=log[log.length-1];
+  var done=kmByOrder(t);
+  // Stops already delivered/handed over but still without an odometer reading.
+  var pending=(t.orders||[]).filter(function(id){
+    var st=(t.status||{})[id];
+    return (st==='delivered'||st==='shipped') && !done[id];
+  });
+  var head, body;
+  if(!start){
+    head='<div style="font-size:14px;font-weight:800;color:#92400e">🏁 เลขไมล์ก่อนออกรถ / Start odometer</div>'
+      +'<div style="font-size:12px;color:#92400e;margin-top:2px">ถ่ายรูปเลขไมล์ในรถก่อนออก / Photograph the odometer before you leave</div>';
+    body='<button type="button" onclick="drKmOpen(\'\')" style="width:100%;margin-top:8px;padding:12px;border:none;border-radius:var(--rs);background:#d97706;color:#fff;font-size:14px;font-weight:800;cursor:pointer">📷 ถ่ายรูป + ใส่เลขไมล์ / Take photo + km</button>';
+  } else {
+    head='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+      +'<span style="font-size:14px;font-weight:800;color:#1d4ed8">🛣️ ทัวร์คิดตามกิโลเมตร / KM tour</span>'
+      +'<span style="font-size:13px;font-weight:800">'+kmFmt(kmTotal(t))+' กม. · '+kmPayAmount(t).toLocaleString()+' ฿</span>'
+      +'</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:2px">ล่าสุด / last: '+kmFmt(last.km)+' กม. · '+kmFmt(kmRateOf(t))+' ฿/กม.</div>';
+    body=pending.length
+      ? '<div style="margin-top:8px;background:#fef3c7;border:1px solid #fde68a;border-radius:var(--rs);padding:8px 10px">'
+        +'<div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px">⚠️ ยังไม่ได้บันทึกเลขไมล์หลังส่ง / odometer missing after:</div>'
+        +pending.map(function(id){
+          return '<button type="button" onclick="drKmOpen(\''+String(id).replace(/['\\]/g,'')+'\')" style="width:100%;margin-bottom:4px;padding:9px;border:none;border-radius:var(--rs);background:#d97706;color:#fff;font-size:13px;font-weight:700;cursor:pointer">📷 '+id+' — ใส่เลขไมล์ / add km</button>';
+        }).join('')
+        +'</div>'
+      : '';
+    body+='<div style="margin-top:6px"><span onclick="ofToggleMore(\'drkmlog\')" style="cursor:pointer;font-size:11px;font-weight:700;color:#1d4ed8">📷 ประวัติเลขไมล์ ('+log.length+') ▾</span>'
+      +'<div id="drkmlog" style="display:none">'+kmSummaryHTML(t)+'</div></div>';
+  }
+  box.innerHTML='<div style="border:1.5px solid '+(start?'#bfdbfe':'#fde68a')+';background:'+(start?'#eff6ff':'#fffbeb')+';border-radius:var(--r);padding:12px 14px">'+head+body+'</div>';
+}
+var _kmM={orderId:'', photo:null};
+function drKmOpen(orderId){
+  var t=drGetTour(); if(!t){ alert('No active tour'); return; }
+  _kmM={orderId:orderId||'', photo:null};
+  var log=kmLogOf(t), prev=log.length?log[log.length-1]:null;
+  document.getElementById('km-modal-title').textContent = _kmM.orderId ? ('🛣️ เลขไมล์หลังส่ง / KM after '+_kmM.orderId) : '🏁 เลขไมล์ก่อนออกรถ / Start km';
+  document.getElementById('km-modal-sub').innerHTML = prev
+    ? 'ค่าล่าสุด / last reading: <b>'+kmFmt(prev.km)+' กม.</b>'
+    : 'ถ่ายรูปเลขไมล์ในรถ แล้วพิมพ์ตัวเลข / Photograph the odometer, then type the number';
+  document.getElementById('km-photo-preview').style.display='none';
+  document.getElementById('km-photo-preview').innerHTML='';
+  document.getElementById('km-photo-input').value='';
+  document.getElementById('km-photo-gal').value='';
+  var inp=document.getElementById('km-value'); inp.value='';
+  document.getElementById('km-msg').textContent='';
+  document.getElementById('km-modal').classList.add('open');
+  setTimeout(function(){ try{ inp.focus(); }catch(e){} }, 250);
+}
+function closeKmModal(){ document.getElementById('km-modal').classList.remove('open'); _kmM={orderId:'',photo:null}; }
+function drKmPhoto(input){
+  var f=input.files&&input.files[0]; if(!f) return;
+  var msg=document.getElementById('km-msg'); msg.style.color='var(--text2)'; msg.textContent='⏳ กำลังบีบอัดรูป / compressing…';
+  compressPhotoFile(f, function(dataUrl){
+    _kmM.photo=dataUrl||null;
+    var pv=document.getElementById('km-photo-preview');
+    if(dataUrl){
+      pv.style.display='block';
+      pv.innerHTML='<img src="'+dataUrl+'" style="width:100%;max-height:220px;object-fit:contain;border-radius:var(--rs);border:1px solid var(--border)">';
+      msg.textContent='';
+    } else { msg.style.color='#dc2626'; msg.textContent='อ่านรูปไม่ได้ / could not read the photo'; }
+  });
+  input.value='';
+}
+function drKmSave(){
+  var t=drGetTour(); if(!t){ closeKmModal(); return; }
+  var msg=document.getElementById('km-msg');
+  var km=parseFloat((document.getElementById('km-value')||{}).value);
+  if(!isFinite(km) || km<0){ msg.style.color='#dc2626'; msg.textContent='ใส่เลขไมล์ / please enter the odometer reading'; return; }
+  var log=kmLogOf(t), prev=log.length?log[log.length-1]:null;
+  if(prev && km < (parseFloat(prev.km)||0)){
+    if(!confirm('เลขไมล์น้อยกว่าครั้งก่อน ('+kmFmt(prev.km)+') — บันทึกเลย?\nReading is lower than the previous one. Save anyway?')) return;
+  }
+  if(!_kmM.photo && !confirm('ยังไม่มีรูปเลขไมล์ — บันทึกเลย?\nNo odometer photo yet. Save anyway?')) return;
+  var drName=((typeof currentDriverId!=='undefined' ? (drivers.find(function(d){return d.id===currentDriverId;})||{}).name : '')||'Driver');
+  var arr=kmLogOf(t);
+  arr.push({ km:km, photo:_kmM.photo||'', orderId:_kmM.orderId||'', ts:Date.now(), by:drName });
+  t.kmLog=arr;
+  if(t.kmRate==null||t.kmRate==='') t.kmRate=KM_RATE_DEFAULT;
+  syncTours();
+  closeKmModal();
+  try{ drKmRender(); }catch(e){}
+  try{ showNotif('🛣️ '+kmFmt(km)+' กม. บันทึกแล้ว / saved'); }catch(e){}
+}
+// Office changed the driving sequence (or switched KM mode on) → reload the tour order.
+var _drKmSeqSeen=null;
+function drKmSyncSeq(){
+  var t=drGetTour(); if(!t) return;
+  var ts=t.kmOrderTs||0;
+  if(_drKmSeqSeen===null){ _drKmSeqSeen=ts; return; }
+  if(_drKmSeqSeen===ts) return;
+  _drKmSeqSeen=ts;
+  drLoadTourData();
+  var onTour=document.getElementById('drv-tour')&&document.getElementById('drv-tour').classList.contains('active');
+  if(onTour) drTour(); else drReady();
 }
 
 function drChk(id,f){
@@ -9871,6 +10115,11 @@ function drArrDepart(){
   var mt=dTour.filter(function(id){return dAllOrders.find(function(x){return x.id===id;});});
   var arranged=dArranged.filter(function(id){return mt.indexOf(id)>=0;});
   if(arranged.length===0){ alert('แตะออเดอร์ทางซ้ายเพื่อจัดลำดับก่อน / Tap orders on the left to build your route first'); return; }
+  if(tour.kmMode && !kmLogOf(tour).length){
+    alert('🏁 ถ่ายรูปเลขไมล์ก่อนออกรถ\nPhotograph the odometer before departing.');
+    try{ drKmOpen(''); }catch(e){}
+    return;
+  }
   if(!confirm('ออกรถเลย? / Depart now?')) return;
   arranged.forEach(function(id){
     var o=orders.find(function(x){return x.id===id;});
@@ -12185,6 +12434,9 @@ function drDoDeliver(id, photoUrl){
   drTour();drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;
   ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();try{payUpdateBadge();}catch(e){}
   try{ if(ord) sheetsSyncOrder(ord); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
+  // KM tour: right after the delivery the driver photographs the odometer again —
+  // that reading belongs to the stop just finished.
+  if(tour && tour.kmMode) setTimeout(function(){ try{ drKmOpen(id); }catch(e){} }, 400);
 }
 function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded','Driver');auditStatus(id,_o,'loaded','Driver');}revOrders=revOrders.filter(x=>x.id!==id);const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
 // Shipper handover: driver dropped the goods at a carrier company. The order is done
@@ -12208,6 +12460,7 @@ function drDoShip(id){
   drTour();drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;
   ofRenderOrders();mgRender();syncOrders();syncTours();
   try{ if(ord) sheetsSyncOrder(ord); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
+  if(tour && tour.kmMode) setTimeout(function(){ try{ drKmOpen(id); }catch(e){} }, 400);
 }
 function drCancel(id){
   const ord=orders.find(x=>x.id===id);
@@ -15231,6 +15484,29 @@ function calcViz() {
       <i class="ti ti-check"></i> Confirm Delivered / ยืนยัน
     </button>
     <button type="button" class="btn" onclick="closeDeliveryModal()" style="margin-top:6px">Cancel</button>
+  </div>
+</div>
+
+<!-- ODOMETER (KM) MODAL — km-based tours: photo + manual reading -->
+<div class="modal-overlay" id="km-modal">
+  <div class="modal" style="max-width:460px">
+    <div class="mhdr">
+      <span class="mtit" id="km-modal-title">🛣️ KM</span>
+      <button type="button" class="mclose" onclick="closeKmModal()"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="km-modal-sub" style="font-size:12px;color:var(--text2);margin-bottom:10px"></div>
+    <div id="km-photo-preview" style="display:none;margin-bottom:8px"></div>
+    <input type="file" id="km-photo-input" accept="image/*" capture="environment" style="display:none" onchange="drKmPhoto(this)">
+    <input type="file" id="km-photo-gal" accept="image/*" style="display:none" onchange="drKmPhoto(this)">
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <button type="button" onclick="document.getElementById('km-photo-input').click()" style="flex:1;padding:14px 6px;border:2px dashed var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:13px;font-weight:700;cursor:pointer">📷 ถ่ายรูปเลขไมล์<br><span style="font-size:11px;font-weight:500;color:var(--text2)">Photo of the odometer</span></button>
+      <button type="button" onclick="document.getElementById('km-photo-gal').click()" style="flex:0 0 92px;padding:14px 6px;border:2px dashed var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:13px;font-weight:700;cursor:pointer">🖼️<br><span style="font-size:11px;font-weight:500;color:var(--text2)">Gallery</span></button>
+    </div>
+    <label class="fl" style="margin-top:0">🔢 เลขไมล์ / Odometer reading (กม.)</label>
+    <input type="number" id="km-value" inputmode="decimal" step="0.1" min="0" placeholder="เช่น 128450" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:var(--rs);font-size:20px;font-weight:800;text-align:right;background:var(--bg);color:var(--text)">
+    <div id="km-msg" style="font-size:12px;margin-top:8px;text-align:center"></div>
+    <button type="button" class="btn btng" onclick="drKmSave()" style="margin-top:10px"><i class="ti ti-device-floppy"></i> บันทึก / Save km</button>
+    <button type="button" class="btn" onclick="closeKmModal()" style="margin-top:6px">Cancel</button>
   </div>
 </div>
 
