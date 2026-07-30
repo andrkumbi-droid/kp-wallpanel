@@ -2086,9 +2086,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="view" id="ofv-stock"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div class="stit" style="margin-bottom:0">📦 Stock / สต็อก</div>
-      <div style="position:relative;flex:1;max-width:220px;margin-left:10px">
-        <i class="ti ti-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:14px;color:var(--text2)"></i>
-        <input type="text" id="of-stockcat-search" oninput="ofStockCatalog()" placeholder="Search code / ค้นหา" style="width:100%;box-sizing:border-box;padding:7px 8px 7px 28px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px">
+      <div style="display:flex;align-items:center;gap:8px;flex:1;margin-left:10px;justify-content:flex-end">
+        <div style="position:relative;flex:1;max-width:220px">
+          <i class="ti ti-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:14px;color:var(--text2)"></i>
+          <input type="text" id="of-stockcat-search" oninput="ofStockCatalog()" placeholder="Search code / ค้นหา" style="width:100%;box-sizing:border-box;padding:7px 8px 7px 28px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px">
+        </div>
+        <button type="button" onclick="ofStockPrint()" title="Print current stock / พิมพ์สต็อก" style="flex-shrink:0;padding:7px 11px;border:none;border-radius:var(--rs);background:#1d4ed8;color:#fff;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-printer"></i> Print / พิมพ์</button>
       </div>
     </div>
     <div id="of-stockcat-list"><div class="empty" style="padding:1rem;font-size:13px">No stock yet</div></div>
@@ -4605,6 +4608,84 @@ function ofStockCatalog(){
   host.innerHTML = html || '<div class="empty" style="padding:1rem;font-size:13px">No stock found</div>';
 }
 
+// Office → Stock tab: print the CURRENT stock. Two separate tables — KP wall panels and
+// K-PVC ceiling — each in code order (KP006, KP009, KP011 … / K-PVC-01, K-PVC-02 …).
+// L-Corner / U-Trim / T-Trim are deliberately left out for now. The last column stays
+// blank so the sheet can be used for counting in the warehouse.
+function ofStockPrint(){
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var prod=function(code){ return (window.QT_PRODUCTS||[]).find(function(p){ return p.code===code; }) || {}; };
+  var byCode=function(a,b){ return String(a.code||'').localeCompare(String(b.code||''), undefined, {numeric:true}); };
+  var panels=(stockItems||[]).filter(function(s){return s.type==='panel';}).slice().sort(byCode);
+  var pvc=(stockItems||[]).filter(function(s){return s.type==='pvc';}).slice().sort(byCode);
+  if(!panels.length && !pvc.length){ alert('No stock / ไม่มีสต็อก'); return; }
+  var now=new Date();
+  var dateStr=now.toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'})+' '
+    +String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  function tbl(title, items){
+    if(!items.length) return '';
+    var ta=items.reduce(function(a,s){return a+(parseInt(s.qty)||0);},0);
+    var tb=items.reduce(function(a,s){return a+(parseInt(s.damaged)||0);},0);
+    return '<div class="sec"><div class="sect">'+esc(title)+' <span class="cnt">'+items.length+' รายการ / items</span></div>'
+      +'<table><thead><tr>'
+        +'<th class="c">#</th><th>รหัส / Code</th><th>สี / Colour</th><th class="c">ขนาด / Size</th>'
+        +'<th class="r">GRADE A</th><th class="r">GRADE B</th><th class="r">รวม / Total</th><th class="c cnt-col">นับจริง / Counted</th>'
+      +'</tr></thead><tbody>'
+      +items.map(function(s,i){
+        var p=prod(s.code);
+        var a=parseInt(s.qty)||0, b=parseInt(s.damaged)||0;
+        return '<tr>'
+          +'<td class="c muted">'+(i+1)+'</td>'
+          +'<td class="cd">'+esc(s.code)+'</td>'
+          +'<td>'+esc(p.name||s.notes||'')+'</td>'
+          +'<td class="c">'+esc(p.w?p.w+' cm':'')+'</td>'
+          +'<td class="r'+(a<=0?' zero':'')+'">'+a.toLocaleString()+'</td>'
+          +'<td class="r'+(b>0?' bq':'')+'">'+(b>0?b.toLocaleString():'—')+'</td>'
+          +'<td class="r tot">'+(a+b).toLocaleString()+'</td>'
+          +'<td class="c"></td>'
+        +'</tr>';
+      }).join('')
+      +'</tbody><tfoot><tr>'
+        +'<td colspan="4" class="r">รวม / Total</td>'
+        +'<td class="r">'+ta.toLocaleString()+'</td><td class="r">'+tb.toLocaleString()+'</td><td class="r tot">'+(ta+tb).toLocaleString()+'</td><td></td>'
+      +'</tr></tfoot></table></div>';
+  }
+  var gA=panels.reduce(function(a,s){return a+(parseInt(s.qty)||0);},0)+pvc.reduce(function(a,s){return a+(parseInt(s.qty)||0);},0);
+  var gB=panels.reduce(function(a,s){return a+(parseInt(s.damaged)||0);},0)+pvc.reduce(function(a,s){return a+(parseInt(s.damaged)||0);},0);
+  var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Stock / สต็อก '+esc(now.toISOString().slice(0,10))+'</title><style>'
+    +'*{box-sizing:border-box;margin:0;padding:0}'
+    +'@page{size:A4 portrait;margin:10mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;background:#fff;font-size:10pt}'
+    +'.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:5px;margin-bottom:4px}'
+    +'.hd h1{font-size:14pt}.hd .d{font-size:9.5pt;color:#444}'
+    +'.grand{display:flex;gap:8px;margin:6px 0 2px}'
+    +'.gbox{flex:1;border:1.5px solid #111;border-radius:4px;padding:5px 8px;text-align:center}'
+    +'.gbox .l{font-size:8.5pt;color:#555;font-weight:700;letter-spacing:.04em}.gbox .v{font-size:14pt;font-weight:800}'
+    +'.sec{margin-top:12px;page-break-inside:auto}'
+    +'.sect{font-size:11pt;font-weight:800;background:#ffeb3b;border:1px solid #999;padding:3px 7px;margin-bottom:3px}'
+    +'.sect .cnt{font-size:9pt;font-weight:600;color:#444;float:right}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #999;padding:3px 5px;font-size:9.5pt}'
+    +'th{background:#f1f5f9;font-size:8.5pt;text-transform:uppercase;letter-spacing:.03em}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.c{text-align:center}.r{text-align:right}.muted{color:#777}'
+    +'.cd{font-weight:800}.tot{font-weight:800}.bq{color:#b45309;font-weight:700}.zero{color:#dc2626;font-weight:800}'
+    +'.cnt-col{width:24mm}'
+    +'tfoot td{background:#f1f5f9;font-weight:800}'
+    +'</style></head><body>'
+    +'<div class="hd"><h1>📦 สต็อกคงเหลือ / Stock on hand — KP Wallpanel</h1><div class="d">'+esc(dateStr)+'</div></div>'
+    +'<div class="grand"><div class="gbox"><div class="l">GRADE A</div><div class="v">'+gA.toLocaleString()+'</div></div>'
+      +'<div class="gbox"><div class="l">GRADE B</div><div class="v">'+gB.toLocaleString()+'</div></div>'
+      +'<div class="gbox"><div class="l">รวมทั้งหมด / TOTAL</div><div class="v">'+(gA+gB).toLocaleString()+'</div></div></div>'
+    +tbl('KP — WPC Wall Panels / แผ่นผนัง', panels)
+    +tbl('K-PVC — PVC Ceiling / ฝ้าเพดาน', pvc)
+    +'<div style="margin-top:14px;font-size:9pt;color:#555">ผู้นับ / Counted by: ______________________ &nbsp;&nbsp; วันที่ / Date: ______________</div>'
+    +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(full); w.document.close(); w.focus();
+}
+
 
 
 // ── NOTIFICATIONS ──
@@ -5896,16 +5977,32 @@ function printDeliverySheet() {
   if(currentTourDetailIdx === null) return;
   const t = activeTours[currentTourDetailIdx];
   if(!t) return;
-
+  var _tos = (t.orders||[]).map(function(id){
+    return orders.find(function(x){return x.id===id;}) || {id:id, customer:'—', address:'—', panels:'—', lcorner:'—', clips:0, total:'—', zone:'—', phone:'—'};
+  }).filter(function(o){ return ((t.status||{})[o.id]||'loaded') !== 'cancelled'; });
+  return dsPrintSheet(t.driverName||'', _tos);
+}
+// Reprint a sheet later from the Drivers tab — works for an archived tourHistory record
+// AND for a tour that is still on the road. Each stop prints from the LIVE order record
+// when it still exists, otherwise from the snapshot stored on the tour, so an old tour
+// always prints exactly the stops it carried.
+function ofDrvPrintSheet(driverKey, tourKey, tourId){
+  var at = tourId ? (activeTours||[]).find(function(x){return x.id===tourId;}) : null;
+  var rec = at ? ofActiveTourRec(at) : (((tourHistory||{})[driverKey]||{})[tourKey]);
+  if(!rec){ alert('Tour not found / ไม่พบทัวร์'); return; }
+  var snaps = rec.orders||[];
+  if(!Array.isArray(snaps)) snaps = Object.keys(snaps).map(function(k){ return snaps[k]; });
+  var list = snaps.filter(function(sp){ return sp && sp.id && sp.status!=='cancelled'; })
+    .map(function(sp){ return (orders||[]).find(function(x){return x.id===sp.id;}) || sp; });
+  if(!list.length){ alert('No orders in this tour / ทัวร์นี้ไม่มีออเดอร์'); return; }
+  dsPrintSheet(rec.driverName||'', list);
+}
+function dsPrintSheet(driverName, tourOrders) {
   const now = new Date();
   const dateStr = now.toLocaleDateString('th-TH', {day:'numeric', month:'long', year:'numeric'});
-  const driver = t.driverName || '';
+  const driver = driverName || '';
   const esc = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
   const PRODT = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
-
-  const tourOrders = t.orders.map(function(id){
-    return orders.find(function(x){return x.id===id;}) || {id:id, customer:'—', address:'—', panels:'—', lcorner:'—', clips:0, total:'—', zone:'—', phone:'—'};
-  }).filter(function(o){ return (t.status[o.id]||'loaded') !== 'cancelled'; });
 
   function moneyOf(o){ return parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0; }
 
@@ -6586,6 +6683,18 @@ function ofOrderCard(o, sfx){
     +'<span style="font-size:11px;font-weight:700;margin-left:auto;white-space:nowrap;color:'+(_payFull?'#166534':_payPart?'#854d0e':'#991b1b')+'">'+(_payFull?'✓ Fully paid':_payPart?('ค้าง '+_payOut.toLocaleString()+' ฿'):'Unpaid')+'</span>'
     +'</div>';
   }
+  // Pre-assign the carrier while the order is still in the warehouse (optional). It is
+  // stored on the order (o.shipper), so as soon as the order goes onto a tour the shipper
+  // is already filled in there — and stays changeable everywhere, any time.
+  if(!window.ofReadOnly && ['new','packing','ready','loaded'].indexOf(o.status)>=0){
+    s += '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;padding:6px 8px;border-radius:var(--rs);background:'+(o.shipper?'#eef2ff':'var(--bg2)')+'">'
+      +'<span style="font-size:12px;font-weight:700;color:'+(o.shipper?'#4f46e5':'var(--text2)')+';white-space:nowrap">🚚 ขนส่ง</span>'
+      +'<select onchange="shipSetShipper(\''+o.id+'\',this.value)" title="Shipper / บริษัทขนส่ง (optional)" style="flex:1;min-width:0;padding:5px 8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px;cursor:pointer">'
+        +'<option value="">— shipper / ขนส่ง (optional) —</option>'
+        +(shippers||[]).map(function(_sp){ return '<option value="'+_esc(_sp)+'"'+(o.shipper===_sp?' selected':'')+'>'+_esc(_sp)+'</option>'; }).join('')
+      +'</select>'
+      +'</div>';
+  }
   s += createdHTML;
   if(logHTML) s += '<div style="font-size:11px;color:#888;margin-top:5px;line-height:1.8"><i class="ti ti-clock" style="font-size:11px;vertical-align:-1px"></i> '+logHTML+'</div>';
   // Visible row: Print receipt stays · "More" toggle opens the rest.
@@ -7165,7 +7274,9 @@ function ofRenderTour(){
         var st=t.status[id]||'loaded';
         if(st==='delivered'||st==='cancelled'||st==='shipped') return;
         var o=orders.find(function(x){return x.id===id;});
-        if(o && o.status==='delivered'){ t.status[id]='delivered'; _recon=true; }
+        // Adopt every finished state, not just "delivered" — a handover booked
+        // elsewhere left the tour row on ready/loaded and the progress bar wrong.
+        if(o && (o.status==='delivered'||o.status==='shipped'||o.status==='cancelled')){ t.status[id]=o.status; _recon=true; }
       });
     });
     if(_recon) syncTours();
@@ -7319,9 +7430,11 @@ function ofRenderTour(){
     // popup (openLalaInfo) — showing them on the card too was duplicate work. Advance
     // is dropped entirely: a Lalamove ride is always paid in full, never advanced.
     var isL = ofIsLala(t);
-    var del=t.orders.filter(function(id){return (t.status||{})[id]==='delivered';}).length;
-    var can=t.orders.filter(function(id){return (t.status||{})[id]==='cancelled';}).length;
-    var shp=t.orders.filter(function(id){return (t.status||{})[id]==='shipped';}).length;
+    // Count with the SAME status the rows show: an order handed to a carrier counts as
+    // done even when the tour row still says ready/loaded (the order record wins).
+    var del=t.orders.filter(function(id){return tourEffStatus(t,id)==='delivered';}).length;
+    var can=t.orders.filter(function(id){return tourEffStatus(t,id)==='cancelled';}).length;
+    var shp=t.orders.filter(function(id){return tourEffStatus(t,id)==='shipped';}).length;
     var pen=t.orders.length-del-can-shp;
     var pct=t.orders.length>0?Math.round((del+shp)/t.orders.length*100):0;
     var totCtn=t.orders.reduce(function(a,id){var o=orders.find(function(x){return x.id===id;});return a+(parseInt(o&&o.ctn)||0);},0);
@@ -7336,9 +7449,7 @@ function ofRenderTour(){
     var orderList = t.orders.map(function(id, _oi) {
       var ord = orders.find(function(x){return x.id===id;});
       var rawSt = t.status[id]||'loaded';
-      // Reflect the live packing status for planned-but-unready orders so the tour
-      // card auto-updates as the warehouse packs. Terminal tour states win.
-      var st = (rawSt==='delivered'||rawSt==='cancelled'||rawSt==='shipped') ? rawSt : ((ord&&ord.status)||rawSt);
+      var st = tourEffStatus(t,id);
       // Conflict flag: the tour row says done, but the order record is still open
       // (re-packed by the warehouse, undone elsewhere, or a lost status write).
       var _stConflict = (rawSt==='delivered'||rawSt==='shipped') && ord
@@ -7509,31 +7620,32 @@ function ofRenderTour(){
         '<span style="font-size:12px;color:var(--text2)">฿</span>'+
         '</div>')+
         (!isL&&(parseFloat(t.driverAdvance)||0)>0&&(parseFloat(t.driverPay)||0)>0?'<div style="font-size:11px;color:var(--text2);margin:-4px 0 8px;text-align:right">คงเหลือจ่ายท้ายทัวร์ / Pay at end: <b style="color:var(--green)">'+tourNetPay(t).toLocaleString()+' ฿</b></div>':'')+
-        // Cash button (online = upload the slip below, which counts as paid).
+        // Cash + slip side by side, same size: cash = tap the button, transfer = upload
+        // the slip. Both mark the tour as paid; the thumbnails open under the row.
         (isL ? '' : (function(){
-          var st=tourPayState(t);
-          if(st.paid) return '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px">'+tourPayBadgeHTML(t)
-            +(ro||st.how!=='cash'?'':'<span onclick="event.stopPropagation();ofTourPayCash(\''+t.id+'\')" title="ยกเลิก / undo" style="cursor:pointer;font-size:11px;color:var(--text2)">✕</span>')+'</div>';
-          return ro?'':'<button type="button" onclick="event.stopPropagation();ofTourPayCash(\''+t.id+'\')" title="จ่ายค่าทัวร์เป็นเงินสด / pay the tour in cash" style="width:100%;margin-bottom:8px;padding:9px;border-radius:var(--rs);border:1.5px dashed #86efac;background:#f0fdf4;color:#166534;font-size:12px;font-weight:700;cursor:pointer">💵 จ่ายเงินสดแล้ว / Paid in cash'+(tourNetPay(t)?' · '+tourNetPay(t).toLocaleString()+' ฿':'')+'</button>';
+          var half='flex:1 1 0;min-width:0;box-sizing:border-box;padding:8px 6px;border-radius:var(--rs);font-size:11.5px;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;gap:6px;min-height:40px';
+          var st=tourPayState(t), cnt=(t.carFeeSlips||[]).length;
+          var cash = st.paid
+            ? '<div style="'+half+';border:1.5px solid #86efac;background:#dcfce7;color:#166534">'+(st.how==='cash'?'✅ 💵 จ่ายเงินสด / paid cash':'✅ 🏦 โอนแล้ว / paid by transfer')
+                +(ro||st.how!=='cash'?'':'<span onclick="event.stopPropagation();ofTourPayCash(\''+t.id+'\')" title="ยกเลิก / undo" style="cursor:pointer;color:var(--text2);font-weight:400">✕</span>')+'</div>'
+            : (ro?'<div style="'+half+';border:1.5px dashed var(--border);color:var(--text2)">⏳ ยังไม่จ่าย / unpaid</div>'
+                 :'<button type="button" onclick="event.stopPropagation();ofTourPayCash(\''+t.id+'\')" title="จ่ายค่าทัวร์เป็นเงินสด / pay the tour in cash" style="'+half+';border:1.5px dashed #86efac;background:#f0fdf4;color:#166534;cursor:pointer">💵 จ่ายเงินสด / Paid cash'+(tourNetPay(t)?'<span style="font-weight:800">'+tourNetPay(t).toLocaleString()+' ฿</span>':'')+'</button>');
+          var slipLbl='🧾 สลิป / Slips'+(cnt?' ('+cnt+') ▾':'');
+          var slips = ro
+            ? '<div '+(cnt?'onclick="event.stopPropagation();ofToggleMore(\'tourslips_'+t.id+'\')" ':'')+'style="'+half+';border:1px solid #bbf7d0;background:#f0fdf4;color:#16a34a'+(cnt?';cursor:pointer':'')+'">'+slipLbl+'</div>'
+            : '<div style="'+half+';border:1px solid #bbf7d0;background:#f0fdf4;color:#16a34a">'
+                +'<span onclick="event.stopPropagation();ofToggleMore(\'tourslips_'+t.id+'\')" style="cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+slipLbl+'</span>'
+                +'<button type="button" onclick="event.stopPropagation();document.getElementById(\'tourslip-'+t.id+'\').click()" title="Take photo / ถ่ายรูปสลิป" style="flex-shrink:0;padding:3px 7px;border:1px solid #bbf7d0;background:var(--bg);color:#16a34a;border-radius:var(--rs);cursor:pointer;font-size:13px">📷</button>'
+                +'<button type="button" onclick="event.stopPropagation();document.getElementById(\'tourslipg-'+t.id+'\').click()" title="Upload one or more / อัปโหลดได้หลายสลิป" style="flex-shrink:0;padding:3px 7px;border:1px solid #bbf7d0;background:var(--bg);color:#16a34a;border-radius:var(--rs);cursor:pointer;font-size:13px">🖼️</button>'
+              +'</div>';
+          var thumbs='<div id="tourslips_'+t.id+'" style="display:none;margin-top:6px"><div style="display:flex;gap:4px;flex-wrap:wrap">'+(t.carFeeSlips||[]).map(function(src,pi){return '<div style="position:relative;display:inline-block"><img src="'+src+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:56px;height:56px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">'+(ro?'':'<button type="button" onclick="event.stopPropagation();ofTourDelSlip(\''+t.id+'\','+pi+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:11px;cursor:pointer;line-height:1">×</button>')+'</div>';}).join('')+'</div></div>';
+          return (ro?'':'<input type="file" accept="image/*" capture="environment" id="tourslip-'+t.id+'" style="display:none" onchange="ofTourAddSlip(this,\''+t.id+'\')">'
+                      +'<input type="file" accept="image/*" multiple id="tourslipg-'+t.id+'" style="display:none" onchange="ofTourAddSlip(this,\''+t.id+'\')">')
+            +'<div style="display:flex;gap:8px;align-items:stretch;margin-bottom:8px">'+cash+slips+'</div>'
+            +thumbs;
         })())+
         // Lalamove only: driver/plate/phone/fee live in the Lalamove tab — same data, editable here too.
         (ofIsLala(t) ? (function(){ var ok=lalaInfoComplete(t); return '<button type="button" onclick="event.stopPropagation();openLalaInfo(\''+t.id+'\')" style="width:100%;margin-bottom:8px;padding:9px;border-radius:var(--rs);border:1px solid '+(ok?'#bbf7d0':'#fed7aa')+';background:'+(ok?'#f0fdf4':'#fff7ed')+';color:'+(ok?'#16a34a':'#c2410c')+';font-size:12px;font-weight:700;cursor:pointer">'+(ok?'✅':'⚠️')+' 🛺 ข้อมูลคนขับ / Driver info'+(ok?'':' — กรอกให้ครบ / incomplete')+'</button>'; })() : '')+
-        (isL ? '' : (function(){
-          var cnt=(t.carFeeSlips||[]).length;
-          var thumbs='<div id="tourslips_'+t.id+'" style="display:none;margin-top:6px"><div style="display:flex;gap:4px;flex-wrap:wrap">'+(t.carFeeSlips||[]).map(function(src,pi){return '<div style="position:relative;display:inline-block"><img src="'+src+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:56px;height:56px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">'+(ro?'':'<button type="button" onclick="event.stopPropagation();ofTourDelSlip(\''+t.id+'\','+pi+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:11px;cursor:pointer;line-height:1">×</button>')+'</div>';}).join('')+'</div></div>';
-          var lbl='🧾 สลิป / Slips'+(cnt?' ('+cnt+') ▾':'');
-          if(ro){ return cnt?('<div style="margin-bottom:8px"><div onclick="event.stopPropagation();ofToggleMore(\'tourslips_'+t.id+'\')" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--rs);padding:5px 8px;font-size:11px;font-weight:700;color:#16a34a">'+lbl+'</div>'+thumbs+'</div>'):''; }
-          return '<input type="file" accept="image/*" capture="environment" id="tourslip-'+t.id+'" style="display:none" onchange="ofTourAddSlip(this,\''+t.id+'\')">'+
-            '<input type="file" accept="image/*" multiple id="tourslipg-'+t.id+'" style="display:none" onchange="ofTourAddSlip(this,\''+t.id+'\')">'+
-            '<div style="margin-bottom:8px">'+
-              '<div style="display:inline-flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--rs);padding:5px 8px">'+
-                '<span onclick="event.stopPropagation();ofToggleMore(\'tourslips_'+t.id+'\')" style="cursor:pointer;font-size:11px;font-weight:700;color:#16a34a;white-space:nowrap">'+lbl+'</span>'+
-                '<button type="button" onclick="event.stopPropagation();document.getElementById(\'tourslip-'+t.id+'\').click()" title="Take photo / ถ่ายรูปสลิป" style="flex-shrink:0;padding:4px 8px;border:1px solid #bbf7d0;background:var(--bg);color:#16a34a;border-radius:var(--rs);cursor:pointer;font-size:13px">📷</button>'+
-                '<button type="button" onclick="event.stopPropagation();document.getElementById(\'tourslipg-'+t.id+'\').click()" title="Upload one or more / อัปโหลดได้หลายสลิป" style="flex-shrink:0;padding:4px 8px;border:1px solid #bbf7d0;background:var(--bg);color:#16a34a;border-radius:var(--rs);cursor:pointer;font-size:13px">🖼️</button>'+
-              '</div>'+
-              thumbs+
-            '</div>';
-        })())+
         // KM tour: route cross-check right under the slips block.
         (_kmOn ? kmRouteRowHTML(t, ro) : '')+
       '</div>'+
@@ -8294,6 +8406,15 @@ function kmRouteRowHTML(t, ro){
 // ── TOUR PAY: paid in cash (button) or by transfer (slip photo) ─────────────
 // Cash → office taps the button. Online → the slip lands in t.carFeeSlips, which
 // counts as paid by transfer. Both are shown to the driver in his own tour.
+// The status a tour stop really has: a terminal tour state wins, otherwise the live
+// order record does (it also carries "shipped" when the handover was booked
+// elsewhere, and the packing progress for planned-but-unready orders).
+function tourEffStatus(t, id){
+  var raw=((t&&t.status)||{})[id]||'loaded';
+  if(raw==='delivered'||raw==='cancelled'||raw==='shipped') return raw;
+  var o=(typeof orders!=='undefined')?orders.find(function(x){return x.id===id;}):null;
+  return (o&&o.status)||raw;
+}
 function tourPayState(t){
   if(!t) return {paid:false};
   if(t.payMethodTour==='cash') return {paid:true, how:'cash', by:t.paidByTour||'', at:t.paidAtTour||0};
@@ -8445,6 +8566,51 @@ function ofDrvAddTourPhoto(input, driverKey, tourKey, tourId){
   });
   input.value='';
 }
+// Enter or correct the tour pay AFTER the tour (forgotten on "End tour", or extra work
+// was added). A tour that is still live just gets t.driverPay (payroll is booked when it
+// ends). For an ENDED tour the payroll entry was already written at tour end, so only the
+// DIFFERENCE is booked as a correction — the driver's month stays correct either way.
+function ofDrvSaveTourPay(driverKey, tourKey, tourId, val){
+  var amt=Math.max(0, parseFloat(String(val==null?'':val).replace(/[^0-9.]/g,''))||0);
+  var at=tourId?(activeTours||[]).find(function(x){return x.id===tourId;}):null;
+  if(at){
+    ofSetTourPay(at.id, amt);
+    try{ ofDriversRender(); }catch(e){}
+    try{ showNotif('💰 ค่าทัวร์ / Tour pay '+amt.toLocaleString()+' ฿ · '+(at.driverName||'')); }catch(e){}
+    return;
+  }
+  var rec=((tourHistory||{})[driverKey]||{})[tourKey];
+  if(!rec){ alert('Tour not found / ไม่พบทัวร์'); return; }
+  if(!window.fbDB){ alert('Offline — try again / ออฟไลน์'); return; }
+  var old=parseFloat(rec.driverPay)||0;
+  if(Math.abs(amt-old)<0.5) return;
+  var diff=amt-old;
+  if(!confirm('ค่าทัวร์ / Tour pay '+(rec.driverName||'')+(rec.tourNo?' · Tour '+rec.tourNo:'')+':\n'
+    +old.toLocaleString()+' ฿ → '+amt.toLocaleString()+' ฿\n'
+    +(diff>0?'+':'')+diff.toLocaleString()+' ฿ → payroll / เงินเดือน')) return;
+  var adv=parseFloat(rec.driverAdvance)||0;
+  var upd={ driverPay:amt, driverPayNet:Math.max(0, amt-adv) };
+  if(rec.lalaDriver||rec.plate) upd.carFee=amt;   // Lalamove: tour pay and car fee are the same money
+  window.fbDB.ref('tourHistory/'+driverKey+'/'+tourKey).update(upd);   // listener re-renders
+  ofDrvBookPayDelta(rec, diff);
+  try{ addLog('Tour pay '+(rec.driverName||'')+(rec.tourNo?' #'+rec.tourNo:'')+': '+old.toLocaleString()+' → '+amt.toLocaleString()+' ฿ (added later)','~'); }catch(e){}
+}
+// Book a later tour-pay correction into the driver's payroll, in the TOUR's month (not
+// today's) so a forgotten July tour still lands in July. Only the delta is written, so
+// editing the same tour repeatedly never double-counts.
+function ofDrvBookPayDelta(rec, delta){
+  if(!delta) return;
+  var s=(staffList||[]).find(function(x){return x.driverId && x.driverId===rec.driverId;})
+     || (staffList||[]).find(function(x){return x.name===rec.driverName;});
+  if(!s){ alert('⚠ No payroll person for '+(rec.driverName||'')+' / ไม่พบพนักงาน — saved on the tour only.'); return; }
+  var when=rec.endedDate||rec.departedDate||new Date().toISOString().slice(0,10);
+  var id='pl-'+Date.now();
+  var r={ id:id, who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:delta,
+    date:when, ts:Date.now(),
+    note:'Tour'+(rec.tourNo?' '+rec.tourNo:'')+(when?' '+when:'')+' · '+(delta>0?'ค่าทัวร์เพิ่มภายหลัง / added later':'ค่าทัวร์แก้ไข / corrected'),
+    by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
+  window.fbDB.ref('payLog/'+id).set(r);
+}
 // ── MONTH VIEW HELPERS ───────────────────────────────────────────
 // The monthly restart of the Drivers / Payroll / Lalamove views is pure DISPLAY
 // filtering — nothing is moved, copied or deleted in Firebase. At 00:00 on the
@@ -8555,12 +8721,24 @@ function ofDriversRender(){
         +'<button type="button" onclick="event.stopPropagation();document.getElementById(\''+pcam+'\').click()" style="flex:1;padding:7px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:700;cursor:pointer">📷 Photo / ถ่ายรูป</button>'
         +'<button type="button" onclick="event.stopPropagation();document.getElementById(\''+pgal+'\').click()" style="flex:1;padding:7px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:700;cursor:pointer">🖼️ Gallery / แกลเลอรี</button>'
         +'</div>';
+      // Reprint the driver delivery sheet later (same sheet as in the active tour).
+      var printHTML='<div style="padding:0 0 4px">'
+        +'<button type="button" onclick="event.stopPropagation();ofDrvPrintSheet(\''+key+'\',\''+t._k+'\',\''+(t.tourId||'')+'\')" title="Driver delivery sheet / ใบส่งของคนขับ" style="width:100%;padding:7px 4px;border:none;border-radius:var(--rs);background:#16a34a;color:#fff;font-size:11px;font-weight:700;cursor:pointer"><i class="ti ti-clipboard-list"></i> Delivery sheet / ใบส่งของ (print)</button>'
+        +'</div>';
+      // Tour pay entered/corrected after the fact (forgotten on "End tour", or extra work).
+      var payInpId='drvpay_'+key+'_'+t._k;
+      var payEditHTML='<div style="display:flex;align-items:center;gap:6px;padding:0 0 6px" onclick="event.stopPropagation()">'
+        +'<span style="font-size:11px;font-weight:700;color:var(--text2);white-space:nowrap">💰 ค่าทัวร์ / Tour pay</span>'
+        +'<input type="number" min="0" id="'+payInpId+'" value="'+(Number(t.driverPay)>0?Number(t.driverPay):'')+'" placeholder="0" style="flex:1;min-width:50px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px;font-weight:700;text-align:right">'
+        +'<span style="font-size:11px;color:var(--text2)">฿</span>'
+        +'<button type="button" onclick="event.stopPropagation();ofDrvSaveTourPay(\''+key+'\',\''+t._k+'\',\''+(t.tourId||'')+'\',(document.getElementById(\''+payInpId+'\')||{}).value)" style="flex-shrink:0;padding:6px 11px;border:none;border-radius:var(--rs);background:var(--blue);color:#fff;font-size:11px;font-weight:700;cursor:pointer">Save</button>'
+        +'</div>';
       return '<div style="border:1px solid '+(t._active?'#16a34a':'var(--border)')+';'+(t._active?'background:#f0fdf4;':'')+'border-radius:var(--rs);margin-bottom:6px">'
         +'<div onclick="ofToggleMore(\''+otid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">'
           +'<span style="font-weight:700">'+(t._active?'🚚 On tour / กำลังส่ง':'🚚 Tour '+(t.tourNo||'?'))+' <span style="font-size:11px;color:var(--text2);font-weight:500">· '+dateStr+(t.departedAt?' '+t.departedAt:'')+'</span></span>'
           +'<span style="font-size:11px;color:var(--text2)">'+(t.orderCount||(t.orders||[]).length)+' orders'+(t.driverPay>0?' · 💰'+t.driverPay.toLocaleString():'')+(t.kmMode?' · 🛣️'+kmFmt(kmTotal(t))+'กม.':'')+' ▾</span>'
         +'</div>'
-        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+payHTML+photoHTML+uploadHTML+((t.kmMode||kmLogOf(t).length)?kmSummaryHTML(t):'')+ordersHtml+'</div>'
+        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+payHTML+photoHTML+uploadHTML+printHTML+payEditHTML+((t.kmMode||kmLogOf(t).length)?kmSummaryHTML(t):'')+ordersHtml+'</div>'
         +'</div>';
     };
     // Month split: the running month is listed flat (starts empty on the 1st),
