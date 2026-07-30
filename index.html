@@ -856,6 +856,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       db.ref('orsKey').on('value', function(snap) { orsKey = snap.val() || ''; });
       db.ref('shipperLoc').on('value', function(snap) {
         shipperLoc = snap.val() || {};
+        _shipLocLoaded = true;
         try{ if(document.getElementById('mg-shipper-list')) mgRenderShippers(); }catch(e){}
         try{ if(document.getElementById('ofv-tour') && document.getElementById('ofv-tour').classList.contains('active')) ofRenderTour(); }catch(e){}
       });
@@ -3141,6 +3142,7 @@ var customerMeta={}; // phoneKey -> {name,address,loc,note,blocked,blockReason} 
 var homeLoc=null;    // warehouse start point {lat,lng} for the KM route cross-check
 var orsKey='';       // optional OpenRouteService key → route that avoids tollways
 var shipperLoc={};   // shipKey(name) -> {name,link,lat,lng} — the carrier's depot we deliver to
+var _shipLocLoaded=false;  // true once Firebase delivered shipperLoc — no routing before that
 var preOrders=[]; // pre-orders: {id,zone,customer,phone,address,location,contact,lineItems,notes,status(open|converted|cancelled),cancelReason,convertedId,createdBy,createdAt}
 var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
 var containerLog=[];
@@ -8077,11 +8079,15 @@ function kmSummaryHTML(t, opts){
 // route in Google Maps ("avoid tolls") for an exact look.
 var _kmRouteBusy={}, _kmRouteTried={};
 function kmRouteSig(t){
-  // Re-route when the stop order OR a carrier assignment changes.
+  // Re-route when the stop order, a carrier assignment, or a carrier DEPOT changes.
+  // The depot has to be part of it: a client whose shipperLoc had not loaded yet
+  // would otherwise consider a depot-less (far too long) route up to date.
   return (t.orders||[]).map(function(id){
     var o=orders.find(function(x){return x.id===id;});
     var sh=(o&&o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:'';
-    return id+(sh?'@'+sh:'');
+    if(!sh) return id;
+    var d=shipperLatLng(sh);
+    return id+'@'+sh+(d?('#'+d.lat.toFixed(4)+','+d.lng.toFixed(4)):'#nopin');
   }).join('>');
 }
 // ── Carrier depots — where the goods are handed over (Pay tab → Shippers) ──
@@ -8170,9 +8176,14 @@ function kmRouteCalc(tourId, force){
     if(!orders || !orders.length) return;
     var incomplete=(t.orders||[]).some(function(id){ return !orders.find(function(x){return x.id===id;}); });
     if(incomplete) return;
+    // Carrier depots not loaded yet → we would route to the customers instead of the
+    // depots and overwrite a correct value with a far too long one.
+    if(!_shipLocLoaded) return;
     // One calculation per tour per 5 minutes across all devices; 🔄 forces it.
     if(t.kmRoute && t.kmRoute.ts && (Date.now()-t.kmRoute.ts)<300000) return;
-    if(document.hidden) return;   // background tab: leave it to the visible one
+    // Only the window the user is actually looking at may write — never a second
+    // tab or a phone in the pocket.
+    if(document.hidden || !document.hasFocus()) return;
   }
   var p=kmRoutePoints(t);
   if(!p.pts.length){ if(force) alert('ไม่มีพิกัดลูกค้าในทัวร์นี้\nNo customer coordinates saved for this tour.'); return; }
