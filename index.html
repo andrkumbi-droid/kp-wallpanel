@@ -200,6 +200,10 @@ textarea{resize:none}
 /* Driver two-column route arranger (tap a card to move it between columns). */
 #dr-arrange{margin-bottom:14px}
 .arr-cols{display:flex;gap:8px;margin-bottom:8px}
+/* While a card is dragged: no page/pinch scrolling, and the card is clearly picked up. */
+.arr-cols.arr-drag{touch-action:none}
+.arr-cols.arr-drag .acard{touch-action:none}
+.acard.dragging{opacity:.95;box-shadow:0 10px 26px rgba(0,0,0,.28);border:1.5px solid var(--blue);transform:scale(1.03);position:relative;z-index:5}
 .arr-col{flex:1;min-width:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px;min-height:90px}
 .arr-col.arr-right{background:var(--blue-l);border-color:var(--blue)}
 .arr-col h4{font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.02em;margin:0 0 8px;text-align:center}
@@ -10211,7 +10215,7 @@ function drTour(){
     var rightIds=dArranged.filter(function(id){return myTour.indexOf(id)>=0;});
     var leftIds=myTour.filter(function(id){return rightIds.indexOf(id)<0;});
     var col=function(side,label,ids,numbered){
-      return '<div class="arr-col arr-'+side+'"><h4>'+label+'</h4>'+
+      return '<div class="arr-col arr-'+side+'" id="dr-arr-'+side+'"><h4>'+label+'</h4>'+
         (ids.length?ids.map(function(id,i){var o=dAllOrders.find(function(x){return x.id===id;});return o?drArrCard(o, numbered?(i+1):null):'';}).join('')
                    :'<div style="font-size:11px;color:var(--text2);text-align:center;padding:14px 4px">'+(side==='right'?'แตะทางซ้าย / tap left':'—')+'</div>')+
       '</div>';
@@ -10222,7 +10226,7 @@ function drTour(){
       + '</div>'
       + '<button type="button" onclick="drArrDepart()" style="width:100%;padding:12px;border:none;border-radius:var(--rs);font-weight:800;font-size:15px;cursor:pointer;'+(rightIds.length?'background:var(--green,#059669);color:#fff':'background:var(--bg2);color:var(--text2)')+'"><i class="ti ti-truck"></i> 🚀 ออกรถ / Depart'+(rightIds.length?' ('+rightIds.length+')':'')+'</button>';
     if(top){ top.style.display='none'; top.innerHTML=''; }   // only the bottom arranger is used
-    if(bot){ bot.style.display='block'; bot.innerHTML='<div style="border-top:2px dashed var(--border);margin-top:6px;padding-top:12px;font-size:11px;color:var(--text2);margin-bottom:8px">👇 แตะออเดอร์ทางซ้ายตามลำดับที่จะส่ง (แตะทางขวาเพื่อเอาออก) แล้วกดออกรถ / Tap stops on the left in delivery order (tap right to remove), then Depart.</div>'+body; }
+    if(bot){ bot.style.display='block'; bot.innerHTML='<div style="border-top:2px dashed var(--border);margin-top:6px;padding-top:12px;font-size:11px;color:var(--text2);margin-bottom:8px">👇 แตะออเดอร์ทางซ้ายตามลำดับที่จะส่ง (แตะทางขวาเพื่อเอาออก) · <b>กดค้างแล้วลากเพื่อสลับลำดับ</b> แล้วกดออกรถ / Tap stops on the left in delivery order (tap right to remove), <b>press &amp; hold to drag a stop into another position</b>, then Depart.</div>'+body; }
     if(hintEl) hintEl.style.display='none';
   })();
   if(myTour.length===0){
@@ -10538,7 +10542,7 @@ function drArrCard(o, pos){
   var inRight = pos!=null;   // right column card → tap removes it
   var cue = inRight ? '<span style="float:right;color:#dc2626;font-weight:800;font-size:13px">✕</span>'
                     : '<span style="float:right;color:var(--blue);font-weight:800;font-size:14px">＋</span>';
-  return '<div class="acard'+(dStatus[o.id]==='loaded'?'':' arr-unloaded')+'" data-oid="'+o.id+'" onclick="drArrTap(\''+o.id+'\')">'+
+  return '<div class="acard'+(dStatus[o.id]==='loaded'?'':' arr-unloaded')+'" data-oid="'+o.id+'" onclick="drArrTap(\''+o.id+'\')" onpointerdown="drArrPress(event,this)">'+
     '<div class="aid">'+cue+(pos!=null?pos+'. ':'')+dot+' '+o.id+'</div>'+
     '<div class="aaddr">'+addr+'</div>'+
     (o.customer?'<div class="aname">'+o.customer+'</div>':'')+
@@ -10546,6 +10550,7 @@ function drArrCard(o, pos){
 }
 // Tap handling: left card → append to the route (right, in tap order); right card → remove.
 function drArrTap(id){
+  if(_arrJustDragged) return;   // the tap that ends a drag is not a real tap
   var i=dArranged.indexOf(id);
   if(i>=0) dArranged.splice(i,1); else dArranged.push(id);
   var mt=dTour.filter(function(x){return dAllOrders.find(function(y){return y.id===x;});});
@@ -10584,10 +10589,45 @@ function drArrDepart(){
   try{ drTour(); drRenderStatusBar(); ofRenderOrders(); }catch(e){}
 }
 var _arrCard=null;
+// Press and HOLD a card (~280 ms), then drag it between two other cards and let go —
+// it slots in there. A short tap still adds/removes the stop (drArrTap); moving the
+// finger before the hold fires keeps scrolling the page.
+var _arrPress=null, _arrJustDragged=false;
+function drArrPress(e, card){
+  if(e.button!=null && e.button>0) return;
+  if(_arrCard) return;
+  var startX=e.clientX, startY=e.clientY, pid=e.pointerId;
+  var cancel=function(){
+    if(!_arrPress) return;
+    clearTimeout(_arrPress.timer);
+    card.removeEventListener('pointermove', _arrPress.move);
+    card.removeEventListener('pointerup', _arrPress.up);
+    card.removeEventListener('pointercancel', _arrPress.up);
+    _arrPress=null;
+  };
+  var move=function(ev){
+    if(Math.abs(ev.clientX-startX)>8 || Math.abs(ev.clientY-startY)>8) cancel();   // scrolling
+  };
+  var up=function(){ cancel(); };
+  _arrPress={
+    timer:setTimeout(function(){
+      cancel();
+      try{ if(navigator.vibrate) navigator.vibrate(25); }catch(_){}
+      drArrDragStart({button:0, pointerId:pid, clientX:startX, clientY:startY, preventDefault:function(){}}, card);
+    }, 280),
+    move:move, up:up
+  };
+  card.addEventListener('pointermove', move);
+  card.addEventListener('pointerup', up);
+  card.addEventListener('pointercancel', up);
+}
 function drArrDragStart(e, card){
   if(e.button!=null && e.button>0) return;
   _arrCard=card; card.classList.add('dragging');
-  e.preventDefault();
+  if(e.preventDefault) e.preventDefault();
+  // Freeze page scrolling for the duration of the drag.
+  var cols=document.querySelector('.arr-cols'); if(cols) cols.classList.add('arr-drag');
+  document.body.style.overflow='hidden';
   try{ card.setPointerCapture(e.pointerId); card._kpPid=e.pointerId; }catch(_){}
   card.addEventListener('pointermove', drArrDragMove);
   card.addEventListener('pointerup', drArrDragEnd);
@@ -10618,6 +10658,10 @@ function drArrDragEnd(e){
     card.removeEventListener('pointercancel', drArrDragEnd);
     card.classList.remove('dragging');
   }
+  var _cols=document.querySelector('.arr-cols'); if(_cols) _cols.classList.remove('arr-drag');
+  document.body.style.overflow='';
+  _arrJustDragged=true;                       // the click after the drop must not re-tap
+  setTimeout(function(){ _arrJustDragged=false; }, 400);
   var leftCol=document.getElementById('dr-arr-left'), rightCol=document.getElementById('dr-arr-right');
   if(leftCol&&rightCol){
     var pick=function(col){ return Array.prototype.slice.call(col.querySelectorAll('.acard')).map(function(c){return c.getAttribute('data-oid');}).filter(Boolean); };
