@@ -7072,7 +7072,10 @@ function ofRenderTour(){
       var zones = {};
       // Which active tour (driver) has each order → to split ready vs on-tour.
       var orderTourName = {};
-      (activeTours||[]).forEach(function(t){ if(!t||!t.orders) return; t.orders.forEach(function(id){ var st=(t.status||{})[id]||'loaded'; if(st==='cancelled'||st==='delivered') return; orderTourName[id]=t.driverName||'—'; }); });
+      // Only 'cancelled' releases an order from its tour. A tour row marked delivered
+      // while the ORDER record is still open (re-packed, undone, sync conflict) must
+      // stay on the driver — otherwise it silently shows up as free "ready" stock.
+      (activeTours||[]).forEach(function(t){ if(!t||!t.orders) return; t.orders.forEach(function(id){ var st=(t.status||{})[id]||'loaded'; if(st==='cancelled') return; orderTourName[id]=t.driverName||'—'; }); });
       waitingOrders.forEach(function(o) {
         var z = o.zone||'Unknown';
         if(!zones[z]) zones[z] = {orders:0, onTourBaht:0, items:[], ready:{orders:0,panels:0,ctn:0,bundle:0,baht:0}, tours:{}};
@@ -7225,6 +7228,13 @@ function ofRenderTour(){
       // Reflect the live packing status for planned-but-unready orders so the tour
       // card auto-updates as the warehouse packs. Terminal tour states win.
       var st = (rawSt==='delivered'||rawSt==='cancelled'||rawSt==='shipped') ? rawSt : ((ord&&ord.status)||rawSt);
+      // Conflict flag: the tour row says done, but the order record is still open
+      // (re-packed by the warehouse, undone elsewhere, or a lost status write).
+      var _stConflict = (rawSt==='delivered'||rawSt==='shipped') && ord
+        && ['new','packing','ready','loaded'].indexOf(ord.status)>=0;
+      var conflictChip = _stConflict
+        ? ' <span title="ทัวร์ว่าส่งแล้ว แต่ออเดอร์ยังเปิดอยู่ ('+ord.status+') — ตรวจสอบ / tour says done but the order is still '+ord.status+'" style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap">⚠️ '+ord.status+'?</span>'
+        : '';
       var _opin = ord?orderLocUrl(ord):'';
       // Shipper per order: default = the tour driver (self); optionally a carrier company.
       var shipVal = (ord && ord.shipper) ? ord.shipper : '';
@@ -7270,7 +7280,7 @@ function ofRenderTour(){
       return '<div style="padding:4px 0;min-width:0">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;flex-wrap:wrap;gap:4px 8px;min-width:0">'+
         kmMove+
-        '<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/[\'\\]/g,'')+'\')" title="Order info / ข้อมูลออเดอร์" style="font-weight:600;cursor:pointer;min-width:0;flex:1 1 auto">'+(_kmOn?'<b style="color:#1d4ed8">'+(_oi+1)+'.</b> ':'')+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+kmChip+(ro?'':' <span onclick="event.stopPropagation();ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="color:var(--text2);font-size:12px;cursor:pointer;padding:0 3px">▾</span>')+'</span>'+
+        '<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/[\'\\]/g,'')+'\')" title="Order info / ข้อมูลออเดอร์" style="font-weight:600;cursor:pointer;min-width:0;flex:1 1 auto">'+(_kmOn?'<b style="color:#1d4ed8">'+(_oi+1)+'.</b> ':'')+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+kmChip+conflictChip+(ro?'':' <span onclick="event.stopPropagation();ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="color:var(--text2);font-size:12px;cursor:pointer;padding:0 3px">▾</span>')+'</span>'+
         '<div style="display:flex;align-items:center;gap:4px 6px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;min-width:0">'+
         '<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+(ord?((ord.province||'').trim()||ord.zone||''):'')+'</span>'+
         payInline+
