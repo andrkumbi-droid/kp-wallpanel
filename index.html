@@ -4687,6 +4687,22 @@ function ofStockPrint(){
   w.document.open(); w.document.write(full); w.document.close(); w.focus();
 }
 
+// Same product, different spelling: staff type KP36 for KP036, KP10 for KP010, and
+// L7 / L07 / L007 (same for T and U) all mean the same profile. Everything is folded
+// onto the padded form — KP + 3 digits, L/T/U/K-PVC + 2 — so one product is one entry
+// no matter which variant was typed. A number longer than the padding is kept as is.
+function ofNormCode(code){
+  var c=String(code==null?'':code).trim().toUpperCase().replace(/\s+/g,'');
+  var pad=function(n,w){ n=String(parseInt(n,10)); return n.length>=w?n:('0000'+n).slice(-w); };
+  var m;
+  if((m=c.match(/^K-?PVC-?(\d+)$/))) return 'K-PVC-'+pad(m[1],2);
+  if((m=c.match(/^L-?P-?(\d+)$/)))   return 'L-P-'+pad(m[1],2);
+  if((m=c.match(/^KP(\d+)$/)))       return 'KP'+pad(m[1],3);
+  if((m=c.match(/^L(\d+)$/)))        return 'L'+pad(m[1],2);
+  if((m=c.match(/^T(\d+)$/)))        return 'T'+pad(m[1],2);
+  if((m=c.match(/^U(\d+)$/)))        return 'U'+pad(m[1],2);
+  return c;
+}
 // Every product we HAVE or ever HAD — for the yearly stock count. A code counts as
 // "ours" when it is in the stock list (even at 0), is a catalog panel, was ever sold
 // on an order, or shows up in the stock log. The auto-generated L01–L70 / T / U codes
@@ -4695,14 +4711,17 @@ function ofStockAllProducts(){
   var byCode={};
   var CODE_RE=/^[A-Z0-9][A-Z0-9.\-]{1,14}$/;
   function add(code){
-    code=String(code==null?'':code).trim().toUpperCase();
-    if(!code || !CODE_RE.test(code)) return null;
-    return byCode[code] || (byCode[code]={code:code, qty:null, damaged:null, type:'', notes:''});
+    var raw=String(code==null?'':code).trim().toUpperCase();
+    if(!raw || !CODE_RE.test(raw)) return null;
+    var c=ofNormCode(raw);
+    return byCode[c] || (byCode[c]={code:c, qty:null, damaged:null, type:'', notes:''});
   }
   (stockItems||[]).forEach(function(s){
     var e=add(s.code); if(!e) return;
-    e.qty=parseInt(s.qty)||0; e.damaged=parseInt(s.damaged)||0;
-    e.type=s.type||''; e.notes=s.notes||'';
+    // Two stock rows that normalise to the same code (KP36 + KP036) are one product.
+    e.qty=(e.qty||0)+(parseInt(s.qty)||0);
+    e.damaged=(e.damaged||0)+(parseInt(s.damaged)||0);
+    e.type=e.type||s.type||''; e.notes=e.notes||s.notes||'';
   });
   (window.QT_PRODUCTS||[]).forEach(function(p){ if(p.mat==='WPC'||p.mat==='PVC'||p._custom) add(p.code); });
   (orders||[]).forEach(function(o){ (o.lineItems||[]).forEach(function(li){ if(li && li.type!=='extra') add(li.code); }); });
@@ -4718,13 +4737,25 @@ function ofStockCat(e){
   if(t==='utrim' || /^U\d/.test(c)) return 'u';
   return 'other';
 }
-// Printable stock-count sheet: system numbers on the left (grey), empty boxes to write
-// the counted amount into, and a difference column.
+// Printable stock-count sheet: one row per product, empty boxes to write into.
 function ofStockInventoryPrint(){
   var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
-  var prod=function(code){ return (window.QT_PRODUCTS||[]).find(function(p){ return String(p.code).toUpperCase()===code; }) || {}; };
+  var prodMap={};
+  (window.QT_PRODUCTS||[]).forEach(function(p){ var k=ofNormCode(p.code); if(!prodMap[k]) prodMap[k]=p; });
+  var prod=function(code){ return prodMap[code]||{}; };
   var all=ofStockAllProducts();
   if(!all.length){ alert('No products / ไม่มีสินค้า'); return; }
+  // The sheet folds KP36 onto KP036 — but if BOTH spellings exist as their own stock
+  // row, the app still keeps two entries and the counted number can't be posted back
+  // cleanly. Say so once, before printing.
+  var _dupes={};
+  (stockItems||[]).forEach(function(s){ var k=ofNormCode(s.code); (_dupes[k]=_dupes[k]||[]).push(String(s.code)); });
+  var _dupList=Object.keys(_dupes).filter(function(k){ return _dupes[k].length>1; });
+  if(_dupList.length){
+    alert('⚠ สินค้าซ้ำในสต็อก / same product twice in the stock list:\n\n'
+      +_dupList.map(function(k){ return k+'   ←   '+_dupes[k].join(' + '); }).join('\n')
+      +'\n\nThe count sheet lists each one ONCE. Please merge these entries in the stock list after the count.');
+  }
   var groups={wpc:[],pvc:[],l:[],t:[],u:[],other:[]};
   all.forEach(function(e){ groups[ofStockCat(e)].push(e); });
   var byCode=function(a,b){ return String(a.code).localeCompare(String(b.code), undefined, {numeric:true}); };
@@ -4738,15 +4769,14 @@ function ofStockInventoryPrint(){
     if(!items.length) return '';
     return '<div class="sec"><div class="sect">'+esc(title)+' <span class="cnt">'+items.length+' รายการ / items</span></div>'
       +'<table><thead><tr>'
-        +'<th class="c w-n">#</th><th class="w-cd">รหัส / Code</th><th>สี / Colour</th><th class="c w-sz">ขนาด</th>'
-        +'<th class="c w-cnt">นับจริง A / Counted A</th><th class="c w-cnt">นับจริง B / Counted B</th><th class="c w-note">หมายเหตุ / Note</th>'
+        +'<th class="c w-n">#</th><th class="w-cd">รหัส / Code</th><th class="c w-sz">ขนาด / Size</th>'
+        +'<th class="c w-cnt">นับจริง A / Counted A</th><th class="c w-cnt">นับจริง B / Counted B</th><th class="c">หมายเหตุ / Note</th>'
       +'</tr></thead><tbody>'
       +items.map(function(e){
         var p=prod(e.code);
         return '<tr>'
           +'<td class="c muted">'+(++nRow)+'</td>'
-          +'<td class="cd">'+esc(e.code)+'</td>'
-          +'<td>'+esc(p.name||e.notes||'')+((e.qty!=null)?'':' <span class="old">ไม่อยู่ในสต็อก / not in stock list</span>')+'</td>'
+          +'<td class="cd">'+esc(e.code)+((e.qty!=null)?'':'<div class="old">ไม่อยู่ในสต็อก / not in stock list</div>')+'</td>'
           +'<td class="c">'+esc(p.w?p.w+' cm':'')+'</td>'
           +'<td class="box"></td><td class="box"></td><td class="box"></td>'
         +'</tr>';
@@ -4778,10 +4808,10 @@ function ofStockInventoryPrint(){
     +'td{height:7.5mm}'
     +'.c{text-align:center}.r{text-align:right}.muted{color:#777}'
     +'td.c,td.r{white-space:nowrap}'
-    +'.cd{font-weight:800}'
+    +'.cd{font-weight:800;font-size:11pt}'
     +'.old{font-size:7.5pt;color:#b45309;font-weight:700}'
     +'.box{background:#fcfcfc}'
-    +'.w-n{width:8mm}.w-cd{width:24mm}.w-sz{width:15mm}.w-cnt{width:30mm}.w-note{width:32mm}'
+    +'.w-n{width:9mm}.w-cd{width:44mm}.w-sz{width:18mm}.w-cnt{width:36mm}'
     +'</style></head><body>'
     +'<div class="hd"><h1>📋 ใบนับสต็อก / Stock count sheet — KP Wallpanel</h1><div class="d">'+esc(dateStr)+'</div></div>'
     +'<div class="who"><div>ผู้นับ / Counted by:</div><div>ผู้ตรวจ / Checked by:</div><div>วันที่ / Date:</div></div>'
