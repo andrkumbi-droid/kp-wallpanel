@@ -843,6 +843,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active'))ofAttRender();}catch(e){}
       });
       db.ref('recentlyDeleted').on('value', function(snap) { recentlyDeleted = snap.val() || {}; });
+      db.ref('orsKey').on('value', function(snap) { orsKey = snap.val() || ''; });
+      db.ref('homeLoc').on('value', function(snap) {
+        var v=snap.val();
+        homeLoc = (v && typeof v.lat==='number' && typeof v.lng==='number') ? {lat:v.lat,lng:v.lng} : null;
+        try{ if(document.getElementById('ofv-tour') && document.getElementById('ofv-tour').classList.contains('active')) ofRenderTour(); }catch(e){}
+      });
       db.ref('soldOut').on('value', function(snap) {
         soldOut = snap.val() || {};
         try{ var s=document.getElementById('qt-suggestions'); if(s&&s.innerHTML) qtRefreshSoldOut(); }catch(e){}
@@ -3026,6 +3032,8 @@ var attStaff=[]; // separate employee list for attendance (+ payroll settings)
 var attEntries=[]; // payroll entries: {id,staffId,staffName,date,type,qty,note,ts} type=late|ot|trip|advance|hours
 var payLog=[]; // NEW Bills-style payroll log: {id,who,whoName,cat,amount,date,ts,note,by,photoUrl} who='staff:<id>'|'driver:<id>'
 var customerMeta={}; // phoneKey -> {name,address,loc,note,blocked,blockReason} — manual overrides + blocklist
+var homeLoc=null;    // warehouse start point {lat,lng} for the KM route cross-check
+var orsKey='';       // optional OpenRouteService key → route that avoids tollways
 var preOrders=[]; // pre-orders: {id,zone,customer,phone,address,location,contact,lineItems,notes,status(open|converted|cancelled),cancelReason,convertedId,createdBy,createdAt}
 var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
 var containerLog=[];
@@ -7395,6 +7403,8 @@ function ofRenderTour(){
               thumbs+
             '</div>';
         })())+
+        // KM tour: route cross-check right under the slips block.
+        (_kmOn ? kmRouteRowHTML(t, ro) : '')+
       '</div>'+
       '</div>';
   };
@@ -7934,6 +7944,148 @@ function kmSummaryHTML(t, opts){
       +'<span>× '+kmFmt(rate)+' ฿ = <span style="color:var(--green)">'+pay.toLocaleString()+' ฿</span></span>'
     +'</div>'
     +'</div>';
+}
+
+// ── ROUTE CROSS-CHECK for KM tours ──────────────────────────────────────────
+// Road distance from the warehouse (homeLoc) over the stops IN THE OFFICE ORDER
+// to the last customer, so the office can sanity-check what the driver logged.
+// The number comes from the free OSRM demo router with tollways excluded —
+// Google's Directions API needs a paid key. The 🗺️ link opens exactly the same
+// route in Google Maps ("avoid tolls") for an exact look.
+var _kmRouteBusy={};
+function kmRouteSig(t){ return (t.orders||[]).join('>'); }
+function kmParseLatLng(s){
+  s=String(s||'').trim(); if(!s) return null;
+  var m = s.match(/[?&](?:q|query|destination)=(-?\d{1,3}\.\d+),\s*(-?\d{1,3}\.\d+)/i)
+       || s.match(/@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/)
+       || s.match(/!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/)
+       || s.match(/^\s*(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/);
+  if(!m) return null;
+  var la=parseFloat(m[1]), ln=parseFloat(m[2]);
+  return geoSane(la,ln) ? {lat:la,lng:ln} : null;
+}
+function kmRoutePoints(t){
+  var pts=[], missing=0;
+  (t.orders||[]).forEach(function(id){
+    var o=orders.find(function(x){return x.id===id;});
+    var c=o?orderLatLng(o):null;
+    if(c && geoSane(c.lat,c.lng)) pts.push(c); else missing++;
+  });
+  return {pts:pts, missing:missing};
+}
+function kmRouteMapsUrl(t){
+  if(!homeLoc) return '';
+  var p=kmRoutePoints(t); if(!p.pts.length) return '';
+  var pts=p.pts.slice(0,10);   // Maps URL API: destination + max 9 waypoints
+  var dest=pts[pts.length-1], mid=pts.slice(0,pts.length-1);
+  var u='https://www.google.com/maps/dir/?api=1&travelmode=driving&avoid=tolls'
+    +'&origin='+homeLoc.lat+','+homeLoc.lng
+    +'&destination='+dest.lat+','+dest.lng;
+  if(mid.length) u+='&waypoints='+mid.map(function(c){return c.lat+','+c.lng;}).join('|');
+  return u;
+}
+function kmRouteCalc(tourId, force){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  if(!homeLoc){ if(force) alert('📍 ตั้งจุดเริ่มต้น (คลัง) ก่อน\nPlease set the start point (warehouse) first.'); return; }
+  if(_kmRouteBusy[tourId]) return;
+  var p=kmRoutePoints(t);
+  if(!p.pts.length){ if(force) alert('ไม่มีพิกัดลูกค้าในทัวร์นี้\nNo customer coordinates saved for this tour.'); return; }
+  var sig=kmRouteSig(t);
+  if(!force && t.kmRoute && t.kmRoute.sig===sig) return;
+  _kmRouteBusy[tourId]=1;
+  var all=[homeLoc].concat(p.pts);
+  var save=function(km, src){
+    delete _kmRouteBusy[tourId];
+    var t2=activeTours.find(function(x){return x.id===tourId;}); if(!t2) return;
+    t2.kmRoute = (km!=null)
+      ? { km:Math.round(km*10)/10, src:src, sig:sig, ts:Date.now(), stops:p.pts.length, missing:p.missing }
+      : { km:null, err:1, sig:sig, ts:Date.now(), stops:p.pts.length, missing:p.missing };
+    try{ syncTours(); }catch(e){}
+    try{ ofRenderTour(); }catch(e){}
+  };
+  // Plain road route — free OSRM demo, no key. It cannot exclude tollways.
+  var osrm=function(){
+    var coords=all.map(function(c){return c.lng+','+c.lat;}).join(';');
+    fetch('https://router.project-osrm.org/route/v1/driving/'+coords+'?overview=false&alternatives=false&steps=false')
+      .then(function(r){return r.json();})
+      .then(function(j){ save((j&&j.routes&&j.routes[0])?j.routes[0].distance/1000:null,'osrm'); })
+      .catch(function(){ save(null,'osrm'); });
+  };
+  // With a (free) OpenRouteService key the route really avoids tollways/expressways.
+  if(orsKey){
+    fetch('https://api.openrouteservice.org/v2/directions/driving-car',{
+      method:'POST',
+      headers:{'Authorization':orsKey,'Content-Type':'application/json'},
+      body:JSON.stringify({ coordinates:all.map(function(c){return [c.lng,c.lat];}), instructions:false, options:{avoid_features:['tollways']} })
+    }).then(function(r){return r.json();})
+      .then(function(j){
+        var d=j&&j.routes&&j.routes[0]&&j.routes[0].summary?j.routes[0].summary.distance:null;
+        if(d!=null) save(d/1000,'ors'); else osrm();
+      }).catch(function(){ osrm(); });
+    return;
+  }
+  osrm();
+}
+// Optional OpenRouteService key (free signup) — only needed for toll-free routing.
+function kmSetOrsKey(){
+  var s=prompt('OpenRouteService API key (ฟรี / free — openrouteservice.org/dev/#/signup)\n\nใส่คีย์เพื่อให้เส้นทางเลี่ยงทางด่วน/ค่าผ่านทาง / paste a key so the route avoids tollways.\nปล่อยว่าง = ลบคีย์ / empty = remove the key', orsKey||'');
+  if(s===null) return;
+  orsKey=(s||'').trim();
+  try{ if(window.fbDB) window.fbDB.ref('orsKey').set(orsKey); }catch(e){}
+  (activeTours||[]).forEach(function(t){ if(t&&t.kmMode&&t.kmRoute) t.kmRoute=null; });
+  try{ ofRenderTour(); }catch(e){}
+}
+// Start point of every route comparison — set once by the office.
+function kmSetHome(){
+  var s=prompt('จุดเริ่มต้น (คลัง) — วางลิงก์ Google Maps หรือ lat,lng\nStart point (warehouse) — paste a Google Maps link or lat,lng\n\n(ปล่อยว่าง = ใช้ตำแหน่งปัจจุบัน / empty = use my current position)','');
+  if(s===null) return;
+  var save=function(lat,lng){
+    homeLoc={lat:lat,lng:lng};
+    try{ if(window.fbDB) window.fbDB.ref('homeLoc').set({lat:lat,lng:lng,ts:Date.now()}); }catch(e){}
+    try{ ofRenderTour(); }catch(e){}
+    try{ showNotif('📍 จุดเริ่มต้นบันทึกแล้ว / start point saved'); }catch(e){}
+  };
+  s=(s||'').trim();
+  if(!s){
+    if(!navigator.geolocation){ alert('GPS not available on this device'); return; }
+    navigator.geolocation.getCurrentPosition(
+      function(pos){ save(pos.coords.latitude, pos.coords.longitude); },
+      function(){ alert('เปิด GPS ไม่ได้ / could not read your location'); },
+      {enableHighAccuracy:true, timeout:10000});
+    return;
+  }
+  var c=kmParseLatLng(s);
+  if(!c){ alert('อ่านพิกัดไม่ได้ — ใช้ลิงก์ที่มี @lat,lng หรือพิมพ์ 13.75,100.50\nCould not read coordinates.'); return; }
+  save(c.lat,c.lng);
+}
+// The comparison line shown under the Slips block on a KM tour card.
+function kmRouteRowHTML(t, ro){
+  var r=t.kmRoute||null, drv=kmTotal(t), sig=kmRouteSig(t);
+  if(homeLoc && (!r || r.sig!==sig) && !_kmRouteBusy[t.id]) setTimeout(function(){ kmRouteCalc(t.id,0); }, 50);
+  var line;
+  if(!homeLoc){
+    line = ro ? '🗺️ Route: ยังไม่ตั้งจุดเริ่มต้น / no start point set'
+              : '<span onclick="event.stopPropagation();kmSetHome()" style="cursor:pointer;color:#1d4ed8;font-weight:700">📍 ตั้งจุดเริ่มต้น (คลัง) / set start point</span>';
+  } else if(r && r.km!=null){
+    var diff=Math.round((drv-r.km)*10)/10;
+    var okDiff=Math.abs(diff)<=Math.max(3,r.km*0.2);
+    line='🗺️ Route = <b>'+kmFmt(r.km)+' กม.</b> <span style="color:var(--text2)">'+(r.src==='ors'?'(เลี่ยงทางด่วน / no tolls)':'(เส้นทางถนน / road route)')+'</span>'
+      +(drv?' · คนขับ/driver '+kmFmt(drv)+' กม. <b style="color:'+(okDiff?'#16a34a':'#dc2626')+'">('+(diff>=0?'+':'')+kmFmt(diff)+')</b>':'')
+      +(r.missing?' · <span style="color:#92400e">'+r.missing+' จุดไม่มีพิกัด / no pin</span>':'');
+  } else if(r && r.err){
+    line='🗺️ Route: คำนวณไม่ได้ / could not calculate';
+  } else {
+    line='🗺️ Route: <span style="color:var(--text2)">กำลังคำนวณ… / calculating…</span>';
+  }
+  var mapUrl=homeLoc?kmRouteMapsUrl(t):'';
+  return '<div style="margin-bottom:8px;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+    +'<span style="flex:1;min-width:0">'+line+'</span>'
+    +(homeLoc&&!ro?'<button type="button" onclick="event.stopPropagation();kmRouteCalc(\''+t.id+'\',1)" title="คำนวณใหม่ / recalculate" style="flex-shrink:0;padding:2px 7px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-size:11px">🔄</button>':'')
+    +(mapUrl?'<a href="'+mapUrl+'" target="_blank" onclick="event.stopPropagation()" style="flex-shrink:0;padding:2px 7px;border:1px solid #bfdbfe;background:var(--bg);color:#1d4ed8;border-radius:var(--rs);text-decoration:none;font-weight:700">🗺️ เปิด / open</a>':'')
+    +(homeLoc&&!ro?'<span onclick="event.stopPropagation();kmSetHome()" title="เปลี่ยนจุดเริ่มต้น / change start point" style="flex-shrink:0;cursor:pointer;color:var(--text2)">📍</span>':'')
+    +(ro?'':'<span onclick="event.stopPropagation();kmSetOrsKey()" title="'+(orsKey?'เปลี่ยน/ลบคีย์ ORS':'ใส่คีย์ ORS ฟรี เพื่อเลี่ยงทางด่วน / free ORS key = toll-free routing')+'" style="flex-shrink:0;cursor:pointer;color:'+(orsKey?'var(--text2)':'#d97706')+'">🔑</span>')
+    +'<div style="width:100%;color:var(--text2);margin-top:2px">ค่าประมาณเพื่อเทียบเท่านั้น · ตามลำดับที่ออฟฟิศตั้งไว้ · '+(orsKey?'เลี่ยงทางด่วน/ค่าผ่านทาง':'อาจใช้ทางด่วน (ใส่คีย์ 🔑 เพื่อเลี่ยง)')+' / rough cross-check, office stop order'+(orsKey?', tollways avoided':', may use expressways — add a 🔑 key to avoid them')+'</div>'
+  +'</div>';
 }
 
 // Photo of the loaded tour vehicle — stored on the tour (t.carPhotos, shared with the
