@@ -2952,6 +2952,23 @@ function kpSafeRender(key, sig, fn){
   }
   try{ fn(); }catch(e){}
 }
+// Keep expanded dropdowns open across a re-render: a rebuilt innerHTML resets every
+// ofToggleMore section to display:none, which is what "everything collapses / jumps
+// back" felt like. Capture the open ids first, restore them right after.
+function kpOpenIds(cid){
+  var c=document.getElementById(cid); if(!c) return [];
+  var out=[];
+  c.querySelectorAll('[id]').forEach(function(el){
+    if(el.style && el.style.display && el.style.display!=='none') out.push(el.id);
+  });
+  return out;
+}
+function kpRestoreOpen(ids){
+  (ids||[]).forEach(function(id){
+    var el=document.getElementById(id);
+    if(el && el.style && el.style.display==='none') el.style.display='block';
+  });
+}
 // Cheap fingerprint of everything the tour views actually display.
 function kpToursSig(){
   try{
@@ -7521,9 +7538,11 @@ function ofRenderTour(){
     (_lalaT.length ? _grpHdr('🛺 Lalamove')+_lalaT.map(_tourCardHTML).join('') : '')+
     (_restT.length ? (_lalaT.length?_grpHdr('🚚 Tours'):'')+_restT.map(_tourCardHTML).join('') : '');
 
+  var _openTour = kpOpenIds('of-active-tours');
   document.getElementById('of-active-tours').innerHTML = activeTours.length===0
     ? '<div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div>'
     : tourCards;
+  kpRestoreOpen(_openTour);
   // Driver select grid
   var dsel=document.getElementById('of-drsel'),noD=document.getElementById('of-nodrivers');
   if(drivers.length===0){dsel.style.display='none';noD.style.display='block';}
@@ -8138,6 +8157,17 @@ function kmRouteCalc(tourId, force){
   var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
   if(!homeLoc){ if(force) alert('📍 ตั้งจุดเริ่มต้น (คลัง) ก่อน\nPlease set the start point (warehouse) first.'); return; }
   if(_kmRouteBusy[tourId]) return;
+  // Never compute on half-loaded data: a client that is still missing orders would
+  // store a wrong distance, the next client would "correct" it, and both would keep
+  // rewriting each other (a write storm that rebuilds the tour view every second).
+  if(!force){
+    if(!orders || !orders.length) return;
+    var incomplete=(t.orders||[]).some(function(id){ return !orders.find(function(x){return x.id===id;}); });
+    if(incomplete) return;
+    // One calculation per tour per 5 minutes across all devices; 🔄 forces it.
+    if(t.kmRoute && t.kmRoute.ts && (Date.now()-t.kmRoute.ts)<300000) return;
+    if(document.hidden) return;   // background tab: leave it to the visible one
+  }
   var p=kmRoutePoints(t);
   if(!p.pts.length){ if(force) alert('ไม่มีพิกัดลูกค้าในทัวร์นี้\nNo customer coordinates saved for this tour.'); return; }
   var sig=kmRouteSig(t);
@@ -8449,6 +8479,7 @@ function ofDriversRender(){
   var el=document.getElementById('of-drivers-list'); if(!el) return;
   var drv=(drivers||[]);
   if(!drv.length){ el.innerHTML='<div class="empty" style="padding:1rem">No drivers / ยังไม่มีคนขับ</div>'; return; }
+  var _openDrv=kpOpenIds('of-drivers-list');
   el.innerHTML = drv.map(function(d){
     var key=String(d.id||'').replace(/[^a-zA-Z0-9_-]/g,'_');
     var esc=function(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
@@ -8550,6 +8581,7 @@ function ofDriversRender(){
       +'<div id="'+wid+'" style="display:none;margin-top:10px">'+toursHtml+'</div>'
       +'</div>';
   }).join('');
+  kpRestoreOpen(_openDrv);
 }
 // Expandable order detail inside the Drivers tab: payment + delivery time + photo
 // buttons (Warehouse / Delivery / Slip) that lazy-load images like the Pictures tab.
