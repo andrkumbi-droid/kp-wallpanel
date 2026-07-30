@@ -765,9 +765,13 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
           t.status=ns; t.checks=nc;
         });
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
-        try{if(document.getElementById('s-office').classList.contains('active')){ofRenderTour();ofLalaUpdBadge();if(document.getElementById('ofv-lala').classList.contains('active'))ofRenderLala();if(document.getElementById('ofv-drivers').classList.contains('active'))ofDriversRender();if(document.getElementById('ofv-home').classList.contains('active'))ofRenderDashboard();}}catch(e){}
+        // Re-render only when something actually changed, and never while the user has
+        // a popup open — a full innerHTML rebuild closes dropdowns and jumps the page.
+        kpSafeRender('tours', kpToursSig(), function(){
+          try{if(document.getElementById('s-office').classList.contains('active')){ofRenderTour();ofLalaUpdBadge();if(document.getElementById('ofv-lala').classList.contains('active'))ofRenderLala();if(document.getElementById('ofv-drivers').classList.contains('active'))ofDriversRender();if(document.getElementById('ofv-home').classList.contains('active'))ofRenderDashboard();}}catch(e){}
+        });
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
-        try{if(document.getElementById('s-driver-tour').classList.contains('active')){drRenderTourSwitch();drReady();drKmSyncSeq();drKmRender();}}catch(e){}
+        try{if(document.getElementById('s-driver-tour').classList.contains('active')){drRenderTourSwitch();drReady();drKmSyncSeq();drKmRender();drPayRender();}}catch(e){}
       });
       db.ref('tourHistory').on('value', function(snap) {
         tourHistory = snap.val() || {};
@@ -2416,6 +2420,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div id="dr-arrange" style="display:none"></div>
     <!-- KM-based tour: odometer photo before departing + after every stop -->
     <div id="dr-kmbox" style="display:none;margin-bottom:10px"></div>
+    <!-- Tour pay: what the office pays for this tour + the transfer slip -->
+    <div id="dr-paybox" style="display:none;margin-bottom:10px"></div>
     <div id="dr-tlist"></div>
     <div id="dr-arrange-bottom" style="display:none"></div>
     <div id="dr-donesec" style="display:none"><div class="donesep"><span>Done / เสร็จแล้ว</span></div><div id="dr-donelist"></div></div>
@@ -2913,6 +2919,50 @@ function tourForFb(t){
 // (the orders survived as "loaded" but the tour vanished). Per-tour writes +
 // explicit removals (fbRemoveTour) below avoid that clobbering.
 function syncTours() { if(window.fbDB) { activeTours.forEach(function(t){ if(t&&t.id) window.fbDB.ref('activeTours/'+t.id).set(tourForFb(t)); }); } }
+// ── RE-RENDER GUARD ─────────────────────────────────────────────────────────
+// Every Firebase update used to rebuild whole views, which closed open dropdowns
+// and threw the page back to the top — even when nothing visible had changed and
+// even while a popup was open. A view is now only rebuilt when its data really
+// differs, and never while a modal/overlay is on screen (it runs right after).
+var _kpRenderSig={}, _kpRenderPending={}, _kpRenderTimer=null;
+function kpModalOpen(){
+  if(document.querySelector('.modal-overlay.open')) return true;
+  var po=document.getElementById('payinfo-overlay');
+  if(po && po.style.display && po.style.display!=='none') return true;
+  var lb=document.getElementById('photo-lightbox');
+  if(lb && lb.style.display && lb.style.display!=='none') return true;
+  return false;
+}
+function kpFlushRenders(){
+  var keys=Object.keys(_kpRenderPending); if(!keys.length) return;
+  if(kpModalOpen()) return;
+  keys.forEach(function(k){ var fn=_kpRenderPending[k]; delete _kpRenderPending[k]; try{ fn(); }catch(e){} });
+}
+function kpSafeRender(key, sig, fn){
+  if(sig!=null && _kpRenderSig[key]===sig) return;   // nothing changed → keep the DOM
+  if(sig!=null) _kpRenderSig[key]=sig;
+  if(kpModalOpen()){
+    _kpRenderPending[key]=fn;
+    if(!_kpRenderTimer) _kpRenderTimer=setInterval(function(){
+      if(kpModalOpen()) return;
+      kpFlushRenders();
+      if(!Object.keys(_kpRenderPending).length){ clearInterval(_kpRenderTimer); _kpRenderTimer=null; }
+    }, 600);
+    return;
+  }
+  try{ fn(); }catch(e){}
+}
+// Cheap fingerprint of everything the tour views actually display.
+function kpToursSig(){
+  try{
+    return (activeTours||[]).map(function(t){
+      return [t.id,(t.orders||[]).join(','),JSON.stringify(t.status||{}),t.driving?1:0,t.departedAt||'',
+        t.driverPay,t.driverAdvance,t.payMethodTour||'',(t.carPhotos||[]).length,(t.carFeeSlips||[]).length,
+        t.kmMode?1:0,t.kmRate,(t.kmLog?(Array.isArray(t.kmLog)?t.kmLog.length:Object.keys(t.kmLog).length):0),
+        (t.kmRoute&&t.kmRoute.km)||'',t.lalaDriver||'',t.plate||''].join('|');
+    }).join('~');
+  }catch(e){ return String(Date.now()); }
+}
 function fbRemoveTour(id){ if(window.fbDB && id) window.fbDB.ref('activeTours/'+id).remove(); }
 function syncPreOrders() { if(window.fbDB) { const obj = {}; preOrders.forEach(function(p){ obj[p.id] = p; }); window.fbDB.ref('preOrders').set(obj); } }
 function syncRevOrders() { if(window.fbDB) { const obj = {}; revOrders.forEach((r,i) => obj[r.rid] = r); window.fbDB.ref('revOrders').set(obj); } }
@@ -7432,6 +7482,13 @@ function ofRenderTour(){
         '<span style="font-size:12px;color:var(--text2)">฿</span>'+
         '</div>')+
         (!isL&&(parseFloat(t.driverAdvance)||0)>0&&(parseFloat(t.driverPay)||0)>0?'<div style="font-size:11px;color:var(--text2);margin:-4px 0 8px;text-align:right">คงเหลือจ่ายท้ายทัวร์ / Pay at end: <b style="color:var(--green)">'+tourNetPay(t).toLocaleString()+' ฿</b></div>':'')+
+        // Cash button (online = upload the slip below, which counts as paid).
+        (isL ? '' : (function(){
+          var st=tourPayState(t);
+          if(st.paid) return '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px">'+tourPayBadgeHTML(t)
+            +(ro||st.how!=='cash'?'':'<span onclick="event.stopPropagation();ofTourPayCash(\''+t.id+'\')" title="ยกเลิก / undo" style="cursor:pointer;font-size:11px;color:var(--text2)">✕</span>')+'</div>';
+          return ro?'':'<button type="button" onclick="event.stopPropagation();ofTourPayCash(\''+t.id+'\')" title="จ่ายค่าทัวร์เป็นเงินสด / pay the tour in cash" style="width:100%;margin-bottom:8px;padding:9px;border-radius:var(--rs);border:1.5px dashed #86efac;background:#f0fdf4;color:#166534;font-size:12px;font-weight:700;cursor:pointer">💵 จ่ายเงินสดแล้ว / Paid in cash'+(tourNetPay(t)?' · '+tourNetPay(t).toLocaleString()+' ฿':'')+'</button>';
+        })())+
         // Lalamove only: driver/plate/phone/fee live in the Lalamove tab — same data, editable here too.
         (ofIsLala(t) ? (function(){ var ok=lalaInfoComplete(t); return '<button type="button" onclick="event.stopPropagation();openLalaInfo(\''+t.id+'\')" style="width:100%;margin-bottom:8px;padding:9px;border-radius:var(--rs);border:1px solid '+(ok?'#bbf7d0':'#fed7aa')+';background:'+(ok?'#f0fdf4':'#fff7ed')+';color:'+(ok?'#16a34a':'#c2410c')+';font-size:12px;font-weight:700;cursor:pointer">'+(ok?'✅':'⚠️')+' 🛺 ข้อมูลคนขับ / Driver info'+(ok?'':' — กรอกให้ครบ / incomplete')+'</button>'; })() : '')+
         (isL ? '' : (function(){
@@ -7854,6 +7911,7 @@ function archiveTour(t){
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0, driverPayNet:tourNetPay(t),
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
+    payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now() };
   try{ window.fbDB.ref('tourHistory/'+key).push(rec); }catch(e){ console.error('archiveTour failed',e); }
 }
@@ -7992,7 +8050,7 @@ function kmSummaryHTML(t, opts){
 // The number comes from the free OSRM demo router with tollways excluded —
 // Google's Directions API needs a paid key. The 🗺️ link opens exactly the same
 // route in Google Maps ("avoid tolls") for an exact look.
-var _kmRouteBusy={};
+var _kmRouteBusy={}, _kmRouteTried={};
 function kmRouteSig(t){
   // Re-route when the stop order OR a carrier assignment changes.
   return (t.orders||[]).map(function(id){
@@ -8153,7 +8211,12 @@ function kmSetHome(){
 // The comparison line shown under the Slips block on a KM tour card.
 function kmRouteRowHTML(t, ro){
   var r=t.kmRoute||null, drv=kmTotal(t), sig=kmRouteSig(t);
-  if(homeLoc && (!r || r.sig!==sig) && !_kmRouteBusy[t.id]) setTimeout(function(){ kmRouteCalc(t.id,0); }, 50);
+  // Auto-calc at most once a minute per tour — a render must never trigger a write
+  // storm (write → listener → render → write …).
+  if(homeLoc && (!r || r.sig!==sig) && !_kmRouteBusy[t.id] && (Date.now()-(_kmRouteTried[t.id]||0))>60000){
+    _kmRouteTried[t.id]=Date.now();
+    setTimeout(function(){ kmRouteCalc(t.id,0); }, 50);
+  }
   var line;
   if(!homeLoc){
     line = ro ? '🗺️ Route: ยังไม่ตั้งจุดเริ่มต้น / no start point set'
@@ -8179,6 +8242,41 @@ function kmRouteRowHTML(t, ro){
     +(ro?'':'<span onclick="event.stopPropagation();kmSetOrsKey()" title="'+(orsKey?'เปลี่ยน/ลบคีย์ ORS':'ใส่คีย์ ORS ฟรี เพื่อเลี่ยงทางด่วน / free ORS key = toll-free routing')+'" style="flex-shrink:0;cursor:pointer;color:'+(orsKey?'var(--text2)':'#d97706')+'">🔑</span>')
     +'<div style="width:100%;color:var(--text2);margin-top:2px">ค่าประมาณเพื่อเทียบเท่านั้น · ตามลำดับที่ออฟฟิศตั้งไว้ · '+(orsKey?'เลี่ยงทางด่วน/ค่าผ่านทาง':'อาจใช้ทางด่วน (ใส่คีย์ 🔑 เพื่อเลี่ยง)')+' / rough cross-check, office stop order'+(orsKey?', tollways avoided':', may use expressways — add a 🔑 key to avoid them')+'</div>'
   +'</div>';
+}
+
+// ── TOUR PAY: paid in cash (button) or by transfer (slip photo) ─────────────
+// Cash → office taps the button. Online → the slip lands in t.carFeeSlips, which
+// counts as paid by transfer. Both are shown to the driver in his own tour.
+function tourPayState(t){
+  if(!t) return {paid:false};
+  if(t.payMethodTour==='cash') return {paid:true, how:'cash', by:t.paidByTour||'', at:t.paidAtTour||0};
+  if((t.carFeeSlips||[]).length>0) return {paid:true, how:'online', by:t.paidByTour||'', at:t.paidAtTour||0};
+  return {paid:false};
+}
+function ofTourPayCash(tourId){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var amt=tourNetPay(t);
+  if(t.payMethodTour==='cash'){
+    if(!confirm('ยกเลิกการจ่ายเงินสด? / Undo the cash payment?')) return;
+    delete t.payMethodTour; delete t.paidByTour; delete t.paidAtTour;
+  } else {
+    if(!amt){ alert('ใส่ค่าทัวร์ก่อน / enter the tour pay first'); return; }
+    if(!confirm('จ่ายเงินสดให้คนขับแล้ว '+amt.toLocaleString()+' ฿?\nPaid '+amt.toLocaleString()+' ฿ to the driver in cash?')) return;
+    t.payMethodTour='cash';
+    t.paidByTour=((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+    t.paidAtTour=Date.now();
+  }
+  syncTours();
+  try{ ofRenderTour(); }catch(e){}
+  try{ ofDriversRender(); }catch(e){}
+}
+// Small "paid" line used on the office card and in the driver app.
+function tourPayBadgeHTML(t){
+  var st=tourPayState(t); if(!st.paid) return '';
+  var d=st.at?new Date(st.at):null;
+  var when=d?(String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')):'';
+  return '<span style="font-size:11px;font-weight:700;color:#166534;background:#dcfce7;border-radius:8px;padding:2px 7px;white-space:nowrap">✅ จ่ายแล้ว / paid '
+    +(st.how==='cash'?'💵 เงินสด':'🏦 โอน (สลิป)')+(st.by?' · '+st.by:'')+(when?' · '+when:'')+'</span>';
 }
 
 // Photo of the loaded tour vehicle — stored on the tour (t.carPhotos, shared with the
@@ -8276,6 +8374,7 @@ function ofActiveTourRec(t){
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0,
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
+    payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now(), _active:true };
 }
 // Add a vehicle photo to a tour from the Drivers tab. Live (still active) tours write
@@ -8389,6 +8488,16 @@ function ofDriversRender(){
       var _end=((t.endedDate?fmtD(t.endedDate):'')+(t.endedAt?' '+t.endedAt:'')).trim();
       var timeHTML='<div style="font-size:11px;color:var(--text2);padding:6px 0 0"><i class="ti ti-clock" style="font-size:11px;vertical-align:-1px"></i> เริ่ม/Start: <b>'+(_start||'—')+'</b> · จบ/End: '+(t._active?'<span style="color:var(--green);font-weight:700">กำลังส่ง / ongoing</span>':'<b>'+(_end||'—')+'</b>')+'</div>';
       var photoHTML=kpPhotoDrop('drvphotos_'+key+'_'+t._k,(t.carPhotos||[]).length,'<div style="display:flex;gap:4px;flex-wrap:wrap">'+(t.carPhotos||[]).map(function(src){return '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:64px;height:64px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';}).join('')+'</div>');
+      // Tour-pay proof: cash badge or the transfer slip(s) the office uploaded.
+      var payHTML=(function(){
+        var st=tourPayState(t), sl=(t.carFeeSlips||[]);
+        if(!st.paid && !sl.length) return '';
+        return '<div style="padding:6px 0 0">'+(st.paid?tourPayBadgeHTML(t):'')
+          +(sl.length?kpPhotoDrop('drvslips_'+key+'_'+t._k, sl.length,
+             '<div style="display:flex;gap:4px;flex-wrap:wrap">'+sl.map(function(src){return '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:64px;height:64px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';}).join('')+'</div>',
+             '🧾 สลิปค่าทัวร์ / Pay slips', 'receipt'):'')
+          +'</div>';
+      })();
       // Retroactively add a vehicle photo to a tour (camera or gallery) — works for
       // live tours (t.carPhotos) and archived ones (tourHistory record).
       var pcam='drvpc_'+key+'_'+t._k, pgal='drvpg_'+key+'_'+t._k;
@@ -8403,7 +8512,7 @@ function ofDriversRender(){
           +'<span style="font-weight:700">'+(t._active?'🚚 On tour / กำลังส่ง':'🚚 Tour '+(t.tourNo||'?'))+' <span style="font-size:11px;color:var(--text2);font-weight:500">· '+dateStr+(t.departedAt?' '+t.departedAt:'')+'</span></span>'
           +'<span style="font-size:11px;color:var(--text2)">'+(t.orderCount||(t.orders||[]).length)+' orders'+(t.driverPay>0?' · 💰'+t.driverPay.toLocaleString():'')+(t.kmMode?' · 🛣️'+kmFmt(kmTotal(t))+'กม.':'')+' ▾</span>'
         +'</div>'
-        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+photoHTML+uploadHTML+((t.kmMode||kmLogOf(t).length)?kmSummaryHTML(t):'')+ordersHtml+'</div>'
+        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+payHTML+photoHTML+uploadHTML+((t.kmMode||kmLogOf(t).length)?kmSummaryHTML(t):'')+ordersHtml+'</div>'
         +'</div>';
     };
     // Month split: the running month is listed flat (starts empty on the 1st),
@@ -10055,6 +10164,7 @@ function drTour(){
   const myTour=dTour.filter(id=>dAllOrders.find(x=>x.id===id));
   document.getElementById('dr-t-cnt').textContent=myTour.length;
   try{ drKmRender(); }catch(e){}
+  try{ drPayRender(); }catch(e){}
   // Two-column route arranger: tap a stop on the left → it joins the route on the right (in
   // tap order). Rendered BOTH above and below the full order cards (#dr-arrange +
   // #dr-arrange-bottom). Hidden once the driver has departed → only full cards remain.
@@ -10175,6 +10285,27 @@ function drKmRender(){
       +'<div id="drkmlog" style="display:none">'+kmSummaryHTML(t)+'</div></div>';
   }
   box.innerHTML='<div style="border:1.5px solid '+(start?'#bfdbfe':'#fde68a')+';background:'+(start?'#eff6ff':'#fffbeb')+';border-radius:var(--r);padding:12px 14px">'+head+body+'</div>';
+}
+// Driver's own view of the tour pay: amount, advance, paid state and the office's
+// transfer slip(s) — so he sees the money side without asking.
+function drPayRender(){
+  var box=document.getElementById('dr-paybox'); if(!box) return;
+  var t=drGetTour();
+  var pay=parseFloat(t&&t.driverPay)||0, adv=parseFloat(t&&t.driverAdvance)||0;
+  var slips=(t&&t.carFeeSlips)||[];
+  if(!t || (!pay && !adv && !slips.length)){ box.style.display='none'; box.innerHTML=''; return; }
+  var st=tourPayState(t);
+  box.style.display='block';
+  box.innerHTML='<div style="border:1.5px solid '+(st.paid?'#bbf7d0':'var(--border)')+';background:'+(st.paid?'#f0fdf4':'var(--bg)')+';border-radius:var(--r);padding:12px 14px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+      +'<span style="font-size:14px;font-weight:800;color:var(--text)">💰 ค่าทัวร์ / Tour pay</span>'
+      +'<span style="font-size:15px;font-weight:800;color:var(--green)">'+pay.toLocaleString()+' ฿</span>'
+    +'</div>'
+    +(adv?'<div style="font-size:12px;color:var(--text2);margin-top:2px">🤝 เบิกก่อน / advance: '+adv.toLocaleString()+' ฿ · คงเหลือ / left: <b>'+tourNetPay(t).toLocaleString()+' ฿</b></div>':'')
+    +'<div style="margin-top:6px">'+(st.paid?tourPayBadgeHTML(t):'<span style="font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:2px 7px">⏳ ยังไม่จ่าย / not paid yet</span>')+'</div>'
+    +(slips.length?'<div style="margin-top:8px"><div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:4px">🧾 สลิปโอนเงิน / transfer slip ('+slips.length+')</div>'
+      +'<div style="display:flex;gap:6px;flex-wrap:wrap">'+slips.map(function(src){return '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:72px;height:72px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';}).join('')+'</div></div>':'')
+    +'</div>';
 }
 var _kmM={orderId:'', photo:null};
 function drKmOpen(orderId){
