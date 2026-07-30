@@ -6529,9 +6529,59 @@ function ofFinalizeShipped(id){
 }
 
 var ofZoneCollapsed = {}; // zone name → collapsed?
+// ── ORDER-LIST PAGING ────────────────────────────────────────────
+// An order card is a big chunk of HTML, so building 600+ of them in one string froze
+// the tab for seconds on every render. Each list now renders only its first chunk and
+// offers "show more"; a collapsed zone builds nothing at all until it is opened.
+var OF_PAGE=100;    // flat lists (All, New, Loaded, …)
+var OF_GROUP=25;    // per zone group in the Delivered / Priority view
+var _ofLists={};    // list key → the orders behind it
+var _ofShown={};    // list key → how many cards are currently rendered
+var _ofListKey='';  // filter+today+search fingerprint; a change resets the paging
+function ofChunkHTML(key, list, sfx, page){
+  page=page||OF_PAGE;
+  _ofLists[key]=list;
+  var n=Math.min(list.length, _ofShown[key]||page);
+  _ofShown[key]=n;
+  var h=list.slice(0,n).map(function(o){ return ofOrderCard(o, sfx||''); }).join('');
+  if(list.length>n){
+    h+='<button type="button" onclick="ofShowMore(\''+key+'\','+page+',\''+(sfx||'')+'\')" style="width:100%;margin:8px 0 4px;padding:11px;border:1px dashed var(--blue);border-radius:var(--rs);background:var(--blue-bg);color:var(--blue);font-size:13px;font-weight:700;cursor:pointer">▾ แสดงเพิ่ม / Show more · '+(list.length-n).toLocaleString()+' more ('+n.toLocaleString()+'/'+list.length.toLocaleString()+')</button>';
+  }
+  return h;
+}
+function ofShowMore(key, page, sfx){
+  var list=_ofLists[key]||[];
+  _ofShown[key]=Math.min(list.length, (_ofShown[key]||0)+(page||OF_PAGE));
+  var host=document.getElementById('oflist-'+key);
+  if(host) host.innerHTML=ofChunkHTML(key, list, sfx, page);
+  else ofRenderOrders();
+}
+// Build a collapsed group's cards the first time it is opened.
+function ofFillList(key, sfx, page){
+  var host=document.getElementById('oflist-'+key);
+  if(!host || host.getAttribute('data-filled')==='1') return;
+  host.innerHTML=ofChunkHTML(key, _ofLists[key]||[], sfx, page);
+  host.setAttribute('data-filled','1');
+}
+// Scrolling to one order (chat jump, Pictures jump) must not fail just because its
+// card sits beyond the rendered chunk — render up to it first.
+function ofRevealOrder(oid){
+  var list=_ofLists['main']||[];
+  var i=-1;
+  for(var k=0;k<list.length;k++){ if(list[k] && list[k].id===oid){ i=k; break; } }
+  if(i<0) return false;
+  if(i>=(_ofShown['main']||0)){
+    _ofShown['main']=Math.min(list.length, Math.ceil((i+1)/OF_PAGE)*OF_PAGE);
+    var host=document.getElementById('oflist-main');
+    if(host) host.innerHTML=ofChunkHTML('main', list);
+  }
+  return true;
+}
+function ofZoneFill(z){ ofFillList(z, z==='__ALL__'?'_a':'', z==='__ALL__'?OF_PAGE:OF_GROUP); }
 function ofToggleZone(z){
   ofZoneCollapsed[z] = !ofZoneCollapsed[z];
   var body=document.getElementById('zbody-'+z), chev=document.getElementById('zchev-'+z);
+  if(!ofZoneCollapsed[z]) ofZoneFill(z);
   if(body) body.style.display = ofZoneCollapsed[z]?'none':'';
   if(chev) chev.style.transform = ofZoneCollapsed[z]?'rotate(-90deg)':'rotate(0)';
 }
@@ -6541,6 +6591,7 @@ function ofToggleAllZones(btn){
   bodies.forEach(function(b){
     var z=b.id.replace('zbody-','');
     ofZoneCollapsed[z]=anyOpen;
+    if(!anyOpen) ofZoneFill(z);
     b.style.display=anyOpen?'none':'';
     var chev=document.getElementById('zchev-'+z);
     if(chev) chev.style.transform=anyOpen?'rotate(-90deg)':'rotate(0)';
@@ -7009,6 +7060,9 @@ function ofRenderOrders(){
   var q=searchEl?searchEl.value.trim().toLowerCase():'';
   if(q){f=f.filter(function(o){return (o.id||'').toLowerCase().indexOf(q)>=0||(o.customer||'').toLowerCase().indexOf(q)>=0||(o.phone||'').toLowerCase().indexOf(q)>=0||(o.address||'').toLowerCase().indexOf(q)>=0||(o.panels||'').toLowerCase().indexOf(q)>=0||(o.zone||'').toLowerCase().indexOf(q)>=0;});}
   if(f.length===0){document.getElementById('of-olist').innerHTML='<div class="empty">'+(ofTodayOnly_?'No orders today / วันนี้ยังไม่มีออเดอร์':'No orders yet / ยังไม่มีออเดอร์')+'</div>';return;}
+  // Switching filter / Today / search starts a different list → back to the first chunk.
+  var _lk=ofFilt_+'|'+(ofTodayOnly_?'T':'')+'|'+q;
+  if(_lk!==_ofListKey){ _ofListKey=_lk; _ofShown={}; }
   // Group by zone when viewing Delivered or Priority
   var _grouped = (ofFilt_==='delivered'||ofFilt_==='priority');
   if(_grouped){
@@ -7032,15 +7086,16 @@ function ofRenderOrders(){
     });
   }
   var _zoneLabel={Bangkok:'🏬 Bangkok / กรุงเทพฯ',Northern:'⛰️ Northern / ภาคเหนือ',Northeastern:'🌾 Northeastern / ภาคอีสาน',Eastern:'🌊 Eastern / ภาคตะวันออก',Southern:'🏝️ Southern / ภาคใต้',Instore:'🏪 Instore / หน้าร้าน',Other:'❔ Other / อื่นๆ'};
-  var _lastZone=null;
   var html = '';
   if(_grouped){
     html += '<div style="display:flex;justify-content:flex-end;margin:2px 2px 6px">'
       +'<button type="button" onclick="ofToggleAllZones(this)" class="btnsm" style="font-size:11px"><i class="ti ti-chevrons-up"></i> Collapse all</button></div>';
-    // "All" dropdown — every delivered order by date, newest first (collapsed by default)
+    // "All" dropdown — every delivered order by date, newest first. Collapsed by default,
+    // and its cards are only built once it is actually opened (it repeats every order).
     if(ofZoneCollapsed['__ALL__']===undefined) ofZoneCollapsed['__ALL__']=true;
     var _allCol = ofZoneCollapsed['__ALL__'];
     var _allByDate = f.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+    _ofLists['__ALL__']=_allByDate;
     html += '<div class="zone-group" data-zone="__ALL__">'
       +'<div onclick="ofToggleZone(\'__ALL__\')" style="display:flex;align-items:center;gap:8px;margin:6px 2px 8px;font-size:13px;font-weight:800;color:var(--text);cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none">'
       +'<i class="ti ti-chevron-down" id="zchev-__ALL__" style="font-size:16px;transition:transform .2s;transform:rotate('+(_allCol?'-90deg':'0')+')"></i>'
@@ -7048,29 +7103,28 @@ function ofRenderOrders(){
       +'<span style="background:var(--blue-bg);color:var(--blue);border-radius:20px;padding:1px 9px;font-size:11px;font-weight:700">'+f.length+'</span>'
       +'<span style="flex:1;height:1px;background:var(--border)"></span></div>'
       +'<div class="zone-body" id="zbody-__ALL__"'+(_allCol?' style="display:none"':'')+'>'
-      + _allByDate.map(function(_o){ return ofOrderCard(_o,'_a'); }).join('')
+      +'<div id="oflist-__ALL__"'+(_allCol?'':' data-filled="1"')+'>'+(_allCol?'':ofChunkHTML('__ALL__',_allByDate,'_a'))+'</div>'
       +'</div></div>';
+    // Zone groups (f is already sorted by zone) — each renders its own chunk.
+    var _zones=[], _byZone={};
+    f.forEach(function(o){ var z=o.zone||'Other'; if(!_byZone[z]){ _byZone[z]=[]; _zones.push(z); } _byZone[z].push(o); });
+    html += _zones.map(function(_z){
+      var _list=_byZone[_z];
+      _ofLists[_z]=_list;
+      var _col=!!ofZoneCollapsed[_z];
+      return '<div class="zone-group" data-zone="'+_z+'">'
+        +'<div onclick="ofToggleZone(\''+_z+'\')" style="display:flex;align-items:center;gap:8px;margin:14px 2px 8px;font-size:13px;font-weight:800;color:var(--text);cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none">'
+        +'<i class="ti ti-chevron-down" id="zchev-'+_z+'" style="font-size:16px;transition:transform .2s;transform:rotate('+(_col?'-90deg':'0')+')"></i>'
+        +'<span>'+(_zoneLabel[_z]||_z)+'</span>'
+        +'<span style="background:var(--blue-bg);color:var(--blue);border-radius:20px;padding:1px 9px;font-size:11px;font-weight:700">'+_list.length+'</span>'
+        +'<span style="flex:1;height:1px;background:var(--border)"></span></div>'
+        +'<div class="zone-body" id="zbody-'+_z+'"'+(_col?' style="display:none"':'')+'>'
+        +'<div id="oflist-'+_z+'"'+(_col?'':' data-filled="1"')+'>'+(_col?'':ofChunkHTML(_z,_list,'',OF_GROUP))+'</div>'
+        +'</div></div>';
+    }).join('');
+  } else {
+    html = '<div id="oflist-main" data-filled="1">'+ofChunkHTML('main', f)+'</div>';
   }
-  f.forEach(function(o){
-    if(_grouped){
-      var _z=o.zone||'Other';
-      if(_z!==_lastZone){
-        if(_lastZone!==null) html += '</div></div>'; // close previous body + group
-        _lastZone=_z;
-        var _cnt=f.filter(function(x){return (x.zone||'Other')===_z;}).length;
-        var _col=!!ofZoneCollapsed[_z];
-        html += '<div class="zone-group" data-zone="'+_z+'">'
-          +'<div onclick="ofToggleZone(\''+_z+'\')" style="display:flex;align-items:center;gap:8px;margin:14px 2px 8px;font-size:13px;font-weight:800;color:var(--text);cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none">'
-          +'<i class="ti ti-chevron-down" id="zchev-'+_z+'" style="font-size:16px;transition:transform .2s;transform:rotate('+(_col?'-90deg':'0')+')"></i>'
-          +'<span>'+(_zoneLabel[_z]||_z)+'</span>'
-          +'<span style="background:var(--blue-bg);color:var(--blue);border-radius:20px;padding:1px 9px;font-size:11px;font-weight:700">'+_cnt+'</span>'
-          +'<span style="flex:1;height:1px;background:var(--border)"></span></div>'
-          +'<div class="zone-body" id="zbody-'+_z+'"'+(_col?' style="display:none"':'')+'>';
-      }
-    }
-    html += ofOrderCard(o);
-  });
-  if(_grouped && _lastZone!==null) html += '</div></div>'; // close final body + group
   document.getElementById('of-olist').innerHTML = html;
 }
 
@@ -9452,6 +9506,7 @@ function kpcJumpRef(kind,id){
   try{ oft('orders'); }catch(e){}
   try{ var allBtn=document.querySelector('#ofv-orders .fbtn[data-status="all"]'); if(allBtn) ofFilt('all',allBtn); }catch(e){}
   setTimeout(function(){
+    try{ ofRevealOrder(id); }catch(e){}   // card may sit beyond the rendered chunk
     var card=document.querySelector('#of-olist [data-oid="'+String(id).replace(/["\\]/g,'')+'"]');
     if(card){ card.scrollIntoView({behavior:'smooth',block:'center'}); kpcFlash(card); }
     else { try{ kpcToast({byName:'',text:'Order '+id+' not in list / ไม่พบในรายการ'}); }catch(e){} }
@@ -11976,6 +12031,7 @@ function picsGoToOrder(oid){
   }catch(e){}
   setTimeout(function(){
     var card=null;
+    try{ ofRevealOrder(oid); }catch(e){}   // card may sit beyond the rendered chunk
     try{ card=document.querySelector('#of-olist .card[data-oid="'+oid+'"]'); }catch(e){}
     if(!card){ try{ var os=document.getElementById('of-search'); }catch(e){} return; }
     card.scrollIntoView({behavior:'smooth',block:'center'});
