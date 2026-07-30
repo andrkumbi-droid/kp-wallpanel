@@ -203,7 +203,9 @@ textarea{resize:none}
 /* While a card is dragged: no page/pinch scrolling, and the card is clearly picked up. */
 .arr-cols.arr-drag{touch-action:none}
 .arr-cols.arr-drag .acard{touch-action:none}
-.acard.dragging{opacity:.95;box-shadow:0 10px 26px rgba(0,0,0,.28);border:1.5px solid var(--blue);transform:scale(1.03);position:relative;z-index:5}
+/* The lifted card flies with the finger; the dashed slot shows where it lands. */
+.acard.dragging{opacity:.96;box-shadow:0 14px 30px rgba(0,0,0,.3);border:1.5px solid var(--blue);transform:scale(1.04) rotate(-1deg);z-index:1000;transition:none}
+.acard-ph{border:2px dashed var(--blue);border-radius:var(--rs);background:rgba(37,99,235,.07);margin-bottom:6px;box-sizing:border-box}
 .arr-col{flex:1;min-width:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:8px;min-height:90px}
 .arr-col.arr-right{background:var(--blue-l);border-color:var(--blue)}
 .arr-col h4{font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.02em;margin:0 0 8px;text-align:center}
@@ -10592,7 +10594,7 @@ var _arrCard=null;
 // Press and HOLD a card (~280 ms), then drag it between two other cards and let go —
 // it slots in there. A short tap still adds/removes the stop (drArrTap); moving the
 // finger before the hold fires keeps scrolling the page.
-var _arrPress=null, _arrJustDragged=false;
+var _arrPress=null, _arrJustDragged=false, _arrPh=null, _arrGrab={x:0,y:0};
 function drArrPress(e, card){
   if(e.button!=null && e.button>0) return;
   if(_arrCard) return;
@@ -10606,15 +10608,16 @@ function drArrPress(e, card){
     _arrPress=null;
   };
   var move=function(ev){
-    if(Math.abs(ev.clientX-startX)>8 || Math.abs(ev.clientY-startY)>8) cancel();   // scrolling
+    // A clear vertical swipe = the driver wants to scroll; sideways wobble is ignored.
+    if(Math.abs(ev.clientY-startY)>10 || Math.abs(ev.clientX-startX)>16) cancel();
   };
   var up=function(){ cancel(); };
   _arrPress={
     timer:setTimeout(function(){
       cancel();
-      try{ if(navigator.vibrate) navigator.vibrate(25); }catch(_){}
+      try{ if(navigator.vibrate) navigator.vibrate(20); }catch(_){}
       drArrDragStart({button:0, pointerId:pid, clientX:startX, clientY:startY, preventDefault:function(){}}, card);
-    }, 280),
+    }, 130),
     move:move, up:up
   };
   card.addEventListener('pointermove', move);
@@ -10623,9 +10626,23 @@ function drArrPress(e, card){
 }
 function drArrDragStart(e, card){
   if(e.button!=null && e.button>0) return;
-  _arrCard=card; card.classList.add('dragging');
+  _arrCard=card;
   if(e.preventDefault) e.preventDefault();
-  // Freeze page scrolling for the duration of the drag.
+  // The card is lifted out of the flow and follows the finger; a dashed placeholder
+  // keeps its slot and slides to wherever it would drop.
+  var r=card.getBoundingClientRect();
+  _arrGrab={x:e.clientX-r.left, y:e.clientY-r.top};
+  _arrPh=document.createElement('div');
+  _arrPh.className='acard-ph';
+  _arrPh.style.height=r.height+'px';
+  card.parentElement.insertBefore(_arrPh, card);
+  card.classList.add('dragging');
+  card.style.position='fixed';
+  card.style.width=r.width+'px';
+  card.style.left=r.left+'px';
+  card.style.top=r.top+'px';
+  card.style.margin='0';
+  card.style.pointerEvents='none';
   var cols=document.querySelector('.arr-cols'); if(cols) cols.classList.add('arr-drag');
   document.body.style.overflow='hidden';
   try{ card.setPointerCapture(e.pointerId); card._kpPid=e.pointerId; }catch(_){}
@@ -10640,14 +10657,19 @@ function _drArrAfter(col, y){
   return best;
 }
 function drArrDragMove(e){
-  if(!_arrCard) return; e.preventDefault();
+  if(!_arrCard) return;
+  if(e.preventDefault) e.preventDefault();
+  // The card flies with the finger …
+  _arrCard.style.left=(e.clientX-_arrGrab.x)+'px';
+  _arrCard.style.top =(e.clientY-_arrGrab.y)+'px';
   var leftCol=document.getElementById('dr-arr-left'), rightCol=document.getElementById('dr-arr-right');
-  if(!leftCol||!rightCol) return;
+  if(!leftCol||!rightCol||!_arrPh) return;
   var lr=leftCol.getBoundingClientRect(), rr=rightCol.getBoundingClientRect();
   var col = (e.clientX >= (lr.right+rr.left)/2) ? rightCol : leftCol;
+  // … and the placeholder shows where it will land.
   var after=_drArrAfter(col, e.clientY);
-  if(after==null){ if(_arrCard.parentElement!==col || _arrCard!==col.lastElementChild) col.appendChild(_arrCard); }
-  else if(after!==_arrCard.nextSibling) col.insertBefore(_arrCard, after);
+  if(after==null){ if(_arrPh.parentElement!==col || _arrPh!==col.lastElementChild) col.appendChild(_arrPh); }
+  else if(after!==_arrPh.nextSibling) col.insertBefore(_arrPh, after);
 }
 function drArrDragEnd(e){
   var card=_arrCard;
@@ -10656,8 +10678,13 @@ function drArrDragEnd(e){
     card.removeEventListener('pointermove', drArrDragMove);
     card.removeEventListener('pointerup', drArrDragEnd);
     card.removeEventListener('pointercancel', drArrDragEnd);
+    // Drop it exactly where the placeholder sits and put it back into the flow.
+    if(_arrPh && _arrPh.parentElement) _arrPh.parentElement.insertBefore(card, _arrPh);
     card.classList.remove('dragging');
+    ['position','width','left','top','margin','pointerEvents'].forEach(function(p){ card.style[p]=''; });
   }
+  if(_arrPh && _arrPh.parentElement) _arrPh.parentElement.removeChild(_arrPh);
+  _arrPh=null;
   var _cols=document.querySelector('.arr-cols'); if(_cols) _cols.classList.remove('arr-drag');
   document.body.style.overflow='';
   _arrJustDragged=true;                       // the click after the drop must not re-tap
