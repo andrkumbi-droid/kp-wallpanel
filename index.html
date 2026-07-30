@@ -2916,7 +2916,9 @@ function syncWOrders() { if(window.fbDB) { const obj = {}; wOrders.forEach((o,i)
 // t.orders, so the reader rebuilds the real keys from there (see activeTours .on).
 function tourKey(id){ return String(id||'').replace(/[.#$/\[\]]/g,'_'); }
 function tourForFb(t){
-  var out={}; for(var k in t){ if(k!=='status'&&k!=='checks') out[k]=t[k]; }
+  // kmRoute is a locally derived comparison value — it must never be stored (see
+  // _kmRouteLocal); dropping it here also clears the old entries on the next write.
+  var out={}; for(var k in t){ if(k!=='status'&&k!=='checks'&&k!=='kmRoute') out[k]=t[k]; }
   var s={}; if(t.status){ for(var a in t.status) s[tourKey(a)]=t.status[a]; }
   var c={}; if(t.checks){ for(var b in t.checks) c[tourKey(b)]=t.checks[b]; }
   out.status=s; out.checks=c; return out;
@@ -2983,7 +2985,7 @@ function kpToursSig(){
       return [t.id,(t.orders||[]).join(','),JSON.stringify(t.status||{}),t.driving?1:0,t.departedAt||'',
         t.driverPay,t.driverAdvance,t.payMethodTour||'',(t.carPhotos||[]).length,(t.carFeeSlips||[]).length,
         t.kmMode?1:0,t.kmRate,(t.kmLog?(Array.isArray(t.kmLog)?t.kmLog.length:Object.keys(t.kmLog).length):0),
-        (t.kmRoute&&t.kmRoute.km)||'',t.lalaDriver||'',t.plate||''].join('|');
+        t.lalaDriver||'',t.plate||''].join('|');
     }).join('~');
   }catch(e){ return String(Date.now()); }
 }
@@ -8077,7 +8079,12 @@ function kmSummaryHTML(t, opts){
 // The number comes from the free OSRM demo router with tollways excluded —
 // Google's Directions API needs a paid key. The 🗺️ link opens exactly the same
 // route in Google Maps ("avoid tolls") for an exact look.
-var _kmRouteBusy={}, _kmRouteTried={};
+// The comparison distance is NEVER stored in Firebase. It is a local, derived value:
+// every device computes it for itself and keeps it in memory. Storing it meant devices
+// overwrote each other's result (one without carrier depots, one with) and every write
+// rebuilt the tour view — that is what made the number jump between 70 and 2100 km.
+var _kmRouteLocal={}, _kmRouteBusy={}, _kmRouteTried={};
+function kmRouteOf(t){ return (t && _kmRouteLocal[t.id]) || null; }
 function kmRouteSig(t){
   // Re-route when the stop order, a carrier assignment, or a carrier DEPOT changes.
   // The depot has to be part of it: a client whose shipperLoc had not loaded yet
@@ -8108,7 +8115,7 @@ function setShipperLoc(idx){
     try{ if(window.fbDB){ var r=window.fbDB.ref('shipperLoc/'+key); if(obj) r.set(obj); else r.remove(); } }catch(e){}
     try{ mgRenderShippers(); }catch(e){}
     // Depot moved → the cached route comparisons are stale.
-    try{ (activeTours||[]).forEach(function(t){ if(t&&t.kmMode) t.kmRoute=null; }); ofRenderTour(); }catch(e){}
+    try{ _kmRouteLocal={}; _kmRouteTried={}; ofRenderTour(); }catch(e){}
   };
   if(!s){ save(null); return; }
   var c=kmParseLatLng(s);
@@ -8176,29 +8183,22 @@ function kmRouteCalc(tourId, force){
     if(!orders || !orders.length) return;
     var incomplete=(t.orders||[]).some(function(id){ return !orders.find(function(x){return x.id===id;}); });
     if(incomplete) return;
-    // Carrier depots not loaded yet → we would route to the customers instead of the
-    // depots and overwrite a correct value with a far too long one.
+    // Carrier depots not loaded yet → we would route to the customers, not the depots.
     if(!_shipLocLoaded) return;
-    // One calculation per tour per 5 minutes across all devices; 🔄 forces it.
-    if(t.kmRoute && t.kmRoute.ts && (Date.now()-t.kmRoute.ts)<300000) return;
-    // Only the window the user is actually looking at may write — never a second
-    // tab or a phone in the pocket.
-    if(document.hidden || !document.hasFocus()) return;
+    if(document.hidden) return;   // background tab: no pointless requests
   }
   var p=kmRoutePoints(t);
   if(!p.pts.length){ if(force) alert('ไม่มีพิกัดลูกค้าในทัวร์นี้\nNo customer coordinates saved for this tour.'); return; }
   var sig=kmRouteSig(t);
-  if(!force && t.kmRoute && t.kmRoute.sig===sig) return;
+  if(!force && _kmRouteLocal[tourId] && _kmRouteLocal[tourId].sig===sig) return;
   _kmRouteBusy[tourId]=1;
   var all=[homeLoc].concat(p.pts);
   var save=function(km, src){
     delete _kmRouteBusy[tourId];
-    var t2=activeTours.find(function(x){return x.id===tourId;}); if(!t2) return;
-    t2.kmRoute = (km!=null)
+    _kmRouteLocal[tourId] = (km!=null)
       ? { km:Math.round(km*10)/10, src:src, sig:sig, ts:Date.now(), stops:p.pts.length, missing:p.missing, viaShipper:p.viaShipper }
       : { km:null, err:1, sig:sig, ts:Date.now(), stops:p.pts.length, missing:p.missing, viaShipper:p.viaShipper };
-    try{ syncTours(); }catch(e){}
-    try{ ofRenderTour(); }catch(e){}
+    try{ ofRenderTour(); }catch(e){}   // local only — nothing is written to Firebase
   };
   // Plain road route — free OSRM demo, no key. It cannot exclude tollways.
   var osrm=function(){
@@ -8229,7 +8229,7 @@ function kmSetOrsKey(){
   if(s===null) return;
   orsKey=(s||'').trim();
   try{ if(window.fbDB) window.fbDB.ref('orsKey').set(orsKey); }catch(e){}
-  (activeTours||[]).forEach(function(t){ if(t&&t.kmMode&&t.kmRoute) t.kmRoute=null; });
+  _kmRouteLocal={}; _kmRouteTried={};
   try{ ofRenderTour(); }catch(e){}
 }
 // Start point of every route comparison — set once by the office.
@@ -8257,7 +8257,7 @@ function kmSetHome(){
 }
 // The comparison line shown under the Slips block on a KM tour card.
 function kmRouteRowHTML(t, ro){
-  var r=t.kmRoute||null, drv=kmTotal(t), sig=kmRouteSig(t);
+  var r=kmRouteOf(t), drv=kmTotal(t), sig=kmRouteSig(t);
   // Auto-calc at most once a minute per tour — a render must never trigger a write
   // storm (write → listener → render → write …).
   if(homeLoc && (!r || r.sig!==sig) && !_kmRouteBusy[t.id] && (Date.now()-(_kmRouteTried[t.id]||0))>60000){
