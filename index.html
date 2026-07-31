@@ -4515,7 +4515,10 @@ function openDM(id){editDM=id;document.getElementById('dm-title').textContent=id
 function closeDM(){document.getElementById('dm-modal').classList.remove('open');editDM=null;}
 function saveDM(){const name=document.getElementById('dm-name').value.trim();if(!name){alert('Enter a name');return;}const phone=document.getElementById('dm-phone').value.trim(),vehicle=document.getElementById('dm-vehicle').value.trim();if(editDM){const d=drivers.find(x=>x.id===editDM);d.name=name;d.phone=phone;d.vehicle=vehicle;}else drivers.push({id:'d'+Date.now(),name,phone,vehicle});closeDM();mgRender();syncDrivers();}
 function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filter(x=>x.id!==editDM);closeDM();mgRender();syncDrivers();}
-function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
+// Management view "End tour". It never archived the tour, so a tour ended here was
+// missing from the Drivers tab entirely — archiveTour is idempotent, so calling it
+// from both end paths is safe.
+function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').valueAsDate=new Date();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -6041,6 +6044,7 @@ function openTourDetail(ti) {
           <div style="font-size:12px;font-weight:600;color:#1d4ed8;margin-bottom:4px">🚚 ${(o.shipper && o.shipper!=='ส่งเอง') ? o.shipper : 'ส่งเอง / self'+(o.driver?' ('+o.driver+')':'')}</div>
           <a href="${mapsUrl}" target="_blank" style="font-size:12px;color:var(--blue);text-decoration:none"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> ${o.address}</a>
           ${o.contact?'<div style="font-size:12px;color:var(--text2);margin-top:2px"><i class="ti ti-message-circle" style="font-size:12px;vertical-align:-1px"></i> '+o.contact+'</div>':''}
+          ${ofDelNoteHTML(o,'margin-top:4px;font-size:12.5px')}
           <textarea onchange="tdmSetNote('${String(id).replace(/['\\]/g,'')}', this.value)" rows="2" placeholder="📝 Note for delivery sheet / โน้ตสำหรับใบส่ง" style="width:100%;margin-top:6px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text);resize:vertical;font-family:inherit">${(o.sheetNote||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
         </div>
       </div>
@@ -6214,6 +6218,7 @@ function dsPrintSheet(driverName, tourOrders, dateISO) {
     // (entered on the tour-detail stop card, separate from the office-only Notes).
     var createdStr = o.date ? (function(){ try{ return fmtD(o.date); }catch(e){ return String(o.date); } })() : '';
     var noteTxt = esc(o.sheetNote||'').trim();
+    var reqTxt  = esc(o.reqNote||'').trim();
     // Payment status — mirror the order card: paidAmount (or full if payMethod), legacy deposit as fallback.
     var total = moneyOf(o);
     var paid = (o.paidAmount!=null&&o.paidAmount!=='') ? (parseFloat(o.paidAmount)||0) : (o.payMethod?total:0);
@@ -6245,7 +6250,12 @@ function dsPrintSheet(driverName, tourOrders, dateISO) {
         + '<div class="ds-prods">'+prods+ctn+'</div>'
         + '<div class="ds-pay'+(payFull?' ds-pay-paid':'')+'">'+payInner+'</div>'
       + '</div>'
-      + '<div class="ds-notes">📝 หมายเหตุ / Notes:'+(noteTxt?' <b style="color:#111">'+noteTxt+'</b>':'')+'</div>'
+      // The order's delivery note goes on the sheet too, in red — the driver must not
+      // miss "เอาเข้าคู่บุญ" just because it was typed on the order and not here.
+      + '<div class="ds-notes">📝 หมายเหตุ / Notes:'
+        +(reqTxt?' <b style="color:#dc2626;font-size:10.5pt">'+reqTxt+'</b>':'')
+        +(noteTxt?(reqTxt?' · ':' ')+'<b style="color:#111">'+noteTxt+'</b>':'')
+      +'</div>'
     + '</div></div>';
   }
 
@@ -6842,6 +6852,15 @@ function kpAlarmAck(){ var ov=document.getElementById('kp-alarm-overlay'); if(ov
 // render every order twice (once under "All", once under its zone) — without a suffix
 // both copies share an id and getElementById always hits the hidden first one, so the
 // "More" button in the zone group silently did nothing.
+// The "Note for delivery / หมายเหตุการส่ง" typed on the order (o.reqNote) is an
+// instruction for whoever moves the goods — so it travels with the order everywhere:
+// order card, tour card, tour detail, driver app and the printed delivery sheet.
+// Always red + bold, so it is never mistaken for an office remark.
+function ofDelNoteHTML(o, style){
+  var n=String((o&&o.reqNote)||'').trim();
+  if(!n) return '';
+  return '<div style="font-size:11.5px;font-weight:800;color:#dc2626;'+(style||'')+'">📝 '+kpcEsc(n)+'</div>';
+}
 function ofOrderCard(o, sfx){
   sfx = (typeof sfx==='string')?sfx:'';
   var logHTML = '';
@@ -6886,7 +6905,7 @@ function ofOrderCard(o, sfx){
   s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> '+o.address+'</div>';
   if(o.contact) s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-message-circle" style="font-size:12px;vertical-align:-1px"></i> '+o.contact+'</div>';
   if(o.deliveryRound) s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-calendar" style="font-size:12px;vertical-align:-1px"></i> '+o.deliveryRound+'</div>';
-  if(o.reqDate||o.reqNote) s += '<div style="font-size:12px;color:#c2410c;font-weight:600;margin-bottom:2px"><i class="ti ti-calendar-event" style="font-size:12px;vertical-align:-1px"></i> ต้องการรับ / Requested: '+(o.reqDate?fmtD(o.reqDate):'')+(o.reqNote?(o.reqDate?' · ':'')+o.reqNote:'')+'</div>';
+  if(o.reqDate||o.reqNote) s += '<div style="font-size:12px;color:#c2410c;font-weight:600;margin-bottom:2px"><i class="ti ti-calendar-event" style="font-size:12px;vertical-align:-1px"></i> ต้องการรับ / Requested: '+(o.reqDate?fmtD(o.reqDate):'')+(o.reqNote?(o.reqDate?' · ':'')+'<b style="color:#dc2626">'+o.reqNote+'</b>':'')+'</div>';
   // Due today → "Accept" button to stop this card blinking (or a "seen" note once accepted)
   if(!window.ofReadOnly && o.reqDate && o.status!=='delivered' && o.status!=='cancelled' && kpReqDayDiff(o.reqDate)===0){
     s += (o.reqAck===kpTodayStr())
@@ -7780,6 +7799,7 @@ function ofRenderTour(){
               : '<span class="badge" style="font-size:10px;background:var(--green-bg);color:var(--green)">'+st+'</span>'))))+
         '</div>'+
         '</div>'+
+        ofDelNoteHTML(ord,'margin-top:3px')+
         (ro?'':'<div id="'+wrapId+'" style="display:none;margin-top:5px">'+
           '<select onchange="ofTourSetShipper(\''+String(id).replace(/['\\]/g,'')+'\',\''+driverEsc+'\',this.value)" style="width:100%;padding:6px 8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;cursor:pointer">'+
             shipOpts+
@@ -8286,10 +8306,21 @@ function ofLalaDeparted(ti){
   ofRenderLala();
 }
 // Archive a finished tour to Firebase tourHistory, numbered per driver (Tour 1,2,…).
+var _archivedTourIds={};   // tour ids archived in this session (double-tap guard)
 function archiveTour(t){
   if(!t || !window.fbDB) return;
   var key=String(t.driverId||'unknown').replace(/[^a-zA-Z0-9_-]/g,'_');
-  var existing=(tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).length : 0;
+  var hist=(tourHistory && tourHistory[key]) || {};
+  var hKeys=Object.keys(hist);
+  // Ending the same tour twice (double tap, or both end paths firing) used to push a
+  // SECOND identical record — that is why a tour could show up twice in the Drivers tab.
+  // Two guards: what the Firebase listener already knows, plus what THIS session wrote
+  // (a double tap fires again long before the listener has come back).
+  if(t.id && (_archivedTourIds[t.id] || hKeys.some(function(k){ return (hist[k]||{}).tourId===t.id; }))) return;
+  if(t.id) _archivedTourIds[t.id]=1;
+  // Number from the highest existing tourNo, not from the record count: a deleted or
+  // duplicated record must not make the next tour re-use a number.
+  var existing=hKeys.reduce(function(mx,k){ var n=parseInt((hist[k]||{}).tourNo)||0; return n>mx?n:mx; }, 0);
   var now=new Date();
   var ordersSnap=(t.orders||[]).map(function(id){
     var o=orders.find(function(x){return x.id===id;})||{};
@@ -10744,7 +10775,7 @@ function drTour(){
         '<div class="crow"><i class="ti ti-map-pin" style="font-size:13px;color:var(--text2)"></i><a class="clink" href="'+murl+'" target="_blank">'+o.address+'</a></div>'+
         (_navUrl?'<div class="crow"><i class="ti ti-navigation" style="font-size:13px;color:#16a34a"></i><a class="clink" href="'+_navUrl+'" target="_blank" style="color:#16a34a;font-weight:600">🧭 Navigate / นำทาง</a></div>':'')+
         (o.contact?'<div class="crow"><i class="ti ti-message-circle" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.contact+'</span></div>':'')+
-        ((o.reqDate||o.reqNote)?'<div class="crow"><i class="ti ti-calendar-event" style="font-size:13px;color:#c2410c"></i><span style="font-size:13px;color:#c2410c;font-weight:600">ต้องการรับ / Requested: '+(o.reqDate?fmtD(o.reqDate):'')+(o.reqNote?(o.reqDate?' · ':'')+o.reqNote:'')+'</span></div>':'')+
+        ((o.reqDate||o.reqNote)?'<div class="crow"><i class="ti ti-calendar-event" style="font-size:13px;color:#c2410c"></i><span style="font-size:13px;color:#c2410c;font-weight:600">ต้องการรับ / Requested: '+(o.reqDate?fmtD(o.reqDate):'')+(o.reqNote?(o.reqDate?' · ':'')+'<b style="color:#dc2626">'+o.reqNote+'</b>':'')+'</span></div>':'')+
         '</div>'+
         (isPacking
           ? '<div class="tfoot"><div style="flex:1;text-align:center;font-size:12px;font-weight:600;color:#92400e;background:#fef3c7;border-radius:var(--rs);padding:9px">📦 Waiting for warehouse / รอแพ็คเสร็จ</div></div>'
