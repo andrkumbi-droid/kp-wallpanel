@@ -8333,10 +8333,45 @@ function ofDrvDupeScan(){
   });
   return out;
 }
+// Different tours (own tourId, own departure time) that carry the SAME order — the tour
+// was re-created, or an order was delivered twice. Not a duplicate record: both are real
+// tours, so this is reported for checking only, never deleted automatically.
+function ofDrvSameOrderScan(){
+  var out=[];
+  Object.keys(tourHistory||{}).forEach(function(key){
+    var recs=tourHistory[key]||{}, byOrder={};
+    Object.keys(recs).forEach(function(k){
+      var r=recs[k]||{};
+      var arr=Array.isArray(r.orders)?r.orders:Object.keys(r.orders||{}).map(function(x){return (r.orders||{})[x];});
+      arr.forEach(function(o){
+        var id=o&&o.id; if(!id) return;
+        (byOrder[id]=byOrder[id]||[]).push(r);
+      });
+    });
+    Object.keys(byOrder).forEach(function(id){
+      var rs=byOrder[id];
+      // Same record listed twice is the duplicate case above — only flag distinct tours.
+      var seen={}, uniq=rs.filter(function(r){ var s=r.tourId||(r.tourNo+'|'+r.endedAt); if(seen[s]) return false; seen[s]=1; return true; });
+      if(uniq.length>1) out.push({name:uniq[0].driverName||key, id:id, tours:uniq});
+    });
+  });
+  return out;
+}
 function ofDrvCheckDupes(){
-  var dupes=[];
-  try{ dupes=ofDrvDupeScan(); }catch(e){ alert('Scan failed: '+e.message); return; }
-  if(!dupes.length){ alert('✅ ไม่พบทัวร์ซ้ำ / No duplicate tours — all '+Object.keys(tourHistory||{}).length+' driver histories are clean.'); return; }
+  var dupes=[], same=[];
+  try{ dupes=ofDrvDupeScan(); same=ofDrvSameOrderScan(); }catch(e){ alert('Scan failed: '+e.message); return; }
+  var sameTxt = same.length
+    ? '\n\n──────────\nℹ '+same.length+' order(s) appear on MORE THAN ONE tour / ออเดอร์อยู่หลายทัวร์:\n'
+      +same.slice(0,15).map(function(s){
+          return '  '+s.id+' → '+s.tours.map(function(r){ return (r.driverName||'')+' Tour '+(r.tourNo||'?')+' ('+(r.departedDate||r.endedDate||'')+(r.departedAt?' '+r.departedAt:'')+')'; }).join('  +  ');
+        }).join('\n')
+      +(same.length>15?'\n  … +'+(same.length-15)+' more':'')
+      +'\nThese are separate real tours (own departure time) — check whether the tour was re-created.'
+    : '';
+  if(!dupes.length){
+    alert('✅ ไม่พบทัวร์ซ้ำ / No duplicate tour records — all '+Object.keys(tourHistory||{}).length+' driver histories are clean.'+sameTxt);
+    return;
+  }
   var nDrop=dupes.reduce(function(a,d){ return a+d.drop.length; },0);
   var lines=dupes.map(function(d){
     var r=d.keep.r;
@@ -8344,7 +8379,7 @@ function ofDrvCheckDupes(){
       +' · '+(r.orderCount||0)+' orders · '+(Number(r.driverPay)||0).toLocaleString('en-US')+' ฿'
       +'   →   +'+d.drop.length+' copy'+(d.drop.length>1?'ies':'');
   });
-  if(!confirm('⚠ พบทัวร์ซ้ำ / '+dupes.length+' tour(s) archived more than once:\n\n'+lines.join('\n')
+  if(!confirm('⚠ พบทัวร์ซ้ำ / '+dupes.length+' tour(s) archived more than once:\n\n'+lines.join('\n')+sameTxt
     +'\n\n──────────\nDelete the '+nDrop+' extra cop'+(nDrop>1?'ies':'y')+'? The FIRST record of each tour is kept.'
     +'\nลบสำเนาส่วนเกิน '+nDrop+' รายการ? (เก็บรายการแรกไว้)')) return;
   if(!window.fbDB){ alert('Offline — try again / ออฟไลน์'); return; }
