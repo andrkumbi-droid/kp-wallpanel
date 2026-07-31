@@ -8380,6 +8380,8 @@ function ofKmMove(tourId, oid, dir){
   var tmp=t.orders[i]; t.orders[i]=t.orders[j]; t.orders[j]=tmp;
   t.arranged=null;            // office order wins over the driver's own arrangement
   t.kmOrderTs=Date.now();
+  // Moving a stop is a change to the tour like any other → who did it goes on record.
+  try{ auditTour('reorder', oid, 'ลำดับ / stop '+(i+1)+' → '+(j+1)+' · 🚚 '+(t.driverName||'')); }catch(e){}
   syncTours();
   try{ ofRenderTour(); }catch(e){}
 }
@@ -10466,11 +10468,21 @@ function drLoadTourData(){
   } else { dArranged=[]; }
 }
 // Persist the driver's two-column route arrangement (right = ordered delivery sequence).
+var _drSeqLogged={};   // tour id → last sequence written to the audit log (per session)
 function drPersistArrange(){
   var tour=drGetTour(); if(!tour) return;
   var mt=dTour.filter(function(id){return dAllOrders.find(function(x){return x.id===id;});});
   tour.orders=mt.concat(tour.orders.filter(function(x){return mt.indexOf(x)<0;}));
   tour.arranged=dArranged.filter(function(id){return mt.indexOf(id)>=0;});
+  // The driver rearranging their own route is a movement too. Logged once per real
+  // change — a drop that ends where it started, or departing, writes nothing.
+  try{
+    var _k=tour.id||'', _seq=(tour.arranged||[]).join(',');
+    if(_seq && _seq!==_drSeqLogged[_k]){
+      _drSeqLogged[_k]=_seq;
+      auditTour('reorder','🚚 '+(tour.driverName||''), 'ลำดับใหม่ / new stop order: '+(tour.arranged||[]).join(' → '), drWho());
+    }
+  }catch(e){}
   try{ syncTours(); }catch(e){}
 }
 // Tour switcher shown at the top of the driver screen when there is >1 tour.
@@ -18156,9 +18168,12 @@ function _auditRenderNow() {
     else if(_auditFilt === 'delete') { if(e.type !== 'delete') return false; }
     else if(_auditFilt === 'tour') { if(e.type !== 'tour') return false; }
     else if(_auditFilt === 'claim') { if(e.type !== 'claim') return false; }
-    // Free-text search across order id + staff name (case-insensitive).
+    // Free-text search across order id + staff name + detail (case-insensitive).
+    // The detail matters: a tour entry is labelled with the DRIVER ("🚚 Go") and lists
+    // the order numbers in its detail, so without it searching an order id would miss
+    // exactly the "who put this on a tour" entries.
     if(_auditSearch) {
-      var hay = ((e.orderId||'') + ' ' + (e.by||'')).toLowerCase();
+      var hay = ((e.orderId||'') + ' ' + (e.by||'') + ' ' + (e.detail||'')).toLowerCase();
       if(hay.indexOf(_auditSearch) < 0) return false;
     }
     return true;
