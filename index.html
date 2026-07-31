@@ -4635,17 +4635,18 @@ function ofStockCatalog(){
   host.innerHTML = html || '<div class="empty" style="padding:1rem;font-size:13px">No stock found</div>';
 }
 
-// Office → Stock tab: print the CURRENT stock. Two separate tables — KP wall panels and
-// K-PVC ceiling — each in code order (KP006, KP009, KP011 … / K-PVC-01, K-PVC-02 …).
-// L-Corner / U-Trim / T-Trim are deliberately left out for now. The last column stays
-// blank so the sheet can be used for counting in the warehouse.
+// Office → Stock tab: print the CURRENT stock — KP wall panels, K-PVC ceiling and the
+// L / T / U profiles, each table in code order. Only what is really on hand: a product
+// with 0 in both grades is left off the sheet. The last column stays blank so the sheet
+// can be used for counting in the warehouse.
 function ofStockPrint(){
   var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
   var prod=function(code){ return (window.QT_PRODUCTS||[]).find(function(p){ return p.code===code; }) || {}; };
   var byCode=function(a,b){ return String(a.code||'').localeCompare(String(b.code||''), undefined, {numeric:true}); };
-  var panels=(stockItems||[]).filter(function(s){return s.type==='panel';}).slice().sort(byCode);
-  var pvc=(stockItems||[]).filter(function(s){return s.type==='pvc';}).slice().sort(byCode);
-  if(!panels.length && !pvc.length){ alert('No stock / ไม่มีสต็อก'); return; }
+  var onHand=function(s){ return ((parseInt(s.qty)||0)+(parseInt(s.damaged)||0))>0; };
+  var pick=function(type){ return (stockItems||[]).filter(function(s){return s.type===type;}).filter(onHand).slice().sort(byCode); };
+  var panels=pick('panel'), pvc=pick('pvc'), lco=pick('lcorner'), ttr=pick('ttrim'), utr=pick('utrim');
+  if(!panels.length && !pvc.length && !lco.length && !ttr.length && !utr.length){ alert('No stock / ไม่มีสต็อก'); return; }
   var now=new Date();
   var dateStr=now.toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'})+' '
     +String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
@@ -4677,8 +4678,12 @@ function ofStockPrint(){
         +'<td class="r">'+ta.toLocaleString('en-US')+'</td><td class="r">'+tb.toLocaleString('en-US')+'</td><td class="r tot">'+(ta+tb).toLocaleString('en-US')+'</td><td></td>'
       +'</tr></tfoot></table></div>';
   }
-  var gA=panels.reduce(function(a,s){return a+(parseInt(s.qty)||0);},0)+pvc.reduce(function(a,s){return a+(parseInt(s.qty)||0);},0);
-  var gB=panels.reduce(function(a,s){return a+(parseInt(s.damaged)||0);},0)+pvc.reduce(function(a,s){return a+(parseInt(s.damaged)||0);},0);
+  // Panels and profiles are different units, so they are summed separately — same split
+  // as the summary bar on screen (WPC · PVC · TOTAL panels · L·U·T).
+  var sumA=function(arr){ return arr.reduce(function(a,s){return a+(parseInt(s.qty)||0);},0); };
+  var sumB=function(arr){ return arr.reduce(function(a,s){return a+(parseInt(s.damaged)||0);},0); };
+  var wA=sumA(panels), pA=sumA(pvc), lutA=sumA(lco)+sumA(ttr)+sumA(utr);
+  var gA=wA+pA, gB=sumB(panels)+sumB(pvc), lutB=sumB(lco)+sumB(ttr)+sumB(utr);
   var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Stock / สต็อก '+esc(now.toISOString().slice(0,10))+'</title><style>'
     +'*{box-sizing:border-box;margin:0;padding:0}'
     +'@page{size:A4 portrait;margin:10mm}'
@@ -4701,11 +4706,19 @@ function ofStockPrint(){
     +'tfoot td{background:#f1f5f9;font-weight:800}'
     +'</style></head><body>'
     +'<div class="hd"><h1>📦 สต็อกคงเหลือ / Stock on hand — KP Wallpanel</h1><div class="d">'+esc(dateStr)+'</div></div>'
-    +'<div class="grand"><div class="gbox"><div class="l">GRADE A</div><div class="v">'+gA.toLocaleString('en-US')+'</div></div>'
-      +'<div class="gbox"><div class="l">GRADE B</div><div class="v">'+gB.toLocaleString('en-US')+'</div></div>'
-      +'<div class="gbox"><div class="l">รวมทั้งหมด / TOTAL</div><div class="v">'+(gA+gB).toLocaleString('en-US')+'</div></div></div>'
+    +'<div class="grand">'
+      +'<div class="gbox"><div class="l">WPC</div><div class="v">'+wA.toLocaleString('en-US')+'</div></div>'
+      +'<div class="gbox"><div class="l">PVC</div><div class="v">'+pA.toLocaleString('en-US')+'</div></div>'
+      +'<div class="gbox"><div class="l">รวมแผ่น / PANELS</div><div class="v">'+gA.toLocaleString('en-US')+'</div>'
+        +(gB>0?'<div style="font-size:8.5pt;font-weight:700;color:#b45309">+'+gB.toLocaleString('en-US')+' B</div>':'')+'</div>'
+      +'<div class="gbox"><div class="l">L · U · T</div><div class="v">'+lutA.toLocaleString('en-US')+'</div>'
+        +(lutB>0?'<div style="font-size:8.5pt;font-weight:700;color:#b45309">+'+lutB.toLocaleString('en-US')+' B</div>':'')+'</div>'
+    +'</div>'
     +tbl('KP — WPC Wall Panels / แผ่นผนัง', panels)
     +tbl('K-PVC — PVC Ceiling / ฝ้าเพดาน', pvc)
+    +tbl('L-Corner / อลูมิเนียมขอบ L', lco)
+    +tbl('T-Trim / ขอบ T', ttr)
+    +tbl('U-Trim / ขอบ U', utr)
     +'<div style="margin-top:14px;font-size:9pt;color:#555">ผู้นับ / Counted by: ______________________ &nbsp;&nbsp; วันที่ / Date: ______________</div>'
     +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
   var w=window.open('','_blank');
