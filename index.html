@@ -6945,6 +6945,9 @@ function ofOrderCard(o, sfx){
   var _moreId='omore_'+safeOrderId(o.id)+sfx;
   var _photoId='ofphoto_'+safeOrderId(o.id)+sfx;
   s += '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">';
+  // Hand over to a carrier straight from the order card. ofTourShip only exists inside an
+  // ACTIVE tour, so an order whose tour was already ended had no way to reach "at shipper".
+  if(!window.ofReadOnly && (o.status==='ready'||o.status==='loaded')) s += '<button type="button" class="btnsm" style="background:#eef2ff;color:#4f46e5;border-color:#c7d2fe;font-weight:700" onclick="ofOrderShip(\''+o.id+'\')" title="Handed over to the carrier / ส่งให้ขนส่งแล้ว"><i class="ti ti-truck"></i> 🚚 At shipper / ส่งขนส่งแล้ว</button>';
   if(!window.ofReadOnly && o.status==='shipped') s += '<button type="button" class="btnsm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="ofFinalizeShipped(\''+o.id+'\')" title="Customer received — mark delivered / ลูกค้าได้รับแล้ว"><i class="ti ti-check"></i> Delivered / ส่งถึงลูกค้าแล้ว</button>';
   s += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
   if(!window.ofReadOnly) s += '<button type="button" class="btnsm" onclick="ofToggleMore(\''+_moreId+'\')" style="background:var(--bg2);color:var(--text)"><i class="ti ti-dots"></i> More / จัดการ ⌄</button>';
@@ -9148,6 +9151,31 @@ function ofTourShip(tourId, orderId){
   try{ if(ord) sheetsSyncOrder(ord); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
 }
 
+// "At shipper" from the ORDER card — same result as ofTourShip, but without needing a
+// live tour (the goods left with a carrier, the customer has not received them yet, no
+// revenue yet). The carrier must be picked first so the handover is documented.
+function ofOrderShip(id){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  var shp=(o.shipper && o.shipper!=='ส่งเอง') ? o.shipper : '';
+  if(!shp){ alert('เลือกขนส่งก่อน 🚚 / Pick the shipper in the 🚚 dropdown on this card first.'); return; }
+  if(!confirm('ส่งให้ '+shp+' แล้ว? / Handed over to '+shp+'?\n\n'+id+' — ลูกค้ายังไม่ได้รับ ยืนยันทีหลัง / customer receipt is confirmed later')) return;
+  var byName=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName
+    :(((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office');
+  var _old=o.status;
+  o.shippedBy=byName;
+  addStatusLog(o,'shipped',byName);
+  o.status='shipped';
+  auditStatus(id,_old,'shipped',byName);
+  // If the order still sits on a live tour, move that row along too.
+  (activeTours||[]).forEach(function(t){ if(t && t.orders && t.orders.indexOf(id)>=0){ t.status=t.status||{}; t.status[id]='shipped'; } });
+  try{ addLog('Order '+id+' → 🚚 '+shp+' (by '+byName+')','~'); }catch(e){}
+  try{ syncOrders(); }catch(e){}
+  try{ syncTours(); }catch(e){}
+  try{ sheetsSyncOrder(o); }catch(e){}
+  try{ ofRenderOrders(); }catch(e){}
+  try{ ofRenderTour(); }catch(e){}
+  try{ payUpdateBadge(); }catch(e){}
+}
 // Move an order from one active tour to another (e.g. driver came back for it)
 function ofMoveOrder(fromTourId, orderId){
   var from = activeTours.find(function(x){return x.id===fromTourId;}); if(!from) return;
