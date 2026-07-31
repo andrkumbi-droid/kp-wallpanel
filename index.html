@@ -6898,7 +6898,7 @@ function ofOrderCard(o, sfx){
     +'</div>';
   s += noteHTML;
   var _shownTotal=(ofCanonTotal(o)!=null?ofCanonTotal(o).toLocaleString()+' ฿':o.total);
-  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span style="font-size:14px;font-weight:700">'+_shownTotal+'</span><span style="font-size:11px;color:#888">'+fmtD(o.date)+'</span></div>';
+  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span style="font-size:14px;font-weight:700">'+_shownTotal+'</span><span style="font-size:13.5px;font-weight:700;color:var(--text2)">'+fmtD(o.date)+'</span></div>';
   var _exLi=(o.lineItems||[]).filter(function(i){return i.type==='extra';});
   if(_exLi.length){ var _exTot=_exLi.reduce(function(a,i){return a+(parseFloat(i.amount)||0);},0); s += '<div style="font-size:12px;margin-top:2px;color:#15803d">➕ '+(_exLi[0].code||'Extra')+': <b>'+_exTot.toLocaleString()+' ฿</b></div>'; }
   var _depN=parseFloat(o.deposit)||0;
@@ -10578,8 +10578,16 @@ function drReady(){
     }).join('');
   }
 }
-function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord)ord.status='loaded';const tour=drGetTour();if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();syncOrders();syncTours();}
-function drUnload(id){dStatus[id]='ready';if(!dTour.includes(id))dTour.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='ready';addStatusLog(ord,'ready','Driver');auditStatus(id,_o,'ready','Driver');}const tour=drGetTour();if(tour)tour.status[id]='ready';drTour();drReady();syncOrders();syncTours();}
+// Who is using the driver app right now — the driver's real name, so a status log
+// reads "loaded 08:12 (Go)" instead of an anonymous "Driver".
+function drWho(){
+  try{ var d=(drivers||[]).find(function(x){return x.id===currentDriverId;}); if(d&&d.name) return d.name; }catch(e){}
+  return 'Driver';
+}
+// NOTE: loading used to be the ONE status change that wrote no log at all — an order
+// sat on "loaded" with nothing saying who put it there. It logs like every other step now.
+function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded',drWho());auditStatus(id,_o,'loaded',drWho());}const tour=drGetTour();if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();syncOrders();syncTours();}
+function drUnload(id){dStatus[id]='ready';if(!dTour.includes(id))dTour.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='ready';addStatusLog(ord,'ready',drWho());auditStatus(id,_o,'ready',drWho());}const tour=drGetTour();if(tour)tour.status[id]='ready';drTour();drReady();syncOrders();syncTours();}
 
 function drRenderStatusBar(){
   var bar=document.getElementById('dr-status-bar');
@@ -11016,7 +11024,7 @@ function drArrDepart(){
   if(!confirm('ออกรถเลย? / Depart now?')) return;
   arranged.forEach(function(id){
     var o=orders.find(function(x){return x.id===id;});
-    if(o && o.status==='ready'){ o.status='loaded'; dStatus[id]='loaded'; tour.status=tour.status||{}; tour.status[id]='loaded'; try{ addStatusLog(o,'loaded','Driver'); auditStatus(id,'ready','loaded','Driver'); }catch(e){} }
+    if(o && o.status==='ready'){ o.status='loaded'; dStatus[id]='loaded'; tour.status=tour.status||{}; tour.status[id]='loaded'; try{ addStatusLog(o,'loaded',drWho()); auditStatus(id,'ready','loaded',drWho()); }catch(e){} }
   });
   tour.driving=true;
   var now=new Date();
@@ -13554,7 +13562,7 @@ function drDoDeliver(id, photoUrl){
   ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();try{payUpdateBadge();}catch(e){}
   try{ if(ord) sheetsSyncOrder(ord); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
 }
-function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded','Driver');auditStatus(id,_o,'loaded','Driver');}revOrders=revOrders.filter(x=>x.id!==id);const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
+function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded',drWho());auditStatus(id,_o,'loaded',drWho());}revOrders=revOrders.filter(x=>x.id!==id);const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
 // Shipper handover: driver dropped the goods at a carrier company. The order is done
 // for the driver/tour (counts as complete), but is NOT delivered to the customer yet —
 // no revenue is booked here; office finalises to "delivered" once the customer receives it.
@@ -13582,12 +13590,12 @@ function drCancel(id){
   const name=ord?ord.id:id;
   if(!confirm('Cancel order '+name+'?\nThis cannot be undone / ยืนยันการยกเลิก?')) return;
   dStatus[id]='cancelled';dTour=dTour.filter(x=>x!==id);if(!dDone.includes(id))dDone.push(id);delete dChecks[id];
-  if(ord){var _oc=ord.status;ord.status='cancelled';addStatusLog(ord,'cancelled','Driver');auditStatus(id,_oc,'cancelled','Driver');}
+  if(ord){var _oc=ord.status;ord.status='cancelled';addStatusLog(ord,'cancelled',drWho());auditStatus(id,_oc,'cancelled',drWho());}
   const tour=drGetTour();
   if(tour)tour.status[id]='cancelled';
   drTour();drReady();ofRenderOrders();syncOrders();syncTours();
 }
-function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded','Driver');auditStatus(id,_o,'loaded','Driver');}const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();syncOrders();}
+function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded',drWho());auditStatus(id,_o,'loaded',drWho());}const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();syncOrders();}
 
 // ── STAFF MODAL FUNCTIONS ──
 // Drivers are derived from staffList (staff flagged isDriver). Old driver ids are
