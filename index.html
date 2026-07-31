@@ -2154,6 +2154,26 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         <div><label class="fl" style="margin-top:0;color:var(--red)">Discount / ส่วนลด (฿)</label><input type="number" id="po-discount" min="0" placeholder="0" oninput="poCalc()" style="border-color:var(--red);color:var(--red);text-align:right"></div>
         <div><label class="fl" style="margin-top:0;color:var(--blue)">Delivery / ค่าจัดส่ง (฿)</label><input type="number" id="po-delivery" min="0" placeholder="0" value="0" oninput="poCalc()" style="border-color:var(--blue-l);color:var(--blue);text-align:right"></div>
       </div>
+      <!-- Deposit already paid on the pre-order. Does NOT change the total — it is money
+           received, and travels with the order when the pre-order is converted. -->
+      <div class="g2" style="margin-top:8px">
+        <div><label class="fl" style="margin-top:0;color:var(--green)">💰 มัดจำ / Deposit (฿)</label><input type="number" id="po-deposit" min="0" placeholder="0" oninput="poCalc()" style="border-color:#86efac;color:var(--green);text-align:right"></div>
+        <div><label class="fl" style="margin-top:0">ชำระโดย / Paid by</label>
+          <select id="po-deposit-method" style="width:100%;padding:9px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">
+            <option value="cash">💵 เงินสด / Cash</option>
+            <option value="online">🏦 โอน / Online</option>
+          </select></div>
+      </div>
+      <div id="po-slip-box" style="margin-top:8px;border:1px dashed #86efac;background:rgba(22,163,74,0.06);border-radius:var(--rs);padding:8px">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:700;color:var(--green)">🧾 สลิปมัดจำ / Deposit slip</span>
+          <input type="file" id="po-slip-cam" accept="image/*" capture="environment" style="display:none" onchange="poSlipUpload(this)">
+          <input type="file" id="po-slip-file" accept="image/*" multiple style="display:none" onchange="poSlipUpload(this)">
+          <button type="button" class="btnsm" style="margin-left:auto" onclick="document.getElementById('po-slip-cam').click()">📷 ถ่ายรูป / Photo</button>
+          <button type="button" class="btnsm" onclick="document.getElementById('po-slip-file').click()">🖼️ Gallery</button>
+        </div>
+        <div id="po-slip-thumbs" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
+      </div>
       <div id="po-summary" style="background:var(--bg2);border-radius:var(--rs);padding:10px;margin-top:10px;font-size:13px;line-height:1.8"></div>
       <label class="fl" style="margin-top:10px">Notes / หมายเหตุ</label><textarea id="po-notes" rows="2" placeholder="…"></textarea>
       <button type="button" id="po-priority-btn" onclick="poTogglePriorityNew()" style="width:100%;margin-top:8px;padding:11px;border-radius:var(--rs);border:1.5px dashed #c084fc;background:#faf5ff;color:#7c3aed;font-size:14px;font-weight:700;cursor:pointer"><i class="ti ti-star"></i> Mark as Priority / ตั้งเป็นสำคัญมาก</button>
@@ -12441,7 +12461,7 @@ function poCalc(){
   var freeNet=Math.max(0,freeAuto-freeDeduct)+freeGift;
   var packs=num('po-clippacks'), packCost=packs*199;
   var extraLabel=((document.getElementById('po-extra-label')||{}).value||'').trim(), extraPrice=num('po-extra-price');
-  var discount=num('po-discount'), delivery=num('po-delivery');
+  var discount=num('po-discount'), delivery=num('po-delivery'), deposit=num('po-deposit');
   var total=Math.max(0, sub+packCost+extraPrice+delivery-discount);
   var cc=document.getElementById('po-clipcost'); if(cc) cc.textContent=packCost.toLocaleString()+' ฿';
   var ec=document.getElementById('po-extracost'); if(ec) ec.textContent=extraPrice.toLocaleString()+' ฿';
@@ -12454,7 +12474,12 @@ function poCalc(){
     +(delivery?row('Delivery / ค่าจัดส่ง', delivery.toLocaleString()+' ฿'):'')
     +(discount?row('Discount / ส่วนลด', '−'+discount.toLocaleString()+' ฿', 'var(--red)'):'')
     +'<div style="display:flex;justify-content:space-between;color:var(--text2)"><span>Free clips / คลิปฟรี'+(freeDeduct?' (−'+freeDeduct+')':'')+(freeGift?' +🎁'+freeGift:'')+'</span><span>'+freeNet.toLocaleString()+' ตัว</span></div>'
-    +'<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;font-weight:800"><span>Total / รวม</span><span style="color:var(--green)">'+total.toLocaleString()+' ฿</span></div>';
+    +'<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;font-weight:800"><span>Total / รวม</span><span style="color:var(--green)">'+total.toLocaleString()+' ฿</span></div>'
+    // Deposit is money already received — shown under the total, never subtracted from it.
+    +(deposit>0
+      ? '<div style="display:flex;justify-content:space-between;font-weight:700"><span>💰 มัดจำ / Deposit</span><span style="color:var(--green)">−'+deposit.toLocaleString()+' ฿</span></div>'
+        +'<div style="display:flex;justify-content:space-between;font-weight:800"><span>คงเหลือ / Remaining</span><span style="color:#dc2626">'+Math.max(0,total-deposit).toLocaleString()+' ฿</span></div>'
+      : '');
 }
 // Contact channel + chat name → one stored string (same format as New Order).
 function poContactVal(){
@@ -12510,10 +12535,42 @@ function poQuickParse(){
   try{ poLookupCustomer(); }catch(e){}
 }
 var poEditId=null;
+// Deposit slips. A pre-order that is still being typed has no id yet, so its photos wait
+// in memory and are written once it is saved. Stored under their own photo type
+// ('preslip') so they don't show up as phantom orders in Pictures → Slips; on convert
+// they are copied onto the real order.
+var _poSlipPending=[];
+function poSlipUpload(input){
+  var files=input&&input.files?Array.prototype.slice.call(input.files):[];
+  input.value='';
+  if(!files.length) return;
+  files.forEach(function(f){
+    compressPhotoFile(f, function(dataUrl){
+      if(!dataUrl) return;
+      if(poEditId) addOrderPhoto(poEditId,'preslip',dataUrl,ofWho(),function(){ poSlipRender(); });
+      else { _poSlipPending.push(dataUrl); poSlipRender(); }
+    });
+  });
+}
+function poSlipDrop(i){ _poSlipPending.splice(i,1); poSlipRender(); }
+function poSlipRender(){
+  var box=document.getElementById('po-slip-thumbs'); if(!box) return;
+  var html=_poSlipPending.map(function(src,i){
+    return '<div style="position:relative"><img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:56px;height:56px;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:zoom-in">'
+      +'<span onclick="poSlipDrop('+i+')" title="Remove / ลบ" style="position:absolute;top:-6px;right:-6px;background:#dc2626;color:#fff;border-radius:50%;width:18px;height:18px;font-size:11px;line-height:18px;text-align:center;cursor:pointer">✕</span></div>';
+  }).join('');
+  if(poEditId){
+    var n=0; try{ n=orderPhotoCount(poEditId,'preslip'); }catch(e){}
+    if(n) html+='<div style="font-size:11px;font-weight:700;color:var(--green);align-self:center">🧾 '+n+' บันทึกแล้ว / saved</div>';
+  }
+  box.innerHTML=html||'<span style="font-size:11px;color:var(--text2)">ยังไม่มีสลิป / no slip yet</span>';
+}
 function poResetForm(){
   poEditId=null;
+  _poSlipPending=[]; try{ poSlipRender(); }catch(e){}
   ['po-cust','po-phone','po-province','po-loc','po-contact-ch','po-contact-name','po-deliveround','po-reqdate','po-reqnote','po-paste','po-notes',
-   'po-free-minus','po-free-clips','po-extra-label','po-extra-price','po-discount'].forEach(function(x){var e=document.getElementById(x);if(e)e.value='';});
+   'po-free-minus','po-free-clips','po-extra-label','po-extra-price','po-discount','po-deposit'].forEach(function(x){var e=document.getElementById(x);if(e)e.value='';});
+  var _dm=document.getElementById('po-deposit-method'); if(_dm) _dm.value='cash';
   var _lu=document.getElementById('po-cust-lookup'); if(_lu){ _lu.style.display='none'; _lu.innerHTML=''; }
   document.getElementById('po-addr').value='';
   document.getElementById('po-delivery').value='0'; document.getElementById('po-clippacks').value='0';
@@ -12552,6 +12609,9 @@ function poEdit(id){
   document.getElementById('po-extra-label').value=p.extraLabel||'';
   document.getElementById('po-extra-price').value=p.extraPrice||'';
   document.getElementById('po-discount').value=p.discount||'';
+  document.getElementById('po-deposit').value=p.deposit||'';
+  var _dmE=document.getElementById('po-deposit-method'); if(_dmE) _dmE.value=p.depositMethod||'cash';
+  _poSlipPending=[]; try{ poSlipRender(); }catch(e){}
   try{ poLookupCustomer(); }catch(e){}
   _poPriority=!!p.priority; _poPriorityReason=p.priorityReason||''; try{poUpdatePriorityBtn();}catch(e){}
   document.getElementById('po-products').innerHTML='';
@@ -12598,14 +12658,29 @@ function poCreate(){
     freeDeduct:num('po-free-minus'), freeGift:num('po-free-clips'),
     extraLabel:val('po-extra-label'), extraPrice:num('po-extra-price'),
     discount:num('po-discount'),
+    deposit:num('po-deposit'), depositMethod:val('po-deposit-method')||'cash',
     priority:_poPriority, priorityReason:_poPriorityReason
   };
+  if(data.deposit>0){ data.depositBy=ofWho(); data.depositAt=Date.now(); }
+  else { data.depositBy=''; data.depositAt=0; data.depositMethod=''; }
   if(poEditId){
     var p=preOrders.find(function(x){return x.id===poEditId;});
-    if(p){ for(var k in data) p[k]=data[k]; p.editedAt=Date.now(); }
+    if(p){
+      // Keep who took the deposit + when, unless the amount itself was changed.
+      var _pDep=parseInt(p.deposit)||0, _pBy=p.depositBy||'', _pAt=p.depositAt||0;
+      for(var k in data) p[k]=data[k];
+      if(data.deposit>0 && data.deposit===_pDep && _pBy){ p.depositBy=_pBy; p.depositAt=_pAt; }
+      p.editedAt=Date.now();
+    }
   } else {
     data.id='po'+Date.now(); data.status='open'; data.createdBy=(typeof currentStaffName!=='undefined'?currentStaffName:'')||'Office'; data.createdAt=Date.now();
     preOrders.push(data);
+    // Slips picked before the pre-order had an id can be written now.
+    if(_poSlipPending.length){
+      var _pid=data.id;
+      _poSlipPending.forEach(function(d){ try{ addOrderPhoto(_pid,'preslip',d,data.createdBy,function(){}); }catch(e){} });
+      _poSlipPending=[];
+    }
     try{ auditAdd({type:'preorder', action:'create', orderId:'📝 '+(data.customer||''), by:data.createdBy, detail:'Pre-order created · '+(data.zone||'')}); }catch(e){}
   }
   syncPreOrders();
@@ -12654,6 +12729,17 @@ function poRender(){
       +(p.address?'<div style="font-size:12px;color:var(--text2)">📍 '+p.address+'</div>':'')
       +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:3px"><span style="font-size:13px">'+prodStr(p)+'</span><b style="font-size:14px;white-space:nowrap;margin-left:8px">'+poTotal(p).toLocaleString()+' ฿</b></div>'
       +((parseInt(p.delivery)||0)||(parseInt(p.clipPacks)||0)?'<div style="font-size:11px;color:var(--text2)">'+((parseInt(p.delivery)||0)?'ค่าส่ง '+p.delivery+'฿ ':'')+((parseInt(p.clipPacks)||0)?'· clip packs '+p.clipPacks:'')+'</div>':'')
+      +(function(){
+        var dep=parseInt(p.deposit)||0; if(!dep) return '';
+        var nSlip=0; try{ nSlip=orderPhotoCount(p.id,'preslip'); }catch(e){}
+        return '<div style="font-size:12px;margin-top:3px;background:rgba(22,163,74,0.08);border-radius:var(--rs);padding:4px 8px">'
+          +'💰 มัดจำ / Deposit <b style="color:var(--green)">'+dep.toLocaleString()+' ฿</b>'
+          +(p.depositMethod==='online'?' 🏦':' 💵')
+          +' · คงเหลือ / rest <b style="color:#dc2626">'+Math.max(0,poTotal(p)-dep).toLocaleString()+' ฿</b>'
+          +(nSlip?' · <span style="color:var(--green);font-weight:700">🧾 '+nSlip+'</span>':' · <span style="color:#dc2626;font-weight:700">🧾 ✕</span>')
+          +(p.depositBy?'<div style="font-size:10px;color:var(--text2)">'+p.depositBy+'</div>':'')
+          +'</div>';
+      })()
       +(p.notes?'<div style="font-size:12px;color:#EF9F27;margin-top:2px">📝 '+p.notes+'</div>':'')
       +(p.cancelReason?'<div style="font-size:12px;color:#dc2626;margin-top:2px">✗ '+p.cancelReason+'</div>':'')
       +actions
@@ -12706,7 +12792,28 @@ function poConvert(id){
   var createdBy=(typeof currentStaffName!=='undefined'?currentStaffName:'')||'Office';
   var assignedReceiptNum=currentReceiptNum+1; currentReceiptNum=assignedReceiptNum; try{syncReceiptNum();}catch(e){}
   var o={id:no,receiptNum:assignedReceiptNum,date:now.toISOString().split('T')[0],zone:zone,customer:p.customer||'—',phone:p.phone||'—',address:p.address||'—',province:p.province||'',location:p.location||'',contact:p.contact||'',deliveryRound:p.deliveryRound||'',reqDate:p.reqDate||'',reqNote:p.reqNote||'',panels:panels.length?panels.join(' · '):'—',lcorner:lc.length?lc.join(' · '):'—',clips:clips,boxes:Math.max(1,Math.ceil(tq/10)),total:String(total),status:'new',notes:p.notes||'',custRaw:p.custRaw||'',createdBy:createdBy,editedBy:'',lineItems:li,_stockDeducted:true,_editTs:Date.now(),fromPreOrder:p.id,priority:!!p.priority,priorityReason:p.priorityReason||'',priorityBy:p.priority?createdBy:'',priorityAt:p.priority?Date.now():0,statusLog:[{status:'new',time:ts,by:createdBy}]};
+  // Deposit taken on the pre-order travels with the order: it is money already received,
+  // so it lands as a partial payment (or a full one if it covers the whole total).
+  var _dep=parseInt(p.deposit)||0;
+  if(_dep>0){
+    o.deposit=_dep;
+    o.paidAmount=_dep;
+    o.paidBy=p.depositBy||createdBy;
+    if(total>0 && _dep>=total){ o.payMethod=p.depositMethod||'cash'; o.payDate=now.toISOString().split('T')[0]; }
+    else { o.payMethodPartial=p.depositMethod||'cash'; }
+  }
   orders.unshift(o);
+  // Copy the deposit slip(s) onto the real order so they show up in Pictures → Slips.
+  try{
+    if(window.fbDB && _dep>0){
+      window.fbDB.ref('orderPhotos/preslip/'+safeOrderId(p.id)).once('value', function(snap){
+        var d=snap.val(); if(!d) return;
+        Object.keys(d).forEach(function(k){
+          var ph=d[k]||{}; if(ph.data) addOrderPhoto(no,'slip',ph.data,ph.by||'Pre-order',function(){});
+        });
+      });
+    }
+  }catch(e){}
   wOrders.unshift({id:no,zone:zone,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:clips,packed:false,packedAt:null});
   // deduct stock for products
   li.forEach(function(x){ if(['panel','lcorner','tedge','uedge','ttrim','utrim'].indexOf(x.type)>=0){ var st=stockItems.find(function(s){return s.code===x.code;}); if(st){ st.qty=Math.max(0,st.qty-(parseInt(x.qty)||0)); addLog(x.code+' -'+x.qty+' pcs (order '+no+')','-'); } } });
