@@ -1706,8 +1706,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     </div>
   </div></div>
   <div class="view" id="ofv-drivers"><div class="sec">
-    <div class="stit">🚚 Drivers / คนขับ</div>
-    <div style="font-size:12px;color:var(--text2);margin-bottom:10px">Fahrer & ihre vergangenen Touren / ทัวร์ที่ผ่านมา — tippen zum Aufklappen</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <div class="stit" style="margin-bottom:0">🚚 Drivers / คนขับ</div>
+      <button type="button" onclick="ofDrvCheckDupes()" title="Find tours archived more than once / ตรวจทัวร์ซ้ำ" style="flex-shrink:0;padding:6px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text2);font-size:11px;font-weight:700;cursor:pointer">🔍 ตรวจทัวร์ซ้ำ / Check duplicates</button>
+    </div>
+    <div style="font-size:12px;color:var(--text2);margin:6px 0 10px">Drivers & their past tours / ทัวร์ที่ผ่านมา — tap to expand / แตะเพื่อดู</div>
     <div id="of-drivers-list"></div>
   </div></div>
   <div class="view" id="ofv-pay"><div class="sec">
@@ -8306,6 +8309,58 @@ function ofLalaDeparted(ti){
   ofRenderLala();
 }
 // Archive a finished tour to Firebase tourHistory, numbered per driver (Tour 1,2,…).
+// ── DUPLICATE TOUR HISTORY ───────────────────────────────────────
+// Before the guard in archiveTour existed, ending a tour twice pushed a second identical
+// record. This finds those leftovers: same tourId (or, for old records without one, the
+// same driver + dates + stop list) archived more than once.
+function ofDrvDupeScan(){
+  var out=[];
+  Object.keys(tourHistory||{}).forEach(function(key){
+    var recs=tourHistory[key]||{}, groups={};
+    Object.keys(recs).forEach(function(k){
+      var r=recs[k]||{};
+      var ids=(Array.isArray(r.orders)?r.orders:Object.keys(r.orders||{}).map(function(x){return (r.orders||{})[x];}))
+        .map(function(o){ return (o&&o.id)||''; }).join(',');
+      var sig=r.tourId || ('x|'+(r.departedDate||'')+'|'+(r.endedDate||'')+'|'+(r.endedAt||'')+'|'+(r.orderCount||0)+'|'+ids);
+      (groups[sig]=groups[sig]||[]).push({k:k, r:r});
+    });
+    Object.keys(groups).forEach(function(sig){
+      var g=groups[sig];
+      if(g.length<2) return;
+      g.sort(function(a,b){ return (a.r.ts||0)-(b.r.ts||0); });   // oldest record is the keeper
+      out.push({driverKey:key, name:g[0].r.driverName||key, keep:g[0], drop:g.slice(1)});
+    });
+  });
+  return out;
+}
+function ofDrvCheckDupes(){
+  var dupes=[];
+  try{ dupes=ofDrvDupeScan(); }catch(e){ alert('Scan failed: '+e.message); return; }
+  if(!dupes.length){ alert('✅ ไม่พบทัวร์ซ้ำ / No duplicate tours — all '+Object.keys(tourHistory||{}).length+' driver histories are clean.'); return; }
+  var nDrop=dupes.reduce(function(a,d){ return a+d.drop.length; },0);
+  var lines=dupes.map(function(d){
+    var r=d.keep.r;
+    return '🚚 '+d.name+' · Tour '+(r.tourNo||'?')+' · '+(r.endedDate||r.departedDate||'?')
+      +' · '+(r.orderCount||0)+' orders · '+(Number(r.driverPay)||0).toLocaleString('en-US')+' ฿'
+      +'   →   +'+d.drop.length+' copy'+(d.drop.length>1?'ies':'');
+  });
+  if(!confirm('⚠ พบทัวร์ซ้ำ / '+dupes.length+' tour(s) archived more than once:\n\n'+lines.join('\n')
+    +'\n\n──────────\nDelete the '+nDrop+' extra cop'+(nDrop>1?'ies':'y')+'? The FIRST record of each tour is kept.'
+    +'\nลบสำเนาส่วนเกิน '+nDrop+' รายการ? (เก็บรายการแรกไว้)')) return;
+  if(!window.fbDB){ alert('Offline — try again / ออฟไลน์'); return; }
+  var done=0;
+  dupes.forEach(function(d){
+    d.drop.forEach(function(x){
+      window.fbDB.ref('tourHistory/'+d.driverKey+'/'+x.k).remove();
+      done++;
+      try{ addLog('Duplicate tour record removed: '+d.name+' Tour '+(x.r.tourNo||'?')+' ('+(x.r.endedDate||'')+')','-'); }catch(e){}
+    });
+  });
+  try{ auditTour('cleanup','🧹 tour history', 'Removed '+done+' duplicate tour record'+(done!==1?'s':'')); }catch(e){}
+  alert('✓ '+done+' duplicate record'+(done!==1?'s':'')+' removed / ลบแล้ว.\n\n'
+    +'⚠ Please also check Payroll: a tour archived twice may have booked its tour pay twice.\n'
+    +'กรุณาตรวจสอบเงินเดือนด้วย — ค่าทัวร์อาจถูกบันทึกซ้ำ');
+}
 var _archivedTourIds={};   // tour ids archived in this session (double-tap guard)
 function archiveTour(t){
   if(!t || !window.fbDB) return;
