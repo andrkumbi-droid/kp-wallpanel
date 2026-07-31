@@ -4696,7 +4696,9 @@ function ofNormCode(code){
   var c=String(code==null?'':code).trim().toUpperCase().replace(/\s+/g,'');
   var pad=function(n,w){ n=String(parseInt(n,10)); return n.length>=w?n:('0000'+n).slice(-w); };
   var m;
-  if((m=c.match(/^K-?PVC-?(\d+)$/))) return 'K-PVC-'+pad(m[1],2);
+  // K-PVC is the only "K-P…" family, so any two-letter salad after the P (K-PCV-10,
+  // K-PVD-09, KPVC9 …) is a typo of it and folds onto the correct code.
+  if((m=c.match(/^K-?P[A-Z]{2}-?(\d+)$/))) return 'K-PVC-'+pad(m[1],2);
   if((m=c.match(/^L-?P-?(\d+)$/)))   return 'L-P-'+pad(m[1],2);
   if((m=c.match(/^KP(\d+)$/)))       return 'KP'+pad(m[1],3);
   if((m=c.match(/^L(\d+)$/)))        return 'L'+pad(m[1],2);
@@ -4704,10 +4706,10 @@ function ofNormCode(code){
   if((m=c.match(/^U(\d+)$/)))        return 'U'+pad(m[1],2);
   return c;
 }
-// Every product we HAVE or ever HAD — for the yearly stock count. A code counts as
-// "ours" when it is in the stock list (even at 0), is a catalog panel, was ever sold
-// on an order, or shows up in the stock log. The auto-generated L01–L70 / T / U codes
-// that were never touched stay out, otherwise the sheet is 90 phantom rows long.
+// Every product we HAVE or ever HAD — for the yearly stock count: the stock list (even
+// at 0) plus the product catalog. Order line items are deliberately NOT a source: a
+// mistyped code there (K-PCV-10, K-PVD-09) invented products that do not exist. A code
+// only counts as ours when stock or catalog knows it.
 function ofStockAllProducts(){
   var byCode={};
   var CODE_RE=/^[A-Z0-9][A-Z0-9.\-]{1,14}$/;
@@ -4725,8 +4727,6 @@ function ofStockAllProducts(){
     e.type=e.type||s.type||''; e.notes=e.notes||s.notes||'';
   });
   (window.QT_PRODUCTS||[]).forEach(function(p){ if(p.mat==='WPC'||p.mat==='PVC'||p._custom) add(p.code); });
-  (orders||[]).forEach(function(o){ (o.lineItems||[]).forEach(function(li){ if(li && li.type!=='extra') add(li.code); }); });
-  try{ (stockLog||[]).forEach(function(l){ if(l) add(l.code); }); }catch(e){}
   return Object.keys(byCode).map(function(k){ return byCode[k]; });
 }
 function ofStockCat(e){
@@ -4775,15 +4775,18 @@ function ofStockInventoryPrint(lang){
   var COLS = my
     ? ['ကတ်ထူပုံး အပြည့် (CTN)','ပုံးမပါသော ပြား (loose)','စုစုပေါင်း ပြား (total)']
     : ['นับจริง A / Counted A','นับจริง B / Counted B'];
+  // Clips are only ever counted in whole boxes — one column, no loose/total.
+  var BOXCOL = my ? ['ပုံး အရေအတွက် (box)'] : ['จำนวนกล่อง / Boxes'];
   var LBL = my
     ? {code:'ကုဒ် / Code', size:'အရွယ်အစား / Size', note:'မှတ်ချက် / Note', items:'မျိုး / items'}
     : {code:'รหัส / Code', size:'ขนาด / Size', note:'หมายเหตุ / Note', items:'รายการ / items'};
-  function sec(title, items){
+  function sec(title, items, cols){
     if(!items.length) return '';
+    cols=cols||COLS;
     return '<div class="sec"><div class="sect">'+esc(title)+' <span class="cnt">'+items.length+' '+LBL.items+'</span></div>'
       +'<table><thead><tr>'
         +'<th class="c w-n">#</th><th class="w-cd">'+LBL.code+'</th><th class="c w-sz">'+LBL.size+'</th>'
-        +COLS.map(function(h){ return '<th class="c">'+h+'</th>'; }).join('')
+        +cols.map(function(h){ return '<th class="c">'+h+'</th>'; }).join('')
       +'</tr></thead>'
       // One <tbody> per product = the row and its note line never split across pages.
       +items.map(function(e){
@@ -4792,9 +4795,9 @@ function ofStockInventoryPrint(lang){
           +'<td class="c muted">'+(++nRow)+'</td>'
           +'<td class="cd">'+esc(e.code)+'</td>'
           +'<td class="c">'+esc(p.w?p.w+' cm':'')+'</td>'
-          +COLS.map(function(){ return '<td class="box"></td>'; }).join('')
+          +cols.map(function(){ return '<td class="box"></td>'; }).join('')
         +'</tr><tr class="nrow">'
-          +'<td class="c"></td><td colspan="'+(2+COLS.length)+'" class="nt">'+LBL.note+'</td>'
+          +'<td class="c"></td><td colspan="'+(2+cols.length)+'" class="nt">'+LBL.note+'</td>'
         +'</tr></tbody>';
       }).join('')
       +'</table></div>';
@@ -4805,13 +4808,13 @@ function ofStockInventoryPrint(lang){
       + sec('L — အနားသတ် L / L-Corner', groups.l)
       + sec('T — အနားသတ် T / T-Profile', groups.t)
       + sec('U — အနားသတ် U / U-Profile', groups.u)
-      + sec('အခြား / Other (clips …)', groups.other)
+      + sec('ကလစ် / Clips (ပုံးလိုက်သာ / boxes only)', groups.other, BOXCOL)
     : sec('KP — WPC Wall Panels / แผ่นผนัง', groups.wpc)
       + sec('K-PVC — PVC Ceiling / ฝ้าเพดาน', groups.pvc)
       + sec('L-Corner / อลูมิเนียมขอบ L', groups.l)
       + sec('T-Profile / ขอบ T', groups.t)
       + sec('U-Profile / ขอบ U', groups.u)
-      + sec('Other / อื่นๆ (clips …)', groups.other);
+      + sec('Clips / คลิป (นับเป็นกล่องเท่านั้น / boxes only)', groups.other, BOXCOL);
   // Contest rules, in Burmese, on the first page of the Myanmar sheet.
   var introHTML = my ? ('<div class="intro">'
     +'<div class="itit">🏆 ဒီနေ့ စတော့ရေတွက် ပြိုင်ပွဲ / Stock count contest</div>'
@@ -4821,6 +4824,7 @@ function ofStockInventoryPrint(lang){
     +'<div class="itit2">📏 ရေတွက်ပုံ — နံရံပြား တစ်မျိုးချင်းစီအတွက် 3 ခု ဖြည့်ပါ</div>'
     +'<p>1. <b>ကတ်ထူပုံး အပြည့်</b> ဘယ်နှစ်ပုံး ရှိလဲ &nbsp;·&nbsp; 2. <b>ပုံးမပါဘဲ အပြင်မှာရှိတဲ့ ပြား</b> ဘယ်နှစ်ပြား &nbsp;·&nbsp; 3. <b>စုစုပေါင်း ပြား</b> အရေအတွက်</p>'
     +'<p>✅ <b>ကောင်းမွန်တဲ့ (မကျိုး မပဲ့တဲ့) ပြားတွေကိုပဲ ရေတွက်ပါ။</b> ပျက်စီးနေတဲ့ ပြားတွေ မထည့်ပါနဲ့။</p>'
+    +'<p>📦 <b>ကလစ် (clips) ကို ပုံးလိုက်သာ ရေတွက်ပါ။</b> အလုံးလိုက် မရေတွက်ပါနှင့်။</p>'
     +'<p>✏️ စာရင်းထဲမှာ ပါပေမယ့် <b>လုံးဝ မရှိတဲ့ ကုဒ်နံပါတ်ကို မျဉ်းဆွဲ ပယ်ဖျက်လိုက်ပါ။</b></p>'
     +'</div>') : '';
   var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+(my?'ရေတွက်စာရင်း / Stock count':'Stock count / ใบนับสต็อก')+' '+esc(now.toISOString().slice(0,10))+'</title><style>'
