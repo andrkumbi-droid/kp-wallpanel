@@ -6609,6 +6609,14 @@ function ofCreate(){
 }
 
 
+// Who is logged into the office right now. Several status changes used to hard-code
+// "Office" (assigning a tour flipped packing→ready, removing from a tour, delivering
+// from the tour tab), so the Audit Log could not say WHO did it.
+function ofWho(){
+  try{ var s=(staffList||[]).find(function(x){return x.id===currentStaffId;}); if(s&&s.name) return s.name; }catch(e){}
+  if(typeof currentStaffName!=='undefined' && currentStaffName) return currentStaffName;
+  return 'Office';
+}
 function quickStatus(btn) {
   var id = btn.getAttribute('data-id');
   var newStatus = btn.getAttribute('data-status');
@@ -6618,8 +6626,7 @@ function quickStatus(btn) {
   const o = orders.find(x => x.id === id);
   if(!o) return;
   const old = o.status;
-  const editor = staffList.find(x=>x.id===currentStaffId);
-  const byName = editor ? editor.name : 'Office';
+  const byName = ofWho();
   addStatusLog(o, newStatus, byName);
   o.editedBy = byName;
   o.status = newStatus;
@@ -9067,7 +9074,7 @@ function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.
   auditTour('remove', orderId, 'Removed from '+(t.driverName||'tour')+"'s tour");
   // Set order back to ready
   var ord = orders.find(function(x){return x.id===orderId;});
-  if(ord) { var _o=ord.status; ord.status='ready'; addStatusLog(ord,'ready','Office'); auditStatus(orderId,_o,'ready','Office'); }
+  if(ord) { var _o=ord.status; ord.status='ready'; addStatusLog(ord,'ready',ofWho()); auditStatus(orderId,_o,'ready',ofWho()); }
   // If tour is now empty, remove it
   if(t.orders.length===0) {
     activeTours = activeTours.filter(function(x){return x.id!==tourId;});
@@ -9087,9 +9094,9 @@ function ofTourDeliver(tourId, orderId){
   t.status[orderId]='delivered';
   if(ord){
     var _oldSt=ord.status;
-    addStatusLog(ord,'delivered','Office');
+    addStatusLog(ord,'delivered',ofWho());
     ord.status='delivered';
-    auditStatus(orderId,_oldSt,'delivered','Office');
+    auditStatus(orderId,_oldSt,'delivered',ofWho());
     var amt=parseFloat((ord.total+'').replace(/[^0-9]/g,''))||0;
     if(amt>0 && !revOrders.find(function(r){return r.id===ord.id;})){
       revOrders.push({rid:'r'+Date.now(),id:ord.id,cust:ord.customer,amt:amt,date:new Date().toISOString().split('T')[0],zone:ord.zone,month:mkey(new Date().toISOString())});
@@ -9239,7 +9246,7 @@ function ofAddConfirm(){
     var newSt = keepPack ? o.status : (t.driving ? 'loaded' : 'ready');
     if(t.orders.indexOf(o.id)<0) t.orders.push(o.id);
     t.status = t.status||{}; t.status[o.id] = newSt;
-    if(!keepPack && o.status!==newSt){ var _o=o.status; o.status=newSt; try{ addStatusLog(o,newSt,'Office'); }catch(e){} auditStatus(o.id,_o,newSt,'Office'); }
+    if(!keepPack && o.status!==newSt){ var _o=o.status; o.status=newSt; try{ addStatusLog(o,newSt,ofWho()); }catch(e){} auditStatus(o.id,_o,newSt,ofWho()); }
     // Make the driver app aware of the order (mirror what ofCreateTour does).
     try{ if(!dAllOrders.find(function(x){return x.id===o.id;})){ dAllOrders.push({id:o.id,customer:o.customer,phone:o.phone,address:o.address,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:o.clips,ctn:o.ctn,bundle:o.bundle}); dAllOrders.sort(function(a,b){return reg(a.id).s-reg(b.id).s;}); } }catch(e){}
     try{ dStatus[o.id]=newSt; }catch(e){}
@@ -9837,7 +9844,7 @@ function ofCreateTour(){
     }
     dStatus[id]=status[id];
     // Ready order stays "ready" so it shows in the driver's Ready-to-Load.
-    if(src && !keepPack && src.status!=='ready'){ var _o=src.status; src.status='ready'; addStatusLog(src,'ready','Office'); auditStatus(src.id,_o,'ready','Office'); }
+    if(src && !keepPack && src.status!=='ready'){ var _o=src.status; src.status='ready'; addStatusLog(src,'ready',ofWho()); auditStatus(src.id,_o,'ready',ofWho()); }
   });
   var _tourId;
   if(existingTour && !existingTour.driving){
@@ -9848,7 +9855,7 @@ function ofCreateTour(){
       var keepPack=_o&&(_o.status==='new'||_o.status==='packing');
       existingTour.status[id]=keepPack?_o.status:'ready';
       dStatus[id]=existingTour.status[id];
-      if(_o && !keepPack && _o.status!=='ready'){ var _os=_o.status; _o.status='ready'; addStatusLog(_o,'ready','Office'); auditStatus(_o.id,_os,'ready','Office'); }
+      if(_o && !keepPack && _o.status!=='ready'){ var _os=_o.status; _o.status='ready'; addStatusLog(_o,'ready',ofWho()); auditStatus(_o.id,_os,'ready',ofWho()); }
     });
     existingTour.orders=optimizeTourOrder(existingTour.orders); // initial sort by whatever coords we already have
     _tourId=existingTour.id;
@@ -11637,6 +11644,7 @@ function ofReviewTourSlips(tourId){
 function ofCloseSlipReview(){ var ov=document.getElementById('slip-review-modal'); if(ov) ov.style.display='none'; }
 function ofSlipReviewCard(o){
   var online=ofPayCO(o).online, sid=safeOrderId(o.id), s=o.slip;
+  var oid=String(o.id).replace(/['\\]/g,'');
   var badge=s?('<span style="font-size:12px;font-weight:700;color:'+kpSlipColor(s.status)+'">'+kpSlipShort(s)+'</span>'):'';
   var vmsg=(s&&s.msg)?'<div style="font-size:11px;color:var(--text2);margin-top:2px">'+kpcEsc(s.msg)+'</div>':'';
   // Cross-check: does the amount decoded from the slip QR match what the driver entered?
@@ -11649,8 +11657,26 @@ function ofSlipReviewCard(o){
       +'<div style="text-align:right;flex-shrink:0"><div style="font-size:16px;font-weight:800;color:#1d4ed8">🏦 '+online.toLocaleString()+'</div><div style="font-size:10px;color:var(--text2)">฿ online</div></div>'
     +'</div>'
     +'<div id="slrev_ph_'+sid+'" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><span style="font-size:12px;color:var(--text2)">Loading slip… / กำลังโหลด</span></div>'
+    // Free note between the slip photo and the OK/Problem buttons — "wrong amount",
+    // "customer sends the rest tomorrow", … Saved on blur, shown to everyone.
+    +'<textarea id="slrev_nt_'+sid+'" rows="2" placeholder="📝 หมายเหตุ / Note…" onchange="ofSetSlipNote(\''+oid+'\',this.value)" style="width:100%;box-sizing:border-box;margin-top:8px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px;font-family:inherit;line-height:1.5;resize:vertical">'+kpcEsc(o.slipNote||'')+'</textarea>'
+    +'<div id="slrev_ntm_'+sid+'" style="font-size:10px;color:var(--text2);margin-top:2px">'+ofSlipNoteMeta(o)+'</div>'
     +'<div id="slrev_btn_'+sid+'" style="margin-top:8px">'+ofSlipReviewButtons(o)+'</div>'
   +'</div>';
+}
+function ofSlipNoteMeta(o){
+  if(!o.slipNote || !o.slipNoteBy) return '';
+  return '📝 '+kpcEsc(o.slipNoteBy)+(o.slipNoteTs?' · '+ofSlipTime(o.slipNoteTs):'');
+}
+function ofSetSlipNote(orderId, val){
+  var o=orders.find(function(x){return x.id===orderId;}); if(!o) return;
+  var txt=String(val==null?'':val).trim();
+  if(txt===String(o.slipNote||'').trim()) return;      // blur without a change
+  o.slipNote=txt;
+  o.slipNoteBy=txt?ofWho():'';
+  o.slipNoteTs=txt?Date.now():0;
+  try{ syncOrders(); }catch(e){}
+  var m=document.getElementById('slrev_ntm_'+safeOrderId(orderId)); if(m) m.innerHTML=ofSlipNoteMeta(o);
 }
 function ofSlipReviewButtons(o){
   var r=o.slipReview||null, okOn=r&&r.status==='ok', flagOn=r&&r.status==='flag';
