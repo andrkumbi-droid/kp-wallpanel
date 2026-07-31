@@ -8012,7 +8012,7 @@ function ofRenderTour(){
         +'<span style="margin-left:auto;font-weight:800;color:var(--green);white-space:nowrap">= '+_kmP.toLocaleString()+' ฿</span>'
         +(ro?'':'<button type="button" onclick="event.stopPropagation();ofKmUsePay(\''+t.id+'\')" title="ใส่เป็นค่าทัวร์ / use as tour pay" style="font-size:10px;padding:3px 7px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:700">→ ค่าทัวร์</button>')
         +'<div style="width:100%;font-size:10px;color:'+(_kmStart?'var(--text2)':'#92400e')+'">'
-          +(_kmStart?'🏁 Start '+kmFmt(_kmStart.km)+' กม.'+(_kmStart.photo?' 📷':''):'⏳ รอคนขับถ่ายรูปเลขไมล์ก่อนออกรถ / waiting for the start odometer photo')
+          +(_kmStart?'🏁 Start '+kmFmt(_kmStart.km)+' กม.'+(kmPhotosOf(_kmStart).length?' 📷'+(kmPhotosOf(_kmStart).length>1?'×'+kmPhotosOf(_kmStart).length:''):''):'⏳ รอคนขับถ่ายรูปเลขไมล์ก่อนออกรถ / waiting for the start odometer photo')
           +(_kmLog.length?' · <span onclick="event.stopPropagation();ofToggleMore(\'kmlog_'+t.id+'\')" style="cursor:pointer;color:#1d4ed8;font-weight:700">📷 รูปเลขไมล์ ('+_kmLog.length+') ▾</span>':'')
         +'</div>'
         +'<div id="kmlog_'+t.id+'" style="display:none;width:100%">'+kmSummaryHTML(t)+'</div>'
@@ -8676,7 +8676,7 @@ function kmLegs(t){
   for(var i=1;i<log.length;i++){
     var cur=parseFloat(log[i].km)||0, prev=parseFloat(log[i-1].km)||0;
     var d=odo?(cur-prev):cur;
-    out.push({ orderId:log[i].orderId||'', km:cur, dist:Math.max(0,Math.round(d*10)/10), photo:log[i].photo||'' });
+    out.push({ orderId:log[i].orderId||'', km:cur, dist:Math.max(0,Math.round(d*10)/10), photo:log[i].photo||'', photos:kmPhotosOf(log[i]) });
   }
   return out;
 }
@@ -8700,6 +8700,13 @@ function kmTotal(t){
 }
 function kmPayAmount(t){ return Math.round(kmTotal(t)*kmRateOf(t)); }
 function kmFmt(n){ n=parseFloat(n)||0; return (Math.round(n*10)/10).toLocaleString(); }
+// A reading can carry several photos (odometer, dashboard, surroundings). Entries logged
+// before that only have .photo — always read the photos through this helper.
+function kmPhotosOf(e){
+  var a=(e && Array.isArray(e.photos)) ? e.photos.filter(Boolean) : [];
+  if(e && e.photo && a.indexOf(e.photo)<0) a.unshift(e.photo);
+  return a;
+}
 
 function ofToggleKmMode(tourId){
   var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
@@ -8743,8 +8750,13 @@ function kmSummaryHTML(t, opts){
   var tot=kmTotal(t), rate=kmRateOf(t), pay=kmPayAmount(t), legs=kmLegs(t);
   var rows=log.map(function(e,i){
     var d=(i===0)?null:(legs[i-1]?legs[i-1].dist:0);
+    var ph=kmPhotosOf(e);
     return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--border);font-size:11px">'
-      +(e.photo?'<img src="'+e.photo+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:38px;height:38px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer;flex-shrink:0">':'<span style="width:38px;text-align:center;flex-shrink:0">—</span>')
+      +(ph.length
+        ? '<span style="display:flex;gap:3px;flex-shrink:0">'+ph.map(function(src){
+            return '<img src="'+src+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:38px;height:38px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';
+          }).join('')+'</span>'
+        : '<span style="width:38px;text-align:center;flex-shrink:0">—</span>')
       +'<span style="flex:1;min-width:0">'+(i===0?'🏁 Start':('📍 '+(e.orderId||'—')))+'</span>'
       +'<span style="font-weight:700;white-space:nowrap">'+kmFmt(e.km)+' กม.</span>'
       +'<span style="color:var(--text2);white-space:nowrap;width:56px;text-align:right">'+(d==null?'0':'+'+kmFmt(d))+'</span>'
@@ -11183,10 +11195,10 @@ function drPayRender(){
       +'<div style="display:flex;gap:6px;flex-wrap:wrap">'+slips.map(function(src){return '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:72px;height:72px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';}).join('')+'</div></div>':'')
     +'</div>';
 }
-var _kmM={orderId:'', photo:null};
+var _kmM={orderId:'', photos:[]};
 function drKmOpen(orderId){
   var t=drGetTour(); if(!t){ alert('No active tour'); return; }
-  _kmM={orderId:orderId||'', photo:null};
+  _kmM={orderId:orderId||'', photos:[]};
   var log=kmLogOf(t), prev=log.length?log[log.length-1]:null, _odo=(kmInputMode(t)==='odo');
   document.getElementById('km-modal-title').textContent = _kmM.orderId
     ? ((_odo?'🛣️ เลขไมล์หลังส่ง / KM after ':'🛣️ ระยะทางถึง / Km to ')+_kmM.orderId)
@@ -11196,8 +11208,7 @@ function drKmOpen(orderId){
            :'ถ่ายรูปเลขไมล์ในรถ — จุดเริ่มต้นนับเป็น 0 กม. / Photo of the odometer, the start counts as 0 km')
     : (_odo?('ใส่เลขไมล์รวมของรถ · ค่าล่าสุด / last: <b>'+kmFmt(prev?prev.km:0)+' กม.</b>')
            :'ใส่ระยะทางจากจุดก่อนหน้าถึงลูกค้านี้ / distance from the previous stop to this customer');
-  document.getElementById('km-photo-preview').style.display='none';
-  document.getElementById('km-photo-preview').innerHTML='';
+  drKmPreview();
   document.getElementById('km-photo-input').value='';
   document.getElementById('km-photo-gal').value='';
   var inp=document.getElementById('km-value');
@@ -11206,30 +11217,52 @@ function drKmOpen(orderId){
   document.getElementById('km-modal').classList.add('open');
   setTimeout(function(){ try{ inp.focus(); }catch(e){} }, 250);
 }
-function closeKmModal(){ document.getElementById('km-modal').classList.remove('open'); _kmM={orderId:'',photo:null}; }
+function closeKmModal(){ document.getElementById('km-modal').classList.remove('open'); _kmM={orderId:'',photos:[]}; }
+// Several photos per reading: the camera button adds one shot at a time (phones only
+// return one per capture), the gallery button takes as many as the driver picks.
 function drKmPhoto(input){
-  var f=input.files&&input.files[0]; if(!f) return;
-  var msg=document.getElementById('km-msg'); msg.style.color='var(--text2)'; msg.textContent='⏳ กำลังบีบอัดรูป / compressing…';
-  compressPhotoFile(f, function(dataUrl){
-    _kmM.photo=dataUrl||null;
-    var pv=document.getElementById('km-photo-preview');
-    if(dataUrl){
-      pv.style.display='block';
-      pv.innerHTML='<img src="'+dataUrl+'" style="width:100%;max-height:220px;object-fit:contain;border-radius:var(--rs);border:1px solid var(--border)">';
-      msg.textContent='';
-    } else { msg.style.color='#dc2626'; msg.textContent='อ่านรูปไม่ได้ / could not read the photo'; }
-  });
+  var files=input.files?Array.prototype.slice.call(input.files):[]; if(!files.length) return;
+  var msg=document.getElementById('km-msg'); msg.style.color='var(--text2)';
+  var i=0, added=0;
+  (function next(){
+    if(i>=files.length){
+      if(added){ msg.textContent=''; }
+      else { msg.style.color='#dc2626'; msg.textContent='อ่านรูปไม่ได้ / could not read the photo'; }
+      return;
+    }
+    msg.textContent='⏳ กำลังบีบอัดรูป / compressing… ('+(i+1)+'/'+files.length+')';
+    compressPhotoFile(files[i++], function(dataUrl){
+      if(dataUrl){ _kmM.photos.push(dataUrl); added++; drKmPreview(); }
+      next();
+    });
+  })();
   input.value='';
+}
+function drKmPhotoDel(i){ (_kmM.photos||[]).splice(i,1); drKmPreview(); }
+function drKmPreview(){
+  var pv=document.getElementById('km-photo-preview'); if(!pv) return;
+  var a=_kmM.photos||[];
+  if(!a.length){ pv.style.display='none'; pv.innerHTML=''; return; }
+  pv.style.display='block';
+  pv.innerHTML='<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:4px">📷 '+a.length+' รูป / photos</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+    +a.map(function(src,i){
+      return '<div style="position:relative">'
+        +'<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:86px;height:86px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">'
+        +'<button type="button" onclick="drKmPhotoDel('+i+')" title="ลบรูป / remove" style="position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:none;border-radius:50%;background:#dc2626;color:#fff;font-size:14px;font-weight:800;line-height:1;cursor:pointer">×</button>'
+      +'</div>';
+    }).join('')+'</div>';
 }
 function drKmSave(){
   var t=drGetTour(); if(!t){ closeKmModal(); return; }
   var msg=document.getElementById('km-msg');
   var km=parseFloat((document.getElementById('km-value')||{}).value);
   if(!isFinite(km) || km<0){ msg.style.color='#dc2626'; msg.textContent='ใส่เลขไมล์ / please enter the odometer reading'; return; }
-  if(!_kmM.photo && !confirm('ยังไม่มีรูปเลขไมล์ — บันทึกเลย?\nNo odometer photo yet. Save anyway?')) return;
+  if(!(_kmM.photos||[]).length && !confirm('ยังไม่มีรูปเลขไมล์ — บันทึกเลย?\nNo odometer photo yet. Save anyway?')) return;
   var drName=((typeof currentDriverId!=='undefined' ? (drivers.find(function(d){return d.id===currentDriverId;})||{}).name : '')||'Driver');
   var arr=kmLogOf(t);
-  arr.push({ km:km, photo:_kmM.photo||'', orderId:_kmM.orderId||'', ts:Date.now(), by:drName });
+  // .photo stays filled with the first shot so anything still reading the old field works.
+  arr.push({ km:km, photo:(_kmM.photos||[])[0]||'', photos:(_kmM.photos||[]).slice(), orderId:_kmM.orderId||'', ts:Date.now(), by:drName });
   t.kmLog=arr;
   if(t.kmRate==null||t.kmRate==='') t.kmRate=KM_RATE_DEFAULT;
   syncTours();
@@ -11650,10 +11683,10 @@ function openDeliveryModal(id, shipMode){
 }
 // ── KM tours: the odometer reading for THIS stop, entered inside the delivery modal
 // (below payment / slip). Saved together with the delivery when Confirm is pressed.
-var _dlKmPhoto = null;
+var _dlKmPhotos = [];
 function dlKmTour(){ var t=(typeof drGetTour==='function')?drGetTour():null; return (t&&t.kmMode)?t:null; }
 function dlKmReset(){
-  _dlKmPhoto=null;
+  _dlKmPhotos=[];
   var sec=document.getElementById('dl-km-section'); if(!sec) return;
   var t=dlKmTour();
   sec.style.display = t ? '' : 'none';
@@ -11681,20 +11714,34 @@ function dlKmMsg(){
   msg.style.color='var(--green)';
   msg.textContent='+ '+kmFmt(d)+' กม. · '+Math.round(d*kmRateOf(t)).toLocaleString()+' ฿';
 }
+// Same as the km modal: camera adds one shot per tap, gallery adds as many as picked.
 function dlKmPhoto(input){
-  var f=input.files&&input.files[0]; if(!f) return;
+  var files=input.files?Array.prototype.slice.call(input.files):[]; if(!files.length) return;
   var msg=document.getElementById('dl-km-msg');
-  if(msg){ msg.style.color='var(--text2)'; msg.textContent='⏳ กำลังบีบอัดรูป / compressing…'; }
-  compressPhotoFile(f, function(dataUrl){
-    _dlKmPhoto=dataUrl||null;
-    var pv=document.getElementById('dl-km-preview');
-    if(dataUrl && pv){
-      pv.style.display='block';
-      pv.innerHTML='<img src="'+dataUrl+'" style="width:100%;max-height:170px;object-fit:contain;border-radius:var(--rs);border:1px solid var(--border)">';
-    }
-    dlKmMsg();
-  });
+  var i=0;
+  (function next(){
+    if(i>=files.length){ dlKmMsg(); return; }
+    if(msg){ msg.style.color='var(--text2)'; msg.textContent='⏳ กำลังบีบอัดรูป / compressing… ('+(i+1)+'/'+files.length+')'; }
+    compressPhotoFile(files[i++], function(dataUrl){
+      if(dataUrl){ _dlKmPhotos.push(dataUrl); dlKmPreview(); }
+      next();
+    });
+  })();
   input.value='';
+}
+function dlKmPhotoDel(i){ _dlKmPhotos.splice(i,1); dlKmPreview(); }
+function dlKmPreview(){
+  var pv=document.getElementById('dl-km-preview'); if(!pv) return;
+  if(!_dlKmPhotos.length){ pv.style.display='none'; pv.innerHTML=''; return; }
+  pv.style.display='block';
+  pv.innerHTML='<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:4px">📷 '+_dlKmPhotos.length+' รูป / photos</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+    +_dlKmPhotos.map(function(src,i){
+      return '<div style="position:relative">'
+        +'<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:74px;height:74px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">'
+        +'<button type="button" onclick="dlKmPhotoDel('+i+')" title="ลบรูป / remove" style="position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border:none;border-radius:50%;background:#dc2626;color:#fff;font-size:14px;font-weight:800;line-height:1;cursor:pointer">×</button>'
+      +'</div>';
+    }).join('')+'</div>';
 }
 // Confirm pressed: reading must be there (photo only warns), then it is appended to
 // the tour's km log for the stop just delivered.
@@ -11707,7 +11754,7 @@ function dlKmValidate(){
     try{ el.focus(); }catch(e){}
     return false;
   }
-  if(!_dlKmPhoto && !confirm('ยังไม่มีรูปเลขไมล์ — บันทึกเลย?\nNo odometer photo yet. Save anyway?')) return false;
+  if(!_dlKmPhotos.length && !confirm('ยังไม่มีรูปเลขไมล์ — บันทึกเลย?\nNo odometer photo yet. Save anyway?')) return false;
   return true;
 }
 function dlKmCommit(orderId){
@@ -11716,10 +11763,10 @@ function dlKmCommit(orderId){
   if(!isFinite(v)) return;
   var drName=((typeof currentDriverId!=='undefined' ? (drivers.find(function(d){return d.id===currentDriverId;})||{}).name : '')||'Driver');
   var arr=kmLogOf(t);
-  arr.push({ km:v, photo:_dlKmPhoto||'', orderId:orderId||'', ts:Date.now(), by:drName });
+  arr.push({ km:v, photo:_dlKmPhotos[0]||'', photos:_dlKmPhotos.slice(), orderId:orderId||'', ts:Date.now(), by:drName });
   t.kmLog=arr;
   if(t.kmRate==null||t.kmRate==='') t.kmRate=KM_RATE_DEFAULT;
-  _dlKmPhoto=null;
+  _dlKmPhotos=[];
   try{ syncTours(); }catch(e){}
 }
 // Checkbox toggle: auto-fill the amount for the single ticked method with the total.
@@ -11913,8 +11960,22 @@ function addSlipPhoto(orderId, dataUrl, by, verify, done){
     }, function(){ if(done) done(true, ref.key); });
   });
 }
+// Several slips can be uploaded at once (two transfers, or a re-shot photo). They are
+// processed ONE AFTER THE OTHER — each one scans its QR and may trigger a bank check, so
+// running them in parallel would let the verdicts race each other.
 function handleSlipPhoto(input){
-  var f=input&&input.files&&input.files[0]; if(!f||!_deliveryId) return;
+  var files=(input&&input.files)?Array.prototype.slice.call(input.files):[];
+  if(!files.length || !_deliveryId) return;
+  input.value='';
+  var i=0;
+  (function next(){
+    if(i>=files.length) return;
+    _slipPhotoOne(files[i++], next);
+  })();
+}
+function _slipPhotoOne(f, done){
+  done = done || function(){};
+  if(!f||!_deliveryId){ done(); return; }
   var drName=(typeof currentDriverId!=='undefined')?((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver'):'Driver';
   var prog=document.getElementById('dl-slip-progress'); if(prog) prog.style.display='block';
   var expected=parseFloat((document.getElementById('dl-online-amt')||{}).value)||0;
@@ -11940,23 +12001,24 @@ function handleSlipPhoto(input){
             if(prog){ prog.style.display='block'; prog.innerHTML='<i class="ti ti-loader"></i> 🏦 Bank check... / กำลังตรวจกับธนาคาร'; }
             kpSlipApiVerify(qr, expected, function(apiV){
               if(prog) prog.style.display='none';
-              if(!apiV) return;   // API unreachable → keep the local verdict
+              if(!apiV){ done(); return; }   // API unreachable → keep the local verdict
               _slipResult=apiV;
               kpRenderSlipResult(apiV);
               var o2=(typeof orders!=='undefined'?orders.find(function(x){return x.id===_deliveryId;}):null);
               if(o2){ o2.slip={status:apiV.status,matched:!!apiV.matched,amount:apiV.amount||0,ref:apiV.ref||'',receiver:apiV.receiver||'',bankVerified:true,ts:Date.now(),by:drName}; try{ syncOrders(); }catch(e){} }
               if(window.fbDB && key){ window.fbDB.ref('orderPhotos/slip/'+safeOrderId(_deliveryId)+'/'+key+'/slip').set({status:apiV.status,matched:!!apiV.matched,amount:apiV.amount||0,ref:apiV.ref||'',msg:apiV.msg||''}); }
               dlSlipRefresh();
+              done();
             });
-          }
+          } else { done(); }
         });
       });
     };
-    img.onerror=function(){ if(prog) prog.style.display='none'; kpRenderSlipResult({status:'unreadable',msg:'ภาพเสีย / image error'}); };
+    img.onerror=function(){ if(prog) prog.style.display='none'; kpRenderSlipResult({status:'unreadable',msg:'ภาพเสีย / image error'}); done(); };
     img.src=ev.target.result;
   };
+  reader.onerror=function(){ if(prog) prog.style.display='none'; done(); };
   reader.readAsDataURL(f);
-  input.value='';
 }
 // Little slip badge used on the active-tour order rows. Shows the driver's auto
 // QR verdict plus (once the office has eyeballed it) a green ✅ / red 🚩 mark.
@@ -17097,7 +17159,7 @@ function calcViz() {
         <i class="ti ti-qrcode" style="font-size:26px;color:#2563eb;display:block;margin-bottom:6px"></i>
         <div style="font-size:13px;color:#2563eb">Tap to photograph slip / ถ่ายรูปสลิป</div>
       </div>
-      <input type="file" id="dl-slip-input" accept="image/*" style="display:none" onchange="handleSlipPhoto(this)">
+      <input type="file" id="dl-slip-input" accept="image/*" multiple style="display:none" onchange="handleSlipPhoto(this)">
       <div id="dl-slip-progress" style="display:none;font-size:12px;color:var(--blue);margin-top:6px;text-align:center"><i class="ti ti-loader"></i> Checking QR... / กำลังตรวจ QR</div>
       <div id="dl-slip-result" style="font-size:13px;margin-top:8px"></div>
     </div>
@@ -17112,7 +17174,7 @@ function calcViz() {
         <button type="button" onclick="document.getElementById('dl-km-gal').click()" title="เลือกจากแกลเลอรี / from gallery" style="flex:0 0 50px;border:2px dashed #93c5fd;border-radius:var(--rs);background:var(--bg);font-size:19px;cursor:pointer">🖼️</button>
       </div>
       <input type="file" id="dl-km-cam" accept="image/*" capture="environment" style="display:none" onchange="dlKmPhoto(this)">
-      <input type="file" id="dl-km-gal" accept="image/*" style="display:none" onchange="dlKmPhoto(this)">
+      <input type="file" id="dl-km-gal" accept="image/*" multiple style="display:none" onchange="dlKmPhoto(this)">
       <div id="dl-km-preview" style="display:none;margin-top:8px"></div>
       <div id="dl-km-msg" style="font-size:11px;margin-top:6px;text-align:center"></div>
     </div>
@@ -17134,7 +17196,7 @@ function calcViz() {
     <div id="km-modal-sub" style="font-size:12px;color:var(--text2);margin-bottom:10px"></div>
     <div id="km-photo-preview" style="display:none;margin-bottom:8px"></div>
     <input type="file" id="km-photo-input" accept="image/*" capture="environment" style="display:none" onchange="drKmPhoto(this)">
-    <input type="file" id="km-photo-gal" accept="image/*" style="display:none" onchange="drKmPhoto(this)">
+    <input type="file" id="km-photo-gal" accept="image/*" multiple style="display:none" onchange="drKmPhoto(this)">
     <div style="display:flex;gap:6px;margin-bottom:10px">
       <button type="button" onclick="document.getElementById('km-photo-input').click()" style="flex:1;padding:14px 6px;border:2px dashed var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:13px;font-weight:700;cursor:pointer">📷 ถ่ายรูปเลขไมล์<br><span style="font-size:11px;font-weight:500;color:var(--text2)">Photo of the odometer</span></button>
       <button type="button" onclick="document.getElementById('km-photo-gal').click()" style="flex:0 0 92px;padding:14px 6px;border:2px dashed var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:13px;font-weight:700;cursor:pointer">🖼️<br><span style="font-size:11px;font-weight:500;color:var(--text2)">Gallery</span></button>
