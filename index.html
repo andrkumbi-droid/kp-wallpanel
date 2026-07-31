@@ -8346,41 +8346,57 @@ function ofDrvDupeScan(){
   });
   return out;
 }
-// Different tours (own tourId, own departure time) that carry the SAME order — the tour
-// was re-created, or an order was delivered twice. Not a duplicate record: both are real
-// tours, so this is reported for checking only, never deleted automatically.
+// One order on several tours. Usually this is NORMAL: the stop was not delivered, the
+// tour ended, and the order went out again on the next tour. It is only suspicious when
+// the order was already delivered (or handed to a carrier) on the EARLIER tour and still
+// travelled on a later one — that is a stop driven (and paid) twice.
+// Returns { sus:[…], normal:<count> } so the report can separate the two.
 function ofDrvSameOrderScan(){
-  var out=[];
+  var sus=[], normal=0;
   Object.keys(tourHistory||{}).forEach(function(key){
     var recs=tourHistory[key]||{}, byOrder={};
     Object.keys(recs).forEach(function(k){
       var r=recs[k]||{};
       var arr=Array.isArray(r.orders)?r.orders:Object.keys(r.orders||{}).map(function(x){return (r.orders||{})[x];});
       arr.forEach(function(o){
-        var id=o&&o.id; if(!id) return;
-        (byOrder[id]=byOrder[id]||[]).push(r);
+        if(!o||!o.id) return;
+        (byOrder[o.id]=byOrder[o.id]||[]).push({r:r, st:String(o.status||'')});
       });
     });
     Object.keys(byOrder).forEach(function(id){
-      var rs=byOrder[id];
-      // Same record listed twice is the duplicate case above — only flag distinct tours.
-      var seen={}, uniq=rs.filter(function(r){ var s=r.tourId||(r.tourNo+'|'+r.endedAt); if(seen[s]) return false; seen[s]=1; return true; });
-      if(uniq.length>1) out.push({name:uniq[0].driverName||key, id:id, tours:uniq});
+      // Same record listed twice is the duplicate-record case — only distinct tours here.
+      var seen={}, uniq=byOrder[id].filter(function(x){
+        var s=x.r.tourId||(x.r.tourNo+'|'+x.r.endedAt); if(seen[s]) return false; seen[s]=1; return true;
+      });
+      if(uniq.length<2) return;
+      uniq.sort(function(a,b){ return (a.r.ts||0)-(b.r.ts||0); });
+      // Any tour BEFORE the last one that already counts as finished → driven twice.
+      var done=uniq.slice(0,-1).some(function(x){ return x.st==='delivered'||x.st==='shipped'; });
+      if(done) sus.push({name:uniq[0].r.driverName||key, id:id, tours:uniq});
+      else normal++;
     });
   });
-  return out;
+  return {sus:sus, normal:normal};
 }
 function ofDrvCheckDupes(){
   var dupes=[], same=[];
   try{ dupes=ofDrvDupeScan(); same=ofDrvSameOrderScan(); }catch(e){ alert('Scan failed: '+e.message); return; }
-  var sameTxt = same.length
-    ? '\n\n──────────\nℹ '+same.length+' order(s) appear on MORE THAN ONE tour / ออเดอร์อยู่หลายทัวร์:\n'
-      +same.slice(0,15).map(function(s){
-          return '  '+s.id+' → '+s.tours.map(function(r){ return (r.driverName||'')+' Tour '+(r.tourNo||'?')+' ('+(r.departedDate||r.endedDate||'')+(r.departedAt?' '+r.departedAt:'')+')'; }).join('  +  ');
+  var sameTxt='';
+  if(same.normal>0){
+    sameTxt += '\n\n──────────\nℹ '+same.normal+' order(s) went out again on a later tour after NOT being delivered'
+      +' / ออเดอร์ที่ส่งไม่สำเร็จแล้วออกทัวร์ใหม่ — this is normal, nothing to fix.';
+  }
+  if(same.sus.length){
+    sameTxt += '\n\n──────────\n⚠ '+same.sus.length+' order(s) were ALREADY delivered and still went out on a later tour'
+      +' / ส่งแล้วแต่ยังอยู่ในทัวร์ถัดไป — driven (and paid) twice:\n'
+      +same.sus.slice(0,15).map(function(s){
+          return '  '+s.id+' → '+s.tours.map(function(x){
+            return (x.r.driverName||'')+' Tour '+(x.r.tourNo||'?')+' ('+(x.r.departedDate||x.r.endedDate||'')+(x.r.departedAt?' '+x.r.departedAt:'')+') ['+(x.st||'?')+']';
+          }).join('  +  ');
         }).join('\n')
-      +(same.length>15?'\n  … +'+(same.length-15)+' more':'')
-      +'\nThese are separate real tours (own departure time) — check whether the tour was re-created.'
-    : '';
+      +(same.sus.length>15?'\n  … +'+(same.sus.length-15)+' more':'')
+      +'\nCheck Payroll for these — the tour pay may have been booked twice.';
+  }
   if(!dupes.length){
     alert('✅ ไม่พบทัวร์ซ้ำ / No duplicate tour records — all '+Object.keys(tourHistory||{}).length+' driver histories are clean.'+sameTxt);
     return;
