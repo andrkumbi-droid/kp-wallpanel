@@ -2699,6 +2699,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <input type="number" id="acinv-other" placeholder="Other" oninput="acInvPreview()" style="flex:1;min-width:0">
   </div>
 
+  <label class="fl">Bank debit advice / ใบแจ้งหักบัญชี <span style="font-size:11px;color:var(--text2)">(.pdf — optional, fills the rate + bank fees by itself)</span></label>
+  <input type="file" id="acinv-pdf" accept=".pdf" onchange="acInvPdf(this)"
+    style="width:100%;box-sizing:border-box;padding:9px;border:1px dashed var(--border);border-radius:var(--rs);background:var(--bg2);font-size:12px">
+  <div id="acinv-pdf-out" style="font-size:12px;margin-top:6px"></div>
+
   <label class="fl">Invoice file / ไฟล์ <span style="font-size:11px;color:var(--text2)">(.xlsx · .xls · .csv)</span></label>
   <input type="file" id="acinv-file" accept=".xlsx,.xls,.csv,.txt" onchange="acInvFile(this)"
     style="width:100%;box-sizing:border-box;padding:9px;border:1px dashed var(--border);border-radius:var(--rs);background:var(--bg2);font-size:12px">
@@ -20975,7 +20980,7 @@ document.addEventListener('change', function(e){
      · depreciation / interest / tax    → EBITDA
    ═══════════════════════════════════════════════════════════════════════════ */
 
-var acctData = { opening:{mk:'',bank:0,cash:0}, cogsPct:0, cost:{}, budget:{}, ap:[], loans:[], invoices:[], fx:{}, other:{}, fixedCats:{} };
+var acctData = { opening:{mk:'',bank:0,cash:0}, cogsPct:0, cost:{}, budget:{}, ap:[], loans:[], invoices:[], payments:[], fx:{}, other:{}, fixedCats:{} };
 var _acTab = 'sum';
 var _acMonth = '';
 
@@ -20996,6 +21001,7 @@ function acSync(){ try{ if(window.fbDB) window.fbDB.ref('acctData').set(acctData
         loans:   v.loans ? (Array.isArray(v.loans)?v.loans:Object.values(v.loans)) : [],
         invoices: v.invoices ? (Array.isArray(v.invoices)?v.invoices:Object.values(v.invoices)) : [],
         fx:      v.fx      || {},
+        payments: v.payments ? (Array.isArray(v.payments)?v.payments:Object.values(v.payments)) : [],
         other:   v.other   || {},
         fixedCats: v.fixedCats || {}
       };
@@ -21973,14 +21979,17 @@ var _acInvAoA = null;     // raw sheet as array-of-arrays
 var _acInvLines = [];     // mapped + priced lines shown in the preview
 var _acInvCodeFix = {};   // rowIndex → code the user corrected it to
 var _acInvMeta = {};      // supplier / currency / balance read out of the sheet
+var _acInvAdvice = null;  // parsed bank debit advice (rate, fees, baht debited)
 
 function acInvOpen(){
-  _acInvAoA=null; _acInvLines=[]; _acInvCodeFix={}; _acInvMeta={};
+  _acInvAoA=null; _acInvLines=[]; _acInvCodeFix={}; _acInvMeta={}; _acInvAdvice=null;
   ['acinv-supplier','acinv-no','acinv-rate','acinv-thb','acinv-freight','acinv-duty','acinv-other','acinv-ppc'].forEach(function(id){
     var e=document.getElementById(id); if(e) e.value='';
   });
   var rh=document.getElementById('acinv-rate-hint'); if(rh) rh.innerHTML='';
   var f=document.getElementById('acinv-file'); if(f) f.value='';
+  var fp=document.getElementById('acinv-pdf'); if(fp) fp.value='';
+  var po=document.getElementById('acinv-pdf-out'); if(po) po.innerHTML='';
   document.getElementById('acinv-date').value=new Date().toISOString().split('T')[0];
   document.getElementById('acinv-cur').value='CNY';
   document.getElementById('acinv-status').textContent='';
@@ -22091,6 +22100,195 @@ function acInvFile(input){
   reader.onerror=function(){ st.style.color='#dc2626'; st.textContent='Could not read the file.'; };
   if(isCSV) reader.readAsText(f, 'UTF-8'); else reader.readAsArrayBuffer(f);
 }
+/* ── BANK DEBIT ADVICE (PDF) ────────────────────────────────────────────────
+   The SCB advice carries the three things the invoice cannot: the exact
+   exchange rate the bank used, the bank fees, and the baht that really left
+   the account. Reading it removes the last manual step of the import and puts
+   the fees (999 ฿ on the sample) into the landed cost, where they belong —
+   today they are booked nowhere at all.
+
+   No PDF library: the text lives in Flate-compressed content streams and the
+   fonts are subsetted, so every glyph code is translated through that font's
+   own /ToUnicode CMap — the map has to be switched on each Tf operator, or the
+   labels decode and the numbers come out as gibberish.
+─────────────────────────────────────────────────────────────────────────────*/
+function acLatin1(u8){
+  var s='';
+  for(var i=0;i<u8.length;i+=8192) s+=String.fromCharCode.apply(null, u8.subarray(i, i+8192));
+  return s;
+}
+function acInflate(bytes){
+  // zlib-wrapped first, then raw deflate — PDFs use both.
+  var tryOne=function(fmt){
+    return new Promise(function(res){
+      try{
+        var ds=new DecompressionStream(fmt);
+        var w=ds.writable.getWriter();
+        w.write(bytes); w.close();
+        new Response(ds.readable).arrayBuffer().then(function(b){ res(new Uint8Array(b)); }, function(){ res(null); });
+      }catch(e){ res(null); }
+    });
+  };
+  return tryOne('deflate').then(function(r){ return r || tryOne('deflate-raw'); });
+}
+function acPdfText(file){
+  if(typeof DecompressionStream==='undefined') return Promise.reject(new Error('This browser is too old to unpack PDFs.'));
+  return file.arrayBuffer().then(function(ab){
+    var u8=new Uint8Array(ab), s=acLatin1(u8);
+    // Index every object so /ToUnicode NN 0 R can be resolved.
+    var marks=[], m, rx=/(\d+)\s+0\s+obj/g;
+    while((m=rx.exec(s))) marks.push({num:m[1], from:m.index+m[0].length});
+    var objs={};
+    marks.forEach(function(mk,i){
+      var to=s.indexOf('endobj', mk.from);
+      if(to<0) to = (i+1<marks.length ? marks[i+1].from : s.length);
+      objs[mk.num]={from:mk.from, body:s.slice(mk.from, to)};
+    });
+    var inflateObj=function(num){
+      var o=objs[num]; if(!o) return Promise.resolve('');
+      var mm=o.body.match(/stream\r?\n/); if(!mm) return Promise.resolve('');
+      var st=o.from+mm.index+mm[0].length, en=s.indexOf('endstream', st);
+      if(en<0) return Promise.resolve('');
+      return acInflate(u8.subarray(st,en)).then(function(out){ return out?acLatin1(out):''; });
+    };
+    var parseCMap=function(txt){
+      var map={}, x;
+      if(!txt) return map;
+      (txt.match(/beginbfchar([\s\S]*?)endbfchar/g)||[]).forEach(function(blk){
+        var cr=/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>(?!\s*<)/g;
+        while((x=cr.exec(blk))){
+          var dst=(x[2].match(/.{4}/g)||[]).map(function(h){ return String.fromCharCode(parseInt(h,16)); }).join('');
+          map[parseInt(x[1],16)]=dst;
+        }
+      });
+      (txt.match(/beginbfrange([\s\S]*?)endbfrange/g)||[]).forEach(function(blk){
+        var rr=/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g;
+        while((x=rr.exec(blk))){
+          var lo=parseInt(x[1],16), hi=parseInt(x[2],16), base=parseInt(x[3],16);
+          for(var c=lo;c<=hi && c-lo<512;c++) map[c]=String.fromCharCode(base+(c-lo));
+        }
+      });
+      return map;
+    };
+    // font name → its own CMap
+    var fontJobs=[], fontMap={};
+    Object.keys(objs).forEach(function(num){
+      var b=objs[num].body;
+      if(!/\/Type\s*\/Font/.test(b)) return;
+      var nm=b.match(/\/Name\s*\/([A-Za-z0-9]+)/), tu=b.match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
+      if(!nm||!tu) return;
+      fontJobs.push(inflateObj(tu[1]).then(function(t){ fontMap[nm[1]]=parseCMap(t); }));
+    });
+    return Promise.all(fontJobs).then(function(){
+      var streamJobs=Object.keys(objs).map(function(num){ return inflateObj(num); });
+      return Promise.all(streamJobs);
+    }).then(function(bodies){
+      var lines=[];
+      bodies.forEach(function(txt){
+        if(!txt || !/(Tj|TJ)/.test(txt)) return;
+        var active=null, cur=[], x;
+        var opRx=/\/([A-Za-z0-9]+)\s+[\d.]+\s+Tf|(\((?:[^()\\]|\\.)*\))\s*Tj|(\[[\s\S]*?\])\s*TJ|(T\*|TD|Td|ET)/g;
+        var strRx=/\(((?:[^()\\]|\\.)*)\)/g;
+        while((x=opRx.exec(txt))){
+          if(x[1]){ active=fontMap[x[1]]||null; continue; }
+          if(x[4]){ if(cur.length){ lines.push(cur.join('')); cur=[]; } continue; }
+          var blob = x[2]!==undefined ? x[2] : x[3];
+          var pieces=[], y; strRx.lastIndex=0;
+          while((y=strRx.exec(blob))) pieces.push(y[1]);
+          var raw=pieces.join('').replace(/\\([()\\])/g,'$1'), dec='';
+          for(var i2=0;i2<raw.length;i2++){
+            var c=raw.charCodeAt(i2);
+            dec += (active && active[c]!==undefined) ? active[c] : raw.charAt(i2);
+          }
+          cur.push(dec);
+        }
+        if(cur.length) lines.push(cur.join(''));
+      });
+      return lines.map(function(l){ return String(l).replace(/\s+/g,' ').trim(); }).filter(Boolean);
+    });
+  });
+}
+// Read the numbers out of the decoded advice. The bank prints the value ABOVE
+// its label, so labelled amounts are searched upwards first.
+function acAdviceParse(lines){
+  var joined=lines.join('\n');
+  var near=function(label){
+    var i=-1;
+    for(var k=0;k<lines.length;k++){ if(new RegExp(label,'i').test(lines[k])){ i=k; break; } }
+    if(i<0) return 0;
+    var isNum=function(t){ var mm=String(t).match(/^[\s:]*([\d,]+\.\d{2})\s*$/); return mm?acN(mm[1]):null; };
+    for(var d=1; d<=3; d++){ var v=(i-d>=0)?isNum(lines[i-d]):null; if(v!=null) return v; }
+    for(var d2=1; d2<=3; d2++){ var v2=(i+d2<lines.length)?isNum(lines[i+d2]):null; if(v2!=null) return v2; }
+    return 0;
+  };
+  var after=function(label){
+    var i=-1;
+    for(var k=0;k<lines.length;k++){ if(new RegExp(label,'i').test(lines[k])){ i=k; break; } }
+    if(i<0) return '';
+    for(var d=1; d<=4 && i+d<lines.length; d++){
+      var t=String(lines[i+d]).replace(/^[\s:]+/,'').trim();
+      if(t.length>=4 && /[A-Za-z]{3}/.test(t)) return t;
+    }
+    return '';
+  };
+  var val=joined.match(/(\d{4}-\d{2}-\d{2})\s+([A-Z]{3})\s+([\d,]+\.\d{2})/);
+  var rateM=null;
+  for(var k2=0;k2<lines.length;k2++){ var mm=String(lines[k2]).match(/^\s*(\d{1,3}\.\d{4,9})\s*$/); if(mm){ rateM=acN(mm[1]); break; } }
+  var out={
+    date:      val?val[1]:(joined.match(/(\d{4}-\d{2}-\d{2})/)||[])[1]||'',
+    currency:  val?val[2]:'',
+    foreign:   val?acN(val[3]):0,
+    rate:      rateM||0,
+    commission:near('Commission'),
+    bankCharge:near('Bank\\s*Charge'),
+    beneficiary:after('Beneficiary Name'),
+    purpose:   after('Details of Payment'),
+    ref:       (joined.match(/\b(\d{4,6}[A-Z]\d{8,14})\b/)||[])[1]||''
+  };
+  out.baht = (out.foreign>0 && out.rate>0) ? out.foreign*out.rate : 0;
+  out.fees = out.commission + out.bankCharge;
+  out.total = out.baht + out.fees;
+  out.ok = out.foreign>0 && out.rate>0;
+  return out;
+}
+function acInvPdf(input){
+  var f=input.files&&input.files[0]; if(!f) return;
+  var box=document.getElementById('acinv-pdf-out');
+  box.style.color='var(--text2)'; box.textContent='Reading '+f.name+' …';
+  acPdfText(f).then(function(lines){
+    var a=acAdviceParse(lines);
+    _acInvAdvice = a.ok ? a : null;
+    if(!a.ok){
+      box.style.color='#dc2626';
+      box.textContent='Could not find the amount and rate in this PDF. Enter the rate by hand — the invoice import still works.';
+      return;
+    }
+    // Rate + fees straight into the form
+    document.getElementById('acinv-rate').value=Math.round(a.rate*10000)/10000;
+    var t=document.getElementById('acinv-thb'); if(t) t.value='';
+    if(a.fees>0){
+      var o=document.getElementById('acinv-other');
+      if(o && !acN(o.value)) o.value=a.fees;
+    }
+    if(a.currency){
+      var cs=document.getElementById('acinv-cur');
+      if(cs && [].some.call(cs.options,function(op){return op.value===a.currency;})) cs.value=a.currency;
+    }
+    var sup=document.getElementById('acinv-supplier');
+    if(sup && !String(sup.value).trim() && a.beneficiary) sup.value=a.beneficiary;
+    box.style.color='var(--green)';
+    box.innerHTML='✓ '+_esc(f.name)+'<div style="color:var(--text);margin-top:4px;line-height:1.6">'
+      +'Paid <b>'+a.foreign.toLocaleString(undefined,{minimumFractionDigits:2})+' '+_esc(a.currency)+'</b> at rate <b>'+a.rate+'</b> = '+acB(a.baht)+'<br>'
+      +'Bank fees '+acB(a.fees)+' (commission '+acB(a.commission)+' + charge '+acB(a.bankCharge)+') → added to “Other”<br>'
+      +'<b>'+acB(a.total)+'</b> debited'+(a.date?' on '+a.date:'')
+      +(a.purpose?'<br><span style="color:var(--text2)">'+_esc(a.purpose)+'</span>':'')+'</div>';
+    acInvRateHint(); acInvPreview();
+  }).catch(function(e){
+    box.style.color='#dc2626';
+    box.textContent='Could not read the PDF: '+e.message;
+  });
+}
+
 // ── COLUMN DETECTION ───────────────────────────────────────────────────────
 // Header names alone are not trustworthy. The real Linyi proforma calls the
 // product code column "Number" (which reads like a quantity) and has an empty
@@ -22269,7 +22467,14 @@ function acInvAfterParse(name){
   var meta=acInvMeta(aoa);
   _acInvMeta=meta;
   var set=function(id,v){ var e=document.getElementById(id); if(e && v && !String(e.value).trim()) e.value=v; };
-  set('acinv-supplier', meta.supplier);
+  // The bank clips the beneficiary to a fixed width ("…IMPORT EXPORT CO L"), so a
+  // name already taken from a debit advice is replaced by the sheet's full one.
+  var supEl=document.getElementById('acinv-supplier');
+  if(supEl && meta.supplier){
+    var norm=function(t){ return String(t||'').toUpperCase().replace(/[^A-Z0-9]/g,''); };
+    var curV=norm(supEl.value), fullV=norm(meta.supplier);
+    if(!supEl.value.trim() || (curV && fullV.indexOf(curV)===0)) supEl.value=meta.supplier;
+  }
   set('acinv-no', meta.no);
   if(meta.currency){ var cs=document.getElementById('acinv-cur'); if(cs && [].some.call(cs.options,function(o){return o.value===meta.currency;})) { cs.value=meta.currency; acInvCurChanged(); } }
 
@@ -22405,6 +22610,18 @@ function acInvApply(){
   // Remember the rate per currency — the next invoice starts from it.
   var curNow=document.getElementById('acinv-cur').value, rateNow=acN(document.getElementById('acinv-rate').value);
   if(curNow!=='THB' && rateNow>0){ if(!acctData.fx) acctData.fx={}; acctData.fx[curNow]=rateNow; }
+  // A debit advice is a real cash movement — keep it, deduplicated by its bank reference.
+  if(_acInvAdvice && _acInvAdvice.ok){
+    if(!acctData.payments) acctData.payments=[];
+    var a=_acInvAdvice, key=a.ref||(a.date+'|'+a.foreign);
+    acctData.payments=acctData.payments.filter(function(p){ return (p.ref||(p.date+'|'+p.foreign))!==key; });
+    acctData.payments.unshift({
+      id:'pm'+Date.now(), ref:a.ref, date:a.date, supplier:sup,
+      currency:a.currency, foreign:a.foreign, rate:a.rate,
+      baht:Math.round(a.baht*100)/100, commission:a.commission, bankCharge:a.bankCharge,
+      total:Math.round(a.total*100)/100, purpose:a.purpose, ts:Date.now()
+    });
+  }
   if(!acctData.invoices) acctData.invoices=[];
   acctData.invoices.unshift({
     id:'inv'+Date.now(),
@@ -22508,11 +22725,23 @@ function acRenderData(){
         +'</div>';
       }).join('')+'<div style="height:10px"></div>'
     : '';
+  var payList=(acctData.payments||[]).length
+    ? '<div style="font-size:12px;font-weight:700;margin:10px 0 5px">🏦 Payments read from debit advices</div>'
+      +(acctData.payments||[]).map(function(p){
+        return '<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">'
+          +'<div style="display:flex;justify-content:space-between;gap:8px">'
+            +'<span style="min-width:0;flex:1"><b>'+_esc(p.supplier||'—')+'</b><span style="color:var(--text2)"> · '+(p.date||'')+(p.ref?' · '+_esc(p.ref):'')+'</span></span>'
+            +'<span style="font-weight:800;white-space:nowrap">'+acB(acN(p.total))+'</span></div>'
+          +'<div style="color:var(--text2);font-size:11px;margin-top:1px">'+acN(p.foreign).toLocaleString()+' '+_esc(p.currency||'')+' @ '+p.rate
+            +' · fees '+acB(acN(p.commission)+acN(p.bankCharge))+(p.purpose?' · '+_esc(p.purpose):'')+'</div>'
+        +'</div>';
+      }).join('')+'<div style="height:10px"></div>'
+    : '';
   h+=box('2 · Purchase cost per piece / ต้นทุนต่อชิ้น',
-    'What ONE piece costs you landed in the warehouse (goods + freight + duty ÷ pieces). The container log records quantities and dates but no prices, so this is the single biggest gap. <b>Switches on:</b> cost of goods, gross & net profit, all margins, profit by product/customer/rep, stock value, cash conversion cycle.<br><br><b>Where to get it:</b> the supplier proforma invoice (PI) per container — total goods value ÷ pieces, plus freight and customs from the forwarder invoice.<br><br>Cost known for <b>'+have+' of '+codes.length+'</b> codes · covering <b>'+Math.round(cogs.coverage)+'%</b> of this month\'s sales.',
+    'What ONE piece costs you landed in the warehouse (goods + freight + duty ÷ pieces). The container log records quantities and dates but no prices, so this is the single biggest gap. <b>Switches on:</b> cost of goods, gross & net profit, all margins, profit by product/customer/rep, stock value, cash conversion cycle.<br><br><b>Where to get it:</b> the supplier proforma invoice (PI) per container. Add the bank\'s debit advice PDF and the exchange rate plus the bank fees fill themselves in.<br><br>Cost known for <b>'+have+' of '+codes.length+'</b> codes · covering <b>'+Math.round(cogs.coverage)+'%</b> of this month\'s sales.',
     '<button type="button" onclick="acInvOpen()" style="width:100%;background:#0d9488;color:#fff;border:none;border-radius:var(--rs);padding:11px;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:8px"><i class="ti ti-file-spreadsheet"></i> Import supplier invoice (Excel/CSV) / นำเข้าใบแจ้งหนี้</button>'
     +'<div style="font-size:11px;color:var(--text2);margin-bottom:10px;line-height:1.5">Upload the invoice, enter the supplier + exchange rate + freight/duty — the app reads the lines, spreads the extra costs over the pieces and fills the table below by itself. You can correct every product code before anything is saved.</div>'
-    +invList
+    +invList+payList
     +row('Fallback: gross COGS as % of revenue (rough stopgap)', inp('n',acctData.cogsPct||'','e.g. 55','acSetCogsPct(this.value)'))
     +'<div style="margin-top:8px;max-height:420px;overflow-y:auto">'+(costRows||'<div style="font-size:12px;color:var(--text2)">No products sold yet.</div>')+'</div>'
     +(codes.length>80?'<div style="font-size:11px;color:var(--text2);margin-top:6px">Showing the top 80 by revenue.</div>':''));
