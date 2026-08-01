@@ -743,6 +743,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       db.ref('stockItems').on('value', function(snap) {
         stockItems = snap.val() ? Object.values(snap.val()) : [];
         try{ fbSeedSnap('stockItems', snap.val()); }catch(e){}
+        // Quotation shows the remaining pieces per product → keep it live with the warehouse
+        try{ if(document.getElementById('qt-suggestions').innerHTML){ qtRefreshSoldOut(); qtInitCounts(); } }catch(e){}
         try{if(document.getElementById('s-manager').classList.contains('active'))mgStock();}catch(e){}
         try{ofRenderStock();}catch(e){}
       });
@@ -4916,6 +4918,24 @@ function ofNormCode(code){
   if((m=c.match(/^T-?(\d+)$/)))      return 'T'+pad(m[1],2);
   if((m=c.match(/^U-?(\d+)$/)))      return 'U'+pad(m[1],2);
   return c;
+}
+// Grade A on hand per NORMALISED code — the one place that answers "how many do we
+// really have" (pre-orders, quotation). Two stock rows for the same product written
+// differently (L52 / L052) are added together. Returns null for a code the stock list
+// does not know at all, which is different from "we have zero".
+function stockOnHandMap(){
+  var m={};
+  (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
+    if(!s||!s.code) return;
+    var k=ofNormCode(s.code);
+    m[k]=(m[k]||0)+(parseInt(s.qty)||0);
+  });
+  return m;
+}
+function stockOnHandOf(code){
+  if(!code) return null;
+  var m=stockOnHandMap(), k=ofNormCode(code);
+  return (m[k]==null) ? null : m[k];
 }
 // Every product we HAVE or ever HAD — for the yearly stock count: the stock list (even
 // at 0) plus the product catalog. Order line items are deliberately NOT a source: a
@@ -12846,18 +12866,8 @@ function closePhotoLightbox(){
 //  Becomes "ready" when all product codes are in stock (container arrived).
 // ════════════════════════════════════════════════════════════
 var PO_PRODT = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1,clip:1,clips:1};
-// Grade A on hand per product, keyed by the NORMALISED code — KP36/KP036, L52/L052 and
-// LP7/LP07/L-P-007 are one product, so two stock rows for the same thing are added up.
-// Grade B (damaged) is deliberately left out: a pre-order must not go "ready" on scrap.
-function poStockMap(){
-  var m={};
-  (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
-    if(!s||!s.code) return;
-    var k=ofNormCode(s.code);
-    m[k]=(m[k]||0)+(parseInt(s.qty)||0);
-  });
-  return m;
-}
+// Stock check runs on Grade A only (see stockOnHandMap): a pre-order must not go "ready"
+// on damaged goods.
 // What the pre-order needs vs. what is there: [{code, need, have, short}], one row per
 // product (several lines with the same code are summed).
 function poNeeds(po){
@@ -12868,7 +12878,7 @@ function poNeeds(po){
     if(need[k]==null){ need[k]=0; seq.push({key:k, code:li.code}); }
     need[k]+=parseInt(li.qty)||0;
   });
-  var stock=poStockMap();
+  var stock=stockOnHandMap();
   return seq.map(function(o){
     var n=need[o.key]||0, have=stock[o.key]||0;
     return { code:o.code, key:o.key, need:n, have:have, short:Math.max(0,n-have) };
@@ -15589,25 +15599,53 @@ function qtInit() {
   qtInitCounts();
 }
 
+// ── QUOTATION ↔ STOCK ───────────────────────────────────────────────────────
+// The quotation offers what the warehouse actually knows:
+//   · no stock record at all → not ours to sell, the product is hidden. Cliplock bags
+//     and hand-added catalog products are exempt — they are not tracked as stock.
+//   · record with 0 pieces   → shown as sold out, like the manual flag.
+// The manual sold-out toggle keeps controlling the WEBSITE flag; the stock-driven state
+// is only shown here and follows the warehouse by itself.
+function qtStockQty(p){ return stockOnHandOf(p && p.code); }
+function qtQuotable(p){
+  if(!p) return false;
+  if(p._custom || p.profile==='clip') return true;
+  return qtStockQty(p)!==null;
+}
+function qtSoldOutState(p){
+  if(!p) return '';
+  if(soldOut[p.code]) return 'manual';
+  var q=qtStockQty(p);
+  return (q!==null && q<=0) ? 'stock' : '';
+}
+function qtAvailable(p){ return qtQuotable(p) && !qtSoldOutState(p); }
 function qtProductRow(p) {
   var priceStr = p.price > 0 ? p.price+'฿/'+unitFor(p.code) : '—';
   var sub = p.mat === 'ACC' ? p.name : p.name+' · '+p.mat+(p.w?' '+p.w+'cm':'');
-  var out = soldOut[p.code];
+  var state = qtSoldOutState(p);
+  var out = !!state;
+  var qty = qtStockQty(p);
+  var stockLine = (qty===null) ? ''
+    : '<div style="font-size:11px;font-weight:700;color:'+(qty>0?'#166534':'#dc2626')+'">'
+        +'📦 คงเหลือ / left: '+qty.toLocaleString()+' '+unitFor(p.code)+'</div>';
   return '<div id="qtrow-'+p.code+'" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid '+(out?'#dc2626':'var(--border)')+';border-radius:var(--rs);margin-bottom:6px;background:var(--bg);opacity:'+(out?'0.45':'1')+';position:relative">'
     +'<div onclick="qtSelectProduct(\''+p.code+'\')" style="display:flex;align-items:center;gap:10px;flex:1;cursor:pointer">'
     +'<img loading="lazy" src="'+IMG_BASE+p.code+'.jpg" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0" onerror="this.style.display=\'none\'">'
     +'<div style="flex:1">'
-    +'<div style="font-size:13px;font-weight:700">'+p.code+(out?' <span style="color:#dc2626;font-size:11px">✕ หมด / Sold out</span>':'')+'</div>'
+    +'<div style="font-size:13px;font-weight:700">'+p.code+(out?' <span style="color:#dc2626;font-size:11px">✕ หมด / Sold out'+(state==='stock'?' (สต็อก 0)':'')+'</span>':'')+'</div>'
     +'<div style="font-size:12px;color:var(--text2)">'+sub+'</div>'
     +(p.price>0?'<div style="font-size:13px;font-weight:700;color:var(--blue)">'+priceStr+'</div>':'')
+    +stockLine
     +'</div>'
     +'<i class="ti ti-plus" style="color:var(--blue);font-size:18px"></i>'
     +'</div>'
     +(p._custom?'<button type="button" onclick="event.stopPropagation();qtOpenAddProduct(\''+p.code+'\')" title="Edit / Delete — แก้ไข/ลบ" style="width:28px;height:28px;border-radius:6px;border:1.5px solid #d1d5db;background:var(--bg2);cursor:pointer;font-size:13px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#6b7280;padding:0;margin-left:4px">✎</button>':'')
-    +'<button type="button" onclick="event.stopPropagation();qtToggleSoldOut(\''+p.code+'\')" title="Sold out / หมด" '
-    +'style="width:28px;height:28px;border-radius:6px;border:1.5px solid '+(out?'#dc2626':'#d1d5db')+';background:'+(out?'#fee2e2':'var(--bg2)')+';cursor:pointer;font-size:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:'+(out?'#dc2626':'#9ca3af')+';padding:0;margin-left:4px">'
-    +(out?'✕':'☐')
-    +'</button>'
+    // The button shows the MANUAL website flag — a product that is only out because stock
+    // hit 0 must still be togglable (and comes back on its own once stock arrives).
+    +(function(){ var man=!!soldOut[p.code];
+      return '<button type="button" onclick="event.stopPropagation();qtToggleSoldOut(\''+p.code+'\')" title="'+(man?'Sold out on the website / ซ่อนบนเว็บไซต์':'Mark sold out on the website / ตั้งเป็นหมดบนเว็บไซต์')+'" '
+      +'style="width:28px;height:28px;border-radius:6px;border:1.5px solid '+(man?'#dc2626':'#d1d5db')+';background:'+(man?'#fee2e2':'var(--bg2)')+';cursor:pointer;font-size:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:'+(man?'#dc2626':'#9ca3af')+';padding:0;margin-left:4px">'
+      +(man?'✕':'☐')+'</button>'; })()
     +'</div>';
 }
 
@@ -15671,14 +15709,18 @@ function qtShowProducts(list, activeCat) {
     btn.style.color = active ? 'var(--blue)' : 'var(--text2)';
   });
   var sEl = document.getElementById('qt-suggestions');
+  // Single choke point for every product list in the quotation (all / category /
+  // profile / search) — products the stock list does not know are dropped here.
+  list = (list||[]).filter(qtQuotable);
   if(!list.length) { sEl.innerHTML = '<div style="font-size:12px;color:var(--text2);padding:6px 0">No product found / ไม่พบสินค้า</div>'; return; }
   sEl.innerHTML = list.map(qtProductRow).join('');
 }
 
 function qtInitCounts() {
-  var wpc = QT_PRODUCTS.filter(function(p){ return p.mat==='WPC' && !soldOut[p.code]; }).length;
-  var pvc = QT_PRODUCTS.filter(function(p){ return p.mat==='PVC' && !soldOut[p.code]; }).length;
-  var acc = QT_PRODUCTS.filter(function(p){ return p.mat==='ACC' && !soldOut[p.code]; }).length;
+  // Counts must match what the list actually offers: in stock and not sold out.
+  var wpc = QT_PRODUCTS.filter(function(p){ return p.mat==='WPC' && qtAvailable(p); }).length;
+  var pvc = QT_PRODUCTS.filter(function(p){ return p.mat==='PVC' && qtAvailable(p); }).length;
+  var acc = QT_PRODUCTS.filter(function(p){ return p.mat==='ACC' && qtAvailable(p); }).length;
   var total = wpc + pvc;
   var wEl = document.getElementById('qtf-WPC-count');
   var pEl = document.getElementById('qtf-PVC-count');
@@ -15725,7 +15767,7 @@ function qtFilterCat(cat) {
           +'style="padding:6px 36px 6px 10px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;cursor:pointer;color:var(--text2);line-height:1.3;text-align:left">'
           +'<div style="font-weight:700">'+p.label+'</div>'
           +'<div style="font-size:10px;opacity:0.8">'+p.en+'</div>'
-          +'<div style="font-size:10px;opacity:0.5">'+p.sub+' &nbsp;·&nbsp; '+QT_PRODUCTS.filter(function(x){return x.profile===k&&!soldOut[x.code];}).length+' สี</div>'
+          +'<div style="font-size:10px;opacity:0.5">'+p.sub+' &nbsp;·&nbsp; '+QT_PRODUCTS.filter(function(x){return x.profile===k&&qtAvailable(x);}).length+' สี</div>'
           +'</button>'
           +'<button type="button" id="qtpf-copy-'+k+'" onclick="event.stopPropagation();qtCopyProfileImages(\''+k+'\',this)" title="Copy all images" '
           +'style="position:absolute;right:4px;top:50%;transform:translateY(-50%);width:26px;height:26px;border-radius:6px;border:1px solid var(--border);background:var(--bg);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;color:var(--text2);padding:0">'
@@ -15752,7 +15794,7 @@ function qtFilterProfile(profile) {
 }
 
 function qtCopyProfileImages(profile, btn) {
-  var products = QT_PRODUCTS.filter(function(p){ return p.profile === profile && !soldOut[p.code]; });
+  var products = QT_PRODUCTS.filter(function(p){ return p.profile === profile && qtAvailable(p); });
   if(!products.length) return;
   if(btn) { btn.innerHTML='⏳'; btn.disabled=true; }
   var IMG_SIZE = 500; // each product image square size on collage
