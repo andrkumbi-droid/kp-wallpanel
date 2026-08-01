@@ -1896,7 +1896,15 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="stit" style="margin-bottom:0">📈 Batch / รอบตู้ — ขายเร็วแค่ไหน</div>
       <button type="button" onclick="btPrint()" style="flex-shrink:0;padding:7px 11px;border:none;border-radius:var(--rs);background:#1d4ed8;color:#fff;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-printer"></i> Print / พิมพ์</button>
     </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+      <button type="button" id="btm-one" onclick="btSetMode('one')" style="padding:8px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🚢 ตู้เดียว / Container</button>
+      <button type="button" id="btm-all" onclick="btSetMode('all')" style="padding:8px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">📊 ทั้งหมด / All products</button>
+    </div>
     <select id="bt-pick" onchange="btRender()" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;font-weight:700;margin-bottom:10px"></select>
+    <div id="bt-allfilter" style="display:none;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+      <button type="button" id="btf-panels" onclick="btSetAllFilter('panels')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🪵 แผ่นผนัง / Panels</button>
+      <button type="button" id="btf-all" onclick="btSetAllFilter('all')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🔧 ทุกอย่าง / Everything</button>
+    </div>
     <div id="bt-body"></div>
   </div></div>
 
@@ -4606,7 +4614,7 @@ function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id)
 // (CSS var --of-topbar-h). Re-run on tab switch + resize since the topbar height varies.
 function ofSyncStickyTop(){ try{ var tb=document.getElementById('of-topbar'); if(tb&&tb.offsetHeight) document.documentElement.style.setProperty('--of-topbar-h', tb.offsetHeight+'px'); }catch(e){} }
 try{ window.addEventListener('resize', ofSyncStickyTop); }catch(e){}
-function oft(t){ try{setTimeout(kpGoalWatch,0);}catch(e){} if(t==='orders') setTimeout(ofSyncStickyTop,0); if(t==='new' && window.ofInstoreOnly) ofApplyInstoreLock(); document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='drivers')ofDriversRender();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='batch')btRender();if(t==='new')ofRenderStock();if(t==='stock')ofStockCatalog();if(t==='lala')ofRenderLala();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='attend')ofAttRender();if(t==='bills')billsRender();if(t==='food')foodRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
+function oft(t){ try{setTimeout(kpGoalWatch,0);}catch(e){} if(t==='orders') setTimeout(ofSyncStickyTop,0); if(t==='new' && window.ofInstoreOnly) ofApplyInstoreLock(); document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='drivers')ofDriversRender();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='batch')btSetMode(btMode);if(t==='new')ofRenderStock();if(t==='stock')ofStockCatalog();if(t==='lala')ofRenderLala();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='attend')ofAttRender();if(t==='bills')billsRender();if(t==='food')foodRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
 function custBlockToggle(){
   var b=document.getElementById('cust-block-body'), ch=document.getElementById('cust-block-chev');
   if(!b) return;
@@ -5187,6 +5195,129 @@ function btFastSlow(st){
   var sorted=withDays.slice().sort(function(a,b){ return btDoneDays(a)-btDoneDays(b); });
   return {fast:sorted[0], slow:sorted[sorted.length-1]};
 }
+// ── OVERVIEW: every product, not one container ──────────────────────────────
+// Same FIFO ledger, but read per product: what is on hand, how fast it moves right now,
+// how long that lasts, how much is still queued in unopened batches, and how long the
+// finished batches of this product took to sell out. Sorted by "days of stock left", so
+// the top of the list is what has to be reordered next.
+var btMode='one', btAllFilter='panels';
+function btTypeOf(key){
+  var s=(stockItems||[]).find(function(x){ return x && x.code && ofNormCode(x.code)===key; });
+  if(s && s.type) return s.type;
+  var p=(window.QT_PRODUCTS||[]).find(function(x){ return ofNormCode(x.code)===key; });
+  if(p) return p.mat==='PVC'?'pvc':(p.mat==='WPC'?'panel':'acc');
+  return '';
+}
+function btIsPanel(type){ return type==='panel'||type==='pvc'; }
+function btAllStats(){
+  var salesBy=btSalesByCode(), arrBy=btArrivalsByCode();
+  var keys={};
+  (stockItems||[]).forEach(function(s){ if(s&&s.code) keys[ofNormCode(s.code)]=1; });
+  Object.keys(arrBy).forEach(function(k){ keys[k]=1; });
+  var cut30=new Date(); cut30.setDate(cut30.getDate()-30); var c30=cut30.toISOString().slice(0,10);
+  var rows=Object.keys(keys).map(function(k){
+    var led=btLots(k, salesBy, arrBy), sales=salesBy[k]||[];
+    var speed=btRecentRate(sales);
+    var stock=led.stockNow==null?0:led.stockNow;
+    var lots=led.lots.filter(function(l){ return !l.open; });
+    var done=lots.filter(function(l){ return l.out; }).map(function(l){ return btDayIdx(l.out,l.date)+1; });
+    var waiting=lots.filter(function(l){ return l.first==null; }).reduce(function(a,l){ return a+l.left; },0);
+    var last=lots.length?lots[lots.length-1]:null;
+    return {
+      key:k, code:(last&&last.code)||k, type:btTypeOf(k),
+      stock:stock, speed:Math.round(speed*10)/10,
+      cover: speed>0 ? Math.round(stock/speed) : null,       // days of stock left
+      sold30: sales.reduce(function(a,s){ return a+(s.date>=c30?s.qty:0); },0),
+      soldAll: sales.reduce(function(a,s){ return a+s.qty; },0),
+      lots:lots.length, waiting:waiting,
+      avgOut: done.length ? Math.round(done.reduce(function(a,d){return a+d;},0)/done.length) : null,
+      bestOut: done.length ? Math.min.apply(null,done) : null,
+      lastArr: last?last.date:'', lastNo: last?last.cno:''
+    };
+  });
+  rows.sort(function(a,b){
+    var ca=(a.cover==null?1e9:a.cover), cb=(b.cover==null?1e9:b.cover);
+    if(ca!==cb) return ca-cb;
+    return b.stock-a.stock;
+  });
+  return rows;
+}
+function btSetMode(m){
+  btMode=m;
+  var one=document.getElementById('btm-one'), all=document.getElementById('btm-all');
+  [[one,m==='one'],[all,m==='all']].forEach(function(p){
+    if(!p[0]) return;
+    p[0].style.background=p[1]?'var(--blue-bg)':'var(--bg2)';
+    p[0].style.borderColor=p[1]?'var(--blue)':'var(--border)';
+    p[0].style.color=p[1]?'var(--blue)':'var(--text2)';
+  });
+  var pick=document.getElementById('bt-pick'); if(pick) pick.style.display=(m==='one')?'':'none';
+  var f=document.getElementById('bt-allfilter'); if(f) f.style.display=(m==='all')?'grid':'none';
+  btRender();
+}
+function btSetAllFilter(f){ btAllFilter=f; btRender(); }
+function btRenderAll(){
+  var rows=btAllStats().filter(function(r){ return btAllFilter==='all' ? true : btIsPanel(r.type); });
+  ['panels','all'].forEach(function(f){
+    var b=document.getElementById('btf-'+f); if(!b) return;
+    var on=(btAllFilter===f);
+    b.style.background=on?'var(--blue-bg)':'var(--bg2)';
+    b.style.borderColor=on?'var(--blue)':'var(--border)';
+    b.style.color=on?'var(--blue)':'var(--text2)';
+  });
+  if(!rows.length) return '<div class="empty" style="padding:1rem;font-size:13px">ไม่มีข้อมูล / no data</div>';
+  var totStock=rows.reduce(function(a,r){return a+r.stock;},0);
+  var totWait=rows.reduce(function(a,r){return a+r.waiting;},0);
+  var tot30=rows.reduce(function(a,r){return a+r.sold30;},0);
+  var urgent=rows.filter(function(r){ return r.cover!=null && r.cover<45; });
+  var box=function(l,v,col){ return '<div style="flex:1;min-width:80px"><div style="font-size:10px;font-weight:700;color:var(--text2);letter-spacing:.04em">'+l+'</div>'
+    +'<div style="font-size:16px;font-weight:800;color:'+(col||'var(--text)')+'">'+v+'</div></div>'; };
+  var coverCol=function(c){ return c==null?'var(--text2)':(c<30?'#dc2626':(c<60?'#b45309':'#166534')); };
+  return '<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;padding:10px 12px;margin-bottom:8px">'
+      +box('สินค้า / PRODUCTS', rows.length.toLocaleString())
+      +box('สต็อก / IN STOCK', totStock.toLocaleString())
+      +box('ขาย 30 วัน / SOLD 30d', tot30.toLocaleString(),'#16a34a')
+      +box('รอในตู้ / QUEUED', totWait.toLocaleString())
+      +box('ต้องสั่งด่วน / REORDER', urgent.length.toLocaleString()+' <span style="font-size:12px">&lt;45 วัน</span>', urgent.length?'#dc2626':'var(--text)')
+    +'</div>'
+    +'<div class="card" style="padding:0;margin-bottom:8px;overflow-x:auto">'
+      +'<table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<thead><tr style="background:var(--bg2)">'
+        +'<th style="text-align:left;padding:6px 8px">รหัส / Code</th>'
+        +'<th style="text-align:right;padding:6px 8px">สต็อก</th>'
+        +'<th style="text-align:right;padding:6px 8px">ขาย/วัน<div style="font-weight:400;font-size:9px">60 วัน</div></th>'
+        +'<th style="text-align:right;padding:6px 8px">ขาย 30 วัน</th>'
+        +'<th style="text-align:right;padding:6px 8px">พอใช้อีก<div style="font-weight:400;font-size:9px">วัน</div></th>'
+        +'<th style="text-align:right;padding:6px 8px">รอในตู้</th>'
+        +'<th style="text-align:right;padding:6px 8px">ตู้/เฉลี่ยหมด</th>'
+        +'<th style="text-align:right;padding:6px 8px">ตู้ล่าสุด</th>'
+      +'</tr></thead><tbody>'
+      +rows.map(function(r){
+        return '<tr style="border-top:1px solid var(--border)">'
+          +'<td style="padding:6px 8px;font-weight:700">'+r.code+(r.type==='pvc'?' <span style="font-size:9px;color:var(--text2)">PVC</span>':'')+'</td>'
+          +'<td style="padding:6px 8px;text-align:right">'+r.stock.toLocaleString()+'</td>'
+          +'<td style="padding:6px 8px;text-align:right">'+r.speed.toLocaleString()+'</td>'
+          +'<td style="padding:6px 8px;text-align:right;color:#16a34a;font-weight:700">'+r.sold30.toLocaleString()+'</td>'
+          +'<td style="padding:6px 8px;text-align:right;font-weight:800;color:'+coverCol(r.cover)+'">'+(r.cover==null?'—':r.cover.toLocaleString())+'</td>'
+          +'<td style="padding:6px 8px;text-align:right;color:var(--text2)">'+(r.waiting?r.waiting.toLocaleString():'—')+'</td>'
+          +'<td style="padding:6px 8px;text-align:right;color:var(--text2)">'+r.lots+(r.avgOut!=null?(' / '+r.avgOut+' วัน'):'')+'</td>'
+          +'<td style="padding:6px 8px;text-align:right;color:var(--text2)">'+(r.lastArr?(r.lastArr.slice(5)+(r.lastNo?' · No.'+r.lastNo:'')):'—')+'</td>'
+        +'</tr>';
+      }).join('')
+      +'</tbody></table></div>'
+    +'<div class="card" style="padding:10px 12px">'
+      +'<div style="font-size:12px;font-weight:800;margin-bottom:4px">📝 สรุป / summary</div>'
+      +'<div style="font-size:12px;line-height:1.8">'
+      +(urgent.length
+        ? urgent.slice(0,12).map(function(r){ return '• <b>'+r.code+'</b>: เหลือ '+r.stock.toLocaleString()+' · ขาย '+r.speed+'/วัน → พอใช้อีก <b>'+r.cover+' วัน</b>'
+            +(r.waiting?(' · มีในตู้อีก '+r.waiting.toLocaleString()):' · <b style="color:#dc2626">ไม่มีในตู้ / nothing on the way</b>')
+            +(r.avgOut!=null?(' · ตู้ก่อน ๆ หมดใน ~'+r.avgOut+' วัน'):''); }).join('<br>')
+        : 'ทุกอย่างพอใช้เกิน 45 วัน / everything covers more than 45 days')
+      +'</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:6px">* พอใช้อีก = สต็อก ÷ ความเร็วขาย 60 วันล่าสุด · รอในตู้ = ของที่มาถึงแล้วแต่ยังไม่ถึงคิวขาย (FIFO)'
+      +'<br>Days left = stock ÷ selling speed of the last 60 days. "Queued" is stock that arrived but has not started selling yet (FIFO).</div>'
+    +'</div>';
+}
 function btFillPicker(){
   var sel=document.getElementById('bt-pick'); if(!sel) return;
   var list=btContainers(), keep=sel.value;
@@ -5196,6 +5327,7 @@ function btFillPicker(){
 }
 function btRender(){
   var body=document.getElementById('bt-body'); if(!body) return;
+  if(btMode==='all'){ body.innerHTML=btRenderAll(); return; }
   btFillPicker();
   var id=(document.getElementById('bt-pick')||{}).value;
   var c=(containerLog||[]).find(function(x){return x.id===id;});
@@ -5252,7 +5384,65 @@ function btRender(){
       +(st.unattr>0?' ⚠ '+st.unattr.toLocaleString()+' pcs were sold with no container to book them against — stock from before the records began.':'')+'</div>'
     +'</div>';
 }
+var BT_PRINT_CSS='*{box-sizing:border-box;margin:0;padding:0}@page{size:A4 portrait;margin:10mm}'
+  +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;font-size:10pt}'
+  +'h1{font-size:14pt;border-bottom:2px solid #111;padding-bottom:5px;margin-bottom:6px}'
+  +'.grand{display:flex;gap:8px;margin:6px 0}'
+  +'.gbox{flex:1;border:1.5px solid #111;border-radius:4px;padding:5px 8px;text-align:center}'
+  +'.gbox .l{font-size:8pt;color:#555;font-weight:700}.gbox .v{font-size:13pt;font-weight:800}'
+  +'table{width:100%;border-collapse:collapse;margin-top:8px}'
+  +'th,td{border:1px solid #999;padding:3px 5px;font-size:9.5pt}'
+  +'th{background:#f1f5f9;font-size:8.5pt;text-transform:uppercase}'
+  +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+  +'.r{text-align:right}.sum{margin-top:10px;font-size:9.5pt;line-height:1.7}'
+  +'.note{margin-top:8px;font-size:8.5pt;color:#555}.red{color:#dc2626;font-weight:800}.amb{color:#b45309;font-weight:700}';
+function btPrintWin(title, bodyHTML){
+  var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+title+'</title><style>'+BT_PRINT_CSS+'</style></head><body>'
+    +bodyHTML+'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(full); w.document.close(); w.focus();
+}
+// Overview print: every product, most urgent first.
+function btPrintAll(){
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  var rows=btAllStats().filter(function(r){ return btAllFilter==='all' ? true : btIsPanel(r.type); });
+  if(!rows.length){ alert('ไม่มีข้อมูล / no data'); return; }
+  var now=new Date();
+  var totStock=rows.reduce(function(a,r){return a+r.stock;},0);
+  var tot30=rows.reduce(function(a,r){return a+r.sold30;},0);
+  var totWait=rows.reduce(function(a,r){return a+r.waiting;},0);
+  var urgent=rows.filter(function(r){ return r.cover!=null && r.cover<45; });
+  btPrintWin('Products overview '+now.toISOString().slice(0,10),
+     '<h1>📊 ภาพรวมสินค้า / Product overview — '+(btAllFilter==='all'?'ทุกอย่าง / everything':'แผ่นผนัง / panels')
+      +' <span style="font-size:9pt;font-weight:400">'+now.toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'})+'</span></h1>'
+    +'<div class="grand">'
+      +'<div class="gbox"><div class="l">สินค้า / PRODUCTS</div><div class="v">'+rows.length+'</div></div>'
+      +'<div class="gbox"><div class="l">สต็อก / IN STOCK</div><div class="v">'+totStock.toLocaleString('en-US')+'</div></div>'
+      +'<div class="gbox"><div class="l">ขาย 30 วัน / SOLD 30d</div><div class="v">'+tot30.toLocaleString('en-US')+'</div></div>'
+      +'<div class="gbox"><div class="l">รอในตู้ / QUEUED</div><div class="v">'+totWait.toLocaleString('en-US')+'</div></div>'
+      +'<div class="gbox"><div class="l">สั่งด่วน / REORDER</div><div class="v">'+urgent.length+'</div></div>'
+    +'</div>'
+    +'<table><thead><tr><th>รหัส / Code</th><th class="r">สต็อก</th><th class="r">ขาย/วัน</th><th class="r">ขาย 30 วัน</th>'
+      +'<th class="r">พอใช้อีก (วัน)</th><th class="r">รอในตู้</th><th class="r">ตู้ / เฉลี่ยหมด</th><th class="r">ตู้ล่าสุด</th></tr></thead><tbody>'
+    +rows.map(function(r){
+      var cls=r.cover==null?'':(r.cover<30?'red':(r.cover<60?'amb':''));
+      return '<tr><td><b>'+esc(r.code)+'</b></td><td class="r">'+r.stock.toLocaleString('en-US')+'</td>'
+        +'<td class="r">'+r.speed.toLocaleString('en-US')+'</td><td class="r">'+r.sold30.toLocaleString('en-US')+'</td>'
+        +'<td class="r '+cls+'">'+(r.cover==null?'—':r.cover.toLocaleString('en-US'))+'</td>'
+        +'<td class="r">'+(r.waiting?r.waiting.toLocaleString('en-US'):'—')+'</td>'
+        +'<td class="r">'+r.lots+(r.avgOut!=null?(' / '+r.avgOut+' d'):'')+'</td>'
+        +'<td class="r">'+(r.lastArr?esc(r.lastArr+(r.lastNo?' · No.'+r.lastNo:'')):'—')+'</td></tr>';
+    }).join('')
+    +'</tbody></table>'
+    +(urgent.length?'<div class="sum"><b>⚠ ต้องสั่งด่วน / reorder first</b><br>'
+      +urgent.slice(0,15).map(function(r){ return '• '+esc(r.code)+': เหลือ '+r.stock.toLocaleString('en-US')+' · '+r.speed+'/วัน → '+r.cover+' วัน'
+        +(r.waiting?(' · in containers '+r.waiting.toLocaleString('en-US')):' · nothing on the way')
+        +(r.avgOut!=null?(' · previous batches ~'+r.avgOut+' d'):''); }).join('<br>')+'</div>':'')
+    +'<div class="note">* พอใช้อีก = สต็อก ÷ ความเร็วขาย 60 วันล่าสุด · รอในตู้ = มาถึงแล้วแต่ยังไม่ถึงคิว (FIFO) / days left = stock ÷ selling speed of the last 60 days; queued = arrived but not yet in turn (FIFO).</div>');
+}
 function btPrint(){
+  if(btMode==='all'){ btPrintAll(); return; }
   var id=(document.getElementById('bt-pick')||{}).value;
   var c=(containerLog||[]).find(function(x){return x.id===id;});
   var st=btStats(c);
