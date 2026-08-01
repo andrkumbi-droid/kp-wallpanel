@@ -2705,15 +2705,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div style="font-size:12px;font-weight:700;margin-bottom:5px">Columns / คอลัมน์ <span style="font-weight:400;color:var(--text2)">— auto-detected, change if wrong</span></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
       <div><label class="fl" style="margin-top:0">Product code</label><select id="acinv-c-code" onchange="acInvPreview()"></select></div>
-      <div><label class="fl" style="margin-top:0">Quantity (pcs)</label><select id="acinv-c-qty" onchange="acInvPreview()"></select></div>
-      <div><label class="fl" style="margin-top:0">Unit price</label><select id="acinv-c-price" onchange="acInvPreview()"></select></div>
-      <div><label class="fl" style="margin-top:0">Line amount <span style="font-size:10px;color:var(--text2)">(optional)</span></label><select id="acinv-c-amt" onchange="acInvPreview()"></select></div>
-      <div><label class="fl" style="margin-top:0">Pcs per carton <span style="font-size:10px;color:var(--text2)">(column)</span></label><select id="acinv-c-ppc" onchange="acInvPreview()"></select></div>
+      <div><label class="fl" style="margin-top:0">Total pieces</label><select id="acinv-c-pcs" onchange="acInvPreview()"></select></div>
+      <div><label class="fl" style="margin-top:0">Line amount</label><select id="acinv-c-amt" onchange="acInvPreview()"></select></div>
+      <div><label class="fl" style="margin-top:0">Unit price <span style="font-size:10px;color:var(--text2)">(optional)</span></label><select id="acinv-c-price" onchange="acInvPreview()"></select></div>
+      <div><label class="fl" style="margin-top:0">× pcs per carton <span style="font-size:10px;color:var(--text2)">(column)</span></label><select id="acinv-c-ppc" onchange="acInvPreview()"></select></div>
       <div><label class="fl" style="margin-top:0">First data row</label><input type="number" min="1" id="acinv-row1" oninput="acInvPreview()"></div>
-    </div>
-    <div style="margin-top:6px">
-      <label class="fl" style="margin-top:0">Pcs per carton — same for all lines <span style="font-size:10px;color:var(--text2)">(only if there is no column above)</span></label>
-      <input type="number" min="1" id="acinv-ppc" placeholder="leave empty if the quantity is already in pieces" oninput="acInvPreview()" style="width:100%;box-sizing:border-box">
+      <div><label class="fl" style="margin-top:0">× pcs per carton <span style="font-size:10px;color:var(--text2)">(same for all)</span></label><input type="number" min="1" id="acinv-ppc" placeholder="—" oninput="acInvPreview()"></div>
     </div>
   </div>
 
@@ -21971,9 +21968,10 @@ function acLoanDel(id){
 var _acInvAoA = null;     // raw sheet as array-of-arrays
 var _acInvLines = [];     // mapped + priced lines shown in the preview
 var _acInvCodeFix = {};   // rowIndex → code the user corrected it to
+var _acInvMeta = {};      // supplier / currency / balance read out of the sheet
 
 function acInvOpen(){
-  _acInvAoA=null; _acInvLines=[]; _acInvCodeFix={};
+  _acInvAoA=null; _acInvLines=[]; _acInvCodeFix={}; _acInvMeta={};
   ['acinv-supplier','acinv-no','acinv-rate','acinv-freight','acinv-duty','acinv-other','acinv-ppc'].forEach(function(id){
     var e=document.getElementById(id); if(e) e.value='';
   });
@@ -22050,69 +22048,193 @@ function acInvFile(input){
   reader.onerror=function(){ st.style.color='#dc2626'; st.textContent='Could not read the file.'; };
   if(isCSV) reader.readAsText(f, 'UTF-8'); else reader.readAsArrayBuffer(f);
 }
-// Guess the header row and the four columns, then let the user fix it.
+// ── COLUMN DETECTION ───────────────────────────────────────────────────────
+// Header names alone are not trustworthy. The real Linyi proforma calls the
+// product code column "Number" (which reads like a quantity) and has an empty
+// column literally headed "ITEM". So the columns are found by ARITHMETIC:
+// the triple where amount = quantity × price, verified row by row. Whatever
+// column pair multiplies into the quantity (cartons × pack) proves that the
+// quantity is already a piece count. Headers are only a tie-breaker.
+function acInvIsNum(v){
+  if(v===''||v==null) return false;
+  if(typeof v==='number') return isFinite(v);
+  var s=String(v).trim();
+  return s!=='' && /^-?[\d.,\s]+$/.test(s) && isFinite(acN(s));
+}
+function acInvIsTxt(v){ return v!=null && String(v).trim()!=='' && !acInvIsNum(v); }
+function acInvNum(v){ return acInvIsNum(v) ? acN(v) : null; }
+var AC_INV_STOP=/^(total|sub[- ]?total|grand[- ]?total|sum|deposit|balance|remark|note|说明|备注|合计|总计|小计|定金|余款)/i;
+
+function acInvDetect(aoa){
+  var W=aoa.reduce(function(m,r){ return Math.max(m,(r||[]).length); },0);
+  var best=null;
+  // hr = -1 covers a file with no header row at all (data from the very first line).
+  for(var hr=-1; hr<Math.min(25,aoa.length); hr++){
+    var head = hr>=0 ? (aoa[hr]||[]) : [];
+    if(hr>=0 && head.filter(acInvIsTxt).length<3) continue;   // a header row is mostly words
+    // Data rows: everything below until the first TOTAL / DEPOSIT / BALANCE line.
+    var rows=[];
+    for(var i=hr+1;i<aoa.length;i++){
+      var r=aoa[i]||[], firstTxt='';
+      for(var c=0;c<W;c++){ if(acInvIsTxt(r[c])){ firstTxt=String(r[c]).trim(); break; } }
+      if(AC_INV_STOP.test(firstTxt)) break;
+      if(r.filter(function(v){ return v!=null&&String(v).trim()!==''; }).length>=2) rows.push(r);
+      if(rows.length>500) break;
+    }
+    if(rows.length<2) continue;
+    // Columns that actually hold numbers in the data
+    var numCols=[];
+    for(var c2=0;c2<W;c2++){
+      var n=0; rows.forEach(function(r){ if(acInvIsNum(r[c2])) n++; });
+      if(n>=Math.max(2, rows.length*0.4)) numCols.push(c2);
+    }
+    // Find every a = x × y relation that holds across the rows
+    var rels=[];
+    numCols.forEach(function(a){
+      numCols.forEach(function(x){ if(x===a) return;
+        numCols.forEach(function(y){ if(y===a||y<=x) return;
+          var hit=0, seen=0;
+          rows.forEach(function(r){
+            var A=acInvNum(r[a]), X=acInvNum(r[x]), Y=acInvNum(r[y]);
+            if(A==null||X==null||Y==null||A===0||X===0||Y===0) return;
+            seen++;
+            if(Math.abs(A-X*Y) <= Math.max(0.02, Math.abs(A)*0.005)) hit++;
+          });
+          if(seen>=2 && hit>=Math.max(2, seen*0.7)) rels.push({a:a,x:x,y:y,hit:hit,seen:seen});
+        });
+      });
+    });
+    if(!rels.length) continue;
+    rels.sort(function(p,q){ return q.hit-p.hit; });
+    // The money relation is the one whose product column holds the largest values
+    // (an amount is bigger than a piece count only sometimes, so prefer the
+    // relation that a "price"/"amount" header confirms, else the most hits).
+    var hTxt=function(c){ return String(head[c]==null?'':head[c]).replace(/\s+/g,' ').trim(); };
+    var isPriceH=function(c){ return /price|单价|rate/i.test(hTxt(c)); };
+    var isAmtH  =function(c){ return /amount|金额|total|value/i.test(hTxt(c)); };
+    var money=null;
+    for(var k=0;k<rels.length;k++){
+      var R=rels[k];
+      if(isAmtH(R.a) && (isPriceH(R.x)||isPriceH(R.y))){ money=R; break; }
+    }
+    if(!money) for(var k2=0;k2<rels.length;k2++){ if(isPriceH(rels[k2].x)||isPriceH(rels[k2].y)){ money=rels[k2]; break; } }
+    if(!money) money=rels[0];
+    // Of the two factors, the price is the one with decimals / smaller values.
+    var score=function(c){
+      var dec=0, sum=0, n=0;
+      rows.forEach(function(r){ var v=acInvNum(r[c]); if(v==null) return; n++; sum+=Math.abs(v); if(Math.abs(v-Math.round(v))>1e-9) dec++; });
+      return {dec:n?dec/n:0, avg:n?sum/n:0};
+    };
+    var sx=score(money.x), sy=score(money.y);
+    var priceCol, qtyCol;
+    if(isPriceH(money.x)||isPriceH(money.y)) { priceCol = isPriceH(money.x)?money.x:money.y; }
+    else if(sx.dec!==sy.dec) priceCol = sx.dec>sy.dec ? money.x : money.y;
+    else priceCol = sx.avg<sy.avg ? money.x : money.y;
+    qtyCol = (priceCol===money.x) ? money.y : money.x;
+    // Is the quantity already a piece count? It is when some other pair
+    // multiplies into it — cartons × pack = pieces.
+    var pcsCol=qtyCol, viaCtn=false;
+    rels.forEach(function(R){ if(R.a===qtyCol && R!==money) viaCtn=true; });
+    // Otherwise: if a column equals qty × something, THAT column is the pieces.
+    if(!viaCtn) rels.forEach(function(R){
+      if(R===money) return;
+      if((R.x===qtyCol||R.y===qtyCol) && R.a!==money.a && pcsCol===qtyCol){ pcsCol=R.a; viaCtn=true; }
+    });
+    // Still no piece count: the invoice prices by carton and keeps the pieces per
+    // carton in its own column ("PCS/CTN", "PACK"). Then pieces = qty × that column.
+    var packCol=null;
+    if(!viaCtn){
+      for(var pc=0; pc<W; pc++){
+        if(pc===qtyCol||pc===priceCol||pc===money.a) continue;
+        if(!/pcs?\s*[\/\-]?\s*(ctn|carton|box)|per\s*(ctn|carton|box)|\bpack(ing)?\b|每箱|装箱/i.test(hTxt(pc))) continue;
+        var okv=0, nv=0;
+        rows.forEach(function(r){ var v=acInvNum(r[pc]); if(v==null) return; nv++; if(v>=2 && Math.abs(v-Math.round(v))<1e-9) okv++; });
+        if(nv>=2 && okv>=nv*0.8){ packCol=pc; break; }
+      }
+    }
+    // Product code: mostly text, filled on most data rows, leftmost wins.
+    var codeCol=null, codeScore=-1;
+    for(var c3=0;c3<W;c3++){
+      var t=0; rows.forEach(function(r){ if(acInvIsTxt(r[c3])) t++; });
+      var ratio=t/rows.length;
+      if(ratio<0.5) continue;
+      var s=ratio*100 - c3;                                   // prefer the left
+      if(/code|item|model|sku|product|number|no\.?$|品名|型号|货号/i.test(hTxt(c3))) s+=40;
+      if(/desc|size|color|规格|颜色/i.test(hTxt(c3))) s-=25;   // description-ish, not a code
+      if(s>codeScore){ codeScore=s; codeCol=c3; }
+    }
+    var sc=money.hit + (codeCol!=null?5:0) + rows.length*0.1 + (hr>=0?3:0);
+    if(!best || sc>best.sc) best={sc:sc, headerRow:hr, code:codeCol, pcs:pcsCol, pack:packCol, amt:money.a, price:priceCol, qty:qtyCol, rows:rows.length, viaCtn:viaCtn, W:W};
+  }
+  return best;
+}
+// Pull supplier, currency and the open balance straight out of the sheet.
+function acInvMeta(aoa){
+  var out={supplier:'', currency:'', balance:0, deposit:0, no:''};
+  var flat=[];
+  aoa.slice(0,40).forEach(function(r,ri){ (r||[]).forEach(function(v,ci){ if(v!=null&&String(v).trim()!=='') flat.push({r:ri,c:ci,v:String(v).replace(/\s+/g,' ').trim(),raw:v}); }); });
+  // Supplier = the first long text line at the very top
+  for(var i=0;i<flat.length;i++){
+    var t=flat[i].v;
+    if(flat[i].r>6) break;
+    if(acInvIsTxt(flat[i].raw) && t.length>=6 && t.length<=90 && !/proforma|invoice|buyer|date|contract/i.test(t)){ out.supplier=t; break; }
+  }
+  var all=flat.map(function(f){return f.v;}).join(' | ');
+  var cur=all.match(/\b(USD|RMB|CNY|EUR|THB)\b/i);
+  if(cur) out.currency = /rmb/i.test(cur[1]) ? 'CNY' : cur[1].toUpperCase();
+  var pi=all.match(/(?:P\.?\s?I\.?|invoice|contract)\s*(?:no\.?|number|#)\s*[:：]?\s*([A-Za-z0-9\-\/]{3,20})/i);
+  if(pi) out.no=pi[1];
+  // "BALANCE SHOULD PAY" / "DEPOSIT AMOUNT" — the number on the same row
+  aoa.forEach(function(r){
+    var lbl=''; (r||[]).forEach(function(v){ if(!lbl && acInvIsTxt(v)) lbl=String(v).trim(); });
+    if(!lbl) return;
+    var firstNum=null; (r||[]).forEach(function(v){ if(firstNum==null && acInvIsNum(v)) firstNum=acN(v); });
+    if(firstNum==null) return;
+    if(/balance/i.test(lbl) || /余款|尾款/.test(lbl)) out.balance=firstNum;
+    if(/deposit/i.test(lbl) || /定金/.test(lbl))      out.deposit=firstNum;
+  });
+  return out;
+}
+
+// Guess the header row and the columns, then let the user fix it.
 function acInvAfterParse(name){
   var st=document.getElementById('acinv-status');
   var aoa=_acInvAoA||[];
   if(!aoa.length){ st.style.color='#dc2626'; st.textContent='The file looks empty.'; return; }
   var width=aoa.reduce(function(m,r){ return Math.max(m, (r||[]).length); },0);
-  // Chinese proforma invoices almost always price by CARTON and put the pieces per
-  // carton in their own column ("PCS/CTN"). The order of these tests matters: the
-  // composite header must be claimed by `ppc` before the plain `qty` pattern can
-  // swallow it, and CTN only becomes the quantity when there is no pieces column.
-  var pats={
-    ppc:   /(pcs?|pieces?)\s*[\/\-per]*\s*(ctn|carton|box)|per\s*(ctn|carton|box)|每箱|装箱/i,
-    code:  /\b(code|item|model|art|sku|product|description|desc)\b|品名|型号|货号|规格/i,
-    qty:   /\b(qty|quantity|q'?ty|pcs|pieces|number)\b|数量|件数/i,
-    ctn:   /\b(ctn|ctns|carton|cartons|boxes)\b|箱数|纸箱/i,
-    price: /\b(unit ?price|u\/?price|price|rate)\b|单价/i,
-    amt:   /\b(amount|total|value|sum)\b|金额|总额/i
-  };
-  var best={row:-1, score:0, cols:{}};
-  for(var r=0;r<Math.min(20,aoa.length);r++){
-    var cols={}, sc=0;
-    (aoa[r]||[]).forEach(function(cell,c){
-      var s=String(cell==null?'':cell);
-      if(!s.trim()) return;
-      if(cols.ppc==null   && pats.ppc.test(s))  { cols.ppc=c;   sc++; return; }
-      if(cols.price==null && pats.price.test(s)){ cols.price=c; sc++; return; }
-      if(cols.qty==null   && pats.qty.test(s))  { cols.qty=c;   sc++; return; }
-      if(cols.ctn==null   && pats.ctn.test(s))  { cols.ctn=c;   sc++; return; }
-      if(cols.amt==null   && pats.amt.test(s))  { cols.amt=c;   sc++; return; }
-      if(cols.code==null  && pats.code.test(s)) { cols.code=c;  sc++; return; }
-    });
-    if(sc>best.score) best={row:r, score:sc, cols:cols};
-  }
-  // Quantity in cartons: use the CTN column and multiply by the pieces column.
-  if(best.cols.qty==null && best.cols.ctn!=null) best.cols.qty=best.cols.ctn;
-  // No usable header → fall back to structure: first text column, first two number columns
-  if(best.score<2){
-    var textCol=null, numCols=[];
-    for(var c=0;c<width;c++){
-      var txt=0, num=0;
-      aoa.forEach(function(row){ var v=(row||[])[c]; if(v===''||v==null) return; if(isNaN(acN(v))||String(v).trim()==='') return; if(typeof v==='number'||/^[\d.,\s]+$/.test(String(v))) num++; else txt++; });
-      if(textCol==null && txt>=3) textCol=c;
-      if(num>=3) numCols.push(c);
-    }
-    best={row:0, score:0, cols:{code:textCol==null?0:textCol, qty:numCols[0], price:numCols[1], amt:numCols[2]}};
-  }
+  var d=acInvDetect(aoa);
+  var hdrRow = d ? d.headerRow : 0;
   var opts=function(sel){
     var h='<option value="">— none —</option>';
     for(var c=0;c<width;c++){
-      var hdr=String((aoa[best.row]||[])[c]||'').trim().slice(0,22);
+      var hdr=String((aoa[hdrRow]||[])[c]==null?'':(aoa[hdrRow]||[])[c]).replace(/\s+/g,' ').trim().slice(0,22);
       h+='<option value="'+c+'"'+(sel===c?' selected':'')+'>'+String.fromCharCode(65+(c%26))+(hdr?' · '+_esc(hdr):'')+'</option>';
     }
     return h;
   };
-  document.getElementById('acinv-c-code').innerHTML=opts(best.cols.code);
-  document.getElementById('acinv-c-qty').innerHTML=opts(best.cols.qty);
-  document.getElementById('acinv-c-price').innerHTML=opts(best.cols.price);
-  document.getElementById('acinv-c-amt').innerHTML=opts(best.cols.amt);
-  document.getElementById('acinv-c-ppc').innerHTML=opts(best.cols.ppc);
-  document.getElementById('acinv-row1').value=best.row+2;
+  document.getElementById('acinv-c-code').innerHTML =opts(d?d.code:null);
+  document.getElementById('acinv-c-pcs').innerHTML  =opts(d?d.pcs:null);
+  document.getElementById('acinv-c-amt').innerHTML  =opts(d?d.amt:null);
+  document.getElementById('acinv-c-price').innerHTML=opts(d?d.price:null);
+  document.getElementById('acinv-c-ppc').innerHTML  =opts(d?d.pack:null);
+  document.getElementById('acinv-row1').value=hdrRow+2;
+  document.getElementById('acinv-ppc').value='';
   document.getElementById('acinv-mapwrap').style.display='block';
-  st.style.color='var(--green)';
-  st.textContent='✓ '+name+' — '+aoa.length+' rows read'+(best.score>=2?' · header detected in row '+(best.row+1):' · no header found, please check the columns');
+
+  // Prefill supplier / currency / invoice no. from the sheet itself, but never
+  // overwrite something the user already typed.
+  var meta=acInvMeta(aoa);
+  _acInvMeta=meta;
+  var set=function(id,v){ var e=document.getElementById(id); if(e && v && !String(e.value).trim()) e.value=v; };
+  set('acinv-supplier', meta.supplier);
+  set('acinv-no', meta.no);
+  if(meta.currency){ var cs=document.getElementById('acinv-cur'); if(cs && [].some.call(cs.options,function(o){return o.value===meta.currency;})) { cs.value=meta.currency; acInvCurChanged(); } }
+
+  st.style.color = d ? 'var(--green)' : '#d97706';
+  st.innerHTML = (d?'✓ ':'⚠️ ')+_esc(name)+' — '+aoa.length+' rows read'
+    + (d ? ' · header row '+(d.headerRow+1)+' · '+d.rows+' item rows · columns matched by checking amount = pieces × price'
+         : ' · could not work out the columns automatically, please set them below')
+    + (meta.balance>0 ? '<br><span style="color:var(--text2)">Found in the sheet: balance still to pay '+meta.balance.toLocaleString()+' '+(meta.currency||'')+(meta.deposit>0?' · deposit '+meta.deposit.toLocaleString():'')+'</span>' : '');
   _acInvCodeFix={};
   acInvPreview();
 }
@@ -22123,7 +22245,7 @@ function acInvPreview(){
   var wrap=document.getElementById('acinv-preview'); if(!wrap) return;
   var applyBtn=document.getElementById('acinv-apply');
   if(!_acInvAoA){ wrap.innerHTML=''; if(applyBtn) applyBtn.style.display='none'; return; }
-  var cc=document.getElementById('acinv-c-code').value, cq=document.getElementById('acinv-c-qty').value;
+  var cc=document.getElementById('acinv-c-code').value, cq=document.getElementById('acinv-c-pcs').value;
   var cp=document.getElementById('acinv-c-price').value, ca=document.getElementById('acinv-c-amt').value;
   var cppc=document.getElementById('acinv-c-ppc').value;
   var row1=Math.max(1, parseInt(document.getElementById('acinv-row1').value)||1);
@@ -22131,7 +22253,7 @@ function acInvPreview(){
   var rate=document.getElementById('acinv-cur').value==='THB' ? 1 : acN(document.getElementById('acinv-rate').value);
   var extras=acN(document.getElementById('acinv-freight').value)+acN(document.getElementById('acinv-duty').value)+acN(document.getElementById('acinv-other').value);
 
-  var lines=[];
+  var lines=[], skipped=[];
   for(var i=row1-1;i<_acInvAoA.length;i++){
     var row=_acInvAoA[i]||[];
     var rawCode=String(cc===''?'':(row[+cc]==null?'':row[+cc])).trim();
@@ -22142,15 +22264,16 @@ function acInvPreview(){
     // own TOTAL / subtotal lines — counting them would double the goods value and
     // halve the freight allocated to every piece.
     if(!rawCode) continue;
-    if(/^(total|sub[- ]?total|grand[- ]?total|sum|amount|合计|总计|小计)\b/i.test(rawCode)) continue;
-    if(qty<=0) continue;
+    if(AC_INV_STOP.test(rawCode)) continue;
+    // A named row the app cannot price (no piece count / no money) must not vanish
+    // silently — it would also shrink the base the freight is spread over.
+    if(qty<=0){ if(amt>0||unit>0) skipped.push({raw:rawCode, why:'no piece count'}); continue; }
     if(unit<=0 && amt>0) unit=amt/qty;
-    if(unit<=0) continue;
+    if(unit<=0){ skipped.push({raw:rawCode, why:'no price'}); continue; }
     if(amt<=0) amt=unit*qty;
     // Pieces per carton: the invoice's own column wins over the single manual value.
-    var rowPpc = cppc==='' ? 0 : (parseInt(acN(row[+cppc]))||0);
-    var mult = rowPpc>0 ? rowPpc : (ppc>0 ? ppc : 1);
-    var pcs = qty*mult;
+    var rowPack = cppc==='' ? 0 : (parseInt(acN(row[+cppc]))||0);
+    var pcs = qty*(rowPack>0 ? rowPack : (ppc>0?ppc:1));
     var fixed=_acInvCodeFix[i];
     var code = fixed!=null ? fixed : ofNormCode(rawCode);
     lines.push({i:i, raw:rawCode, code:code, qty:qty, pcs:pcs, unit:unit, amt:amt});
@@ -22196,6 +22319,10 @@ function acInvPreview(){
   h+='</div>';
   h+='<div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.5">Goods '+acB(totalTHB)+' + extras '+acB(extras)+' = <b>'+acB(totalTHB+extras)+'</b> over <b>'+totalPcs.toLocaleString()+' pieces</b>. '
     +'Green = the code already exists in the app · amber = new code, check the spelling. ✕ skips a line (freight rows, subtotals…).</div>';
+  if(skipped.length) h+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:8px 10px;margin-top:6px">'
+    +'<div style="font-size:11px;font-weight:700;color:#92400e">⚠️ '+skipped.length+' row'+(skipped.length!==1?'s':'')+' could not be priced and are NOT included</div>'
+    +'<div style="font-size:11px;color:#a16207;margin-top:2px">'+skipped.map(function(s){ return _esc(s.raw)+' ('+s.why+')'; }).join(', ')
+    +' — their share of the freight is carried by the other lines. Fix the columns above if that is wrong.</div></div>';
   wrap.innerHTML=h;
   if(applyBtn) applyBtn.style.display = (rate>0) ? 'flex' : 'none';
 }
@@ -22215,7 +22342,20 @@ function acInvApply(){
     var old=acN((acctData.cost||{})[k]);
     return k+': '+(old>0?old+' → ':'')+(Math.round(agg[k].cost/agg[k].pcs*100)/100)+' ฿';
   });
-  if(!confirm('Set the purchase cost for '+codes.length+' product'+(codes.length!==1?'s':'')+'?\n\n'+changed.slice(0,15).join('\n')+(changed.length>15?'\n…':''))) return;
+  // Revised invoices arrive under the same PI number ("3实际(2).xlsx"). Replace the
+  // earlier version instead of stacking a second record — the costs overwrite
+  // anyway, so two records would only make the history lie.
+  var no=(document.getElementById('acinv-no').value||'').trim();
+  var prev=(acctData.invoices||[]).filter(function(iv){
+    if(iv.supplier!==sup) return false;
+    return no ? (iv.no||'')===no : (iv.date||'')===(document.getElementById('acinv-date').value||'');
+  });
+  var msg='Set the purchase cost for '+codes.length+' product'+(codes.length!==1?'s':'')+'?\n\n'
+    +changed.slice(0,15).join('\n')+(changed.length>15?'\n…':'');
+  if(prev.length) msg='⚠️ REVISION — this invoice was already imported'+(prev[0].date?' ('+prev[0].date+')':'')
+    +'.\nThe old record is replaced and the costs updated.\n\n'+msg;
+  if(!confirm(msg)) return;
+  if(prev.length) acctData.invoices=(acctData.invoices||[]).filter(function(iv){ return prev.indexOf(iv)<0; });
   if(!acctData.cost) acctData.cost={};
   codes.forEach(function(k){ acctData.cost[k]=Math.round(agg[k].cost/agg[k].pcs*100)/100; });
   if(!acctData.invoices) acctData.invoices=[];
@@ -22233,6 +22373,19 @@ function acInvApply(){
     by:(currentStaffName||''),
     ts:Date.now()
   });
+  // The sheet's own "BALANCE SHOULD PAY" is exactly what A/P needs — offer it
+  // instead of making the owner retype it.
+  var bal=acN(_acInvMeta&&_acInvMeta.balance), rate=acN(document.getElementById('acinv-rate').value)||1;
+  if(bal>0){
+    var balTHB=Math.round(bal*rate);
+    var already=(acctData.ap||[]).some(function(r){ return r.supplier===sup && Math.abs(acN(r.amount)-balTHB)<1; });
+    if(!already && confirm('The invoice still shows a balance of '+bal.toLocaleString()+' '+document.getElementById('acinv-cur').value
+        +' = '+acB(balTHB)+'.\n\nAdd it to Accounts payable?')){
+      if(!acctData.ap) acctData.ap=[];
+      acctData.ap.push({id:'ap'+Date.now(), supplier:sup, amount:balTHB, due:'', paid:false,
+        note:'Balance from invoice '+(no||document.getElementById('acinv-date').value||'')});
+    }
+  }
   acSync();
   acInvClose();
   acRenderData();
