@@ -1824,7 +1824,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="mbox"><div class="mbox-l">Total Panels / แผ่นรวม</div><div class="mbox-v" id="of-sales-panels">0</div><div class="mbox-s">pcs / ชิ้น</div></div>
       <div class="mbox"><div class="mbox-l">Total L-Corner</div><div class="mbox-v" id="of-sales-lcorner">0</div><div class="mbox-s">pcs / ชิ้น</div></div>
       <div class="mbox"><div class="mbox-l">Total Clips / คลิปรวม</div><div class="mbox-v" id="of-sales-clips">0</div><div class="mbox-s">pcs / ชิ้น</div></div>
-      <div class="mbox"><div class="mbox-l">Total Orders / ออเดอร์</div><div class="mbox-v" id="of-sales-orders">0</div><div class="mbox-s">this month</div></div>
+      <div class="mbox" onclick="ofOpenMonthOrders()" title="Show all orders of this month / ดูออเดอร์ทั้งหมดของเดือนนี้" style="cursor:pointer"><div class="mbox-l">Total Orders / ออเดอร์</div><div class="mbox-v" id="of-sales-orders">0</div><div class="mbox-s">this month <i class="ti ti-list-search" style="font-size:11px;vertical-align:-1px"></i></div></div>
       <div class="mbox"><div class="mbox-l">Avg ฿/day / เฉลี่ยต่อวัน</div><div class="mbox-v" id="of-sales-avgrev">0</div><div class="mbox-s" id="of-sales-avgrev-s">฿ per day</div></div>
       <div class="mbox"><div class="mbox-l">Avg orders/day / ออเดอร์ต่อวัน</div><div class="mbox-v" id="of-sales-avgord">0</div><div class="mbox-s">per day / ต่อวัน</div></div>
     </div>
@@ -1889,6 +1889,25 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div id="of-inc-pending"></div>
     <div id="of-inc-history"></div>
   </div></div>
+
+  <!-- ALL ORDERS OF THE SELECTED SALES MONTH (tap the "Total Orders" tile) -->
+  <div class="modal-overlay" id="m-monthorders">
+    <div class="modal" style="max-width:520px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
+        <div style="font-size:16px;font-weight:700" id="mo-title">📋 Orders</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button type="button" onclick="ofPrintMonthOrders()" title="Print / พิมพ์" style="padding:5px 9px;border:none;border-radius:var(--rs);background:#1d4ed8;color:#fff;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-printer"></i></button>
+          <button type="button" onclick="closeMonthOrders()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button>
+        </div>
+      </div>
+      <div style="position:relative;margin-bottom:8px">
+        <i class="ti ti-search" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--text2);font-size:14px;pointer-events:none"></i>
+        <input id="mo-search" type="text" oninput="ofRenderMonthOrders()" placeholder="ค้นหา / search id, customer, zone…" style="width:100%;box-sizing:border-box;padding:8px 8px 8px 30px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px">
+      </div>
+      <div id="mo-sum" style="font-size:12px;font-weight:700;margin-bottom:6px"></div>
+      <div id="mo-list" style="max-height:60vh;overflow-y:auto"></div>
+    </div>
+  </div>
 
   <!-- BATCH / SELL-THROUGH — how fast the products of one container sold (Andre + Nicky) -->
   <div class="view" id="ofv-batch"><div class="sec">
@@ -8137,6 +8156,93 @@ function ofFiltToday(btn){ofTodayOnly_=!ofTodayOnly_;ofFilt_='all';document.quer
 
 // Zone color helper
 function zoneColor(z){return z==='Bangkok'?'#2563eb':z==='Northern'?'#8b5cf6':z==='Northeastern'?'#f59e0b':z==='Eastern'?'#06b6d4':z==='Southern'?'#ec4899':z==='Instore'?'#16a34a':'#6b7280';}
+// ── ALL ORDERS OF THE SALES MONTH ───────────────────────────────────────────
+// The "Total Orders" tile counts every non-cancelled order CREATED in the selected sales
+// month. Tapping it lists exactly those — same filter as the tile, so the list can never
+// disagree with the number above it.
+function ofSalesMonthOrders(){
+  var mk=(typeof ofSalesMonth!=='undefined')?ofSalesMonth:'';
+  return (orders||[]).filter(function(o){
+    if(!o || o.status==='cancelled' || !o.date) return false;
+    var d=new Date((o.date||'')+'T00:00:00'); if(isNaN(d)) return false;
+    return (d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'))===mk;
+  }).sort(function(a,b){
+    if((a.date||'')!==(b.date||'')) return (a.date||'')<(b.date||'')?1:-1;   // newest day first
+    return String(b.id||'').localeCompare(String(a.id||''), undefined, {numeric:true});
+  });
+}
+function _moTotal(o){ return parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0; }
+function ofOpenMonthOrders(){
+  var s=document.getElementById('mo-search'); if(s) s.value='';
+  ofRenderMonthOrders();
+  document.getElementById('m-monthorders').classList.add('open');
+}
+function closeMonthOrders(){ document.getElementById('m-monthorders').classList.remove('open'); }
+function ofRenderMonthOrders(){
+  var all=ofSalesMonthOrders();
+  var q=((document.getElementById('mo-search')||{}).value||'').trim().toLowerCase();
+  var list=q ? all.filter(function(o){
+    return ((o.id||'')+' '+(o.customer||'')+' '+(o.zone||'')+' '+(o.phone||'')+' '+(o.status||'')+' '+(o.panels||'')).toLowerCase().indexOf(q)>=0;
+  }) : all;
+  var t=document.getElementById('mo-title');
+  if(t) t.textContent='📋 '+(typeof ofSalesMonth!=='undefined'?ofSalesMonth:'')+' · '+all.length+' ออเดอร์';
+  var sum=list.reduce(function(a,o){ return a+_moTotal(o); },0);
+  var se=document.getElementById('mo-sum');
+  if(se) se.innerHTML=(q?('พบ / found '+list.length+' · '):'')+'รวม / total <span style="color:var(--green)">'+sum.toLocaleString()+' ฿</span>';
+  var SC={'new':'#dbeafe:#1d4ed8','packing':'#fef3c7:#92400e','ready':'#d1fae5:#065f46','loaded':'#dbeafe:#1d4ed8','shipped':'#e0f2fe:#0369a1','delivered':'#d1fae5:#065f46'};
+  var host=document.getElementById('mo-list'); if(!host) return;
+  host.innerHTML = list.length ? list.map(function(o){
+    var sc=(SC[o.status]||'#f3f4f6:#374151').split(':');
+    return '<div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid var(--border)">'
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+          +'<b style="font-size:13px">'+(o.id||'')+'</b>'
+          +'<span style="font-size:10px;font-weight:700;border-radius:10px;padding:1px 7px;background:'+sc[0]+';color:'+sc[1]+'">'+(o.status||'')+'</span>'
+          +zoneBadge(o.zone)
+        +'</div>'
+        +'<div style="font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(o.customer||'—')+'</div>'
+        +(o.panels&&o.panels!=='—'?'<div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+o.panels+'</div>':'')
+      +'</div>'
+      +'<div style="text-align:right;flex-shrink:0">'
+        +'<div style="font-size:13px;font-weight:800">'+_moTotal(o).toLocaleString()+' ฿</div>'
+        +'<div style="font-size:11px;color:var(--text2)">'+(o.date||'').slice(5)+'</div>'
+      +'</div>'
+    +'</div>';
+  }).join('') : '<div class="empty" style="padding:1rem;font-size:13px">ไม่พบออเดอร์ / no orders</div>';
+}
+function ofPrintMonthOrders(){
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  var list=ofSalesMonthOrders();
+  if(!list.length){ alert('ไม่มีออเดอร์ / no orders'); return; }
+  var sum=list.reduce(function(a,o){ return a+_moTotal(o); },0);
+  var byZone={}; list.forEach(function(o){ var z=o.zone||'—'; byZone[z]=(byZone[z]||0)+1; });
+  var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Orders '+esc(ofSalesMonth)+'</title><style>'
+    +'*{box-sizing:border-box;margin:0;padding:0}@page{size:A4 portrait;margin:10mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;font-size:10pt}'
+    +'h1{font-size:14pt;border-bottom:2px solid #111;padding-bottom:5px;margin-bottom:4px}'
+    +'.sub{font-size:9.5pt;color:#444;margin-bottom:6px}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #999;padding:3px 5px;font-size:9pt}'
+    +'th{background:#f1f5f9;font-size:8.5pt;text-transform:uppercase}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.r{text-align:right}.c{text-align:center}tfoot td{background:#f1f5f9;font-weight:800}'
+    +'</style></head><body>'
+    +'<h1>📋 ออเดอร์เดือน / Orders '+esc(ofSalesMonth)+' — KP Wallpanel</h1>'
+    +'<div class="sub">'+list.length+' ออเดอร์ · รวม '+sum.toLocaleString('en-US')+' ฿ · '
+      +Object.keys(byZone).map(function(z){ return esc(z)+': '+byZone[z]; }).join(' · ')+'</div>'
+    +'<table><thead><tr><th class="c">#</th><th>วันที่ / Date</th><th>เลขที่ / Order</th><th>ลูกค้า / Customer</th>'
+      +'<th>โซน / Zone</th><th>สถานะ / Status</th><th class="r">ยอด / Total</th></tr></thead><tbody>'
+    +list.map(function(o,i){
+      return '<tr><td class="c">'+(i+1)+'</td><td>'+esc(o.date||'')+'</td><td><b>'+esc(o.id||'')+'</b></td>'
+        +'<td>'+esc(o.customer||'')+'</td><td>'+esc(o.zone||'')+'</td><td>'+esc(o.status||'')+'</td>'
+        +'<td class="r">'+_moTotal(o).toLocaleString('en-US')+'</td></tr>';
+    }).join('')
+    +'</tbody><tfoot><tr><td colspan="6" class="r">รวม / Total</td><td class="r">'+sum.toLocaleString('en-US')+' ฿</td></tr></tfoot></table>'
+    +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(full); w.document.close(); w.focus();
+}
 function zoneBadge(z){if(!z)return '';return '<span style="background:'+zoneColor(z)+'22;color:'+zoneColor(z)+';border-radius:10px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:4px">'+z+'</span>';}
 function ofRenderInc() {
   var pEl = document.getElementById('of-inc-pending');
