@@ -4908,12 +4908,13 @@ function ofNormCode(code){
   var m;
   // K-PVC is the only "K-P…" family, so any two-letter salad after the P (K-PCV-10,
   // K-PVD-09, KPVC9 …) is a typo of it and folds onto the correct code.
+  c=c.replace(/[_.]/g,'-');          // KP_036 / K.PVC.09 are the same typing slip as a dash
   if((m=c.match(/^K-?P[A-Z]{2}-?(\d+)$/))) return 'K-PVC-'+pad(m[1],2);
   if((m=c.match(/^L-?P-?(\d+)$/)))   return 'L-P-'+pad(m[1],2);
-  if((m=c.match(/^KP(\d+)$/)))       return 'KP'+pad(m[1],3);
-  if((m=c.match(/^L(\d+)$/)))        return 'L'+pad(m[1],2);
-  if((m=c.match(/^T(\d+)$/)))        return 'T'+pad(m[1],2);
-  if((m=c.match(/^U(\d+)$/)))        return 'U'+pad(m[1],2);
+  if((m=c.match(/^KP-?(\d+)$/)))     return 'KP'+pad(m[1],3);
+  if((m=c.match(/^L-?(\d+)$/)))      return 'L'+pad(m[1],2);
+  if((m=c.match(/^T-?(\d+)$/)))      return 'T'+pad(m[1],2);
+  if((m=c.match(/^U-?(\d+)$/)))      return 'U'+pad(m[1],2);
   return c;
 }
 // Every product we HAVE or ever HAD — for the yearly stock count: the stock list (even
@@ -12845,10 +12846,54 @@ function closePhotoLightbox(){
 //  Becomes "ready" when all product codes are in stock (container arrived).
 // ════════════════════════════════════════════════════════════
 var PO_PRODT = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1,clip:1,clips:1};
+// Grade A on hand per product, keyed by the NORMALISED code — KP36/KP036, L52/L052 and
+// LP7/LP07/L-P-007 are one product, so two stock rows for the same thing are added up.
+// Grade B (damaged) is deliberately left out: a pre-order must not go "ready" on scrap.
+function poStockMap(){
+  var m={};
+  (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
+    if(!s||!s.code) return;
+    var k=ofNormCode(s.code);
+    m[k]=(m[k]||0)+(parseInt(s.qty)||0);
+  });
+  return m;
+}
+// What the pre-order needs vs. what is there: [{code, need, have, short}], one row per
+// product (several lines with the same code are summed).
+function poNeeds(po){
+  var need={}, seq=[];
+  (((po||{}).lineItems)||[]).forEach(function(li){
+    if(!li || !PO_PRODT[li.type] || !li.code) return;
+    var k=ofNormCode(li.code);
+    if(need[k]==null){ need[k]=0; seq.push({key:k, code:li.code}); }
+    need[k]+=parseInt(li.qty)||0;
+  });
+  var stock=poStockMap();
+  return seq.map(function(o){
+    var n=need[o.key]||0, have=stock[o.key]||0;
+    return { code:o.code, key:o.key, need:n, have:have, short:Math.max(0,n-have) };
+  });
+}
+// Ready only when EVERY product is fully covered by Grade A stock. It used to be enough
+// that the code existed with 1 piece, so a pre-order for 95 panels went green on 16.
 function poReady(po){
-  var codes=(po.lineItems||[]).filter(function(li){return PO_PRODT[li.type];}).map(function(li){return li.code;});
-  if(!codes.length) return false;
-  return codes.every(function(c){ var s=(typeof stockItems!=='undefined'?stockItems.find(function(x){return x.code===c;}):null); return s && (parseInt(s.qty)||0)>0; });
+  var rows=poNeeds(po);
+  if(!rows.length) return false;
+  if(!rows.some(function(r){ return r.need>0; })) return false;
+  return rows.every(function(r){ return r.have>=r.need; });
+}
+function poShortTotal(po){ return poNeeds(po).reduce(function(a,r){ return a+r.short; },0); }
+// Per-product stock line under the pre-order's items: 16/95 · ขาด 79
+function poStockLineHTML(po){
+  var rows=poNeeds(po); if(!rows.length) return '';
+  return '<div style="font-size:11px;margin-top:3px;display:flex;flex-wrap:wrap;gap:4px 10px">'
+    +rows.map(function(r){
+      var ok=r.have>=r.need;
+      return '<span style="white-space:nowrap;color:'+(ok?'#166534':'#b45309')+'">'
+        +'<b>'+r.code+'</b> '+r.have.toLocaleString()+'/'+r.need.toLocaleString()
+        +(ok?' ✓':' · ขาด '+r.short.toLocaleString())+'</span>';
+    }).join('')
+    +'</div>';
 }
 function poUpdateBadge(){
   var ready=(preOrders||[]).filter(function(p){return p.status==='open' && poReady(p);}).length;
@@ -13119,7 +13164,7 @@ function poRender(){
     var badge = p.status==='converted' ? '<span class="badge" style="background:var(--green-bg);color:var(--green)">→ '+(p.convertedId||'order')+'</span>'
       : p.status==='cancelled' ? '<span class="badge" style="background:#fee2e2;color:#991b1b">cancelled</span>'
       : ready ? '<span class="badge" style="background:#dcfce7;color:#166534">✅ พร้อม / ready</span>'
-      : '<span class="badge" style="background:#fef3c7;color:#92400e">⏳ waiting stock</span>';
+      : '<span class="badge" style="background:#fef3c7;color:#92400e">⏳ ขาด '+poShortTotal(p).toLocaleString()+' / short</span>';
     var actions='';
     if(p.status==='open'){
       actions='<div style="display:flex;gap:6px;margin-top:8px">'
@@ -13138,6 +13183,7 @@ function poRender(){
       +'<div style="font-size:12px;color:var(--text2)">'+(p.phone?'📞 '+p.phone+'  ':'')+(p.contact?'💬 '+p.contact:'')+'</div>'
       +(p.address?'<div style="font-size:12px;color:var(--text2)">📍 '+p.address+'</div>':'')
       +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:3px"><span style="font-size:13px">'+prodStr(p)+'</span><b style="font-size:14px;white-space:nowrap;margin-left:8px">'+poTotal(p).toLocaleString()+' ฿</b></div>'
+      +(p.status==='open'?poStockLineHTML(p):'')
       +((parseInt(p.delivery)||0)||(parseInt(p.clipPacks)||0)?'<div style="font-size:11px;color:var(--text2)">'+((parseInt(p.delivery)||0)?'ค่าส่ง '+p.delivery+'฿ ':'')+((parseInt(p.clipPacks)||0)?'· clip packs '+p.clipPacks:'')+'</div>':'')
       +(function(){
         var dep=parseInt(p.deposit)||0; if(!dep) return '';
