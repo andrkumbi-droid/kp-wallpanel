@@ -7326,6 +7326,21 @@ function ofCreate(){
     var _first=document.getElementById(_missing[0].el); if(_first){ try{_first.focus();}catch(e){} }
     return;
   }
+  // Province vs. address: the quick-paste parser never overwrites a province that was
+  // typed first, so a province picked before pasting survives even when the address says
+  // something else (order #131 went out as นครพนม with an อยุธยา address — the driver
+  // found out on the road). Compare the two and make office confirm.
+  try{
+    var _pvEl=document.getElementById('of-province');
+    var _pvTyped=kpCanonProvince((_pvEl&&_pvEl.value)||'');
+    var _pvAddr=kpCanonProvince(kpExtractProvince((document.getElementById('of-addr')||{}).value||''));
+    if(_pvTyped && _pvAddr && _pvTyped!==_pvAddr){
+      if(!confirm('⚠ จังหวัดไม่ตรงกับที่อยู่ / Province does not match the address\n\n'
+        +'ที่อยู่ / address: '+_pvAddr+'\n'
+        +'ช่องจังหวัด / province field: '+_pvTyped+'\n\n'
+        +'สร้างออเดอร์ต่อไหม? / create the order anyway?')){ try{_pvEl.focus();}catch(e){} return; }
+    }
+  }catch(e){}
   // Duplicate-order guard: warn if an order with the SAME phone was created within
   // the last 7 days (office may be entering the same customer twice). Phone-only —
   // the old check also required an exact product-signature match, which almost never
@@ -18254,6 +18269,28 @@ var KP_PROVINCES=['กรุงเทพมหานคร','สมุทรป�
 // Pull a Thai province out of an address blob. Prefers a match against the
 // canonical list (province usually sits last, before the postal code); falls
 // back to a "จังหวัด/จ." marker for unusual spellings. Returns '' if none.
+// Everyday short forms. Nobody writes "จ.พระนครศรีอยุธยา" on an address — it says
+// "จ.อยุธยา", which matched neither the province list nor the zone map, so Ayutthaya
+// orders got no zone at all and the province had to be typed by hand (that is how #131
+// ended up in นครพนม while the address said อยุธยา).
+var KP_PROV_ALIAS={
+  'อยุธยา':'พระนครศรีอยุธยา','กรุงเทพ':'กรุงเทพมหานคร','กทม':'กรุงเทพมหานคร','บางกอก':'กรุงเทพมหานคร',
+  'โคราช':'นครราชสีมา','อุบล':'อุบลราชธานี','สุราษฎร์':'สุราษฎร์ธานี','สุราษฏร์ธานี':'สุราษฎร์ธานี',
+  'นครศรี':'นครศรีธรรมราช','ประจวบ':'ประจวบคีรีขันธ์','ศรีสะเกส':'ศรีสะเกษ','อยุทธยา':'พระนครศรีอยุธยา',
+  'พระนครศรีอยุธยา':'พระนครศรีอยุธยา'
+  // deliberately NOT aliased: หนองบัว — there are sub-districts called ต.หนองบัว all over
+  // the country, it would drag those addresses into หนองบัวลำภู.
+};
+function kpCanonProvince(p){
+  var t=String(p||'').trim(); if(!t) return '';
+  // Staff sometimes type the marker along with the name ("จ.ปทุมธานี"). The dot or the
+  // space is required — a bare "จ" prefix would eat the first letter of จันทบุรี.
+  t=t.replace(/^(จังหวัด\s*|จ\.\s*|จ\s+)/,'').trim();
+  if(KP_PROVINCES.indexOf(t)>=0) return t;
+  if(KP_PROV_ALIAS[t]) return KP_PROV_ALIAS[t];
+  for(var k in KP_PROV_ALIAS){ if(t.indexOf(k)>=0) return KP_PROV_ALIAS[k]; }
+  return t;
+}
 function kpExtractProvince(text){
   var t=String(text||'');
   if(!t) return '';
@@ -18263,6 +18300,11 @@ function kpExtractProvince(text){
   for(var i=0;i<KP_PROVINCES.length;i++){
     var idx=t.lastIndexOf(KP_PROVINCES[i]);
     if(idx>bestIdx){ bestIdx=idx; best=KP_PROVINCES[i]; }
+  }
+  // Short forms count too, and the one nearest the end wins over an earlier full name.
+  for(var a in KP_PROV_ALIAS){
+    var ia=t.lastIndexOf(a);
+    if(ia>bestIdx){ bestIdx=ia; best=KP_PROV_ALIAS[a]; }
   }
   if(best) return best;
   // Fallback: explicit marker with a spelling not in the list.
@@ -18297,6 +18339,8 @@ var KP_PROV_ZONE=(function(){
 function kpProvinceZone(prov){
   var t=String(prov||'').trim(); if(!t) return '';
   if(/กรุงเทพ|กทม|bangkok/i.test(t)) return 'Bangkok';
+  var canon=kpCanonProvince(t);                               // อยุธยา → พระนครศรีอยุธยา
+  if(KP_PROV_ZONE[canon]) return KP_PROV_ZONE[canon];
   if(KP_PROV_ZONE[t]) return KP_PROV_ZONE[t];                 // Thai exact
   var n=t.toLowerCase().replace(/[\s\-\.]/g,'');
   if(KP_PROV_ZONE[n]) return KP_PROV_ZONE[n];                 // English normalized
