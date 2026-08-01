@@ -4977,42 +4977,159 @@ function btDayIdx(dateStr, from){
   return Math.floor((d-a)/86400000);
 }
 // Everything the report needs for one container.
-function btStats(c){
-  if(!c || !c.arrivedWh) return null;
-  var days=Math.max(1, btDayIdx(new Date().toISOString().slice(0,10), c.arrivedWh)+1);
-  var rows=[], byKey={};
-  (c.items||[]).forEach(function(i){
-    if(!i||!i.code) return;
-    var k=ofNormCode(i.code);
-    if(!byKey[k]){ byKey[k]={code:i.code, key:k, recv:0, sold:0, series:new Array(days).fill(0)}; rows.push(byKey[k]); }
-    byKey[k].recv += parseInt(i.qty)||0;
-  });
-  if(!rows.length) return null;
+// ── FIFO LOTS ───────────────────────────────────────────────────────────────
+// The same codes are ordered again and again, so "sold since this container arrived"
+// mixes batches. Goods leave the warehouse oldest-first, so the batches are separated
+// the same way: every arrival is a lot, every sale eats the oldest lot that had already
+// arrived. That is what turns the tab into a real per-batch selling time — when THIS
+// batch started moving, when it was gone, how much of it is still lying there.
+// What the model cannot know is booked as an opening lot (stock that was already there
+// before the first recorded container) and as "unattributed" sales.
+function btSalesByCode(){
+  var m={};
   (orders||[]).forEach(function(o){
-    if(!o || o.status==='cancelled' || o.free) return;      // free replacements are not sales
-    var di=btDayIdx(o.date, c.arrivedWh);
-    if(di<0 || di>=days) return;
+    if(!o || o.status==='cancelled' || o.free) return;   // free claims are not sales
+    var d=String(o.date||'').slice(0,10); if(!d) return;
     (o.lineItems||[]).forEach(function(li){
       if(!li || !BT_PROD[li.type] || !li.code) return;
-      var r=byKey[ofNormCode(li.code)]; if(!r) return;
       var q=parseInt(li.qty)||0; if(q<=0) return;
-      r.sold+=q; r.series[di]+=q;
+      var k=ofNormCode(li.code);
+      (m[k]=m[k]||[]).push({date:d, qty:q});
     });
   });
-  rows.forEach(function(r){
-    r.pct     = r.recv>0 ? Math.round(r.sold/r.recv*1000)/10 : 0;
-    r.perDay  = Math.round(r.sold/days*10)/10;
-    r.left    = Math.max(0, r.recv-r.sold);
-    r.eta     = (r.perDay>0 && r.left>0) ? Math.ceil(r.left/r.perDay) : null;   // days to sell out
-    r.stock   = stockOnHandOf(r.code);
-    r.cum     = r.series.reduce(function(acc,v){ acc.push((acc.length?acc[acc.length-1]:0)+v); return acc; }, []);
+  Object.keys(m).forEach(function(k){ m[k].sort(function(a,b){ return a.date<b.date?-1:(a.date>b.date?1:0); }); });
+  return m;
+}
+function btArrivalsByCode(){
+  var m={};
+  (containerLog||[]).forEach(function(c){
+    if(!c || !c.arrivedWh) return;
+    var per={};
+    (c.items||[]).forEach(function(i){
+      if(!i||!i.code) return;
+      var q=parseInt(i.qty)||0; if(q<=0) return;
+      var k=ofNormCode(i.code);
+      if(!per[k]){ per[k]={date:String(c.arrivedWh).slice(0,10), qty:0, cid:c.id, code:i.code, cno:c.containerNo||'', sup:c.supplier||''}; (m[k]=m[k]||[]).push(per[k]); }
+      per[k].qty+=q;   // same code listed twice in one container = one lot
+    });
   });
+  Object.keys(m).forEach(function(k){ m[k].sort(function(a,b){ return a.date<b.date?-1:(a.date>b.date?1:0); }); });
+  return m;
+}
+function btLots(key, salesBy, arrBy){
+  var arr=(arrBy[key]||[]), sls=(salesBy[key]||[]);
+  var stockNow=stockOnHandOf(key);
+  var totalArr=arr.reduce(function(a,x){return a+x.qty;},0);
+  var totalSold=sls.reduce(function(a,x){return a+x.qty;},0);
+  // Whatever the arrivals cannot explain was already in the warehouse before them.
+  var opening=Math.max(0, (stockNow==null?0:stockNow) - totalArr + totalSold);
+  var lots=[];
+  if(opening>0) lots.push({cid:'_open', open:true, date:'1970-01-01', qty:opening, cno:'', sup:''});
+  arr.forEach(function(a){ lots.push({cid:a.cid, date:a.date, qty:a.qty, cno:a.cno, sup:a.sup}); });
+  lots.forEach(function(l){ l.sold=0; l.left=l.qty; l.first=null; l.out=null; l.ev=[]; });
+  var unattr=0;
+  sls.forEach(function(s){
+    var q=s.qty;
+    for(var i=0;i<lots.length && q>0;i++){
+      var l=lots[i];
+      if(l.left<=0 || l.date>s.date) continue;     // a lot cannot be sold before it arrived
+      var take=Math.min(q,l.left);
+      l.left-=take; l.sold+=take; q-=take;
+      if(!l.first) l.first=s.date;
+      l.ev.push({date:s.date, qty:take});
+      if(l.left<=0) l.out=s.date;
+    }
+    if(q>0) unattr+=q;                              // sold more than we ever booked in
+  });
+  return {lots:lots, unattr:unattr, stockNow:stockNow, opening:opening};
+}
+// How fast a code sells right now, regardless of which batch it comes from: pieces per
+// day over the last N days. FIFO alone is not enough — a container that arrived while
+// old stock was still there shows 0% sold, and the real question is "when does it start
+// moving and when is it gone", which only the current selling speed can answer.
+var BT_WINDOW=60;
+function btRecentRate(sales){
+  var cut=new Date(); cut.setDate(cut.getDate()-BT_WINDOW);
+  var cutS=cut.toISOString().slice(0,10);
+  var q=(sales||[]).reduce(function(a,s){ return a + (s.date>=cutS ? s.qty : 0); }, 0);
+  return q/BT_WINDOW;
+}
+function btStats(c){
+  if(!c || !c.arrivedWh) return null;
+  var salesBy=btSalesByCode(), arrBy=btArrivalsByCode();
+  var days=Math.max(1, btDayIdx(new Date().toISOString().slice(0,10), c.arrivedWh)+1);
+  var rows=[], seen={}, unattr=0;
+  (c.items||[]).forEach(function(i){
+    if(!i||!i.code) return;
+    var k=ofNormCode(i.code); if(seen[k]) return; seen[k]=1;
+    var led=btLots(k, salesBy, arrBy);
+    var lot=null, ahead=0, before=true;
+    led.lots.forEach(function(l){
+      if(l.cid===c.id){ lot=l; before=false; return; }
+      if(before) ahead+=l.left;          // older stock that has to go first (FIFO)
+    });
+    if(!lot) return;
+    unattr+=led.unattr;
+    var speed=btRecentRate(salesBy[k]);  // pcs/day over the last BT_WINDOW days
+    var start=lot.first ? btDayIdx(lot.first, c.arrivedWh) : null;   // day this batch began selling
+    var outD =lot.out   ? btDayIdx(lot.out,  c.arrivedWh) : null;    // day it was gone
+    var sellDays=(start!=null) ? (((outD!=null?outD:days-1) - start) + 1) : 0;
+    var rate=sellDays>0 ? lot.sold/sellDays : 0;
+    var cum=new Array(days).fill(0);
+    lot.ev.forEach(function(e){ var d=btDayIdx(e.date, c.arrivedWh); if(d>=0&&d<days) cum[d]+=e.qty; });
+    for(var d2=1; d2<days; d2++) cum[d2]+=cum[d2-1];
+    rows.push({
+      code:i.code, key:k, recv:lot.qty, sold:lot.sold, left:lot.left,
+      pct: lot.qty>0?Math.round(lot.sold/lot.qty*1000)/10:0,
+      wait: start,                                    // days arrival → first sale
+      outDay: outD,                                   // days arrival → sold out
+      rate: Math.round(rate*10)/10,                   // per day WHILE it was selling
+      speed: Math.round(speed*10)/10,                 // per day right now (last 60 days)
+      ahead: ahead,                                   // older pieces queued in front of this batch
+      startIn: (start!=null) ? 0 : (speed>0 ? Math.ceil(ahead/speed) : null),   // days from TODAY until it starts
+      goneIn:  (lot.left<=0) ? 0 : (speed>0 ? Math.ceil((ahead+lot.left)/speed) : null), // days from TODAY until gone
+      // Total days from arrival until gone — measured when it already sold out, projected
+      // otherwise. Only this figure makes two batches comparable.
+      doneTotal: (outD!=null) ? (outD+1) : (speed>0 ? (days + Math.ceil((ahead+lot.left)/speed)) : null),
+      eta: (lot.left>0 && rate>0) ? Math.ceil(lot.left/rate) : null,
+      stock: led.stockNow, cum: cum,
+      history: led.lots.filter(function(l){ return !l.open; })
+    });
+  });
+  if(!rows.length) return null;
   rows.sort(function(a,b){ return b.pct-a.pct; });
   var recv=rows.reduce(function(a,r){return a+r.recv;},0), sold=rows.reduce(function(a,r){return a+r.sold;},0);
-  return { c:c, days:days, rows:rows, recv:recv, sold:sold,
+  var left=rows.reduce(function(a,r){return a+r.left;},0);
+  // The container is only really gone when its SLOWEST product is gone.
+  var gone=rows.reduce(function(a,r){ return (r.goneIn==null||a==null) ? (r.goneIn==null?a:a) : Math.max(a,r.goneIn); }, 0);
+  if(rows.some(function(r){ return r.left>0 && r.goneIn==null; })) gone=null;   // no speed → no honest guess
+  return { c:c, days:days, rows:rows, recv:recv, sold:sold, left:left, unattr:unattr,
     pct: recv>0?Math.round(sold/recv*1000)/10:0,
     perDay: Math.round(sold/days*10)/10,
-    eta: (sold>0 && recv>sold) ? Math.ceil((recv-sold)/(sold/days)) : null };
+    eta: (left>0 ? gone : 0) };
+}
+// "We keep ordering the same products" — every earlier batch of the same code with the
+// time it took to sell out, so a new container can be compared against its predecessors.
+function btHistoryHTML(st){
+  var rows=st.rows.filter(function(r){ return (r.history||[]).length>1; });
+  if(!rows.length) return '';
+  return '<div class="card" style="padding:10px 12px;margin-bottom:8px">'
+    +'<div style="font-size:12px;font-weight:800;margin-bottom:4px">🔁 ตู้ก่อนหน้าของสินค้าเดียวกัน / same product, earlier containers</div>'
+    +rows.map(function(r){
+      return '<div style="margin-top:6px"><div style="font-size:12px;font-weight:700">'+r.code+'</div>'
+        +r.history.map(function(l){
+          var out=l.out?(btDayIdx(l.out,l.date)+1):null;
+          var pct=l.qty>0?Math.round(l.sold/l.qty*1000)/10:0;
+          var mark=(l.cid===st.c.id)?' ← ตู้นี้':'';
+          return '<div style="font-size:11.5px;color:var(--text2);padding-left:8px">'
+            +'· '+(l.cno?('No. '+l.cno):'—')+' · '+l.date+' · '+l.qty.toLocaleString()+' → '
+            +(out!=null ? '<b style="color:#166534">ขายหมดใน '+out+' วัน</b>'
+                        : '<b>'+pct+'%</b> · เหลือ '+l.left.toLocaleString())
+            +'<b style="color:#1d4ed8">'+mark+'</b></div>';
+        }).join('')
+      +'</div>';
+    }).join('')
+    +'</div>';
 }
 // Cumulative sell-through per product, drawn as plain SVG (no chart library).
 function btChartSVG(st, opts){
@@ -5048,10 +5165,27 @@ function btChartSVG(st, opts){
 }
 function btTextLines(st){
   return st.rows.map(function(r){
-    return r.code+': รับเข้า '+r.recv.toLocaleString()+' · ขายแล้ว '+r.sold.toLocaleString()+' ('+r.pct+'%) ใน '+st.days+' วัน'
-      +' · เฉลี่ย '+r.perDay.toLocaleString()+'/วัน'
-      +(r.eta!=null?(' · หมดใน ~'+r.eta+' วัน'):(r.left<=0?' · ขายหมดแล้ว / sold out':' · ยังไม่ขาย / no sales yet'));
+    var speed=' · ขายตอนนี้ '+r.speed.toLocaleString()+'/วัน';
+    if(r.wait==null){
+      return r.code+': รับเข้า '+r.recv.toLocaleString()+' · ยังไม่ถึงคิว — ของเก่าเหลือ '+r.ahead.toLocaleString()+' ชิ้น'+speed
+        +(r.startIn!=null ? (' → เริ่มขายอีก ~'+r.startIn+' วัน, หมดประมาณ ~'+r.goneIn+' วัน') : ' → ยังไม่มียอดขาย / no sales');
+    }
+    return r.code+': รับเข้า '+r.recv.toLocaleString()
+      +' · เริ่มขายวันที่ '+(r.wait===0?'แรก':(r.wait+' หลังเข้าคลัง'))
+      +' · ขายแล้ว '+r.sold.toLocaleString()+' ('+r.pct+'%) เฉลี่ย '+r.rate.toLocaleString()+'/วัน'
+      +(r.outDay!=null ? (' · ขายหมดใน '+(r.outDay+1)+' วัน ✓')
+                       : (' · เหลือ '+r.left.toLocaleString()+(r.goneIn!=null?(' → อีก ~'+r.goneIn+' วัน (รวม ~'+r.doneTotal+' วัน)'):'')));
   });
+}
+// Days from arrival until this batch is gone — measured if it already sold out,
+// otherwise projected from the current selling speed.
+function btDoneDays(r){ return r.doneTotal; }
+function btDoneTxt(r){ return (r.outDay!=null) ? ((r.outDay+1)+' วัน ✓') : (r.doneTotal!=null ? ('~'+r.doneTotal+' วัน') : '—'); }
+function btFastSlow(st){
+  var withDays=st.rows.filter(function(r){ return btDoneDays(r)!=null; });
+  if(!withDays.length) return {fast:null, slow:null};
+  var sorted=withDays.slice().sort(function(a,b){ return btDoneDays(a)-btDoneDays(b); });
+  return {fast:sorted[0], slow:sorted[sorted.length-1]};
 }
 function btFillPicker(){
   var sel=document.getElementById('bt-pick'); if(!sel) return;
@@ -5069,14 +5203,15 @@ function btRender(){
   if(!st){ body.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">เลือกตู้ที่มาถึงแล้ว / pick an arrived container</div>'; return; }
   var box=function(l,v,col){ return '<div style="flex:1;min-width:80px"><div style="font-size:10px;font-weight:700;color:var(--text2);letter-spacing:.04em">'+l+'</div>'
     +'<div style="font-size:16px;font-weight:800;color:'+(col||'var(--text)')+'">'+v+'</div></div>'; };
+  var fs=btFastSlow(st);
   body.innerHTML =
      '<div class="card" style="display:flex;gap:8px;flex-wrap:wrap;padding:10px 12px;margin-bottom:8px">'
       +box('มาถึง / ARRIVED', st.c.arrivedWh)
       +box('วัน / DAYS', st.days.toLocaleString())
       +box('รับเข้า / RECEIVED', st.recv.toLocaleString())
       +box('ขายแล้ว / SOLD', st.sold.toLocaleString()+' <span style="font-size:12px">('+st.pct+'%)</span>','#16a34a')
-      +box('เฉลี่ย / PER DAY', st.perDay.toLocaleString())
-      +box('หมดใน / SELL-OUT', st.eta!=null?('~'+st.eta+' วัน'):'—')
+      +box('เร็วสุด / FASTEST', fs.fast?(fs.fast.code+' <span style="font-size:12px">'+btDoneTxt(fs.fast)+'</span>'):'—','#16a34a')
+      +box('ช้าสุด / SLOWEST', fs.slow?(fs.slow.code+' <span style="font-size:12px">'+btDoneTxt(fs.slow)+'</span>'):'—','#b45309')
     +'</div>'
     +'<div class="card" style="padding:10px 12px;margin-bottom:8px">'
       +'<div style="font-size:12px;font-weight:800;margin-bottom:4px">📈 ขายไปแล้วกี่ % ตามเวลา / sell-through over time</div>'
@@ -5089,8 +5224,9 @@ function btRender(){
         +'<th style="text-align:right;padding:6px 8px">รับเข้า</th>'
         +'<th style="text-align:right;padding:6px 8px">ขายแล้ว</th>'
         +'<th style="text-align:right;padding:6px 8px">%</th>'
+        +'<th style="text-align:right;padding:6px 8px">เริ่มขาย</th>'
         +'<th style="text-align:right;padding:6px 8px">ต่อวัน</th>'
-        +'<th style="text-align:right;padding:6px 8px">หมดใน</th>'
+        +'<th style="text-align:right;padding:6px 8px">หมดใน<div style="font-weight:400;font-size:9px">จากวันเข้าคลัง</div></th>'
         +'<th style="text-align:right;padding:6px 8px">สต็อกตอนนี้</th>'
       +'</tr></thead><tbody>'
       +st.rows.map(function(r,ri){
@@ -5099,17 +5235,21 @@ function btRender(){
           +'<td style="padding:6px 8px;text-align:right">'+r.recv.toLocaleString()+'</td>'
           +'<td style="padding:6px 8px;text-align:right;font-weight:700;color:#16a34a">'+r.sold.toLocaleString()+'</td>'
           +'<td style="padding:6px 8px;text-align:right;font-weight:800">'+r.pct+'%</td>'
-          +'<td style="padding:6px 8px;text-align:right">'+r.perDay.toLocaleString()+'</td>'
-          +'<td style="padding:6px 8px;text-align:right">'+(r.eta!=null?r.eta+' วัน':(r.left<=0?'✓':'—'))+'</td>'
+          +'<td style="padding:6px 8px;text-align:right;color:var(--text2)">'+(r.wait!=null?('+'+r.wait+' วัน'):(r.startIn!=null?('<i>ใน ~'+r.startIn+' วัน</i>'):'—'))+'</td>'
+          +'<td style="padding:6px 8px;text-align:right">'+(r.wait!=null?r.rate.toLocaleString():'<span style="color:var(--text2)">'+r.speed.toLocaleString()+'</span>')+'</td>'
+          +'<td style="padding:6px 8px;text-align:right">'+(r.outDay!=null?('<b style="color:#166534">'+(r.outDay+1)+' วัน ✓</b>'):(r.doneTotal!=null?('~'+r.doneTotal+' วัน'):'—'))+'</td>'
           +'<td style="padding:6px 8px;text-align:right;color:var(--text2)">'+(r.stock==null?'—':r.stock.toLocaleString())+'</td>'
         +'</tr>';
       }).join('')
       +'</tbody></table></div>'
+    +btHistoryHTML(st)
     +'<div class="card" style="padding:10px 12px">'
       +'<div style="font-size:12px;font-weight:800;margin-bottom:4px">📝 สรุป / summary</div>'
       +'<div style="font-size:12px;line-height:1.8">'+btTextLines(st).map(function(t){return '• '+t;}).join('<br>')+'</div>'
-      +'<div style="font-size:11px;color:var(--text2);margin-top:6px">* นับจากวันที่สร้างออเดอร์ หลังตู้เข้าคลัง · ไม่รวมออเดอร์ที่ยกเลิกและเคลมฟรี · ถ้าสินค้ารหัสเดียวกันมาจากตู้ก่อนหน้า ยอดขายจะรวมของเก่าด้วย'
-      +'<br>Counted from the order date after this container reached the warehouse; cancelled orders and free claims excluded. If an earlier container carried the same code, its stock is included in these sales.</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:6px">* แยกตู้แบบ FIFO — ของเก่าออกก่อน ตัวเลขจึงเป็นของตู้นี้จริง ๆ · นับจากวันที่สร้างออเดอร์ · ไม่รวมออเดอร์ที่ยกเลิกและเคลมฟรี'
+      +(st.unattr>0?' · ⚠ '+st.unattr.toLocaleString()+' ชิ้นขายไปโดยไม่มีตู้รองรับ (ของเก่าก่อนเริ่มบันทึก)':'')
+      +'<br>Batches are separated FIFO (oldest stock leaves first), so these numbers belong to THIS container. Counted from the order date; cancelled orders and free claims excluded.'
+      +(st.unattr>0?' ⚠ '+st.unattr.toLocaleString()+' pcs were sold with no container to book them against — stock from before the records began.':'')+'</div>'
     +'</div>';
 }
 function btPrint(){
@@ -5136,19 +5276,36 @@ function btPrint(){
       +'<div class="gbox"><div class="l">วัน / DAYS</div><div class="v">'+st.days+'</div></div>'
       +'<div class="gbox"><div class="l">รับเข้า / RECEIVED</div><div class="v">'+st.recv.toLocaleString('en-US')+'</div></div>'
       +'<div class="gbox"><div class="l">ขายแล้ว / SOLD</div><div class="v">'+st.sold.toLocaleString('en-US')+' ('+st.pct+'%)</div></div>'
-      +'<div class="gbox"><div class="l">เฉลี่ย / PER DAY</div><div class="v">'+st.perDay.toLocaleString('en-US')+'</div></div>'
-      +'<div class="gbox"><div class="l">หมดใน / SELL-OUT</div><div class="v">'+(st.eta!=null?'~'+st.eta+' d':'—')+'</div></div>'
+      +(function(){ var fs=btFastSlow(st);
+        return '<div class="gbox"><div class="l">เร็วสุด / FASTEST</div><div class="v">'+(fs.fast?esc(fs.fast.code)+' '+btDoneTxt(fs.fast):'—')+'</div></div>'
+             + '<div class="gbox"><div class="l">ช้าสุด / SLOWEST</div><div class="v">'+(fs.slow?esc(fs.slow.code)+' '+btDoneTxt(fs.slow):'—')+'</div></div>'; })()
     +'</div>'
     +btChartSVG(st,{w:700,h:230})
-    +'<table><thead><tr><th>รหัส / Code</th><th class="r">รับเข้า</th><th class="r">ขายแล้ว</th><th class="r">%</th><th class="r">ต่อวัน</th><th class="r">หมดใน</th><th class="r">สต็อก</th></tr></thead><tbody>'
+    +'<table><thead><tr><th>รหัส / Code</th><th class="r">รับเข้า</th><th class="r">ขายแล้ว</th><th class="r">%</th><th class="r">เริ่มขาย</th><th class="r">ต่อวัน</th><th class="r">หมดใน</th><th class="r">สต็อก</th></tr></thead><tbody>'
     +st.rows.map(function(r){
       return '<tr><td><b>'+esc(r.code)+'</b></td><td class="r">'+r.recv.toLocaleString('en-US')+'</td><td class="r">'+r.sold.toLocaleString('en-US')+'</td>'
-        +'<td class="r"><b>'+r.pct+'%</b></td><td class="r">'+r.perDay.toLocaleString('en-US')+'</td>'
-        +'<td class="r">'+(r.eta!=null?r.eta+' d':(r.left<=0?'✓':'—'))+'</td><td class="r">'+(r.stock==null?'—':r.stock.toLocaleString('en-US'))+'</td></tr>';
+        +'<td class="r"><b>'+r.pct+'%</b></td><td class="r">'+(r.wait!=null?('+'+r.wait+' d'):(r.startIn!=null?('in ~'+r.startIn+' d'):'—'))+'</td>'
+        +'<td class="r">'+(r.wait!=null?r.rate.toLocaleString('en-US'):r.speed.toLocaleString('en-US'))+'</td>'
+        +'<td class="r">'+(r.outDay!=null?('<b>'+(r.outDay+1)+' d ✓</b>'):(r.doneTotal!=null?'~'+r.doneTotal+' d':'—'))+'</td><td class="r">'+(r.stock==null?'—':r.stock.toLocaleString('en-US'))+'</td></tr>';
     }).join('')
     +'</tbody></table>'
+    +(function(){
+      var hr=st.rows.filter(function(r){ return (r.history||[]).length>1; });
+      if(!hr.length) return '';
+      return '<div class="sum"><b>🔁 ตู้ก่อนหน้าของสินค้าเดียวกัน / same product, earlier containers</b><br>'
+        +hr.map(function(r){
+          return '<b>'+esc(r.code)+'</b>: '+r.history.map(function(l){
+            var out=l.out?(btDayIdx(l.out,l.date)+1):null;
+            return (l.cno?('No. '+esc(l.cno)):'—')+' ('+l.date+', '+l.qty.toLocaleString('en-US')+') → '
+              +(out!=null?(out+' d ✓'):(l.qty>0?Math.round(l.sold/l.qty*100)+'%':'—'))
+              +(l.cid===st.c.id?' ←':'');
+          }).join('  ·  ');
+        }).join('<br>')
+      +'</div>';
+    })()
     +'<div class="sum">'+btTextLines(st).map(function(t){return '• '+esc(t);}).join('<br>')+'</div>'
-    +'<div class="note">* นับจากวันที่สร้างออเดอร์หลังตู้เข้าคลัง · ไม่รวมออเดอร์ที่ยกเลิกและเคลมฟรี / counted from the order date after arrival; cancelled orders and free claims excluded.</div>'
+    +'<div class="note">* แยกตู้แบบ FIFO (ของเก่าออกก่อน) · นับจากวันที่สร้างออเดอร์ · ไม่รวมออเดอร์ที่ยกเลิกและเคลมฟรี / batches separated FIFO (oldest stock first), counted from the order date; cancelled orders and free claims excluded.'
+    +(st.unattr>0?' ⚠ '+st.unattr.toLocaleString('en-US')+' pcs sold with no container to book against.':'')+'</div>'
     +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
   var w=window.open('','_blank');
   if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
