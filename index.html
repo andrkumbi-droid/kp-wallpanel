@@ -2686,8 +2686,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <select id="acinv-cur" onchange="acInvCurChanged()"><option value="CNY">CNY / 人民币</option><option value="USD">USD</option><option value="THB">THB / ฿</option></select>
     </div>
     <div style="flex:1;min-width:0"><label class="fl">Rate → ฿ <span style="font-size:11px;color:var(--text2)">per 1</span></label>
-      <input type="number" step="0.0001" id="acinv-rate" placeholder="e.g. 5.0" oninput="acInvPreview()"></div>
+      <input type="number" step="0.0001" id="acinv-rate" placeholder="e.g. 32.5" oninput="acInvRateTyped()"></div>
   </div>
+  <label class="fl">…or the ฿ that actually left the bank for this invoice <span style="font-size:11px;color:var(--text2)">(optional — the exact rate)</span></label>
+  <input type="number" id="acinv-thb" placeholder="e.g. 446,000 — deposit + balance together" oninput="acInvRateFromTHB()">
+  <div id="acinv-rate-hint" style="font-size:11px;color:var(--text2);margin-top:4px"></div>
 
   <label class="fl">Landed extras in ฿ / ค่าใช้จ่ายเพิ่ม <span style="font-size:11px;color:var(--text2)">(spread over the pieces by value)</span></label>
   <div style="display:flex;gap:8px">
@@ -20972,7 +20975,7 @@ document.addEventListener('change', function(e){
      · depreciation / interest / tax    → EBITDA
    ═══════════════════════════════════════════════════════════════════════════ */
 
-var acctData = { opening:{mk:'',bank:0,cash:0}, cogsPct:0, cost:{}, budget:{}, ap:[], loans:[], invoices:[], other:{}, fixedCats:{} };
+var acctData = { opening:{mk:'',bank:0,cash:0}, cogsPct:0, cost:{}, budget:{}, ap:[], loans:[], invoices:[], fx:{}, other:{}, fixedCats:{} };
 var _acTab = 'sum';
 var _acMonth = '';
 
@@ -20992,6 +20995,7 @@ function acSync(){ try{ if(window.fbDB) window.fbDB.ref('acctData').set(acctData
         ap:      v.ap ? (Array.isArray(v.ap)?v.ap:Object.values(v.ap)) : [],
         loans:   v.loans ? (Array.isArray(v.loans)?v.loans:Object.values(v.loans)) : [],
         invoices: v.invoices ? (Array.isArray(v.invoices)?v.invoices:Object.values(v.invoices)) : [],
+        fx:      v.fx      || {},
         other:   v.other   || {},
         fixedCats: v.fixedCats || {}
       };
@@ -21972,9 +21976,10 @@ var _acInvMeta = {};      // supplier / currency / balance read out of the sheet
 
 function acInvOpen(){
   _acInvAoA=null; _acInvLines=[]; _acInvCodeFix={}; _acInvMeta={};
-  ['acinv-supplier','acinv-no','acinv-rate','acinv-freight','acinv-duty','acinv-other','acinv-ppc'].forEach(function(id){
+  ['acinv-supplier','acinv-no','acinv-rate','acinv-thb','acinv-freight','acinv-duty','acinv-other','acinv-ppc'].forEach(function(id){
     var e=document.getElementById(id); if(e) e.value='';
   });
+  var rh=document.getElementById('acinv-rate-hint'); if(rh) rh.innerHTML='';
   var f=document.getElementById('acinv-file'); if(f) f.value='';
   document.getElementById('acinv-date').value=new Date().toISOString().split('T')[0];
   document.getElementById('acinv-cur').value='CNY';
@@ -21990,10 +21995,48 @@ function acInvOpen(){
   acInvCurChanged();
 }
 function acInvClose(){ document.getElementById('acinv-modal').classList.remove('open'); }
+// The invoice states its currency but never the THB rate, so the last rate used
+// per currency is remembered and offered again.
 function acInvCurChanged(){
   var cur=document.getElementById('acinv-cur').value, r=document.getElementById('acinv-rate');
-  if(cur==='THB'){ r.value=1; r.disabled=true; } else { r.disabled=false; if(!acN(r.value)) r.value=''; }
+  if(cur==='THB'){ r.value=1; r.disabled=true; }
+  else {
+    r.disabled=false;
+    if(!acN(r.value)){ var last=acN((acctData.fx||{})[cur]); if(last>0) r.value=last; }
+  }
+  acInvRateHint();
   acInvPreview();
+}
+function acInvRateHint(){
+  var el=document.getElementById('acinv-rate-hint'); if(!el) return;
+  var cur=document.getElementById('acinv-cur').value;
+  var last=acN((acctData.fx||{})[cur]);
+  var goods=(_acInvLines||[]).reduce(function(a,l){ return a+l.amt; },0);
+  var rate=acN(document.getElementById('acinv-rate').value);
+  var bits=[];
+  if(goods>0 && rate>0) bits.push('Invoice total '+goods.toLocaleString(undefined,{maximumFractionDigits:2})+' '+cur+' = '+acB(goods*rate));
+  if(last>0) bits.push('last rate used: '+last);
+  el.innerHTML=bits.join(' · ');
+}
+// Typing a rate by hand clears the "฿ paid" shortcut so the two cannot disagree.
+function acInvRateTyped(){
+  var t=document.getElementById('acinv-thb'); if(t) t.value='';
+  acInvRateHint(); acInvPreview();
+}
+// The most exact rate there is: what the bank actually debited ÷ the invoice total.
+function acInvRateFromTHB(){
+  var thb=acN(document.getElementById('acinv-thb').value);
+  var goods=(_acInvLines||[]).reduce(function(a,l){ return a+l.amt; },0);
+  var el=document.getElementById('acinv-rate-hint');
+  if(thb>0 && goods>0){
+    var r=thb/goods;
+    document.getElementById('acinv-rate').value=Math.round(r*10000)/10000;
+    if(el) el.innerHTML='Rate worked out from the payment: '+acB(thb)+' ÷ '+goods.toLocaleString(undefined,{maximumFractionDigits:2})
+      +' '+document.getElementById('acinv-cur').value+' = <b>'+(Math.round(r*10000)/10000)+' ฿</b> per 1';
+    acInvPreview();
+  } else if(thb>0 && goods<=0){
+    if(el) el.innerHTML='<span style="color:#d97706">Load the invoice file first — then the rate is worked out from this amount.</span>';
+  } else acInvRateHint();
 }
 // Load SheetJS on demand; resolves false when it cannot be reached (offline).
 function acInvLoadXLSX(cb){
@@ -22237,6 +22280,7 @@ function acInvAfterParse(name){
     + (meta.balance>0 ? '<br><span style="color:var(--text2)">Found in the sheet: balance still to pay '+meta.balance.toLocaleString()+' '+(meta.currency||'')+(meta.deposit>0?' · deposit '+meta.deposit.toLocaleString():'')+'</span>' : '');
   _acInvCodeFix={};
   acInvPreview();
+  acInvRateFromTHB();   // a ฿ amount typed before the file was loaded now resolves
 }
 function acInvSetCode(i, v){ _acInvCodeFix[i]=String(v||'').trim().toUpperCase(); acInvPreview(); }
 function acInvDrop(i){ _acInvCodeFix[i]='—'; acInvPreview(); }
@@ -22358,6 +22402,9 @@ function acInvApply(){
   if(prev.length) acctData.invoices=(acctData.invoices||[]).filter(function(iv){ return prev.indexOf(iv)<0; });
   if(!acctData.cost) acctData.cost={};
   codes.forEach(function(k){ acctData.cost[k]=Math.round(agg[k].cost/agg[k].pcs*100)/100; });
+  // Remember the rate per currency — the next invoice starts from it.
+  var curNow=document.getElementById('acinv-cur').value, rateNow=acN(document.getElementById('acinv-rate').value);
+  if(curNow!=='THB' && rateNow>0){ if(!acctData.fx) acctData.fx={}; acctData.fx[curNow]=rateNow; }
   if(!acctData.invoices) acctData.invoices=[];
   acctData.invoices.unshift({
     id:'inv'+Date.now(),
