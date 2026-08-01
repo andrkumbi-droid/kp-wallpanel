@@ -9591,10 +9591,31 @@ function kmRouteMapsUrl(t){
   if(mid.length) u+='&waypoints='+mid.map(function(c){return c.lat+','+c.lng;}).join('|');
   return u;
 }
+var _kmRouteResolving={};
 function kmRouteCalc(tourId, force){
   var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
   if(!homeLoc){ if(force) alert('📍 ตั้งจุดเริ่มต้น (คลัง) ก่อน\nPlease set the start point (warehouse) first.'); return; }
   if(_kmRouteBusy[tourId]) return;
+  // A stop whose only location is a SHORT link (maps.app.goo.gl/…) carries no coordinates
+  // in the URL, so it dropped out of the distance AND out of the "open in Maps" route —
+  // while its 📍 pin worked, because that is just the raw link. Pressing 🔄 is exactly the
+  // moment office expects a freshly pasted link to count, so resolve those links first.
+  if(force && !_kmRouteResolving[tourId]){
+    var pending=(t.orders||[]).filter(function(id){
+      var o=(orders||[]).find(function(x){return x.id===id;});
+      return o && !orderLatLng(o) && /^https?:\/\//i.test((o.location||'').trim());
+    });
+    if(pending.length){
+      _kmRouteResolving[tourId]=1;
+      try{ showNotif('⏳ กำลังอ่านลิงก์แผนที่ / resolving '+pending.length+' map link'+(pending.length>1?'s':'')+'…'); }catch(e){}
+      ensureTourCoords(t.orders).then(function(n){
+        delete _kmRouteResolving[tourId];
+        try{ showNotif(n?('📍 +'+n+' พิกัดใหม่ / new pin'+(n>1?'s':'')):'ℹ️ ยังหาพิกัดจากลิงก์ไม่ได้ / could not read the link'); }catch(e){}
+        kmRouteCalc(tourId, 1);
+      });
+      return;
+    }
+  }
   // Never compute on half-loaded data: a client that is still missing orders would
   // store a wrong distance, the next client would "correct" it, and both would keep
   // rewriting each other (a write storm that rebuilds the tour view every second).
@@ -9703,7 +9724,9 @@ function kmRouteRowHTML(t, ro){
   return '<div style="margin-bottom:8px;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
     +'<span style="flex:1;min-width:0">'+line+'</span>'
     +(homeLoc&&!ro?'<button type="button" onclick="event.stopPropagation();kmRouteCalc(\''+t.id+'\',1)" title="คำนวณใหม่ / recalculate" style="flex-shrink:0;padding:2px 7px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-size:11px">🔄</button>':'')
-    +(mapUrl?'<a href="'+mapUrl+'" target="_blank" onclick="event.stopPropagation()" style="flex-shrink:0;padding:2px 7px;border:1px solid #bfdbfe;background:var(--bg);color:#1d4ed8;border-radius:var(--rs);text-decoration:none;font-weight:700">🗺️ เปิด / open</a>':'')
+    // The route link can only contain stops that have coordinates — say so on the button
+    // itself, otherwise a missing stop is only noticed on the road.
+    +(mapUrl?'<a href="'+mapUrl+'" target="_blank" onclick="event.stopPropagation()" title="'+((r&&r.missing)?(r.missing+' จุดไม่อยู่ในเส้นทางนี้ (ไม่มีพิกัด) / '+r.missing+' stop(s) missing from this route — no coordinates'):'')+'" style="flex-shrink:0;padding:2px 7px;border:1px solid '+((r&&r.missing)?'#fbbf24':'#bfdbfe')+';background:var(--bg);color:'+((r&&r.missing)?'#92400e':'#1d4ed8')+';border-radius:var(--rs);text-decoration:none;font-weight:700">🗺️ เปิด / open'+((r&&r.missing)?' ⚠'+r.missing:'')+'</a>':'')
     +(homeLoc&&!ro?'<span onclick="event.stopPropagation();kmSetHome()" title="เปลี่ยนจุดเริ่มต้น / change start point" style="flex-shrink:0;cursor:pointer;color:var(--text2)">📍</span>':'')
     +(ro?'':'<span onclick="event.stopPropagation();kmSetOrsKey()" title="'+(orsKey?'เปลี่ยน/ลบคีย์ ORS':'ใส่คีย์ ORS ฟรี เพื่อเลี่ยงทางด่วน / free ORS key = toll-free routing')+'" style="flex-shrink:0;cursor:pointer;color:'+(orsKey?'var(--text2)':'#d97706')+'">🔑</span>')
     +'<div style="width:100%;color:var(--text2);margin-top:2px">ค่าประมาณเพื่อเทียบเท่านั้น · ตามลำดับที่ออฟฟิศตั้งไว้ · '+(orsKey?'เลี่ยงทางด่วน/ค่าผ่านทาง':'อาจใช้ทางด่วน (ใส่คีย์ 🔑 เพื่อเลี่ยง)')+' / rough cross-check, office stop order'+(orsKey?', tollways avoided':', may use expressways — add a 🔑 key to avoid them')+'</div>'
@@ -13108,11 +13131,16 @@ function optimizeTourOrder(ids){
 function resolveShortLink(url){
   return new Promise(function(resolve){
     if(!KP_RESOLVER_URL || !url){ resolve(null); return; }
+    // A hanging request (resolver asleep, no network) must not block the caller forever —
+    // the route recalculation waits on this, and without the timeout its button stayed
+    // locked until the app was reloaded.
+    var done=false, fin=function(v){ if(done) return; done=true; resolve(v); };
+    setTimeout(function(){ fin(null); }, 12000);
     // Simple GET, no custom headers → no CORS preflight (works with Apps Script).
     fetch(KP_RESOLVER_URL+'?url='+encodeURIComponent(url))
       .then(function(r){ return r.json(); })
-      .then(function(j){ resolve((j&&typeof j.lat==='number'&&geoSane(j.lat,j.lng))?{lat:j.lat,lng:j.lng}:null); })
-      .catch(function(){ resolve(null); });
+      .then(function(j){ fin((j&&typeof j.lat==='number'&&geoSane(j.lat,j.lng))?{lat:j.lat,lng:j.lng}:null); })
+      .catch(function(){ fin(null); });
   });
 }
 // For a set of order-IDs: any order that has no coord yet but DOES have a maps
