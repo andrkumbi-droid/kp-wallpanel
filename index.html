@@ -801,6 +801,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       db.ref('tourReg').on('value', function(snap) {
         tourReg = snap.val() || {};
         window.tourRegLoaded = true;
+        // The registry usually lands AFTER the tours, so repair the IDs from here too —
+        // otherwise a tour keeps a wrong tid until the next time a tour happens to change.
+        try{ tourHealTids(); }catch(e){}
         try{ if(document.getElementById('ofv-tour') && document.getElementById('ofv-tour').classList.contains('active')) ofRenderTourIds(); }catch(e){}
       });
       db.ref('revOrders').on('value', function(snap) {
@@ -10029,9 +10032,12 @@ function tourNoKey(rawId){ return tourKey(rawId); }
 // Claim a number for THIS tour, in one transaction. If the tour already holds one,
 // the transaction aborts and the existing number comes back — that is what makes
 // allocation repeatable instead of minting a new ID on every attempt.
+// Returns 0 when no claim could be committed. The caller then leaves the tour
+// UNNUMBERED and asks again on the next render — inventing a number here (the old
+// "floor+1" fallback) is exactly how one tour ended up with five IDs.
 function tourNoClaim(rawId, day, floor, cb){
   var key=tourNoKey(rawId);
-  if(!window.fbDB){ cb(floor+1); return; }
+  if(!window.fbDB){ cb(0); return; }
   try{
     window.fbDB.ref('tourNo/'+day).transaction(function(cur){
       cur=cur||{};
@@ -10044,15 +10050,14 @@ function tourNoClaim(rawId, day, floor, cb){
     }, function(err, committed, snap){
       var v=0; try{ v=parseInt(((snap&&snap.val())||{})[key])||0; }catch(e){}
       if(v>0){ cb(v); return; }
-      // Aborted without a usable snapshot: read the claim back before falling back to
-      // a fresh number, so an ID this tour already holds can never become a second one.
+      // Aborted without a usable snapshot — read the claim back rather than guess.
       try{
         window.fbDB.ref('tourNo/'+day+'/'+key).once('value',
-          function(s){ var n=parseInt(s.val())||0; cb(n>0?n:(floor+1)); },
-          function(){ cb(floor+1); });
-      }catch(e2){ cb(floor+1); }
-    });
-  }catch(e){ cb(floor+1); }
+          function(s){ cb(parseInt(s.val())||0); },
+          function(){ cb(0); });
+      }catch(e2){ cb(0); }
+    }, false);   // applyLocally=false — no optimistic write that a later abort has to take back
+  }catch(e){ cb(0); }
 }
 // Record an ID a tour ALREADY carries, so a later allocation finds the claim instead
 // of minting a second number (this also migrates every tour numbered by the old code).
@@ -10065,10 +10070,12 @@ function tourNoSeed(rawId, tid){
   try{
     window.fbDB.ref('tourNo/'+day).transaction(function(cur){
       cur=cur||{};
-      if((parseInt(cur[key])||0)===n && (parseInt(cur._max)||0)>=n) return;   // nothing to do
+      // A claim that is already there WINS — seeding only ever fills an empty slot.
+      // Moving a claim would let a stale client drag the number along behind it.
+      if((parseInt(cur[key])||0)>0) return;
       cur[key]=n; cur._max=Math.max(parseInt(cur._max)||0, n);
       return cur;
-    });
+    }, null, false);   // see tourNoClaim: never write optimistically, only server-verified
   }catch(e){}
 }
 // Give a claim back when a tour moves to another day. The number stays burnt
@@ -10101,18 +10108,20 @@ function tourSetTid(rawId, tid, dayIso){
   tourNoSeed(rawId, tid);
   return t;
 }
-// A tour whose tid write was lost gets it back from the registry — instead of being
-// handed a second number by the backfill. Runs on every activeTours update.
+// Every tour ends up on the ID its registry entry says — the lowest one registered
+// for it. That covers both a tid write that was lost AND a tid an outdated tab pushed
+// on top, and it agrees with the ID the duplicate clean-up keeps, so the two can never
+// pull a tour back and forth. Runs on every activeTours update.
 function tourHealTids(){
   if(window.fbDB && !window.tourRegLoaded) return;
   (activeTours||[]).forEach(function(t){
     if(!t || !t.id) return;
-    if(tidOk(t.tid)){ tourNoSeed(t.id, t.tid); return; }
     var ex=tourRegFindByTourId(t.id);
-    if(ex){
+    if(ex && t.tid!==ex){
       t.tid=ex; tourStampOrders(t);
       try{ if(window.fbDB) window.fbDB.ref('activeTours/'+t.id+'/tid').set(ex); }catch(e){}
     }
+    if(tidOk(t.tid)) tourNoSeed(t.id, t.tid);
   });
 }
 // Allocate (or recover) the ID of a tour. Safe to call as often as you like — every
@@ -10142,6 +10151,10 @@ function tourAllocNo(t, cb){
   var day=tourDayOf(t), floor=tourMaxSeqOfDay(day);
   tourNoClaim(rawId, day, floor, function(n){
     delete _tnoPending[rawId];
+    // Nothing claimed (offline, or the write did not go through) → the tour stays
+    // without an ID and the next render asks again. Better no number than a made-up
+    // one that turns into the tour's second ID.
+    if(!(n>0)){ if(cb) cb(); return; }
     tourSetTid(rawId, day+'-'+n, dayIso);
     try{ syncOrders(); }catch(e){}
     // Re-render outside the current call stack — tourAllocNo is also called FROM a
@@ -10165,14 +10178,16 @@ function tourStampOrders(t){
 }
 function tourRegRec(id){ return (tourReg||{})[String(id||'')]||null; }
 // The ID already registered for this tour (guards against handing out a second one).
-// Always the SAME answer for the same tour (lowest ID wins), so two devices asking at
-// the same moment can never settle on two different IDs for one tour.
+// THE rule for "which ID does this tour belong to": a paid one first (that is where
+// the money mark sits), otherwise the first ID it ever got. Always the same answer on
+// every device, so two of them can never settle on two different IDs for one tour.
 function tourRegFindByTourId(tourId){
   if(!tourId) return null;
-  var hit=null;
+  var hit=null, hitPaid=false;
   Object.keys(tourReg||{}).forEach(function(k){
     if(!tidOk(k) || (tourReg[k]||{}).tourId!==tourId) return;
-    if(!hit || tidSortKey(k)<tidSortKey(hit)) hit=k;
+    var paid=!!(tourReg[k]||{}).paid;
+    if(!hit || (paid&&!hitPaid) || (paid===hitPaid && tidSortKey(k)<tidSortKey(hit))){ hit=k; hitPaid=paid; }
   });
   return hit;
 }
@@ -10258,9 +10273,11 @@ function tourRegTogglePaidGroup(idsCsv){
   try{ auditTour('pay','🆔 '+ids.join(', '), (mkPaid?'✅ คนขับรับเงินแล้ว / driver paid':'undo driver-paid')+(drv?' · '+drv:'')+(sum?' · '+sum.toLocaleString()+' ฿':'')); }catch(e){}
   ofRenderTourIds();
 }
-// Registry entries that point at the SAME tour — leftovers from the bug that minted
-// a fresh ID on every reload. The ID the live tour carries is kept, the rest are
-// removed; a paid one is never touched (the money mark would be lost with it).
+// Registry entries that point at the SAME tour — left over from an outdated tab, or
+// from the bug that minted a fresh ID on every reload. Which one survives follows
+// exactly the rule of tourRegFindByTourId() (paid first, otherwise the first ID the
+// tour ever got), so the clean-up and the tid repair can never pull a tour back and
+// forth between two numbers. A paid ID is never deleted — the money mark goes with it.
 function tourRegDupes(){
   var by={}, dups=[];
   Object.keys(tourReg||{}).filter(tidOk).forEach(function(k){
@@ -10269,24 +10286,23 @@ function tourRegDupes(){
   });
   Object.keys(by).forEach(function(tid){
     if(by[tid].length<2) return;
-    var live=(activeTours||[]).find(function(x){ return x && x.id===tid; });
-    var keep=(live && tidOk(live.tid) && by[tid].indexOf(live.tid)>=0)
-      ? live.tid
-      : by[tid].slice().sort(function(a,b){ return tidSortKey(a)-tidSortKey(b); })[0];
+    var keep=tourRegFindByTourId(tid);
+    if(!keep) return;
     by[tid].forEach(function(k){ if(k!==keep && !(tourReg[k]||{}).paid) dups.push({id:k, keep:keep}); });
   });
   return dups;
 }
-// Left-overs from the old allocator are cleaned up by themselves, once per session:
-// they are pure artefacts (several IDs on ONE tour), the office should not have to
-// press a button for that. A paid ID is never touched — the money mark would go with
-// it — so those stay in the warning bar for a human to decide.
-var _tregHealed=false;
+// Several IDs on ONE tour are pure artefacts — the office should not have to press a
+// button for that, so they are cleaned up on sight. This keeps running (30 s apart, not
+// once per session) because an office tab that still has an OUTDATED build open goes on
+// producing them until it is reloaded; any up-to-date tab tidies up behind it. A paid ID
+// is never touched — the money mark would go with it — those stay in the warning bar.
+var _tregHealAt=0;
 function tourRegAutoHeal(){
-  if(_tregHealed) return;
   if(window.fbDB && !window.tourRegLoaded) return;
-  _tregHealed=true;
+  if(Date.now()-_tregHealAt<30000) return;
   var d=tourRegDupes(); if(!d.length) return;
+  _tregHealAt=Date.now();
   d.forEach(function(x){
     delete tourReg[x.id];
     try{ if(window.fbDB) window.fbDB.ref('tourReg/'+x.id).remove(); }catch(e){}
@@ -10535,7 +10551,10 @@ function ofTourIdSetDay(id){
   if(rawId) tourNoRelease(rawId, tidDay(id));
   var floor=tourMaxSeqOfDay(day);
   if(!rawId || !window.fbDB){ apply(floor+1); return; }
-  tourNoClaim(rawId, day, floor, apply);
+  tourNoClaim(rawId, day, floor, function(n){
+    if(!(n>0)){ alert('เปลี่ยนวันไม่สำเร็จ ลองใหม่ / could not move the ID to that day — try again'); return; }
+    apply(n);
+  });
 }
 // ── RENUMBER — rebuild every tour ID from the real creation order ─────────────
 // The IDs were first handed out in whatever order the tours happened to sit in the
