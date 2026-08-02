@@ -5953,7 +5953,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260802006;
+var KP_BUILD = 20260802007;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -10467,7 +10467,12 @@ function ofRenderTourIds(){
   try{ tourRegAutoHeal(); }catch(e){}
   var qEl=document.getElementById('of-tourid-q');
   var q=qEl?qEl.value.trim().toLowerCase():'';
-  var list=Object.keys(tourReg||{}).filter(tidOk).map(function(k){ var r=tourReg[k]||{}; r.id=k; return r; });
+  // Deleted tours are NOT shown here at all — the office wants this list to be what is
+  // still driving or still owed. Every deletion is recorded in the audit log instead
+  // (Management → Audit Log, entry "🆔 <id> · tour deleted").
+  var list=Object.keys(tourReg||{}).filter(tidOk)
+    .map(function(k){ var r=tourReg[k]||{}; r.id=k; return r; })
+    .filter(function(r){ return r.state!=='deleted'; });
   var cntEl=document.getElementById('of-tourid-cnt');
   if(cntEl) cntEl.textContent=list.length?('('+list.length+')'):'';
   if(q){
@@ -10504,7 +10509,7 @@ function ofRenderTourIds(){
       +'<button type="button" onclick="ofTourIdDedupe()" style="flex-shrink:0;padding:5px 10px;border:none;border-radius:var(--rs);background:#ea580c;color:#fff;font-size:11px;font-weight:700;cursor:pointer">🧹 ล้าง / Clean up</button>'
       +'</div>'
     : '';
-  el.innerHTML=dupBar+gkeys.map(function(gk){
+  var cardHTML=function(gk){
     var g=groups[gk];
     g.tours.sort(function(a,b){ return tidSeq(a.id)-tidSeq(b.id); });
     var gid='tidg_'+gk.replace(/[^a-zA-Z0-9]/g,'_');
@@ -10607,7 +10612,38 @@ function ofRenderTourIds(){
         +toursHTML
       +'</div>'
       +'</div>';
-  }).join('');
+  };
+  // A driver-day whose tours have ALL ended and are ALL ticked off as paid is finished
+  // business — it drops into one collapsed block at the bottom instead of pushing the
+  // running tours off the screen. Anything still driving, and anything still owed,
+  // stays up top. While a search is running nothing is folded away.
+  var liveKeys=gkeys, doneKeys=[];
+  if(!q){
+    liveKeys=[];
+    gkeys.forEach(function(gk){
+      var done=groups[gk].tours.every(function(r){ return r.state==='ended' && !!r.paid; });
+      (done?doneKeys:liveKeys).push(gk);
+    });
+  }
+  var doneOrders=0, donePay=0;
+  doneKeys.forEach(function(gk){
+    var g=groups[gk]; donePay+=g.pay;
+    g.tours.forEach(function(r){ doneOrders+=tidArr(r.orders).length; });
+  });
+  var doneHTML=doneKeys.length
+    ? '<div style="border:1px solid #bbf7d0;border-radius:var(--rs);margin-bottom:8px;background:var(--bg2)">'
+        +'<div onclick="ofToggleMore(\'of-tourid-done\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+          +'<span style="font-size:12px;font-weight:800;color:#166534">✅ จบแล้ว + จ่ายแล้ว / done &amp; paid</span>'
+          +'<span style="font-size:10.5px;color:var(--text2);flex:1;min-width:0;text-align:right;white-space:nowrap">'
+            +doneKeys.length+' รายการ · '+doneOrders+' orders'+(donePay>0?' · 💰'+donePay.toLocaleString()+' ฿':'')+' ▾</span>'
+        +'</div>'
+        +'<div id="of-tourid-done" style="display:none;padding:0 8px 8px">'+doneKeys.map(cardHTML).join('')+'</div>'
+      +'</div>'
+    : '';
+  var liveHTML=liveKeys.length
+    ? liveKeys.map(cardHTML).join('')
+    : '<div class="empty" style="padding:1rem;font-size:13px">ไม่มีทัวร์ที่กำลังดำเนินอยู่ / no tours running or unpaid</div>';
+  el.innerHTML=dupBar+liveHTML+doneHTML;
   kpRestoreOpen(_open);
 }
 // ── TOUR DAY PICKER — asked before the tour goes to the driver ───────────────
