@@ -22360,33 +22360,54 @@ function acExpSections(exp){
 // cost yet is reported as "uncovered revenue", so the owner sees exactly how
 // complete the gross-profit figure is instead of a silently wrong number.
 var AC_NONGOODS={discount:1, delivery:1, extra:1, 'free-clips':1, 'free-gift-clips':1};
+// The key a product cost is stored under. Two things it has to survive:
+//   · Firebase rejects . $ # [ ] / in a key. The clip line's own code is
+//     "Clip Pack / คลิปแพ็ค" — the slash made the cost silently unstorable, so
+//     clips could never carry a cost at all.
+//   · Clips are invoiced per piece and sold per pack of 100. Everything to do
+//     with cost therefore speaks ONE clip key, and the price under it is the
+//     price of a PACK, because that is what an order line counts.
+function acCostKey(code, type){
+  if(type==='clips') return 'CLIP';
+  var k=ofNormCode(code);
+  if(/^CLIPPACK/.test(k) || k==='CLIPS') return 'CLIP';
+  return k.replace(/[.$#\[\]\/]/g,'-');
+}
 function acCOGS(mk){
   var cost=acctData.cost||{}, known=0, uncoveredRev=0, coveredRev=0, missing={};
   acRevOrders(mk).forEach(function(o){
     (o.lineItems||[]).forEach(function(li){
       if(!li || !li.code || AC_NONGOODS[li.type]) return;
       var q=parseInt(li.qty)||0; if(q<=0) return;
-      var k=ofNormCode(li.code), amt=acN(li.amount);
+      var k=acCostKey(li.code, li.type), amt=acN(li.amount);
       var c=cost[k];
       if(c!=null && c!=='' && acN(c)>0){ known+=acN(c)*q; coveredRev+=amt; }
       else { uncoveredRev+=amt; missing[k]=(missing[k]||0)+amt; }
     });
   });
   var pct=acN(acctData.cogsPct);
-  var est = pct>0 ? uncoveredRev*pct/100 : 0;
   var totalRev=coveredRev+uncoveredRev;
+  var cov = totalRev>0 ? coveredRev/totalRev*100 : 0;
+  // Once virtually everything is costed, blocking the margin over the last
+  // fraction of a percent is no longer honesty, it is just an unusable screen.
+  // Above 99% the remainder is carried at the cost ratio the costed products
+  // actually show, and the figure says so wherever it appears.
+  var near = uncoveredRev>0 && cov>=99 && coveredRev>0;
+  var est = near ? uncoveredRev*(known/coveredRev)
+          : (pct>0 ? uncoveredRev*pct/100 : 0);
   return {
     value: known+est,
     exact: known,
     estimated: est,
-    coverage: totalRev>0 ? coveredRev/totalRev*100 : 0,
+    nearFull: near,
+    coverage: cov,
     coveredRev: coveredRev,
     uncoveredRev: uncoveredRev,
     missing: missing,
     // "complete" = every sold piece has a cost, either a real one or via the % fallback.
     // Only then may gross profit be computed against the FULL revenue — otherwise
     // full revenue minus partial cost invents a margin that does not exist.
-    usable: (totalRev>0 && uncoveredRev<1) || pct>0,
+    usable: (totalRev>0 && uncoveredRev<1) || near || pct>0,
     full: totalRev>0 && uncoveredRev<1
   };
 }
@@ -22406,7 +22427,7 @@ function acShip(iv){
   // line's landed total, and the extras inside it were allocated by value.
   var lines=(iv.lines||[]).map(function(l){
     var pcs=parseInt(l.pcs)||0;
-    return {code:ofNormCode(l.code), raw:l.raw||l.code, pcs:pcs, unit:acN(l.unit),
+    return {code:acCostKey(l.code), raw:l.raw||l.code, pcs:pcs, unit:acN(l.unit),
             amtF:acN(l.amt), landedOld:acN(l.landed)};
   }).filter(function(l){ return l.pcs>0; });
   var haveAmt=lines.length>0 && lines.every(function(l){ return l.amtF>0; });
@@ -22448,11 +22469,21 @@ function acShipSet(id, field, v){
 function acShipApply(){
   var ships=acShips(), n=0;
   if(!ships.length){ alert('No shipments yet — import a supplier invoice first.'); return; }
-  if(!confirm('Recalculate the purchase cost of every product from the shipments below?\n\nThe newest shipment wins per product code (replacement cost).')) return;
+  // A shipment with no freight and no bank charges prices its pieces roughly a
+  // third too cheap, and being the newest it would overwrite documented figures.
+  // Say so before it happens rather than let a good cost quietly get worse.
+  var bare=ships.filter(function(s){ return s.extras<=0; });
+  var msg='Recalculate the purchase cost of every product from the shipments below?\n\n'
+    +'The newest shipment wins per product code (replacement cost).';
+  if(bare.length) msg='⚠️ '+bare.length+' shipment'+(bare.length===1?' has':'s have')+' no freight and no bank charges entered:\n'
+    +bare.map(function(s){ return '   · '+s.supplier+(s.no?' '+s.no:''); }).join('\n')
+    +'\nTheir pieces will look far cheaper than they are, and they may overwrite\nbetter figures from an older shipment.\n\n'+msg;
+  if(!confirm(msg)) return;
   if(!acctData.cost) acctData.cost={};
   ships.forEach(function(s){ s.lines.forEach(function(l){
     if(!l.code || !(l.landed>0)) return;
-    acctData.cost[l.code]=Math.round(l.landed*100)/100; n++;
+    // Clips are invoiced per piece and sold per pack of 100.
+    acctData.cost[l.code]=Math.round(l.landed*(l.code==='CLIP'?100:1)*100)/100; n++;
   }); });
   acSync(); acRender();
   alert('✓ '+n+' product cost'+(n===1?'':'s')+' updated from '+ships.length+' shipment'+(ships.length===1?'':'s')+'.');
@@ -22473,7 +22504,7 @@ function acShipFIFO(){
     (o.lineItems||[]).forEach(function(li){
       if(!li || !li.code || AC_NONGOODS[li.type]) return;
       var q=parseInt(li.qty)||0; if(q<=0) return;
-      sales.push({date:String(o.date||''), code:ofNormCode(li.code), qty:q, unit:acN(li.amount)/q});
+      sales.push({date:String(o.date||''), code:acCostKey(li.code, li.type), qty:q, unit:acN(li.amount)/q});
     });
   });
   sales.sort(function(a,b){ return a.date.localeCompare(b.date); });
@@ -22506,7 +22537,7 @@ function acVelocity(days){
     (o.lineItems||[]).forEach(function(li){
       if(!li || !li.code || AC_NONGOODS[li.type]) return;
       var q=parseInt(li.qty)||0; if(q<=0) return;
-      var c=ofNormCode(li.code);
+      var c=acCostKey(li.code, li.type);
       if(!last[c] || d>last[c]) last[c]=d;
       if(d>=fromS) sold[c]=(sold[c]||0)+q;
     });
@@ -22519,7 +22550,7 @@ function acInventoryValue(){
     if(!s||!s.code) return;
     var q=(parseInt(s.qty)||0)+(parseInt(s.damaged)||0);
     pcs+=q;
-    var c=cost[ofNormCode(s.code)];
+    var c=cost[acCostKey(s.code)];
     if(c!=null && acN(c)>0){ val+=acN(c)*q; pcsKnown+=q; }
   });
   return {value:val, pcs:pcs, pcsKnown:pcsKnown, avg: pcsKnown>0?val/pcsKnown:0, coverage: pcs>0?pcsKnown/pcs*100:0};
@@ -23302,7 +23333,7 @@ function acRenderStock(){
     acCard('Avg. landed cost', inv.avg>0?(Math.round(inv.avg*100)/100).toLocaleString()+' ฿':'—',
       inv.avg>0?'blended over every piece in stock — clips included':'needs landed cost', inv.avg>0?'var(--text)':'var(--text3)'),
     acCard('COGS · '+acMKlabel(mk), cogs.usable?acB(cogs.value):'—',
-      cogs.usable?(Math.round(cogs.coverage)+'% of sales costed'):'needs landed cost', cogs.usable?'#dc2626':'var(--text3)'),
+      cogs.usable?((Math.round(cogs.coverage*10)/10)+'% of sales costed'):'needs landed cost', cogs.usable?'#dc2626':'var(--text3)'),
     acCard('Gross profit', gp==null?'—':acB(gp), gp==null?'needs landed cost':acB(rev)+' revenue', gp==null?'var(--text3)':'#16a34a'),
     acCard('Gross margin', (gp==null||rev<=0)?'—':Math.round(gp/rev*100)+'%', (gp==null||rev<=0)?'needs landed cost':'(revenue − COGS) ÷ revenue', (gp==null||rev<=0)?'var(--text3)':'#16a34a'),
     acCard('Inventory days (DIO)', dio==null?'—':Math.round(dio)+' d', dio==null?'needs landed cost':'how long the stock lasts at this month\'s pace', dio==null?'var(--text3)':(dio>120?'#d97706':'var(--text)'))
@@ -23310,6 +23341,9 @@ function acRenderStock(){
 
   if(!cogs.usable) h+=acMiss('Landed cost missing for '+Object.keys(cogs.missing).length+' product'+(Object.keys(cogs.missing).length===1?'':'s'),
     'Import the supplier invoices in ⚙️ Data → section 2, or fill the cost column there. Until every sold piece has a cost, gross profit stays blank on purpose — full revenue minus partial cost would invent a margin.');
+  else if(cogs.nearFull) h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:9px 11px;margin-bottom:10px;font-size:11px;color:var(--text2);line-height:1.5">'
+    +Object.keys(cogs.missing).length+' product'+(Object.keys(cogs.missing).length===1?'':'s')+' still carry no landed cost ('+_esc(Object.keys(cogs.missing).join(', '))+' — '+acB(cogs.uncoveredRev)+' of revenue, '
+    +(Math.round((100-cogs.coverage)*100)/100)+'%). They are carried at the cost ratio the costed products show, so the margin below is accurate to about a tenth of a percent.</div>';
 
   // ── Cost waterfall
   h+=acTitle('Cost waterfall','How a supplier price becomes the cost of one piece in our warehouse');
@@ -23354,7 +23388,7 @@ function acRenderStock(){
       // value: the matching shipment if we have one, otherwise the pieces at their known cost
       var s=ships.filter(function(x){ return (x.containerNo && c.containerNo && x.containerNo===c.containerNo)
                                           || (x.no && c.piNo && x.no===c.piNo); })[0];
-      var val = s ? s.total : items.reduce(function(a,i){ return a+acN((acctData.cost||{})[ofNormCode(i.code)])*(parseInt(i.qty)||0); },0);
+      var val = s ? s.total : items.reduce(function(a,i){ return a+acN((acctData.cost||{})[acCostKey(i.code)])*(parseInt(i.qty)||0); },0);
       tVal+=val;
       var eta = c.arrivedTh || c.balance || c.loading || '';
       return '<div style="border:1px solid var(--border);border-radius:var(--rs);padding:9px 11px;margin-bottom:6px;background:var(--bg2)">'
@@ -23378,7 +23412,7 @@ function acRenderStock(){
   (stockItems||[]).forEach(function(s){
     if(!s||!s.code) return;
     var q=(parseInt(s.qty)||0)+(parseInt(s.damaged)||0); if(q<=0) return;
-    var c=ofNormCode(s.code), sold90=vel.sold[c]||0;
+    var c=acCostKey(s.code), sold90=vel.sold[c]||0;
     var val=acN((acctData.cost||{})[c])*q;
     var perDay=sold90/90, cover = perDay>0 ? q/perDay : null;
     var b = sold90<=0 ? 'dead' : (cover!=null && cover<=60 ? 'fast' : 'slow');
@@ -23412,7 +23446,7 @@ function acRenderStock(){
     (o.lineItems||[]).forEach(function(li){
       if(!li || !li.code || AC_NONGOODS[li.type]) return;
       var q=parseInt(li.qty)||0; if(q<=0) return;
-      var c=ofNormCode(li.code);
+      var c=acCostKey(li.code, li.type);
       var p=perCode[c]||(perCode[c]={code:c, qty:0, rev:0, cogs:0, costed:true});
       p.qty+=q; p.rev+=acN(li.amount);
       var cst=acN((acctData.cost||{})[c]);
@@ -24478,14 +24512,14 @@ function acSoldCodes(){
     if(!o||o.status==='cancelled') return;
     (o.lineItems||[]).forEach(function(li){
       if(!li||!li.code||AC_NONGOODS[li.type]) return;
-      var k=ofNormCode(li.code); if(!k) return;
+      var k=acCostKey(li.code, li.type); if(!k) return;
       if(!m[k]) m[k]={code:k, rev:0, qty:0, price:0, n:0};
       m[k].rev+=acN(li.amount); m[k].qty+=parseInt(li.qty)||0;
       if(acN(li.unitPrice)>0){ m[k].price+=acN(li.unitPrice); m[k].n++; }
     });
   });
   (stockItems||[]).forEach(function(s){
-    if(!s||!s.code) return; var k=ofNormCode(s.code);
+    if(!s||!s.code) return; var k=acCostKey(s.code);
     if(!m[k]) m[k]={code:k, rev:0, qty:0, price:0, n:0};
   });
   return Object.keys(m).map(function(k){
