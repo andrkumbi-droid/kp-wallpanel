@@ -10,7 +10,7 @@
 // has not checked in 24 hours — on ordinary fetch events too. So a device that is simply
 // left running picks the new build up by itself within a day, and one where somebody
 // opens the app picks it up at once.
-const BUILD = 20260802004;
+const BUILD = 20260802005;
 const CACHE = 'kp-' + BUILD;
 const SHELL = [
   '/kp-wallpanel/',
@@ -49,10 +49,14 @@ self.addEventListener('activate', function(e) {
     await new Promise(function(r) { setTimeout(r, 3000); });
     self.removeEventListener('message', onMsg);
 
-    for (const c of wins) {
-      if (acked[c.id]) continue;
-      try { await c.navigate(c.url); } catch(err) {}
-    }
+    // Fire and FORGET. Awaiting the navigation here deadlocks the tab: the new page
+    // load needs a fetch, a fetch waits for this worker to finish activating, and this
+    // worker would be waiting for the navigation. Not awaiting lets waitUntil resolve,
+    // the worker becomes activated, and the queued page loads go through.
+    wins.forEach(function(c) {
+      if (acked[c.id]) return;
+      try { var p = c.navigate(c.url); if (p && p.catch) p.catch(function(){}); } catch(err) {}
+    });
   })());
 });
 
