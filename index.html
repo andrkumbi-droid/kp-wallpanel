@@ -2709,6 +2709,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <button type="button" class="btn btng" id="tour-add-confirm" style="margin-top:12px;opacity:.45;pointer-events:none" onclick="ofAddConfirm()"><i class="ti ti-check"></i> Add to tour / เพิ่มเข้าทัวร์</button>
 </div></div>
 
+<div class="modal-overlay" id="tour-drv-modal"><div class="modal">
+  <div class="mhdr"><span class="mtit" id="tour-drv-title">เปลี่ยนคนขับ / Change driver</span><button type="button" class="mclose" onclick="closeTourDrv()"><i class="ti ti-x"></i></button></div>
+  <div style="font-size:12px;color:var(--text2);margin-bottom:8px">แตะคนขับคนใหม่ — ออเดอร์ทั้งหมดในทัวร์ย้ายตามไปด้วย / Tap the new driver — the whole tour moves with all its orders</div>
+  <div id="tour-drv-list" style="max-height:55vh;overflow-y:auto"></div>
+</div></div>
+
 <div class="modal-overlay" id="rm-modal"><div class="modal">
   <div class="mhdr"><span class="mtit">Add delivered order / เพิ่มออเดอร์</span><button type="button" class="mclose" onclick="closeRM()"><i class="ti ti-x"></i></button></div>
   <label class="fl" style="margin-top:0">Order No.</label><input type="text" id="rm-id" placeholder="#567">
@@ -9107,7 +9113,11 @@ function ofRenderTour(){
       : '';
     return '<div class="tmgmt">'+
       '<div '+(ro?'':'onclick="openTourDetail('+ti+')" style="cursor:pointer"')+'>'+
-      '<div style="text-align:center;font-size:16px;font-weight:700;color:var(--text);margin-bottom:8px">'+(tidOk(t.tid)?'<span title="Tour ID / รหัสทัวร์" style="font-size:12px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px;margin-right:7px;vertical-align:2px">'+t.tid+'</span>':'')+'<i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+(ro?'':'<i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2);vertical-align:-2px;margin-left:4px"></i>')+'</div>'+
+      '<div style="text-align:center;font-size:16px;font-weight:700;color:var(--text);margin-bottom:8px">'+(tidOk(t.tid)?'<span title="Tour ID / รหัสทัวร์" style="font-size:12px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px;margin-right:7px;vertical-align:2px">'+t.tid+'</span>':'')+(ro
+        ? '<i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName
+        // Tapping the name itself swaps the driver — the rest of the header still opens the tour detail.
+        : '<span onclick="event.stopPropagation();ofSwapDriver(\''+t.id+'\')" title="เปลี่ยนคนขับ / change driver" style="cursor:pointer;padding:1px 6px;border-radius:8px;background:var(--blue-l)"><i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+'<span style="font-size:12px;font-weight:800;color:var(--blue);margin-left:6px">⇄</span></span>')+
+      (ro?'':'<i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2);vertical-align:-2px;margin-left:4px"></i>')+'</div>'+
       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:8px">'+
       kpcTourBubble(t.id)+
       '<button type="button" onclick="event.stopPropagation();printTourReceipts('+ti+')" title="Customer receipts / ใบเสร็จลูกค้า" style="font-size:11px;padding:3px 8px;border:none;background:#1D4ED8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600"><i class="ti ti-receipt"></i> Print receipts / พิมพ์ใบเสร็จ</button>'+
@@ -11539,6 +11549,67 @@ function ofAddConfirm(){
   try{ if(tidOk(t.tid)){ tourStampOrders(t); tourRegUpsert(t); } else { tourAllocNo(t); } }catch(e){}
   closeTourAdd();
   ofRenderTour(); ofRenderOrders(); mgRender(); syncTours(); syncOrders();
+}
+
+// ─────────────────────────────────────────────────────────────
+// SWAP THE DRIVER OF A LIVE TOUR — office taps the driver name on the tour card.
+// The tour keeps everything (orders, tour ID, km log, photos, pay); only who drives
+// it changes. Both drivers get a push, and it goes on the audit record.
+// ─────────────────────────────────────────────────────────────
+var ofSwapTourId = null;
+function ofSwapDriver(tourId){
+  var t = activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  ofSwapTourId = tourId;
+  var ttl=document.getElementById('tour-drv-title');
+  if(ttl) ttl.textContent='เปลี่ยนคนขับ / Change driver — '+(t.driverName||'');
+  ofRenderSwapDrvList();
+  document.getElementById('tour-drv-modal').classList.add('open');
+}
+function ofRenderSwapDrvList(){
+  var wrap=document.getElementById('tour-drv-list'); if(!wrap) return;
+  var t=activeTours.find(function(x){return x.id===ofSwapTourId;});
+  if(!t){ wrap.innerHTML=''; return; }
+  if(!drivers.length){ wrap.innerHTML='<div style="font-size:13px;color:var(--text2);padding:16px;text-align:center">No drivers / ไม่มีคนขับ</div>'; return; }
+  wrap.innerHTML = drivers.map(function(d){
+    var cur = d.id===t.driverId;
+    var busy = activeTours.find(function(x){return x!==t && x.driverId===d.id && x.orders && x.orders.length;});
+    return '<div class="avrow" '+(cur?'':'onclick="ofSwapDrvPick(\''+d.id+'\')" ')+'style="margin-bottom:4px;align-items:center;'+(cur?'background:var(--bg2);opacity:.75;cursor:default':'cursor:pointer')+'">'+
+      '<div style="width:32px;height:32px;border-radius:50%;background:var(--blue-l);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--blue-t);flex-shrink:0;margin-right:8px">'+initials(d.name)+'</div>'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:13px;font-weight:700">'+d.name+(cur?' <span style="font-size:10px;font-weight:700;color:var(--green)">• ตอนนี้ / current</span>':'')+'</div>'+
+        (d.phone?'<div style="font-size:11px;color:var(--text2)">📞 '+d.phone+'</div>':'')+
+        (busy?'<div style="font-size:11px;color:var(--orange)">🚚 มีทัวร์อยู่แล้ว / already has a tour ('+busy.orders.length+')</div>':'')+
+      '</div>'+
+      (cur?'<i class="ti ti-check" style="font-size:16px;color:var(--green);flex-shrink:0"></i>'
+         :'<i class="ti ti-chevron-right" style="font-size:16px;color:var(--blue);flex-shrink:0"></i>')+
+    '</div>';
+  }).join('');
+}
+function closeTourDrv(){ var m=document.getElementById('tour-drv-modal'); if(m) m.classList.remove('open'); ofSwapTourId=null; }
+function ofSwapDrvPick(driverId){
+  var t = activeTours.find(function(x){return x.id===ofSwapTourId;}); if(!t){ closeTourDrv(); return; }
+  var d = drivers.find(function(x){return x.id===driverId;}); if(!d) return;
+  var oldId=t.driverId||'', oldName=t.driverName||'—', n=(t.orders||[]).length;
+  if(oldId===d.id){ closeTourDrv(); return; }
+  if(!confirm('เปลี่ยนคนขับ / Change driver\n\n'+oldName+'  →  '+d.name+'\n'+n+' order'+(n!==1?'s':'')+(t.driving?'\n\n⚠ ทัวร์ออกรถแล้ว / tour already departed':''))) return;
+  t.driverId=d.id; t.driverName=d.name;
+  // A Lalamove tour pays through the carrier's "car fee"; a real driver is paid the
+  // tour pay. Keep the two in step so neither side shows a stale number.
+  if(ofIsLala(t) && !t.carFee && parseFloat(t.driverPay)) t.carFee=parseFloat(t.driverPay)||0;
+  // "Delivered by" on every order in the tour follows the new driver (sheet col AC).
+  (t.orders||[]).forEach(function(oid){
+    var o=orders.find(function(x){return x.id===oid;});
+    if(o){ o.deliveredBy=d.name; try{ sheetsSyncOrder(o); }catch(e){} }
+  });
+  try{ tourRegUpsert(t); }catch(e){}
+  auditTour('driver','🚚 '+d.name, 'เปลี่ยนคนขับ / driver changed: '+oldName+' → '+d.name+' · '+n+' order'+(n!==1?'s':'')+(n?': '+(t.orders||[]).join(', '):''));
+  try{ if(oldId) pushSend('driver_'+oldId,'🔄 ทัวร์ถูกย้าย / Tour reassigned','ทัวร์ของคุณย้ายไปที่ '+d.name+' / your tour moved to '+d.name,{tag:'tour'}); }catch(e){}
+  try{ pushSend('driver_'+d.id,'🚚 New Tour Ready!',n+' order'+(n!==1?'s':'')+' assigned to you',{tag:'tour'}); }catch(e){}
+  try{ addLog('Tour driver '+oldName+' → '+d.name+' ('+n+' orders)','🔄'); }catch(e){}
+  closeTourDrv();
+  ofRenderTour(); try{ ofRenderOrders(); }catch(e){} try{ mgRender(); }catch(e){}
+  try{ ofRenderLala(); }catch(e){}
+  syncTours(); syncOrders();
 }
 
 // ─────────────────────────────────────────────────────────────
