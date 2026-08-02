@@ -2841,10 +2841,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" class="tab"        onclick="act('cash')" id="act-cash" style="flex-shrink:0">💧 Cash</button>
       <button type="button" class="tab"        onclick="act('prof')" id="act-prof" style="flex-shrink:0">📈 Profit</button>
       <button type="button" class="tab"        onclick="act('exp')"  id="act-exp"  style="flex-shrink:0">💸 Expenses</button>
+      <button type="button" class="tab"        onclick="act('rev')"  id="act-rev"  style="flex-shrink:0">💰 Revenue</button>
     </div>
     <div class="tabs" style="display:flex;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;border-bottom:none;justify-content:center">
-      <button type="button" class="tab" onclick="act('rev')"    id="act-rev"    style="flex-shrink:0">💰 Revenue</button>
       <button type="button" class="tab" onclick="act('days')"   id="act-days"   style="flex-shrink:0">🚚 Days</button>
+      <button type="button" class="tab" onclick="act('stock')"  id="act-stock"  style="flex-shrink:0">📦 Stock &amp; cost</button>
       <button type="button" class="tab" onclick="act('health')" id="act-health" style="flex-shrink:0">❤️ Health</button>
       <button type="button" class="tab" onclick="act('ai')"     id="act-ai"     style="flex-shrink:0">🤖 Insights</button>
       <button type="button" class="tab" onclick="act('data')"   id="act-data"   style="flex-shrink:0">⚙️ Data</button>
@@ -2852,6 +2853,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   </div>
   <div class="view active" id="acv-sum"><div class="sec"    id="ac-sum"></div></div>
   <div class="view"        id="acv-days"><div class="sec"   id="ac-days"></div></div>
+  <div class="view"        id="acv-stock"><div class="sec"  id="ac-stock"></div></div>
   <div class="view"        id="acv-cash"><div class="sec"   id="ac-cash"></div></div>
   <div class="view"        id="acv-prof"><div class="sec"   id="ac-prof"></div></div>
   <div class="view"        id="acv-exp"><div class="sec"    id="ac-exp"></div></div>
@@ -22279,16 +22281,23 @@ function acAR(){
 
 // ── EXPENSES ───────────────────────────────────────────────────────────────
 // Same sources as the Office → Bills tab, so both screens always agree.
+// Every category also remembers WHICH section it belongs to. Without that the
+// Expenses tab showed a section "Other 249,233" above a category "Other 132,312"
+// and the two looked like they contradicted each other — they never did, the
+// section is the sum of Other + Carrier + Packaging + Fuel.
+var AC_SEC={fixed:'🏠 Fixed costs', staff:'👤 Staff & drivers', ship:'🚚 Shipper',
+            utilities:'⚡ Utilities', food:'🍜 Food', other:'📦 Other',
+            container:'🚢 Unload helpers', extra:'➕ Manual entries', loans:'🚗 Loans & leases'};
 function acExpenses(mk){
-  var out={fixed:0, utilities:0, food:0, other:0, ship:0, staff:0, container:0, extra:0, total:0, cats:{}, fixedTotal:0, varTotal:0};
-  var addCat=function(label,amt,isFixed){
-    if(!out.cats[label]) out.cats[label]={amt:0, fixed:!!isFixed};
+  var out={fixed:0, utilities:0, food:0, other:0, ship:0, staff:0, container:0, extra:0, loans:0, total:0, cats:{}, fixedTotal:0, varTotal:0};
+  var addCat=function(label,amt,isFixed,sec){
+    if(!out.cats[label]) out.cats[label]={amt:0, fixed:!!isFixed, sec:sec||'other'};
     out.cats[label].amt+=amt;
     if(isFixed) out.fixedTotal+=amt; else out.varTotal+=amt;
   };
   (costFixed&&costFixed[mk]||[]).forEach(function(r){
     var a=acN(r.amount); if(!a) return;
-    out.fixed+=a; addCat('🏠 '+(r.label||'Fixed cost'), a, true);
+    out.fixed+=a; addCat('🏠 '+(r.label||'Fixed cost'), a, true, 'fixed');
   });
   (bills||[]).forEach(function(b){
     if(!b || billsMKey(b.date)!==mk) return;
@@ -22297,12 +22306,12 @@ function acExpenses(mk){
     out[sec]=(out[sec]||0)+a;
     var icon = sec==='utilities'?'⚡':sec==='food'?'🍜':'📦';
     var isFixed = !!(acctData.fixedCats||{})[b.subcatId];
-    addCat(icon+' '+(b.subcatLabel||b.what||sec), a, isFixed);
+    addCat(icon+' '+(b.subcatLabel||b.what||sec), a, isFixed, sec);
   });
   (orders||[]).forEach(function(o){
     var a=acN(o&&o.shipCost); if(a<=0) return;
     if(billsMKey(o.shipCostDate||o.date)!==mk) return;
-    out.ship+=a; addCat('🚚 Shipper / ค่าส่ง', a, false);
+    out.ship+=a; addCat('🚚 Shipper / ค่าส่ง', a, false, 'ship');
   });
   (payLog||[]).forEach(function(e){
     if(!e || billsMKey(e.date)!==mk) return;
@@ -22310,19 +22319,40 @@ function acExpenses(mk){
     var a=sign*acN(e.amount); if(!a) return;
     out.staff+=a;
     var g='Other'; try{ g=_billStaffGroup(e.who, e.whoName); }catch(err){}
-    addCat('👤 Staff · '+g, a, g==='Warehouse'||g==='Other');
+    addCat('👤 Staff · '+g, a, g==='Warehouse'||g==='Other', 'staff');
   });
   (containerLog||[]).forEach(function(c){
     var a=acN(c&&c.helpersTotal); if(a<=0) return;
     if(acMK(c.arrivedWh)!==mk) return;
-    out.container+=a; addCat('🚢 Unload helpers / คนลงตู้', a, false);
+    out.container+=a; addCat('🚢 Unload helpers / คนลงตู้', a, false, 'container');
   });
   ((acctData.other&&acctData.other[mk]&&acctData.other[mk].extra)||[]).forEach(function(r){
     var a=acN(r.amount); if(!a) return;
-    out.extra+=a; addCat('➕ '+(r.label||'Other'), a, !!r.fixed);
+    out.extra+=a; addCat('➕ '+(r.label||'Other'), a, !!r.fixed, 'extra');
   });
-  out.total = out.fixed+out.utilities+out.food+out.other+out.ship+out.staff+out.container+out.extra;
+  // Car and loan instalments are a real monthly fixed cost but they are never
+  // booked as a bill, so the Fixed figure used to show rent only. Counted from
+  // ⚙️ Data → Loans & debt; switch off there if the instalment is also entered
+  // as a bill, otherwise it would be counted twice.
+  if(acctData.loansInFixed!==false) (acctData.loans||[]).forEach(function(r){
+    var a=acN(r.monthly); if(a<=0) return;
+    out.loans+=a; addCat('🚗 '+(r.label||'Loan')+' · instalment', a, true, 'loans');
+  });
+  out.total = out.fixed+out.utilities+out.food+out.other+out.ship+out.staff+out.container+out.extra+out.loans;
   return out;
+}
+// Sections with the categories inside them, biggest first — the thing that makes
+// the two numbers on the Expenses tab reconcile on screen.
+function acExpSections(exp){
+  var secs={};
+  Object.keys(exp.cats).forEach(function(k){
+    var c=exp.cats[k], s=c.sec||'other';
+    (secs[s]=secs[s]||{key:s, label:AC_SEC[s]||s, amt:0, rows:[]});
+    secs[s].amt+=c.amt; secs[s].rows.push({label:k, value:c.amt, fixed:c.fixed});
+  });
+  return Object.keys(secs).map(function(k){ var s=secs[k];
+    s.rows.sort(function(a,b){return b.value-a.value;}); return s;
+  }).sort(function(a,b){ return b.amt-a.amt; });
 }
 
 // ── COGS (cost of goods sold) ──────────────────────────────────────────────
@@ -22360,6 +22390,129 @@ function acCOGS(mk){
     full: totalRev>0 && uncoveredRev<1
   };
 }
+// ── LANDED COST PER SHIPMENT ───────────────────────────────────────────────
+// One imported supplier invoice = one shipment. Landed cost = goods at the rate
+// actually paid + freight + duty + bank charges + other import costs, the extras
+// spread over the lines BY VALUE. VAT is deliberately not a component: it is
+// recoverable input tax and does not belong in the cost of a piece.
+function acShip(iv){
+  var rate=acN(iv.rate)||1;
+  var freight=acN(iv.freight), duty=acN(iv.duty), bank=acN(iv.bank), other=acN(iv.other);
+  // `unit` on a stored line is the price per INVOICE unit (usually a carton), not
+  // per piece — pcs = cartons × pack size. Multiplying pcs × unit therefore blows
+  // the goods value up by the pack size. The line's own money is `amt` (foreign)
+  // where the import saved it; for records saved before that field existed it is
+  // reconstructed from the stored landed cost, which is exact: landed × pcs is the
+  // line's landed total, and the extras inside it were allocated by value.
+  var lines=(iv.lines||[]).map(function(l){
+    var pcs=parseInt(l.pcs)||0;
+    return {code:ofNormCode(l.code), raw:l.raw||l.code, pcs:pcs, unit:acN(l.unit),
+            amtF:acN(l.amt), landedOld:acN(l.landed)};
+  }).filter(function(l){ return l.pcs>0; });
+  var haveAmt=lines.length>0 && lines.every(function(l){ return l.amtF>0; });
+  if(!haveAmt){
+    var sumTotal=lines.reduce(function(a,l){ return a+l.landedOld*l.pcs; },0);
+    var oldExtras=freight+duty+other;                  // bank did not exist then
+    var goodsTHB=Math.max(0, sumTotal-oldExtras);
+    lines.forEach(function(l){
+      var t=l.landedOld*l.pcs;
+      l.amtF = (sumTotal>0 ? t*(goodsTHB/sumTotal) : 0) / rate;
+    });
+  }
+  var goodsF=lines.reduce(function(a,l){ return a+l.amtF; },0);
+  var goods=goodsF*rate;
+  var extras=freight+duty+bank+other, total=goods+extras;
+  var pcs=lines.reduce(function(a,l){ return a+l.pcs; },0);
+  lines.forEach(function(l){
+    var share = goodsF>0 ? extras*(l.amtF/goodsF) : 0;
+    l.total  = l.amtF*rate + share;
+    l.landed = l.pcs>0 ? l.total/l.pcs : 0;
+  });
+  return {id:iv.id, supplier:iv.supplier||'—', no:iv.no||'', date:iv.date||'',
+          containerNo:iv.containerNo||'', currency:iv.currency||'THB', rate:rate,
+          goods:goods, freight:freight, duty:duty, bank:bank, other:other,
+          extras:extras, total:total, pcs:pcs, perPc: pcs>0?total/pcs:0, lines:lines, raw:iv};
+}
+function acShips(){
+  return (acctData.invoices||[]).map(acShip)
+    .sort(function(a,b){ return String(a.date).localeCompare(String(b.date)); });
+}
+function acShipSet(id, field, v){
+  var iv=(acctData.invoices||[]).filter(function(x){ return x.id===id; })[0];
+  if(!iv) return;
+  iv[field] = (field==='containerNo') ? String(v||'').trim() : acN(v);
+  acSync(); acRender();
+}
+// Push the recomputed landed cost of every shipment into the product costs the
+// rest of the accounting reads (newest shipment wins per code, replacement cost).
+function acShipApply(){
+  var ships=acShips(), n=0;
+  if(!ships.length){ alert('No shipments yet — import a supplier invoice first.'); return; }
+  if(!confirm('Recalculate the purchase cost of every product from the shipments below?\n\nThe newest shipment wins per product code (replacement cost).')) return;
+  if(!acctData.cost) acctData.cost={};
+  ships.forEach(function(s){ s.lines.forEach(function(l){
+    if(!l.code || !(l.landed>0)) return;
+    acctData.cost[l.code]=Math.round(l.landed*100)/100; n++;
+  }); });
+  acSync(); acRender();
+  alert('✓ '+n+' product cost'+(n===1?'':'s')+' updated from '+ships.length+' shipment'+(ships.length===1?'':'s')+'.');
+}
+// FIFO: sales of a code are allocated to the shipments that brought it in, oldest
+// first. That is what makes "how much of this container is sold and what did it
+// earn" a real number instead of a guess.
+function acShipFIFO(){
+  var ships=acShips(), lots={};
+  ships.forEach(function(s){ s.lines.forEach(function(l){
+    if(!l.code || l.pcs<=0) return;
+    (lots[l.code]=lots[l.code]||[]).push({ship:s, pcs:l.pcs, left:l.pcs, landed:l.landed, sold:0, rev:0});
+  }); });
+  Object.keys(lots).forEach(function(c){ lots[c].sort(function(a,b){ return String(a.ship.date).localeCompare(String(b.ship.date)); }); });
+  var sales=[];
+  (orders||[]).forEach(function(o){
+    if(!o || o.status==='cancelled') return;
+    (o.lineItems||[]).forEach(function(li){
+      if(!li || !li.code || AC_NONGOODS[li.type]) return;
+      var q=parseInt(li.qty)||0; if(q<=0) return;
+      sales.push({date:String(o.date||''), code:ofNormCode(li.code), qty:q, unit:acN(li.amount)/q});
+    });
+  });
+  sales.sort(function(a,b){ return a.date.localeCompare(b.date); });
+  var unmatched={};
+  sales.forEach(function(s){
+    var arr=lots[s.code]; if(!arr){ unmatched[s.code]=(unmatched[s.code]||0)+s.qty; return; }
+    var q=s.qty;
+    for(var i=0;i<arr.length && q>0;i++){
+      var take=Math.min(arr[i].left, q);
+      if(take<=0) continue;
+      arr[i].left-=take; arr[i].sold+=take; arr[i].rev+=take*s.unit; q-=take;
+    }
+    if(q>0) unmatched[s.code]=(unmatched[s.code]||0)+q;   // sold more than we ever imported
+  });
+  var byShip={};
+  Object.keys(lots).forEach(function(c){ lots[c].forEach(function(lot){
+    var b=byShip[lot.ship.id]||(byShip[lot.ship.id]={ship:lot.ship, pcs:0, sold:0, rev:0, cogs:0});
+    b.pcs+=lot.pcs; b.sold+=lot.sold; b.rev+=lot.rev; b.cogs+=lot.sold*lot.landed;
+  }); });
+  return {byShip:byShip, lots:lots, unmatched:unmatched};
+}
+// Stock movement per code over the last N days — the basis for fast/slow/dead.
+function acVelocity(days){
+  days=days||90;
+  var from=new Date(); from.setDate(from.getDate()-days);
+  var fromS=from.toISOString().slice(0,10), last={}, sold={};
+  (orders||[]).forEach(function(o){
+    if(!o || o.status==='cancelled') return;
+    var d=String(o.date||'').slice(0,10); if(!d) return;
+    (o.lineItems||[]).forEach(function(li){
+      if(!li || !li.code || AC_NONGOODS[li.type]) return;
+      var q=parseInt(li.qty)||0; if(q<=0) return;
+      var c=ofNormCode(li.code);
+      if(!last[c] || d>last[c]) last[c]=d;
+      if(d>=fromS) sold[c]=(sold[c]||0)+q;
+    });
+  });
+  return {sold:sold, last:last, days:days};
+}
 function acInventoryValue(){
   var cost=acctData.cost||{}, val=0, pcs=0, pcsKnown=0;
   (stockItems||[]).forEach(function(s){
@@ -22369,7 +22522,7 @@ function acInventoryValue(){
     var c=cost[ofNormCode(s.code)];
     if(c!=null && acN(c)>0){ val+=acN(c)*q; pcsKnown+=q; }
   });
-  return {value:val, pcs:pcs, coverage: pcs>0?pcsKnown/pcs*100:0};
+  return {value:val, pcs:pcs, pcsKnown:pcsKnown, avg: pcsKnown>0?val/pcsKnown:0, coverage: pcs>0?pcsKnown/pcs*100:0};
 }
 // Sales channel — derived from the order's existing "Contact channel" field.
 // No new field needed: the form already offers Facebook / Website / TikTok / the
@@ -22512,6 +22665,7 @@ function acRender(){
     if(_acTab==='exp')    acRenderExpenses();
     if(_acTab==='rev')    acRenderRevenue();
     if(_acTab==='days')   acRenderDays();
+    if(_acTab==='stock')  acRenderStock();
     if(_acTab==='health') acRenderHealth();
     if(_acTab==='ai')     acRenderAI();
     if(_acTab==='data')   acRenderData();
@@ -22535,7 +22689,11 @@ function acRenderSummary(){
     acCard('Net profit', pl.np==null?'—':acB(pl.np), pl.np==null?'needs product cost':(pl.nm!=null?Math.round(pl.nm)+'% margin':''), pl.np==null?'var(--text3)':(pl.np>=0?'#16a34a':'#dc2626'), pl.np==null?'':acDeltaChip(acDelta(pl.np, plPrev.np))),
     acCard('Cash balance', cash==null?'—':acB(cash), cash==null?'needs opening balance':'end of '+acMKlabel(mk), cash==null?'var(--text3)':'#0d9488'),
     acCard('A/R · ลูกหนี้', acB(ar.total), ar.rows.length+' unpaid orders', '#d97706'),
-    acCard('A/P · เจ้าหนี้', (acctData.ap||[]).length?acB(ap):'—', (acctData.ap||[]).length?((acctData.ap||[]).filter(function(r){return !r.paid;}).length+' open invoices'):'needs supplier invoices', (acctData.ap||[]).length?'#dc2626':'var(--text3)'),
+    acCard('A/P · เจ้าหนี้',
+      acctData.noAP===true ? '0 ฿' : ((acctData.ap||[]).length?acB(ap):'—'),
+      acctData.noAP===true ? 'cash only — nothing owed to suppliers'
+        : ((acctData.ap||[]).length?((acctData.ap||[]).filter(function(r){return !r.paid;}).length+' open invoices'):'needs supplier invoices'),
+      acctData.noAP===true ? 'var(--text)' : ((acctData.ap||[]).length?'#dc2626':'var(--text3)')),
     acCard('Working capital', (cash==null)?'—':acB(cash+ar.total+inv.value-ap-acDebtTotal()), (cash==null)?'needs cash + costs':'cash + A/R + stock − A/P − debt', (cash==null)?'var(--text3)':'var(--text)')
   ]);
 
@@ -22743,25 +22901,33 @@ function acRenderExpenses(){
 
   h+=acGrid([
     acCard('Total expenses', acB(exp.total), acMKlabel(mk), '#dc2626', acDeltaChip(acDelta(exp.total, expP.total), true)),
-    acCard('Fixed', acB(exp.fixedTotal), exp.total>0?Math.round(exp.fixedTotal/exp.total*100)+'% of total':'', 'var(--text)'),
+    acCard('Fixed', acB(exp.fixedTotal), (exp.total>0?Math.round(exp.fixedTotal/exp.total*100)+'% of total':'')+(exp.loans>0?' · incl. '+acB(exp.loans)+' instalments':''), 'var(--text)'),
     acCard('Variable', acB(exp.varTotal), exp.total>0?Math.round(exp.varTotal/exp.total*100)+'% of total':'', 'var(--text)'),
     acCard('vs. budget', acN(budget.exp)>0?Math.round(exp.total/acN(budget.exp)*100)+'%':'—', acN(budget.exp)>0?acB(acN(budget.exp))+' budget':'needs budget (⚙️ Data)', acN(budget.exp)>0?(exp.total>acN(budget.exp)?'#dc2626':'#16a34a'):'var(--text3)')
   ]);
 
-  h+=acTitle('Breakdown by section','');
-  h+=acBars([
-    {label:'🏠 Fixed costs', value:exp.fixed},
-    {label:'👤 Staff & drivers', value:exp.staff},
-    {label:'🚚 Shipper', value:exp.ship},
-    {label:'⚡ Utilities', value:exp.utilities},
-    {label:'🍜 Food', value:exp.food},
-    {label:'📦 Other', value:exp.other},
-    {label:'🚢 Unload helpers', value:exp.container},
-    {label:'➕ Manual entries', value:exp.extra}
-  ].filter(function(r){return r.value!==0;}), {color:'#dc2626'});
+  h+=acTitle('Breakdown by section','Every section opened up into the cost lines inside it — the section total is exactly their sum');
+  var secs=acExpSections(exp);
+  var maxSec=secs.reduce(function(m,s){ return Math.max(m,Math.abs(s.amt)); },0)||1;
+  h+=secs.map(function(s){
+    var w=Math.max(2, Math.round(Math.abs(s.amt)/maxSec*100));
+    return '<div style="margin-bottom:10px">'
+      +'<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;font-weight:800">'
+        +'<span style="min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+s.label+'</span>'
+        +'<span style="white-space:nowrap">'+acB(s.amt)+'</span></div>'
+      +'<div style="height:7px;background:var(--bg2);border-radius:4px;overflow:hidden;margin:3px 0 4px"><div style="height:100%;border-radius:4px;background:'+(s.amt<0?'#16a34a':'#dc2626')+';width:'+w+'%"></div></div>'
+      +(s.rows.length>1||s.rows[0].label.replace(/^\S+\s/,'')!==s.label.replace(/^\S+\s/,'')
+        ? '<div style="padding-left:10px;border-left:2px solid var(--border)">'+s.rows.map(function(r){
+            return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--text2);padding:1px 0">'
+              +'<span style="min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(r.label)+(r.fixed?' <span style="color:var(--text3)">· fixed</span>':'')+'</span>'
+              +'<span style="white-space:nowrap;font-weight:700">'+acB(r.value)+'</span></div>';
+          }).join('')+'</div>' : '')
+    +'</div>';
+  }).join('');
+  h+='<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:800;padding:8px 10px;border-top:2px solid var(--border);margin-top:2px"><span>TOTAL</span><span>'+acB(exp.total)+'</span></div>';
 
-  h+=acTitle('Top expense categories','Every single cost line, biggest first');
-  var cats=Object.keys(exp.cats).map(function(k){ return {label:k, value:exp.cats[k].amt}; }).sort(function(a,b){return b.value-a.value;});
+  h+=acTitle('Top expense categories','Every single cost line, biggest first — ignoring which section it sits in');
+  var cats=Object.keys(exp.cats).map(function(k){ return {label:k, value:exp.cats[k].amt, extra:'in '+(AC_SEC[exp.cats[k].sec]||exp.cats[k].sec)}; }).sort(function(a,b){return b.value-a.value;});
   h+=acBars(cats, {color:'#dc2626', limit:15});
 
   h+=acTitle('Monthly expense trend','');
@@ -23116,6 +23282,249 @@ function acDaysCSV(){
   setTimeout(function(){ URL.revokeObjectURL(a.href); },1000);
 }
 
+// ── 5c) INVENTORY & COST INTELLIGENCE ──────────────────────────────────────
+// Everything here hangs off ONE number that the operational data cannot know:
+// the landed cost of a piece. Without it the tab says so instead of inventing
+// a margin — same honesty rule as the Profit tab.
+function acRenderStock(){
+  var el=document.getElementById('ac-stock'); if(!el) return;
+  var mk=acMonth(), prev=acMKprev(mk,1);
+  var inv=acInventoryValue(), cogs=acCOGS(mk), rev=acRevenue(mk);
+  var ships=acShips(), fifo=acShipFIFO();
+  var dim=new Date(+mk.slice(0,4), +mk.slice(5,7), 0).getDate();
+  var dio = (cogs.usable && cogs.value>0 && inv.value>0) ? inv.value/(cogs.value/dim) : null;
+  var gp = cogs.usable ? rev-cogs.value : null;
+  var h='';
+
+  h+=acGrid([
+    acCard('Inventory value', inv.value>0?acB(inv.value):'—',
+      inv.value>0?(inv.pcs.toLocaleString()+' pcs · '+Math.round(inv.coverage)+'% costed'):'needs landed cost', inv.value>0?'#0d9488':'var(--text3)'),
+    acCard('Avg. landed cost', inv.avg>0?(Math.round(inv.avg*100)/100).toLocaleString()+' ฿':'—',
+      inv.avg>0?'blended over every piece in stock — clips included':'needs landed cost', inv.avg>0?'var(--text)':'var(--text3)'),
+    acCard('COGS · '+acMKlabel(mk), cogs.usable?acB(cogs.value):'—',
+      cogs.usable?(Math.round(cogs.coverage)+'% of sales costed'):'needs landed cost', cogs.usable?'#dc2626':'var(--text3)'),
+    acCard('Gross profit', gp==null?'—':acB(gp), gp==null?'needs landed cost':acB(rev)+' revenue', gp==null?'var(--text3)':'#16a34a'),
+    acCard('Gross margin', (gp==null||rev<=0)?'—':Math.round(gp/rev*100)+'%', (gp==null||rev<=0)?'needs landed cost':'(revenue − COGS) ÷ revenue', (gp==null||rev<=0)?'var(--text3)':'#16a34a'),
+    acCard('Inventory days (DIO)', dio==null?'—':Math.round(dio)+' d', dio==null?'needs landed cost':'how long the stock lasts at this month\'s pace', dio==null?'var(--text3)':(dio>120?'#d97706':'var(--text)'))
+  ]);
+
+  if(!cogs.usable) h+=acMiss('Landed cost missing for '+Object.keys(cogs.missing).length+' product'+(Object.keys(cogs.missing).length===1?'':'s'),
+    'Import the supplier invoices in ⚙️ Data → section 2, or fill the cost column there. Until every sold piece has a cost, gross profit stays blank on purpose — full revenue minus partial cost would invent a margin.');
+
+  // ── Cost waterfall
+  h+=acTitle('Cost waterfall','How a supplier price becomes the cost of one piece in our warehouse');
+  if(ships.length){
+    var W={goods:0, freight:0, duty:0, bank:0, other:0, total:0, pcs:0};
+    ships.forEach(function(s){ W.goods+=s.goods; W.freight+=s.freight; W.duty+=s.duty;
+      W.bank+=s.bank; W.other+=s.other; W.total+=s.total; W.pcs+=s.pcs; });
+    var wf=function(label, v, bold, sign){
+      return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:'+(bold?13:12)+'px;font-weight:'+(bold?800:600)+';padding:3px 0'+(bold?';border-top:1px solid var(--border);margin-top:3px':'')+'">'
+        +'<span>'+label+'</span><span style="white-space:nowrap">'+(sign||'')+acB(v)+'</span></div>';
+    };
+    h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:11px 13px">'
+      +wf('Product cost (supplier invoice)', W.goods)
+      +wf('+ International freight', W.freight, false, '+ ')
+      +wf('+ Import duty', W.duty, false, '+ ')
+      +wf('+ Bank charges (transfer, LC, conversion)', W.bank, false, '+ ')
+      +wf('+ Other import costs (labelling, loading)', W.other, false, '+ ')
+      +wf('= Total landed cost', W.total, true)
+      +'<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);padding-top:5px">'
+        +'<span>'+W.pcs.toLocaleString()+' pieces imported<br><span style="font-size:10px">blended — a clip and a panel both count as one piece</span></span>'
+        +'<span style="font-weight:800;color:var(--text)">'+(W.pcs>0?(Math.round(W.total/W.pcs*100)/100).toLocaleString():'—')+' ฿ / piece</span></div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:7px;line-height:1.5;border-top:1px solid var(--border);padding-top:7px">'
+        +'Extra costs are spread over the lines <b>by value</b>. VAT is not a component — it is recoverable input tax and does not belong in the cost of a piece. '
+        +'Across all '+ships.length+' shipment'+(ships.length===1?'':'s')+' the extras add '+(W.goods>0?Math.round((W.total-W.goods)/W.goods*100)+'%':'—')+' on top of the supplier price.</div>'
+    +'</div>';
+    h+='<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:9px 13px;margin-top:6px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r)">'
+      +'<span>Landed cost of everything imported<br><span style="color:var(--text2)">− stock still in the warehouse</span><br><b>= cost of what was sold</b></span>'
+      +'<span style="text-align:right;white-space:nowrap">'+acB(W.total)+'<br><span style="color:var(--text2)">− '+acB(inv.value)+'</span><br><b>'+acB(W.total-inv.value)+'</b></span></div>';
+  } else h+=acMiss('No shipment recorded yet','⚙️ Data → section 2 → Import supplier invoice. One invoice = one shipment, and this whole tab fills itself.');
+
+  // ── Goods in transit
+  h+=acTitle('Goods in transit','Money already spent, goods not yet sellable');
+  var transit=(containerLog||[]).filter(function(c){ return c && !c.arrivedWh; });
+  if(transit.length){
+    var tVal=0;
+    h+=transit.map(function(c){
+      var st = c.arrivedThAct?['🛃 Customs clearance','#d97706']
+             : c.loading?['🚢 On vessel','#0070f3']
+             : ['🏭 At supplier','var(--text2)'];
+      var items=c.items||[];
+      var pcs=items.reduce(function(a,i){ return a+(parseInt(i.qty)||0); },0);
+      // value: the matching shipment if we have one, otherwise the pieces at their known cost
+      var s=ships.filter(function(x){ return (x.containerNo && c.containerNo && x.containerNo===c.containerNo)
+                                          || (x.no && c.piNo && x.no===c.piNo); })[0];
+      var val = s ? s.total : items.reduce(function(a,i){ return a+acN((acctData.cost||{})[ofNormCode(i.code)])*(parseInt(i.qty)||0); },0);
+      tVal+=val;
+      var eta = c.arrivedTh || c.balance || c.loading || '';
+      return '<div style="border:1px solid var(--border);border-radius:var(--rs);padding:9px 11px;margin-bottom:6px;background:var(--bg2)">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px">'
+          +'<span style="font-size:13px;font-weight:800;min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(c.supplier||'—')+'</span>'
+          +'<span style="font-size:11px;font-weight:800;color:'+st[1]+';white-space:nowrap">'+st[0]+'</span></div>'
+        +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'+_esc(c.containerNo||'no container no.')+(c.piNo?' · '+_esc(c.piNo):'')
+          +' · '+pcs.toLocaleString()+' pcs'+(eta?' · ETA '+eta:'')+'</div>'
+        +'<div style="display:flex;justify-content:space-between;font-size:12px;margin-top:3px">'
+          +'<span style="color:var(--text2)">'+(s?'from the imported invoice':(val>0?'pieces × landed cost':'no cost known'))+'</span>'
+          +'<span style="font-weight:800">'+(val>0?acB(val):'—')+'</span></div>'
+      +'</div>';
+    }).join('');
+    h+='<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:800;padding:8px 11px;border-top:2px solid var(--border)"><span>'+transit.length+' container'+(transit.length===1?'':'s')+' in transit</span><span>'+(tVal>0?acB(tVal):'—')+'</span></div>';
+  } else h+='<div style="font-size:12px;color:var(--text2);padding:6px 0">Nothing in transit — every container in the log has arrived. ✓</div>';
+
+  // ── Inventory health
+  h+=acTitle('Inventory health','Fast / slow / dead, from the last 90 days of sales');
+  var vel=acVelocity(90), today=new Date().toISOString().slice(0,10);
+  var buckets={fast:{n:0,pcs:0,val:0,rows:[]}, slow:{n:0,pcs:0,val:0,rows:[]}, dead:{n:0,pcs:0,val:0,rows:[]}};
+  (stockItems||[]).forEach(function(s){
+    if(!s||!s.code) return;
+    var q=(parseInt(s.qty)||0)+(parseInt(s.damaged)||0); if(q<=0) return;
+    var c=ofNormCode(s.code), sold90=vel.sold[c]||0;
+    var val=acN((acctData.cost||{})[c])*q;
+    var perDay=sold90/90, cover = perDay>0 ? q/perDay : null;
+    var b = sold90<=0 ? 'dead' : (cover!=null && cover<=60 ? 'fast' : 'slow');
+    buckets[b].n++; buckets[b].pcs+=q; buckets[b].val+=val;
+    // Bars are measured in PIECES, never in a mix of pieces and baht — most codes
+    // still have no landed cost, and a piece count printed with a ฿ sign is a lie.
+    buckets[b].rows.push({label:c, value:q,
+      extra:(cover!=null?Math.round(cover)+' days of cover':'no sales in 90 days')+(val>0?' · '+acB(val)+' of stock':'')});
+  });
+  var bTot=buckets.fast.val+buckets.slow.val+buckets.dead.val;
+  var bPcs=buckets.fast.pcs+buckets.slow.pcs+buckets.dead.pcs;
+  var bRow=function(label, b){
+    return {label:label, value:b.pcs, extra:b.n+' codes'+(bPcs>0?' · '+Math.round(b.pcs/bPcs*100)+'% of the pieces':'')+(b.val>0?' · '+acB(b.val)+' costed':'')};
+  };
+  h+=acBars([
+    bRow('🟢 Fast moving — under 60 days of cover', buckets.fast),
+    bRow('🟡 Slow moving — over 60 days of cover', buckets.slow),
+    bRow('🔴 Dead stock — nothing sold in 90 days', buckets.dead)
+  ].filter(function(r){return r.value>0;}), {color:'#0d9488', raw:true});
+  h+='<div style="font-size:11px;color:var(--text2);margin-top:4px">Bars are pieces. '+(inv.coverage<99?('Only '+Math.round(inv.coverage)+'% of the stock has a landed cost yet, so the baht column is still partial.'):'')+'</div>';
+  if(buckets.dead.rows.length){
+    buckets.dead.rows.sort(function(a,b){return b.value-a.value;});
+    h+='<div style="font-size:11px;font-weight:800;color:#dc2626;margin:10px 0 4px">Dead stock, most pieces first</div>';
+    h+=acBars(buckets.dead.rows.slice(0,10), {color:'#dc2626', limit:10, raw:true});
+  }
+
+  // ── Top profit products
+  h+=acTitle('Top products by profit · '+acMKlabel(mk),'Not the best sellers — the ones that actually earn');
+  var perCode={};
+  acRevOrders(mk).forEach(function(o){
+    (o.lineItems||[]).forEach(function(li){
+      if(!li || !li.code || AC_NONGOODS[li.type]) return;
+      var q=parseInt(li.qty)||0; if(q<=0) return;
+      var c=ofNormCode(li.code);
+      var p=perCode[c]||(perCode[c]={code:c, qty:0, rev:0, cogs:0, costed:true});
+      p.qty+=q; p.rev+=acN(li.amount);
+      var cst=acN((acctData.cost||{})[c]);
+      if(cst>0) p.cogs+=cst*q; else p.costed=false;
+    });
+  });
+  var prod=Object.keys(perCode).map(function(k){ var p=perCode[k];
+    p.gp=p.costed?p.rev-p.cogs:null; p.gm=(p.costed&&p.rev>0)?p.gp/p.rev*100:null; return p;
+  }).filter(function(p){ return p.costed; }).sort(function(a,b){ return b.gp-a.gp; });
+  if(prod.length){
+    h+='<div style="display:flex;font-size:10px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;padding:0 0 4px;border-bottom:1px solid var(--border)">'
+      +'<span style="flex:1">Product</span><span style="width:72px;text-align:right">Revenue</span>'
+      +'<span style="width:66px;text-align:right">COGS</span><span style="width:72px;text-align:right">Profit</span>'
+      +'<span style="width:42px;text-align:right">Margin</span></div>';
+    h+=prod.slice(0,20).map(function(p){
+      return '<div style="display:flex;font-size:12px;padding:4px 0;border-bottom:1px dotted var(--border);align-items:baseline">'
+        +'<span style="flex:1;min-width:0"><b>'+_esc(p.code)+'</b><span style="color:var(--text2);font-size:10px"> · '+p.qty.toLocaleString()+' pcs</span></span>'
+        +'<span style="width:72px;text-align:right">'+Math.round(p.rev).toLocaleString()+'</span>'
+        +'<span style="width:66px;text-align:right;color:var(--text2)">'+Math.round(p.cogs).toLocaleString()+'</span>'
+        +'<span style="width:72px;text-align:right;font-weight:800;color:#16a34a">'+Math.round(p.gp).toLocaleString()+'</span>'
+        +'<span style="width:42px;text-align:right;font-weight:700;color:'+(p.gm<25?'#d97706':'var(--text)')+'">'+Math.round(p.gm)+'%</span></div>';
+    }).join('');
+    if(prod.length>20) h+='<div style="font-size:11px;color:var(--text2);margin-top:5px">+ '+(prod.length-20)+' more products with a known cost.</div>';
+    var noCost=Object.keys(perCode).filter(function(k){ return !perCode[k].costed; });
+    if(noCost.length) h+='<div style="font-size:11px;color:#d97706;margin-top:5px">'+noCost.length+' product'+(noCost.length===1?'':'s')+' left out — no landed cost yet: '+_esc(noCost.slice(0,12).join(', '))+(noCost.length>12?' …':'')+'</div>';
+  } else h+='<div style="font-size:12px;color:var(--text2)">No product has a landed cost yet — nothing to rank.</div>';
+
+  // ── Cost changes
+  h+=acTitle('Cost changes','What made the cost of a piece move, newest shipment against the ones before it');
+  if(ships.length>=2){
+    var last=ships[ships.length-1], before=ships.slice(0,-1);
+    var avgOf=function(arr, f){ var p=0,v=0; arr.forEach(function(s){ p+=s.pcs; v+=f(s); }); return p>0?v/p:0; };
+    var comp=[['Product cost', function(s){return s.goods;}],
+              ['Freight', function(s){return s.freight;}],
+              ['Import duty', function(s){return s.duty;}],
+              ['Bank charges', function(s){return s.bank;}],
+              ['Other import costs', function(s){return s.other;}],
+              ['Landed cost', function(s){return s.total;}]];
+    h+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">'+_esc(last.supplier)+(last.no?' · '+_esc(last.no):'')+(last.date?' · '+last.date:'')+' compared with the average of the '+before.length+' shipment'+(before.length===1?'':'s')+' before it, per piece.</div>';
+    h+=comp.map(function(c){
+      var now=last.pcs>0?c[1](last)/last.pcs:0, was=avgOf(before, c[1]);
+      var d = was>0 ? (now-was)/was*100 : (now>0?100:0);
+      var col = Math.abs(d)<2 ? 'var(--text2)' : (d>0?'#dc2626':'#16a34a');
+      return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:4px 0;border-bottom:1px dotted var(--border)">'
+        +'<span style="flex:1;min-width:0"'+(c[0]==='Landed cost'?' style="font-weight:800"':'')+'>'+c[0]+'</span>'
+        +'<span style="color:var(--text2);white-space:nowrap">'+(Math.round(was*100)/100).toLocaleString()+' → '+(Math.round(now*100)/100).toLocaleString()+' ฿</span>'
+        +'<span style="width:56px;text-align:right;font-weight:800;color:'+col+'">'+(was>0?acPct(d):'new')+'</span></div>';
+    }).join('');
+  } else h+='<div style="font-size:12px;color:var(--text2)">At least two shipments are needed before costs can be compared.</div>';
+
+  // ── Container / shipment profit
+  h+=acTitle('Container profit analysis','What each shipment cost, what it has earned back so far');
+  if(ships.length){
+    h+='<div style="font-size:11px;color:var(--text2);margin-bottom:8px;line-height:1.5">Sales are allocated to shipments oldest-first (FIFO per product code), so a container that arrived later is not credited with sales that came out of the previous one. Tap a shipment to edit its cost components.</div>';
+    h+=ships.slice().reverse().map(function(s){
+      var f=fifo.byShip[s.id]||{sold:0, rev:0, cogs:0, pcs:s.pcs};
+      var gpS=f.rev-f.cogs, pctSold=s.pcs>0?f.sold/s.pcs*100:0;
+      var open=!!_acShipOpen[s.id];
+      return '<div style="border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
+        +'<div onclick="acShipToggle(\''+s.id+'\')" style="padding:9px 11px;cursor:pointer;background:var(--bg2)">'
+          +'<div style="display:flex;justify-content:space-between;gap:8px">'
+            +'<span style="font-size:13px;font-weight:800;min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+              +(open?'▾ ':'▸ ')+_esc(s.supplier)+(s.containerNo?' · '+_esc(s.containerNo):(s.no?' · '+_esc(s.no):''))+'</span>'
+            +'<span style="font-size:13px;font-weight:800;color:'+(gpS>0?'#16a34a':'var(--text2)')+';white-space:nowrap">'+(f.sold>0?acB(gpS):'—')+'</span></div>'
+          +'<div style="font-size:10px;color:var(--text2);margin-top:2px">'+(s.date||'')+' · '+s.pcs.toLocaleString()+' pcs · landed '+acB(s.total)
+            +' · '+Math.round(pctSold)+'% sold'+(f.rev>0&&f.cogs>0?' · margin '+Math.round(gpS/f.rev*100)+'%':'')+'</div>'
+          +'<div style="height:5px;background:var(--bg);border-radius:3px;overflow:hidden;margin-top:4px;border:1px solid var(--border)"><div style="height:100%;background:#0d9488;width:'+Math.min(100,Math.round(pctSold))+'%"></div></div>'
+        +'</div>'
+        +'<div id="acsh-'+s.id+'" style="display:'+(open?'block':'none')+';padding:10px 11px;border-top:1px solid var(--border)">'
+          +acShipRow('Product cost', acB(s.goods), s.currency!=='THB'?(Math.round(s.goods/s.rate).toLocaleString()+' '+s.currency+' @ '+s.rate):'from the invoice lines')
+          +acShipEdit(s,'freight','International freight')
+          +acShipEdit(s,'duty','Import duty')
+          +acShipEdit(s,'bank','Bank charges')
+          +acShipEdit(s,'other','Other import costs')
+          +acShipRow('Total landed cost', acB(s.total), s.pcs.toLocaleString()+' pcs = '+(Math.round(s.perPc*100)/100).toLocaleString()+' ฿/piece', true)
+          +'<div style="height:8px"></div>'
+          +acShipRow('Sold so far', f.sold.toLocaleString()+' pcs', Math.round(pctSold)+'% of the shipment')
+          +acShipRow('Revenue earned', acB(f.rev), '')
+          +acShipRow('Cost of what was sold', acB(f.cogs), '')
+          +acShipRow('Gross profit', acB(gpS), f.rev>0?Math.round(gpS/f.rev*100)+'% margin':'', true)
+          +'<div style="display:flex;gap:6px;align-items:center;margin-top:8px">'
+            +'<span style="font-size:11px;color:var(--text2);flex-shrink:0">Container no.</span>'
+            +'<input value="'+_esc(s.containerNo)+'" onchange="acShipSet(\''+s.id+'\',\'containerNo\',this.value)" placeholder="links it to the container log" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text)"></div>'
+        +'</div>'
+      +'</div>';
+    }).join('');
+    h+='<button type="button" onclick="acShipApply()" style="width:100%;margin-top:6px;padding:10px;border:none;border-radius:var(--rs);background:#0d9488;color:#fff;font-size:13px;font-weight:800;cursor:pointer">↻ Recalculate product costs from these shipments</button>';
+    var un=Object.keys(fifo.unmatched);
+    if(un.length) h+='<div style="font-size:11px;color:#d97706;margin-top:8px;line-height:1.5">'+un.length+' product'+(un.length===1?'':'s')+' were sold in quantities no recorded shipment covers — earlier containers were never imported into the app, so those sales carry no container: '+_esc(un.slice(0,12).join(', '))+(un.length>12?' …':'')+'</div>';
+  }
+  el.innerHTML=h;
+}
+var _acShipOpen={};
+function acShipToggle(id){
+  _acShipOpen[id]=!_acShipOpen[id];
+  var b=document.getElementById('acsh-'+id);
+  if(b) b.style.display=_acShipOpen[id]?'block':'none';
+  else acRender();
+}
+function acShipRow(label, val, sub, bold){
+  return '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;padding:3px 0'+(bold?';border-top:1px solid var(--border);margin-top:3px':'')+'">'
+    +'<span style="font-size:12px;font-weight:'+(bold?800:600)+';min-width:0;flex:1">'+label
+      +(sub?'<span style="display:block;font-size:10px;color:var(--text2);font-weight:600">'+_esc(sub)+'</span>':'')+'</span>'
+    +'<span style="font-size:'+(bold?13:12)+'px;font-weight:'+(bold?800:700)+';white-space:nowrap">'+val+'</span></div>';
+}
+function acShipEdit(s, field, label){
+  return '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:3px 0">'
+    +'<span style="font-size:12px;font-weight:600;min-width:0;flex:1">+ '+label+'</span>'
+    +'<input type="number" value="'+(s[field]||'')+'" placeholder="0" onchange="acShipSet(\''+s.id+'\',\''+field+'\',this.value)" '
+    +'style="width:104px;flex-shrink:0;padding:5px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)"></div>';
+}
+
 // ── 6) FINANCIAL HEALTH ────────────────────────────────────────────────────
 function acRenderHealth(){
   var el=document.getElementById('ac-health'); if(!el) return;
@@ -23146,7 +23555,7 @@ function acRenderHealth(){
     acCard('Working capital', wc==null?'—':acB(wc), wc==null?'needs cash + costs':'', wc==null?'var(--text3)':(wc>=0?'#16a34a':'#dc2626')),
     acCard('Gross margin %', pl.gm==null?'—':Math.round(pl.gm*10)/10+'%', pl.gm==null?'needs product cost':'', pl.gm==null?'var(--text3)':'#16a34a'),
     acCard('Net profit margin', pl.nm==null?'—':Math.round(pl.nm*10)/10+'%', pl.nm==null?'needs product cost':'', pl.nm==null?'var(--text3)':(pl.np>=0?'#16a34a':'#dc2626')),
-    acCard('EBITDA', ebitda==null?'—':acB(ebitda), ebitda==null?'needs profit + depr./interest/tax':'net + interest + tax + depreciation', ebitda==null?'var(--text3)':'var(--text)'),
+    acCard('EBITDA', ebitda==null?'—':acB(ebitda), ebitda==null?(acctData.extAcct===true?'handled by the accounting firm':'needs profit + depr./interest/tax'):'net + interest + tax + depreciation', ebitda==null?'var(--text3)':'var(--text)'),
     acCard('Cash conversion cycle', ccc==null?'—':Math.round(ccc)+' days', ccc==null?'needs stock value':'DSO '+(dso==null?'—':Math.round(dso))+' + DIO '+(dio==null?'—':Math.round(dio))+' − DPO '+(dpo==null?'0':Math.round(dpo)), ccc==null?'var(--text3)':'var(--text)')
   ]);
 
@@ -23291,6 +23700,17 @@ function acSetOpening(field, v){
   acSync(); acRender();
 }
 function acSetCogsPct(v){ acctData.cogsPct=acN(v); acSync(); acRender(); }
+// On/off switches for the parts of the books this company simply does not have
+// (no payables — everything is bought in cash) or does not keep here (the
+// accounting firm owns depreciation, interest and tax). Off is a real answer:
+// the KPIs then read "not applicable" instead of nagging for data forever.
+function acSetFlag(field, on){ acctData[field]=!!on; acSync(); acRender(); }
+function acSwitch(field, on, label, sub){
+  return '<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;padding:7px 9px;border:1px solid '+(on?'#99f6e4':'var(--border)')+';border-radius:var(--rs);background:'+(on?'rgba(13,148,136,0.08)':'var(--bg)')+'">'
+    +'<input type="checkbox" '+(on?'checked':'')+' onchange="acSetFlag(\''+field+'\',this.checked)" style="margin-top:2px;flex-shrink:0;width:16px;height:16px;accent-color:#0d9488;cursor:pointer">'
+    +'<span style="min-width:0"><span style="font-size:12px;font-weight:700">'+label+'</span>'
+    +(sub?'<span style="display:block;font-size:11px;color:var(--text2);margin-top:1px;line-height:1.45">'+sub+'</span>':'')+'</span></label>';
+}
 function acSetCost(code, v){
   if(!acctData.cost) acctData.cost={};
   var n=acN(v);
@@ -24019,7 +24439,10 @@ function acInvApply(){
     freight:acN(document.getElementById('acinv-freight').value),
     duty:acN(document.getElementById('acinv-duty').value),
     other:acN(document.getElementById('acinv-other').value),
-    lines:use.map(function(l){ return {code:l.code, raw:l.raw, pcs:l.pcs, unit:l.unit, landed:Math.round(l.landed*100)/100}; }),
+    // qty + amt are the line's own numbers on the invoice (cartons and their money).
+    // Without amt the goods value cannot be rebuilt later: unit is per carton, pcs
+    // is per piece, and pcs × unit is wrong by the pack size.
+    lines:use.map(function(l){ return {code:l.code, raw:l.raw, qty:l.qty, pcs:l.pcs, unit:l.unit, amt:l.amt, landed:Math.round(l.landed*100)/100}; }),
     by:(currentStaffName||''),
     ts:Date.now()
   });
@@ -24141,10 +24564,14 @@ function acRenderData(){
       +'<button type="button" onclick="acApDel(\''+r.id+'\')" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:28px;height:28px;flex-shrink:0;cursor:pointer">✕</button>'
     +'</div>';
   }).join('');
+  var noAP=acctData.noAP===true;
   h+=box('3 · Accounts payable / เจ้าหนี้ — open supplier invoices',
-    'What you still owe: container balance payments, supplier invoices, anything unpaid. The container log has a "balance" DATE but no amount, so the amounts have to come from the invoices. <b>Switches on:</b> A/P, working capital, current & quick ratio, debt ratio, DPO.',
-    (apRows||'<div style="font-size:12px;color:var(--text2);margin-bottom:6px">Nothing entered yet.</div>')
-    +'<button type="button" onclick="acApAdd()" style="margin-top:6px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add invoice / เพิ่ม</button>');
+    'What you still owe: container balance payments, supplier invoices, anything unpaid. <b>Switches on:</b> A/P, working capital, current & quick ratio, debt ratio, DPO.',
+    acSwitch('noAP', noAP, 'We buy everything in cash — no payables', 'The A/P figures then read "not applicable" instead of "needs data", and nothing here is asked for again.')
+    + (noAP
+      ? '<div style="font-size:12px;color:var(--text2);margin-top:8px">Switched off. Nothing is owed to suppliers — goods are paid before they ship.</div>'
+      : (apRows||'<div style="font-size:12px;color:var(--text2);margin:8px 0 6px">Nothing entered yet.</div>')
+        +'<button type="button" onclick="acApAdd()" style="margin-top:6px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add invoice / เพิ่ม</button>'));
 
   // 4) Loans
   var lnRows=(acctData.loans||[]).map(function(r){
@@ -24154,10 +24581,14 @@ function acRenderData(){
       +'<button type="button" onclick="acLoanDel(\''+r.id+'\')" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:28px;height:28px;flex-shrink:0;cursor:pointer">✕</button>'
     +'</div>';
   }).join('');
-  h+=box('4 · Loans & debt / หนี้สิน',
-    'Bank loans, car leases, private loans — remaining balance and monthly instalment. <b>Switches on:</b> debt ratio, working capital, health score.',
+  var lnMonthly=(acctData.loans||[]).reduce(function(a,r){ return a+acN(r.monthly); },0);
+  h+=box('4 · Loans, car leases & debt / หนี้สิน',
+    'Bank loans, car instalments (C-tank, Toyota), private loans — remaining balance and monthly instalment. <b>Switches on:</b> debt ratio, working capital, health score, and the instalment as a fixed cost.',
     (lnRows||'<div style="font-size:12px;color:var(--text2);margin-bottom:6px">Nothing entered yet.</div>')
-    +'<button type="button" onclick="acLoanAdd()" style="margin-top:6px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add debt / เพิ่ม</button>');
+    +'<button type="button" onclick="acLoanAdd()" style="margin-top:6px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add debt / เพิ่ม</button>'
+    +'<div style="height:8px"></div>'
+    +acSwitch('loansInFixed', acctData.loansInFixed!==false, 'Count the monthly instalments as a fixed cost'+(lnMonthly>0?' ('+acB(lnMonthly)+'/month)':''),
+       'On, the instalments appear under 🏠 Fixed costs in the Expenses tab. Switch it off if the instalment is also entered as a bill — otherwise it is counted twice.'));
 
   // 5) Budget
   h+=box('5 · Budget for '+acMKlabel(mk)+' / งบประมาณ',
@@ -24166,11 +24597,33 @@ function acRenderData(){
     +row('🎯 Expense budget ฿', inp('n',bud.exp||'','0','acSetBudget(\'exp\',this.value)')));
 
   // 6) EBITDA parts
+  var extAcct=acctData.extAcct===true;
   h+=box('6 · Depreciation · interest · tax for '+acMKlabel(mk),
-    'Only needed for EBITDA. Depreciation = the monthly write-down of machines, cars, shop fit-out (from the accountant\'s fixed-asset list). <b>Switches on:</b> EBITDA.',
-    row('Depreciation ฿/month', inp('n',oth.depr||'','0','acSetOther(\'depr\',this.value)'))
-    +row('Interest paid ฿', inp('n',oth.interest||'','0','acSetOther(\'interest\',this.value)'))
-    +row('Tax ฿', inp('n',oth.tax||'','0','acSetOther(\'tax\',this.value)')));
+    'Only needed for EBITDA. Depreciation = the monthly write-down of machines, cars, shop fit-out (from the accountant\'s fixed-asset list).',
+    acSwitch('extAcct', extAcct, 'The accounting firm handles this', 'EBITDA then reads "handled by the accounting firm" instead of "needs data", and these three fields stay out of the way.')
+    + (extAcct
+      ? '<div style="font-size:12px;color:var(--text2);margin-top:8px">Switched off. Depreciation, interest and tax come from the accounting firm\'s books, not from this app.</div>'
+      : '<div style="height:8px"></div>'
+        +row('Depreciation ฿/month', inp('n',oth.depr||'','0','acSetOther(\'depr\',this.value)'))
+        +row('Interest paid ฿', inp('n',oth.interest||'','0','acSetOther(\'interest\',this.value)'))
+        +row('Tax ฿', inp('n',oth.tax||'','0','acSetOther(\'tax\',this.value)'))));
+
+  // 7) Landed cost / shipments
+  var ships=acShips();
+  var wGoods=0, wExtra=0, wPcs=0;
+  ships.forEach(function(s){ wGoods+=s.goods; wExtra+=s.extras; wPcs+=s.pcs; });
+  h+=box('7 · Cost of goods / ต้นทุนสินค้า — landed cost per shipment',
+    'The four things that turn a supplier price into what a piece really costs in our warehouse: <b>product cost</b>, <b>international freight</b>, <b>bank charges</b> (transfer fee, LC charges, currency conversion) and <b>other import costs</b> (labelling, loading and unloading the container). '
+    +'Every shipment gets its own landed cost — a flat percentage across all containers would be wrong, the freight routes differ by a third. Extra costs are spread over the pieces by value. '
+    +'<b>Recoverable input VAT is deliberately excluded</b>; only non-recoverable taxes belong in the cost of a piece.',
+    (ships.length
+      ? '<div style="font-size:12px;line-height:1.7">'
+        +'<div style="display:flex;justify-content:space-between"><span>'+ships.length+' shipment'+(ships.length===1?'':'s')+' · '+wPcs.toLocaleString()+' pieces</span><span style="font-weight:800">'+acB(wGoods+wExtra)+'</span></div>'
+        +'<div style="display:flex;justify-content:space-between;color:var(--text2)"><span>of which import extras</span><span>'+acB(wExtra)+(wGoods>0?' · +'+Math.round(wExtra/wGoods*100)+'%':'')+'</span></div>'
+        +'<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px"><span style="font-weight:800">Average landed cost</span><span style="font-weight:800">'+(wPcs>0?(Math.round((wGoods+wExtra)/wPcs*100)/100).toLocaleString()+' ฿ / piece':'—')+'</span></div>'
+        +'</div>'
+        +'<button type="button" onclick="act(\'stock\')" style="width:100%;margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px;font-weight:800;cursor:pointer">📦 Open Stock &amp; cost — edit each shipment, see container profit</button>'
+      : '<div style="font-size:12px;color:var(--text2)">No shipment recorded yet. Import a supplier invoice in section 2 above — each import becomes one shipment here.</div>'));
 
   h+='<div style="font-size:11px;color:var(--text2);line-height:1.6;margin-top:4px">Stored in Firebase under <code>acctData</code> — shared with everyone who has Accounting access, never shown in the operational tabs.</div>';
   el.innerHTML=h;
