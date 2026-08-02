@@ -779,6 +779,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
           });
           t.status=ns; t.checks=nc;
         });
+        // Give every tour its registered ID back before anything renders — a render
+        // that sees a tour without an ID asks for one, and that is how the same tour
+        // used to collect a whole row of numbers.
+        try{ tourHealTids(); }catch(e){}
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
         // Re-render only when something actually changed, and never while the user has
         // a popup open — a full innerHTML rebuild closes dropdowns and jumps the page.
@@ -8623,9 +8627,10 @@ function ofRenderTour(){
   ofUpdTourDot();
   try{ ofBackfillTourDrivers(); }catch(e){}
   // Tour IDs: tours created before this feature (or while offline) get their number now.
-  // Never while the registry is still loading — that is what minted duplicate IDs.
+  // Never while the registry is still loading. Retrying is harmless — the number is
+  // claimed under the tour's own key, so the same tour always gets the same ID back.
   try{ if(!window.fbDB || window.tourRegLoaded){
-    (activeTours||[]).forEach(function(t){ if(t&&t.id&&!tidOk(t.tid)&&!_tnoPending[t.id]){ _tnoPending[t.id]=1; tourAllocNo(t); } });
+    (activeTours||[]).forEach(function(t){ if(t&&t.id&&!tidOk(t.tid)) tourAllocNo(t); });
   } }catch(e){}
   try{ ofRenderTourIds(); }catch(e){}
   // Reconcile tour-stop status with the order's own status. An order marked
@@ -9976,9 +9981,19 @@ function tourPayBadgeHTML(t){
 //  driver, stamped on every order of that tour (o.tourNo → searchable in the
 //  Orders tab) and shown on the tour card, in the Drivers tab and on the order
 //  card. An ID is NEVER re-used: ending a tour marks it "ended", deleting one
-//  marks it "deleted" — both keep the ID burnt. The day counter only ever counts
-//  up, so tour 2 of a day stays 260801-2 even after 260801-1 was deleted.
-//  Registry: Firebase tourReg/<id>, day counters: tourSeqDay/<yymmdd>.
+//  marks it "deleted" — both keep the ID burnt.
+//
+//  Firebase:
+//    tourNo/<yymmdd>   = { _max:<highest number ever handed out that day>,
+//                          <tourKey>:<the number THIS tour holds> }
+//    tourReg/<id>      = the ID record (driver, state, orders, pay, paid mark)
+//
+//  A number is CLAIMED under the tour's own key inside ONE transaction, so asking
+//  again always returns the SAME number — from a second office device, after a
+//  reload, from the render backfill. That is the whole point of the rebuild: the
+//  old code ran a blind counter, and every retry minted another ID for the same
+//  tour (one tour ended up as 260803-6 … -10). "_max" only ever counts up, so a
+//  released or deleted number is never given out a second time.
 // ════════════════════════════════════════════════════════════
 function tidOk(v){ return typeof v==='string' && /^\d{6}-\d+$/.test(v); }
 function tidDayStr(d){ d=d||new Date(); return String(d.getFullYear()%100).padStart(2,'0')+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0'); }
@@ -10008,10 +10023,105 @@ function tourDayOf(t){
   return tidDayStr();
 }
 var _tnoPending={};   // tours whose ID is currently being allocated (no double-alloc)
-// Allocate the next ID via a Firebase transaction on the day counter (safe when
-// several office devices create tours at once), then stamp it on tour + orders.
+var _tnoSeeded={};    // day/key → number already written to the claim map this session
+// The tour's key inside the claim map (a Firebase key must not contain . # $ / [ ]).
+function tourNoKey(rawId){ return tourKey(rawId); }
+// Claim a number for THIS tour, in one transaction. If the tour already holds one,
+// the transaction aborts and the existing number comes back — that is what makes
+// allocation repeatable instead of minting a new ID on every attempt.
+function tourNoClaim(rawId, day, floor, cb){
+  var key=tourNoKey(rawId);
+  if(!window.fbDB){ cb(floor+1); return; }
+  try{
+    window.fbDB.ref('tourNo/'+day).transaction(function(cur){
+      cur=cur||{};
+      if((parseInt(cur[key])||0)>0) return;            // already claimed → keep it
+      var mx=parseInt(cur._max)||0;
+      for(var k in cur){ if(k!=='_max'){ var v=parseInt(cur[k])||0; if(v>mx) mx=v; } }
+      if(floor>mx) mx=floor;
+      cur._max=mx+1; cur[key]=mx+1;
+      return cur;
+    }, function(err, committed, snap){
+      var v=0; try{ v=parseInt(((snap&&snap.val())||{})[key])||0; }catch(e){}
+      if(v>0){ cb(v); return; }
+      // Aborted without a usable snapshot: read the claim back before falling back to
+      // a fresh number, so an ID this tour already holds can never become a second one.
+      try{
+        window.fbDB.ref('tourNo/'+day+'/'+key).once('value',
+          function(s){ var n=parseInt(s.val())||0; cb(n>0?n:(floor+1)); },
+          function(){ cb(floor+1); });
+      }catch(e2){ cb(floor+1); }
+    });
+  }catch(e){ cb(floor+1); }
+}
+// Record an ID a tour ALREADY carries, so a later allocation finds the claim instead
+// of minting a second number (this also migrates every tour numbered by the old code).
+function tourNoSeed(rawId, tid){
+  if(!window.fbDB || !rawId || !tidOk(tid)) return;
+  var day=tidDay(tid), n=tidSeq(tid), key=tourNoKey(rawId);
+  if(!day || !n) return;
+  if(_tnoSeeded[day+'/'+key]===n) return;
+  _tnoSeeded[day+'/'+key]=n;
+  try{
+    window.fbDB.ref('tourNo/'+day).transaction(function(cur){
+      cur=cur||{};
+      if((parseInt(cur[key])||0)===n && (parseInt(cur._max)||0)>=n) return;   // nothing to do
+      cur[key]=n; cur._max=Math.max(parseInt(cur._max)||0, n);
+      return cur;
+    });
+  }catch(e){}
+}
+// Give a claim back when a tour moves to another day. The number stays burnt
+// (_max never counts down), it is only no longer tied to this tour.
+function tourNoRelease(rawId, day){
+  if(!window.fbDB || !rawId || !day) return;
+  var key=tourNoKey(rawId);
+  delete _tnoSeeded[day+'/'+key];
+  try{ window.fbDB.ref('tourNo/'+day+'/'+key).remove(); }catch(e){}
+}
+// Write the ID onto the tour itself. The tour object is looked up FRESH: the Firebase
+// listener replaces every entry of activeTours on each update, so the object handed to
+// an async allocation is usually already an orphan — setting tid on it and pushing a
+// whole-tour syncTours() silently dropped the ID again, which is what made the backfill
+// hand out yet another number. The tid goes in as its own field, so no stale full-tour
+// write can wipe it either.
+function tourSetTid(rawId, tid, dayIso){
+  if(!tidOk(tid) || !rawId) return null;
+  var t=(activeTours||[]).find(function(x){ return x && x.id===rawId; });
+  var hasDay=!!(dayIso && /^\d{4}-\d{2}-\d{2}$/.test(dayIso));
+  if(t){
+    t.tid=tid;
+    if(hasDay) t.tourDay=dayIso;
+    tourStampOrders(t); tourRegUpsert(t);
+    try{ if(window.fbDB){
+      window.fbDB.ref('activeTours/'+rawId+'/tid').set(tid);
+      if(hasDay) window.fbDB.ref('activeTours/'+rawId+'/tourDay').set(dayIso);
+    } }catch(e){}
+  }
+  tourNoSeed(rawId, tid);
+  return t;
+}
+// A tour whose tid write was lost gets it back from the registry — instead of being
+// handed a second number by the backfill. Runs on every activeTours update.
+function tourHealTids(){
+  if(window.fbDB && !window.tourRegLoaded) return;
+  (activeTours||[]).forEach(function(t){
+    if(!t || !t.id) return;
+    if(tidOk(t.tid)){ tourNoSeed(t.id, t.tid); return; }
+    var ex=tourRegFindByTourId(t.id);
+    if(ex){
+      t.tid=ex; tourStampOrders(t);
+      try{ if(window.fbDB) window.fbDB.ref('activeTours/'+t.id+'/tid').set(ex); }catch(e){}
+    }
+  });
+}
+// Allocate (or recover) the ID of a tour. Safe to call as often as you like — every
+// path below ends on the same number for the same tour.
 function tourAllocNo(t, cb){
-  if(!t || tidOk(t.tid)){ if(cb) cb(); return; }
+  if(!t || !t.id){ if(cb) cb(); return; }
+  if(tidOk(t.tid)){ tourNoSeed(t.id, t.tid); if(cb) cb(); return; }
+  var rawId=t.id;
+  if(_tnoPending[rawId]){ if(cb) cb(); return; }        // one allocation in flight at a time
   // The registry may not have arrived yet (the tours listener fires first on a fresh
   // load) — read it once before minting. Without this, every reload handed the SAME
   // tour another ID, because the "already registered?" check saw an empty registry.
@@ -10025,12 +10135,14 @@ function tourAllocNo(t, cb){
   }
   // This tour already HAS an ID in the registry (its tid write was lost, or another
   // device numbered it) — adopt it instead of minting a second one for the same tour.
-  var ex=tourRegFindByTourId(t.id);
-  if(ex){ t.tid=ex; tourStampOrders(t); tourRegUpsert(t); try{ syncTours(); }catch(e){} try{ syncOrders(); }catch(e){} if(cb) cb(); return; }
+  var ex=tourRegFindByTourId(rawId);
+  if(ex){ tourSetTid(rawId, ex); try{ syncOrders(); }catch(e){} if(cb) cb(); return; }
+  _tnoPending[rawId]=1;
+  var dayIso=(t.tourDay && /^\d{4}-\d{2}-\d{2}$/.test(t.tourDay))?t.tourDay:'';
   var day=tourDayOf(t), floor=tourMaxSeqOfDay(day);
-  var finish=function(n){
-    t.tid=day+'-'+n; tourStampOrders(t); tourRegUpsert(t);
-    try{ syncTours(); }catch(e){}
+  tourNoClaim(rawId, day, floor, function(n){
+    delete _tnoPending[rawId];
+    tourSetTid(rawId, day+'-'+n, dayIso);
     try{ syncOrders(); }catch(e){}
     // Re-render outside the current call stack — tourAllocNo is also called FROM a
     // render (backfill), and rendering inside a render would nest innerHTML rebuilds.
@@ -10040,17 +10152,7 @@ function tourAllocNo(t, cb){
       try{ ofRenderTourIds(); }catch(e){}
     },0);
     if(cb) cb();
-  };
-  if(!window.fbDB){ finish(floor+1); return; }
-  try{
-    // One counter per day — it only counts up, so a deleted tour never frees its number.
-    window.fbDB.ref('tourSeqDay/'+day).transaction(
-      function(cur){ return Math.max(parseInt(cur)||0, floor)+1; },
-      function(err, committed, snap){
-        var n=(snap&&parseInt(snap.val()))||0;
-        finish((err||!committed||!n)?(floor+1):n);
-      });
-  }catch(e){ finish(floor+1); }
+  });
 }
 // Every order of the tour carries the tour ID — that is what makes "search 260801-1"
 // return all orders (and their slips/photos) of that tour.
@@ -10063,10 +10165,15 @@ function tourStampOrders(t){
 }
 function tourRegRec(id){ return (tourReg||{})[String(id||'')]||null; }
 // The ID already registered for this tour (guards against handing out a second one).
+// Always the SAME answer for the same tour (lowest ID wins), so two devices asking at
+// the same moment can never settle on two different IDs for one tour.
 function tourRegFindByTourId(tourId){
   if(!tourId) return null;
   var hit=null;
-  Object.keys(tourReg||{}).forEach(function(k){ if(!hit && tidOk(k) && (tourReg[k]||{}).tourId===tourId) hit=k; });
+  Object.keys(tourReg||{}).forEach(function(k){
+    if(!tidOk(k) || (tourReg[k]||{}).tourId!==tourId) return;
+    if(!hit || tidSortKey(k)<tidSortKey(hit)) hit=k;
+  });
   return hit;
 }
 // Write / refresh the registry entry of a live tour.
@@ -10084,6 +10191,9 @@ function tourRegUpsert(t){
     paid:!!old.paid, paidBy:old.paidBy||'', paidAt:old.paidAt||0, ts:old.ts||Date.now() };
   tourReg[t.tid]=rec;
   try{ if(window.fbDB) window.fbDB.ref('tourReg/'+t.tid).set(rec); }catch(e){}
+  // Keep the claim map in step — that is what stops a second number being minted
+  // for this tour if its tid ever goes missing again.
+  try{ tourNoSeed(t.id, t.tid); }catch(e){}
 }
 // Close an ID: 'ended' (tour finished) or 'deleted' (tour removed). Either way the
 // ID stays in the list and is never handed out again.
@@ -10167,6 +10277,23 @@ function tourRegDupes(){
   });
   return dups;
 }
+// Left-overs from the old allocator are cleaned up by themselves, once per session:
+// they are pure artefacts (several IDs on ONE tour), the office should not have to
+// press a button for that. A paid ID is never touched — the money mark would go with
+// it — so those stay in the warning bar for a human to decide.
+var _tregHealed=false;
+function tourRegAutoHeal(){
+  if(_tregHealed) return;
+  if(window.fbDB && !window.tourRegLoaded) return;
+  _tregHealed=true;
+  var d=tourRegDupes(); if(!d.length) return;
+  d.forEach(function(x){
+    delete tourReg[x.id];
+    try{ if(window.fbDB) window.fbDB.ref('tourReg/'+x.id).remove(); }catch(e){}
+  });
+  try{ auditTour('cleanup','🆔 '+d.map(function(x){return x.id;}).join(', '),
+    'Auto-removed '+d.length+' duplicate ID'+(d.length!==1?'s':'')+' — same tour was numbered more than once'); }catch(e){}
+}
 function ofTourIdDedupe(){
   var d=tourRegDupes();
   if(!d.length){ alert('ไม่มีรหัสซ้ำ / no duplicate IDs'); return; }
@@ -10186,6 +10313,7 @@ function ofTourIdDedupe(){
 // tour pay is settled (all tours of that day summed, paid once).
 function ofRenderTourIds(){
   var el=document.getElementById('of-tourid-list'); if(!el) return;
+  try{ tourRegAutoHeal(); }catch(e){}
   var qEl=document.getElementById('of-tourid-q');
   var q=qEl?qEl.value.trim().toLowerCase():'';
   var list=Object.keys(tourReg||{}).filter(tidOk).map(function(k){ var r=tourReg[k]||{}; r.id=k; return r; });
@@ -10384,27 +10512,30 @@ function ofTourIdSetDay(id){
   var day=tidDayStr(new Date(v+'T00:00:00'));
   if(day===tidDay(id)){ return; }
   var t=(activeTours||[]).find(function(x){ return x && (x.tid===id || x.id===rec.tourId); });
+  var rawId=(t&&t.id)||rec.tourId||'';
   var apply=function(n){
     var nid=day+'-'+n, nrec={};
     for(var k in rec) nrec[k]=rec[k];
     nrec.id=nid; nrec.createdDate=v;
     tourReg[nid]=nrec; delete tourReg[id];
     try{ if(window.fbDB){ window.fbDB.ref('tourReg/'+nid).set(nrec); window.fbDB.ref('tourReg/'+id).remove(); } }catch(e){}
-    if(t){ t.tid=nid; t.tourDay=v; tourStampOrders(t); try{ syncTours(); }catch(e){} }
-    else { tidArr(rec.orders).forEach(function(oid){ var o=(orders||[]).find(function(x){return x.id===oid;}); if(o) o.tourNo=nid; }); }
+    if(t){ tourSetTid(rawId, nid, v); }
+    else {
+      if(rawId) tourNoSeed(rawId, nid);
+      tidArr(rec.orders).forEach(function(oid){ var o=(orders||[]).find(function(x){return x.id===oid;}); if(o) o.tourNo=nid; });
+    }
     try{ syncOrders(); }catch(e){}
     try{ auditTour('day','🆔 '+id+' → '+nid, 'Tour day set to '+v+(rec.driverName?' · '+rec.driverName:'')); }catch(e){}
     try{ ofRenderTour(); }catch(e){}
     try{ ofRenderOrders(); }catch(e){}
     ofRenderTourIds();
   };
+  // The old day's claim goes back first (its number stays burnt), then the tour
+  // claims a number on the new day under its own key — one number, not one per try.
+  if(rawId) tourNoRelease(rawId, tidDay(id));
   var floor=tourMaxSeqOfDay(day);
-  if(!window.fbDB){ apply(floor+1); return; }
-  try{
-    window.fbDB.ref('tourSeqDay/'+day).transaction(
-      function(c){ return Math.max(parseInt(c)||0, floor)+1; },
-      function(err, ok, snap){ var n=(snap&&parseInt(snap.val()))||0; apply((err||!ok||!n)?(floor+1):n); });
-  }catch(e){ apply(floor+1); }
+  if(!rawId || !window.fbDB){ apply(floor+1); return; }
+  tourNoClaim(rawId, day, floor, apply);
 }
 // ── RENUMBER — rebuild every tour ID from the real creation order ─────────────
 // The IDs were first handed out in whatever order the tours happened to sit in the
@@ -10520,13 +10651,26 @@ function ofTourIdsRenumber(){
   Object.keys(tourReg||{}).forEach(function(k){ var r=tourReg[k]||{}; if(r.paid&&r.tourId) paidByTour[r.tourId]={by:r.paidBy||'', at:r.paidAt||0}; });
   Object.keys(newReg).forEach(function(k){ var p=paidByTour[newReg[k].tourId]; if(p){ newReg[k].paid=true; newReg[k].paidBy=p.by; newReg[k].paidAt=p.at; } });
   tourReg=newReg;
+  // Rebuild the claim map from the new numbering, otherwise the old claims would
+  // hand the previous IDs straight back on the next allocation.
+  var claims={};
+  items.forEach(function(it){
+    var day=tidDay(it.newId); if(!day || !it.tourId) return;
+    claims[day]=claims[day]||{_max:0};
+    claims[day][tourNoKey(it.tourId)]=tidSeq(it.newId);
+  });
+  Object.keys(dayMax).forEach(function(d){ claims[d]=claims[d]||{_max:0}; claims[d]._max=dayMax[d]; });
+  _tnoSeeded={};
   try{ if(window.fbDB){
     window.fbDB.ref('tourReg').set(newReg);
-    Object.keys(dayMax).forEach(function(d){ window.fbDB.ref('tourSeqDay/'+d).set(dayMax[d]); });
+    window.fbDB.ref('tourNo').set(claims);
   } }catch(e){}
   // Stamp the new ID on the tours, their orders and the archived records.
   items.forEach(function(it){
-    if(it.tour){ it.tour.tid=it.newId; _tnoPending[it.tour.id]=1; }
+    if(it.tour){
+      it.tour.tid=it.newId;
+      try{ if(window.fbDB) window.fbDB.ref('activeTours/'+it.tour.id+'/tid').set(it.newId); }catch(e){}
+    }
     else if(it.histPath){ try{ if(window.fbDB) window.fbDB.ref(it.histPath+'/tid').set(it.newId); }catch(e){} }
     it.orders.forEach(function(oid){
       var o=(orders||[]).find(function(x){return x.id===oid;});
