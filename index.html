@@ -2593,7 +2593,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 
   <label class="fl">Note for warehouse / หมายเหตุถึงคลัง</label><input type="text" id="co-note" placeholder="optional">
   <div id="co-total" style="font-size:13px;font-weight:700;margin-top:8px;text-align:right;color:var(--text)"></div>
-  <button type="button" class="btn" style="margin-top:14px;background:#ea580c;color:#fff;border:none" onclick="submitCO()"><i class="ti ti-send"></i> Send change to warehouse / ส่งให้คลัง</button>
+  <button type="button" class="btn" id="co-submit" style="margin-top:14px;background:#ea580c;color:#fff;border:none" onclick="submitCO()"><i class="ti ti-send"></i> Send change to warehouse / ส่งให้คลัง</button>
 </div></div>
 
 <div class="modal-overlay" id="qtprod-modal"><div class="modal">
@@ -11768,6 +11768,27 @@ function coAddE(etype,code,price,qty){
     +'<button type="button" class="xbtn" onclick="this.parentNode.remove();coCalc()"><i class="ti ti-x"></i></button>';
   wrap.appendChild(div);
 }
+// Do the GOODS differ from the order (panel/edge quantities, clip packs, gift clips)?
+// Only that needs the warehouse; a price/discount/delivery edit is money only.
+function coGoodsChanged(){
+  var o=orders.find(function(x){return x.id===coId;}); if(!o) return true;
+  var PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  var oldMap={}, newMap={}, changed=false;
+  (o.lineItems||[]).forEach(function(li){ if(PROD[li.type]) oldMap[li.code]=(oldMap[li.code]||0)+(parseInt(li.qty)||0); });
+  document.querySelectorAll('#co-lines .pline, #co-edges .eline').forEach(function(l){
+    var i=l.querySelectorAll('input');   // both row types: [code, qty, price]
+    var c=String(i[0].value||'').trim().toUpperCase(), q=parseInt(i[1].value)||0;
+    if(c&&q) newMap[c]=(newMap[c]||0)+q;
+  });
+  var codes={}; Object.keys(oldMap).forEach(function(c){codes[c]=1;}); Object.keys(newMap).forEach(function(c){codes[c]=1;});
+  Object.keys(codes).forEach(function(c){ if((oldMap[c]||0)!==(newMap[c]||0)) changed=true; });
+  var sumBy=function(pred,f){ return (o.lineItems||[]).reduce(function(s,li){ return pred(li)?s+(f(li)||0):s; },0); };
+  var clipPacks=parseInt((document.getElementById('co-clip-packs')||{}).value)||0;
+  var gift=parseInt((document.getElementById('co-free-clips')||{}).value)||0;
+  if(clipPacks!==sumBy(function(li){return li.type==='clips';},function(li){return parseInt(li.qty)||0;})) changed=true;
+  if(gift!==sumBy(function(li){return li.type==='free-gift-clips';},function(li){return parseInt(li.qty)||0;})) changed=true;
+  return changed;
+}
 function coCalc(){
   var sum=0;
   document.querySelectorAll('#co-lines .pline').forEach(function(l){
@@ -11789,6 +11810,15 @@ function coCalc(){
   var el=document.getElementById('co-total');
   if(el)el.innerHTML='New total / รวมใหม่: '+(sum+ship+extra-disc).toLocaleString()+' ฿'
     +(disc>0?' <span style="font-weight:600;color:var(--red)">(−'+disc.toLocaleString()+' ฿ ส่วนลด)</span>':'');
+  // The button says where this change goes: goods → warehouse, money only → straight in.
+  var btn=document.getElementById('co-submit');
+  if(btn){
+    var phys=coGoodsChanged();
+    btn.style.background=phys?'#ea580c':'#16a34a';
+    btn.innerHTML=phys
+      ? '<i class="ti ti-send"></i> Send change to warehouse / ส่งให้คลัง'
+      : '<i class="ti ti-check"></i> 💰 Save price / บันทึกราคา — ไม่ส่งคลัง';
+  }
 }
 function submitCO(){
   var o=orders.find(function(x){return x.id===coId;}); if(!o)return;
@@ -11841,6 +11871,10 @@ function submitCO(){
   var newTotalNum=sumBy(newItems,function(){return true;},function(li){return parseFloat(li.amount)||0;});
   var otherChange=(clipPacks!==oldClipPacks)||(freeGift!==oldGift)||(deliv!==oldDeliv)||(Math.round(newTotalNum)!==Math.round(oldTotalNum));
   if(!diff.length&&!otherChange){alert('No changes / ไม่มีการเปลี่ยนแปลง');return;}
+  // Did the GOODS change? Only then does the warehouse have to re-pack and confirm.
+  // A price / discount / delivery-fee correction is money only — it is applied
+  // straight away and never lands on the warehouse screen.
+  var goodsChanged=(diff.length>0)||(clipPacks!==oldClipPacks)||(freeGift!==oldGift);
   var who=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
   // snapshot original BEFORE applying (for the warehouse before/after view)
   var oldItems=(o.lineItems||[]).map(function(li){return li;});
@@ -11860,14 +11894,26 @@ function submitCO(){
   o.total=newItems.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0).toLocaleString('en-US')+' ฿';
   try{ deductOrderStock(o); }catch(e){}
   o.editedBy=who; o._editTs=Date.now();
-  // changeReq = a confirmation task for the warehouse (the order is already updated)
-  o.changeReq={status:'pending',by:who,ts:Date.now(),diff:diff,note:document.getElementById('co-note').value||'',oldItems:oldItems,oldTotal:oldTotal,newItems:newItems,newTotal:o.total};
-  try{auditAdd({type:'change-request',orderId:o.id,by:who,detail:coDiffText(o.changeReq)});}catch(e){}
+  // Already-delivered order whose total changed (price/discount fix): keep the booked
+  // revenue in sync, same as Edit order does.
+  if(o.status==='delivered'){ try{ var _nt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0; var _rv=revOrders.find(function(x){return x.id===o.id;}); if(_rv&&_rv.amt!==_nt){ _rv.amt=_nt; syncRevOrders(); } }catch(e){} }
+  if(goodsChanged){
+    // changeReq = a confirmation task for the warehouse (the order is already updated)
+    o.changeReq={status:'pending',by:who,ts:Date.now(),diff:diff,note:document.getElementById('co-note').value||'',oldItems:oldItems,oldTotal:oldTotal,newItems:newItems,newTotal:o.total};
+    try{auditAdd({type:'change-request',orderId:o.id,by:who,detail:coDiffText(o.changeReq)});}catch(e){}
+  } else {
+    // Money-only correction: no warehouse task, no re-pack, no banner on the card.
+    try{auditAdd({type:'edit',orderId:o.id,by:who,detail:'ราคา/ส่วนลด / price only: '+oldTotal+' → '+o.total});}catch(e){}
+    try{addLog('Order '+o.id+' price changed: '+oldTotal+' → '+o.total+' ('+who+')','~');}catch(e){}
+  }
   try{sheetsUpdateMaster(o);}catch(e){}
   closeCO();
   syncOrders();ofRenderOrders();
+  try{ payUpdateBadge(); }catch(e){}
   try{if(document.getElementById('s-warehouse').classList.contains('active'))whRender();}catch(e){}
-  alert('Order updated & sent to warehouse / อัปเดตออเดอร์และส่งให้คลังแล้ว ✓');
+  alert(goodsChanged
+    ? 'Order updated & sent to warehouse / อัปเดตออเดอร์และส่งให้คลังแล้ว ✓'
+    : '💰 ราคาปรับแล้ว ไม่ต้องส่งคลัง / price updated — warehouse not involved ✓\n'+oldTotal+' → '+o.total);
 }
 function whConfirmChange(id){
   // Confirming a change routes the order back through the FULL packing flow
