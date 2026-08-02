@@ -10148,6 +10148,39 @@ function tourRegTogglePaidGroup(idsCsv){
   try{ auditTour('pay','🆔 '+ids.join(', '), (mkPaid?'✅ คนขับรับเงินแล้ว / driver paid':'undo driver-paid')+(drv?' · '+drv:'')+(sum?' · '+sum.toLocaleString()+' ฿':'')); }catch(e){}
   ofRenderTourIds();
 }
+// Registry entries that point at the SAME tour — leftovers from the bug that minted
+// a fresh ID on every reload. The ID the live tour carries is kept, the rest are
+// removed; a paid one is never touched (the money mark would be lost with it).
+function tourRegDupes(){
+  var by={}, dups=[];
+  Object.keys(tourReg||{}).filter(tidOk).forEach(function(k){
+    var tid=(tourReg[k]||{}).tourId; if(!tid) return;
+    (by[tid]=by[tid]||[]).push(k);
+  });
+  Object.keys(by).forEach(function(tid){
+    if(by[tid].length<2) return;
+    var live=(activeTours||[]).find(function(x){ return x && x.id===tid; });
+    var keep=(live && tidOk(live.tid) && by[tid].indexOf(live.tid)>=0)
+      ? live.tid
+      : by[tid].slice().sort(function(a,b){ return tidSortKey(a)-tidSortKey(b); })[0];
+    by[tid].forEach(function(k){ if(k!==keep && !(tourReg[k]||{}).paid) dups.push({id:k, keep:keep}); });
+  });
+  return dups;
+}
+function ofTourIdDedupe(){
+  var d=tourRegDupes();
+  if(!d.length){ alert('ไม่มีรหัสซ้ำ / no duplicate IDs'); return; }
+  if(!confirm('ลบรหัสซ้ำ '+d.length+' รายการ? / remove '+d.length+' duplicate ID'+(d.length!==1?'s':'')+'\n\n'
+    +d.slice(0,8).map(function(x){ return x.id+'  →  เก็บ/keep '+x.keep; }).join('\n')+(d.length>8?'\n…':'')
+    +'\n\nทัวร์ไม่ถูกลบ — เฉพาะรหัสที่ชี้ไปทัวร์เดียวกัน / the tours stay, only IDs pointing at the same tour go.')) return;
+  d.forEach(function(x){
+    delete tourReg[x.id];
+    try{ if(window.fbDB) window.fbDB.ref('tourReg/'+x.id).remove(); }catch(e){}
+  });
+  try{ auditTour('cleanup','🆔 tour ids','Removed '+d.length+' duplicate ID'+(d.length!==1?'s':'')); }catch(e){}
+  ofRenderTourIds();
+  alert('✓ '+d.length+' รหัสซ้ำถูกลบแล้ว / duplicate IDs removed');
+}
 // ── Tour-ID list (Tour tab) ──────────────────────────────────
 // Grouped by driver + day: one card per driver per day, because that is how the
 // tour pay is settled (all tours of that day summed, paid once).
@@ -10185,7 +10218,14 @@ function ofRenderTourIds(){
     return A.minSeq-B.minSeq;
   });
   var _open=kpOpenIds('of-tourid-list');
-  el.innerHTML=gkeys.map(function(gk){
+  var _dup=tourRegDupes();
+  var dupBar=_dup.length
+    ? '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;padding:8px 10px;border:1px solid #fed7aa;background:#fff7ed;border-radius:var(--rs);font-size:11.5px;color:#c2410c;font-weight:700">'
+      +'<span style="flex:1;min-width:0">⚠️ พบรหัสซ้ำ '+_dup.length+' รายการ (ทัวร์เดียวกันได้หลายรหัส) / '+_dup.length+' duplicate ID'+(_dup.length!==1?'s':'')+' — same tour numbered more than once</span>'
+      +'<button type="button" onclick="ofTourIdDedupe()" style="flex-shrink:0;padding:5px 10px;border:none;border-radius:var(--rs);background:#ea580c;color:#fff;font-size:11px;font-weight:700;cursor:pointer">🧹 ล้าง / Clean up</button>'
+      +'</div>'
+    : '';
+  el.innerHTML=dupBar+gkeys.map(function(gk){
     var g=groups[gk];
     g.tours.sort(function(a,b){ return tidSeq(a.id)-tidSeq(b.id); });
     var gid='tidg_'+gk.replace(/[^a-zA-Z0-9]/g,'_');
