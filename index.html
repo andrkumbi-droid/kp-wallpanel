@@ -10459,6 +10459,29 @@ function ofTourIdsRenumber(){
   // One entry per real tour — a tour that somehow shows up twice must not get two IDs.
   var _seenT={};
   items=items.filter(function(it){ if(!it.tourId) return true; if(_seenT[it.tourId]) return false; _seenT[it.tourId]=1; return true; });
+  // Registry entries whose tour is neither active nor in this month's history (e.g. an
+  // older ended tour) are carried over — the rebuild replaces the whole registry, so
+  // without this they would silently disappear.
+  var _regByTour={};
+  Object.keys(tourReg||{}).filter(tidOk).forEach(function(k){ var r=tourReg[k]||{}; if(r.tourId && !_regByTour[r.tourId]) _regByTour[r.tourId]=r; });
+  Object.keys(_regByTour).forEach(function(tid){
+    if(_seenT[tid]) return;
+    var r=_regByTour[tid];
+    var ts=/^\d{4}-\d{2}-\d{2}$/.test(r.createdDate||'')
+      ? tourPlannedTs({tourDay:r.createdDate}, tourCreatedTs(tid, r.ts||Date.now()))
+      : tourCreatedTs(tid, r.ts||Date.now());
+    items.push({ tourId:tid, driverId:r.driverId||'', driverName:r.driverName||'', createdTs:ts, departedTs:0,
+      active:r.state==='active', tour:null, orders:tidArr(r.orders), driverPay:parseFloat(r.driverPay)||0,
+      endedDate:r.endedDate||'', endedAt:r.endedAt||'', keepState:r.state||'' });
+  });
+  // The day shown in the registry wins over the build time (a day corrected with
+  // "📅 เปลี่ยนวัน" must survive the renumber) — unless the tour itself carries a
+  // picked run-day, which wins over everything.
+  items.forEach(function(it){
+    var r=_regByTour[it.tourId];
+    if(r && /^\d{4}-\d{2}-\d{2}$/.test(r.createdDate||'') && !(it.tour && it.tour.tourDay))
+      it.createdTs=tourPlannedTs({tourDay:r.createdDate}, it.createdTs);
+  });
   if(!items.length){ alert('ไม่มีทัวร์ / nothing to renumber'); return; }
   // Per day: tours still on the road first (in departure order), then by creation time.
   items.sort(function(a,b){
@@ -10475,16 +10498,23 @@ function ofTourIdsRenumber(){
     it.newId=day+'-'+seq[day];
     var cd=new Date(it.createdTs);
     newReg[it.newId]={ id:it.newId, tourId:it.tourId, driverId:it.driverId, driverName:it.driverName,
-      createdDate:cd.toISOString().slice(0,10),
+      // LOCAL date — toISOString() would move an evening tour to the previous day here
+      // (UTC+7) and then disagree with the day in its own ID.
+      createdDate:cd.getFullYear()+'-'+String(cd.getMonth()+1).padStart(2,'0')+'-'+String(cd.getDate()).padStart(2,'0'),
       createdAt:String(cd.getHours()).padStart(2,'0')+':'+String(cd.getMinutes()).padStart(2,'0'),
       endedDate:it.endedDate||'', endedAt:it.endedAt||'',
-      state:it.active?'active':'ended', orders:it.orders, orderCount:it.orders.length,
+      state:(it.keepState==='deleted'?'deleted':(it.active?'active':'ended')), orders:it.orders, orderCount:it.orders.length,
       driverPay:it.driverPay, paid:false, paidBy:'', paidAt:0, ts:it.createdTs };
   });
-  var preview=items.slice(0,6).map(function(it){ return it.newId+' · '+(it.driverName||'?')+(it.active?' (on tour)':''); }).join('\n');
+  // Show what each tour is called now → after, and that the day counters restart.
+  var preview=items.slice(-8).map(function(it){
+    var old=(_regByTour[it.tourId]||{}).id||'—';
+    return old+'  →  '+it.newId+'  ·  '+(it.driverName||'?')+(it.active?' (on tour)':'');
+  }).join('\n');
   if(!confirm('เรียงรหัสทัวร์ใหม่ / Renumber '+items.length+' tours?\n\n'
-    +'รหัสเดิมทั้งหมดจะถูกแทนที่ / all current IDs are replaced:\n'+preview+(items.length>6?'\n…':'')
-    +'\n\n⚠ เครื่องหมาย "จ่ายแล้ว" จะถูกล้าง / the driver-paid ticks are reset.')) return;
+    +(items.length>8?'…\n':'')+preview
+    +'\n\nนับใหม่ทุกวัน / counters restart per day: '+Object.keys(dayMax).sort().map(function(d){return d+'→'+dayMax[d];}).join(', ')
+    +'\n\n⚠ เครื่องหมาย "จ่ายแล้ว" ที่ยังอยู่จะถูกย้ายตามทัวร์ / paid marks follow their tour.')) return;
   // Keep the paid marks of IDs that map to the same tour.
   var paidByTour={};
   Object.keys(tourReg||{}).forEach(function(k){ var r=tourReg[k]||{}; if(r.paid&&r.tourId) paidByTour[r.tourId]={by:r.paidBy||'', at:r.paidAt||0}; });
