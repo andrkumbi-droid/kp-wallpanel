@@ -2844,12 +2844,14 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     </div>
     <div class="tabs" style="display:flex;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;border-bottom:none;justify-content:center">
       <button type="button" class="tab" onclick="act('rev')"    id="act-rev"    style="flex-shrink:0">💰 Revenue</button>
+      <button type="button" class="tab" onclick="act('days')"   id="act-days"   style="flex-shrink:0">🚚 Days</button>
       <button type="button" class="tab" onclick="act('health')" id="act-health" style="flex-shrink:0">❤️ Health</button>
       <button type="button" class="tab" onclick="act('ai')"     id="act-ai"     style="flex-shrink:0">🤖 Insights</button>
       <button type="button" class="tab" onclick="act('data')"   id="act-data"   style="flex-shrink:0">⚙️ Data</button>
     </div>
   </div>
   <div class="view active" id="acv-sum"><div class="sec"    id="ac-sum"></div></div>
+  <div class="view"        id="acv-days"><div class="sec"   id="ac-days"></div></div>
   <div class="view"        id="acv-cash"><div class="sec"   id="ac-cash"></div></div>
   <div class="view"        id="acv-prof"><div class="sec"   id="ac-prof"></div></div>
   <div class="view"        id="acv-exp"><div class="sec"    id="ac-exp"></div></div>
@@ -22509,6 +22511,7 @@ function acRender(){
     if(_acTab==='prof')   acRenderProfit();
     if(_acTab==='exp')    acRenderExpenses();
     if(_acTab==='rev')    acRenderRevenue();
+    if(_acTab==='days')   acRenderDays();
     if(_acTab==='health') acRenderHealth();
     if(_acTab==='ai')     acRenderAI();
     if(_acTab==='data')   acRenderData();
@@ -22874,6 +22877,243 @@ function acRenderRevenue(){
   });
   h+=acBars([{label:'🆕 New customers ('+nw+')', value:nwRev},{label:'🔁 Returning ('+ret+')', value:retRev}],{color:'#7c3aed'});
   el.innerHTML=h;
+}
+
+// ── 5b) DAILY INCOME BY TOUR DATE ──────────────────────────────────────────
+// A third date basis next to the two the rest of the app uses (order date for
+// accrual revenue, payDate for cash): the day the goods physically left on a
+// tour. Built from tourHistory + activeTours, NOT from anything on the order.
+var AC_PRODT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+var AC_TLABEL={panel:'Panel',lcorner:'L-corner',tedge:'T-edge',uedge:'U-edge',ttrim:'T-trim',utrim:'U-trim'};
+var AC_WD=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+var _acDayOpen={};
+
+// orderId -> the tour that carried it. An order can sit on several tours (a stop
+// that was not delivered goes back out on the next one), so the tour that actually
+// DELIVERED it wins; failing that, the most recent one.
+function acTourMap(){
+  var map={};
+  var claim=function(id, t){
+    if(!id) return;
+    var cur=map[id];
+    if(!cur){ map[id]=t; return; }
+    if(t.delivered && !cur.delivered){ map[id]=t; return; }
+    if(t.delivered===cur.delivered && t.ts>cur.ts) map[id]=t;
+  };
+  Object.keys(tourHistory||{}).forEach(function(dk){
+    var recs=tourHistory[dk]||{};
+    Object.keys(recs).forEach(function(k){
+      var r=recs[k]||{};
+      var date=r.departedDate||r.endedDate||'';
+      (r.orders||[]).forEach(function(os){
+        var id=(os&&os.id)?os.id:os;
+        // key counts tours, tid only labels them: tours from before the tour-ID
+        // registry have no tid, and counting by tid would show 2 tours in a month.
+        claim(id,{date:date, driver:r.driverName||'', tid:r.tid||'', key:r.tid||r.tourId||k,
+                  tourNo:r.tourNo||'', ts:r.ts||0, delivered:String((os&&os.status)||'')==='delivered'});
+      });
+    });
+  });
+  (activeTours||[]).forEach(function(t){
+    if(!t||!t.orders) return;
+    t.orders.forEach(function(id){
+      claim(id,{date:t.departedDate||'', driver:t.driverName||'', tid:t.tid||'', key:t.tid||t.id||'',
+                tourNo:t.tno||'', ts:9e15, delivered:String((t.status||{})[id]||'')==='delivered', live:true});
+    });
+  });
+  return map;
+}
+// One month, grouped by the day the goods went out.
+function acDays(mk){
+  var tm=acTourMap(), days={}, pending=[], noTour=0;
+  (orders||[]).forEach(function(o){
+    if(!o||!o.id||o.status==='cancelled') return;
+    var t=tm[o.id]||null;
+    var tourDate=(t&&t.date)||'';
+    // Not every delivered order has a tour record: the office marks walk-ins and
+    // carrier deliveries delivered directly, and tours from before this season's
+    // data are gone. Those are dated on the day they were paid instead — flagged,
+    // never silently mixed in.
+    var basis=tourDate?'tour':(o.payDate?'pay':'order');
+    var date=tourDate||o.payDate||o.date||'';
+    if(acMK(date)!==mk) return;
+    var out=(o.status==='delivered'||o.status==='shipped');
+    var items=(o.lineItems||[]).filter(function(li){ return AC_PRODT[li.type] && acN(li.qty)>0; })
+      .map(function(li){ return {type:li.type, code:ofNormCode(li.code), qty:acN(li.qty), amt:acN(li.amount)}; });
+    var pcs=items.reduce(function(a,i){ return a+i.qty; },0);
+    var row={id:o.id, date:date, basis:basis, tour:t, cust:o.customer||'—', prov:o.province||'',
+             status:o.status||'', amt:acAmt(o), pcs:pcs, items:items,
+             cash:acN(o.paidCash), online:acN(o.paidOnline)};
+    if(!out){ pending.push(row); return; }
+    if(basis!=='tour') noTour++;
+    var d=days[date]||(days[date]={date:date, orders:[], rev:0, pcs:0, cash:0, online:0,
+                                  tours:{}, drivers:{}, models:{}, tourRev:0, offRev:0});
+    d.orders.push(row); d.rev+=row.amt; d.pcs+=pcs; d.cash+=row.cash; d.online+=row.online;
+    if(basis==='tour'){ d.tourRev+=row.amt; if(t.key) d.tours[t.key]=1; if(t.driver) d.drivers[t.driver]=1; }
+    else d.offRev+=row.amt;
+    items.forEach(function(i){
+      var m=d.models[i.code]||(d.models[i.code]={code:i.code, type:i.type, qty:0, amt:0, ids:[]});
+      m.qty+=i.qty; m.amt+=i.amt; if(m.ids.indexOf(row.id)<0) m.ids.push(row.id);
+    });
+  });
+  var list=Object.keys(days).sort().map(function(k){
+    var d=days[k];
+    d.tourCount=Object.keys(d.tours).length;
+    d.driverList=Object.keys(d.drivers).sort().join(', ');
+    d.modelList=Object.keys(d.models).map(function(c){ return d.models[c]; })
+      .sort(function(a,b){ return b.qty-a.qty || (a.code<b.code?-1:1); });
+    d.orders.sort(function(a,b){ return a.id<b.id?-1:1; });
+    return d;
+  });
+  // month totals per model
+  var mm={};
+  list.forEach(function(d){ d.modelList.forEach(function(m){
+    var x=mm[m.code]||(mm[m.code]={code:m.code, type:m.type, qty:0, amt:0, days:0});
+    x.qty+=m.qty; x.amt+=m.amt; x.days++;
+  }); });
+  var models=Object.keys(mm).map(function(c){ return mm[c]; })
+    .sort(function(a,b){ return b.qty-a.qty || (a.code<b.code?-1:1); });
+  return {days:list, models:models, pending:pending, noTour:noTour};
+}
+function acDayWd(d){
+  var t=new Date(String(d)+'T00:00:00');
+  return isNaN(t)?'':AC_WD[t.getDay()];
+}
+function acDayToggle(d){
+  _acDayOpen[d]=!_acDayOpen[d];
+  var box=document.getElementById('acd-'+d);
+  var arw=document.getElementById('acda-'+d);
+  if(box) box.style.display=_acDayOpen[d]?'block':'none';
+  if(arw) arw.textContent=_acDayOpen[d]?'▾':'▸';
+}
+function acRenderDays(){
+  var el=document.getElementById('ac-days'); if(!el) return;
+  var mk=acMonth(), r=acDays(mk);
+  var days=r.days, models=r.models;
+  var T=function(f){ return days.reduce(function(a,d){ return a+f(d); },0); };
+  var totRev=T(function(d){return d.rev;}), totPcs=T(function(d){return d.pcs;});
+  var totOrd=T(function(d){return d.orders.length;});
+  var h='';
+
+  h+=acGrid([
+    acCard('Delivery days', String(days.length), acMKlabel(mk)+' · '+T(function(d){return d.tourCount;})+' tours', 'var(--blue)'),
+    acCard('Orders out', String(totOrd), totPcs.toLocaleString()+' pieces', 'var(--text)'),
+    acCard('Income', acB(totRev), days.length?('avg '+acB(totRev/days.length)+' / day'):'', '#16a34a'),
+    acCard('Models sold', String(models.length), 'different codes', '#7c3aed')
+  ]);
+
+  h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:9px 11px;margin-bottom:10px;font-size:11px;color:var(--text2);line-height:1.5">'
+    +'<b style="color:var(--text)">Dated on the day the goods went out</b> — the day the tour left the warehouse. '
+    +'This is not the order date used in Summary and Revenue, and not the payment date used in Cash.'
+    +(r.noTour?('<br>'+r.noTour+' order'+(r.noTour===1?'':'s')+' had no tour record (walk-in, carrier, or delivered straight by the office) and '
+      +'sit'+(r.noTour===1?'s':'')+' on their payment date — marked <b style="color:#d97706">no tour</b> below.'):'')
+    +(r.pending.length?('<br>'+r.pending.length+' order'+(r.pending.length===1?'':'s')+' ordered this month are still in the warehouse ('+acB(r.pending.reduce(function(a,x){return a+x.amt;},0))+') and are not counted as income yet.'):'')
+  +'</div>';
+
+  h+='<button type="button" onclick="acDaysCSV()" style="width:100%;padding:9px;margin-bottom:12px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text2);font-size:12px;font-weight:700;cursor:pointer">⬇ Export CSV / ดาวน์โหลด</button>';
+
+  if(!days.length){
+    el.innerHTML=h+'<div style="font-size:12px;color:var(--text2);padding:10px 0">No deliveries in '+acMKlabel(mk)+' / ไม่มีการจัดส่ง</div>';
+    return;
+  }
+
+  h+=acTitle('Income per day','Tap a day for its models and order numbers');
+  days.forEach(function(d){
+    var open=!!_acDayOpen[d.date];
+    h+='<div style="border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
+      +'<div onclick="acDayToggle(\''+d.date+'\')" style="display:flex;align-items:center;gap:8px;padding:9px 11px;cursor:pointer;background:var(--bg2)">'
+        +'<span id="acda-'+d.date+'" style="font-size:11px;color:var(--text2);width:10px">'+(open?'▾':'▸')+'</span>'
+        +'<div style="flex:1;min-width:0">'
+          +'<div style="font-size:13px;font-weight:800">'+d.date.slice(8)+'.'+d.date.slice(5,7)+' <span style="font-weight:600;color:var(--text2);font-size:11px">'+acDayWd(d.date)+'</span></div>'
+          +'<div style="font-size:10px;color:var(--text2)">'+d.orders.length+' orders · '+d.pcs.toLocaleString()+' pcs · '+d.modelList.length+' models'
+            +(d.tourCount?(' · '+d.tourCount+' tour'+(d.tourCount===1?'':'s')):'')+'</div>'
+        +'</div>'
+        +'<div style="text-align:right;flex-shrink:0">'
+          +'<div style="font-size:13px;font-weight:800;color:#16a34a">'+acB(d.rev)+'</div>'
+          +(d.offRev>0?'<div style="font-size:9px;color:#d97706;font-weight:700">'+acB(d.offRev)+' no tour</div>':'')
+        +'</div>'
+      +'</div>'
+      +'<div id="acd-'+d.date+'" style="display:'+(open?'block':'none')+';padding:10px 11px;border-top:1px solid var(--border)">';
+    if(d.driverList) h+='<div style="font-size:11px;color:var(--text2);margin-bottom:8px">🚚 '+_esc(d.driverList)+'</div>';
+    h+='<div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:5px">Models sold / รุ่นที่ขาย</div>';
+    h+='<div style="margin-bottom:10px">'+d.modelList.map(function(m){
+      return '<div style="display:flex;gap:8px;align-items:baseline;font-size:12px;padding:2px 0;border-bottom:1px dotted var(--border)">'
+        +'<span style="font-weight:700;min-width:62px">'+_esc(m.code)+'</span>'
+        +'<span style="color:var(--text2);font-size:10px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(AC_TLABEL[m.type]||m.type)+' · '+_esc(m.ids.join(', '))+'</span>'
+        +'<span style="font-weight:800;white-space:nowrap">'+m.qty+' pcs</span>'
+        +'<span style="color:var(--text2);white-space:nowrap;min-width:62px;text-align:right">'+acB(m.amt)+'</span>'
+      +'</div>';
+    }).join('')+'</div>';
+    h+='<div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:5px">Orders / ออร์เดอร์</div>';
+    h+=d.orders.map(function(o){
+      return '<div style="font-size:12px;padding:4px 0;border-bottom:1px dotted var(--border)">'
+        +'<div style="display:flex;gap:8px"><span style="font-weight:800">'+_esc(o.id)+'</span>'
+          +'<span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text2)">'+_esc(o.cust)+'</span>'
+          +'<span style="font-weight:700;white-space:nowrap">'+acB(o.amt)+'</span></div>'
+        +'<div style="font-size:10px;color:var(--text2);margin-top:1px">'
+          +_esc(o.items.map(function(i){ return i.code+' × '+i.qty; }).join(', ')||'—')
+          +(o.basis!=='tour'?' · <span style="color:#d97706;font-weight:700">no tour</span>':(o.tour&&o.tour.tid?' · '+_esc(o.tour.tid):''))
+        +'</div>'
+      +'</div>';
+    }).join('');
+    h+='</div></div>';
+  });
+
+  h+='<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:800;padding:9px 11px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);margin-top:4px">'
+    +'<span>TOTAL · '+days.length+' days</span><span>'+acB(totRev)+'</span></div>';
+
+  h+=acTitle('Models sold this month','All '+models.length+' codes, most pieces first');
+  h+=acBars(models.slice(0,25).map(function(m){
+    return {label:m.code+' · '+(AC_TLABEL[m.type]||m.type), value:m.qty,
+            extra:acB(m.amt)+' · sold on '+m.days+' day'+(m.days===1?'':'s')};
+  }),{color:'#7c3aed', raw:true, limit:25});
+  if(models.length>25) h+='<div style="font-size:11px;color:var(--text2);margin-top:6px">+ '+(models.length-25)+' more codes — in the CSV export.</div>';
+
+  el.innerHTML=h;
+}
+// Three CSV blocks in one file: day totals, models per day, orders per day.
+function acDaysCSV(){
+  var mk=acMonth(), r=acDays(mk);
+  var q=function(v){ v=String(v==null?'':v); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  var L=[];
+  L.push('Daily income by tour date,'+acMKlabel(mk));
+  L.push('');
+  L.push(['Date','Weekday','Tours','Drivers','Orders','Pieces','Models','Revenue THB','of which on a tour','of which no tour record','Paid cash','Paid online','Order numbers'].map(q).join(','));
+  r.days.forEach(function(d){
+    L.push([d.date, acDayWd(d.date), d.tourCount, d.driverList, d.orders.length, d.pcs, d.modelList.length,
+            Math.round(d.rev), Math.round(d.tourRev), Math.round(d.offRev), Math.round(d.cash), Math.round(d.online),
+            d.orders.map(function(o){return o.id;}).join(' ')].map(q).join(','));
+  });
+  L.push('');
+  L.push('Models sold per day');
+  L.push(['Date','Code','Type','Pieces','Revenue THB','Orders','Order numbers'].map(q).join(','));
+  r.days.forEach(function(d){ d.modelList.forEach(function(m){
+    L.push([d.date, m.code, AC_TLABEL[m.type]||m.type, m.qty, Math.round(m.amt), m.ids.length, m.ids.join(' ')].map(q).join(','));
+  }); });
+  L.push('');
+  L.push('Every order');
+  L.push(['Date','Dated on','Tour','Driver','Order no','Status','Customer','Province','Models','Pieces','Total THB','Paid cash','Paid online'].map(q).join(','));
+  r.days.forEach(function(d){ d.orders.forEach(function(o){
+    L.push([d.date, o.basis==='tour'?'tour':'payment (no tour record)', (o.tour&&(o.tour.tid||o.tour.key))||'', (o.tour&&o.tour.driver)||'',
+            o.id, o.status, o.cust, o.prov, o.items.map(function(i){return i.code+' x '+i.qty;}).join(' | '),
+            o.pcs, Math.round(o.amt), Math.round(o.cash), Math.round(o.online)].map(q).join(','));
+  }); });
+  if(r.pending.length){
+    L.push('');
+    L.push('Ordered this month, still in the warehouse — not counted as income');
+    L.push(['Order no','Status','Customer','Province','Models','Pieces','Total THB'].map(q).join(','));
+    r.pending.forEach(function(o){
+      L.push([o.id, o.status, o.cust, o.prov, o.items.map(function(i){return i.code+' x '+i.qty;}).join(' | '),
+              o.pcs, Math.round(o.amt)].map(q).join(','));
+    });
+  }
+  // BOM so Excel opens the Thai text in the right encoding
+  var blob=new Blob(['﻿'+L.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='kp-daily-'+mk+'.csv';
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); },1000);
 }
 
 // ── 6) FINANCIAL HEALTH ────────────────────────────────────────────────────
