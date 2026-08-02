@@ -2672,6 +2672,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div style="flex:1"><label class="fl" style="margin-top:0">Move A→B / ย้ายเป็นเกรด B (pcs)</label><input type="number" id="sm-move" min="0" placeholder="pcs"></div>
     <button type="button" class="btnsm" style="padding:8px 12px;white-space:nowrap" onclick="smMoveToB()"><i class="ti ti-arrow-down"></i> A→B</button>
   </div>
+  <div id="sm-move-note" style="display:none;font-size:11px;font-weight:700;color:var(--green);background:var(--green-bg);border-radius:var(--rs);padding:6px 9px;margin-top:5px"></div>
   <label class="fl">Notes <span style="font-size:11px;color:var(--text2)">(color, size, supplier...)</span></label><input type="text" id="sm-notes" placeholder="e.g. Beige, 195*14*2900">
   <button type="button" class="btn btng" style="margin-top:14px" onclick="saveSM()"><i class="ti ti-check"></i> Save</button>
   <button type="button" class="btn btnr" id="sm-del" style="display:none;margin-top:6px" onclick="delSM()"><i class="ti ti-trash"></i> Delete</button>
@@ -4818,7 +4819,7 @@ function mgRevenue(){
 function selM(m){selMonth=m;mgRevenue();}
 
 function smGuessType(code){code=(code||'').toUpperCase();if(code.indexOf('K-PVC')===0)return 'pvc';if(code.indexOf('KP')===0)return 'panel';if(code.indexOf('L-P')===0)return 'lcorner';if(code.charAt(0)==='T')return 'ttrim';if(code.charAt(0)==='U')return 'utrim';if(code.charAt(0)==='L')return 'lcorner';return 'panel';}
-function openSM(code){const s=code?stockItems.find(x=>x.code===code):null;editSM=s?code:null;document.getElementById('sm-title').textContent=s?'Edit stock':'Add stock';document.getElementById('sm-del').style.display=s?'flex':'none';if(s){document.getElementById('sm-code').value=s.code;document.getElementById('sm-code').disabled=true;document.getElementById('sm-type').value=s.type||((s.code==='T07'||s.code==='T08')?'ttrim':'panel');document.getElementById('sm-qty').value=s.qty;document.getElementById('sm-dmg').value=s.damaged;document.getElementById('sm-notes').value=s.notes||'';document.getElementById('sm-ctn-per').value=(s.pcsPerCtn||'');}else{document.getElementById('sm-code').value=(code||'');document.getElementById('sm-code').disabled=false;document.getElementById('sm-type').value=smGuessType(code);['sm-qty','sm-dmg','sm-notes','sm-ctn-per'].forEach(x=>document.getElementById(x).value='');}document.getElementById('sm-ctn').value='';var _cr=document.getElementById('sm-ctn-res');if(_cr)_cr.textContent='0';document.getElementById('sm-move').value='';document.getElementById('sm-move-row').style.display=s?'flex':'none';document.getElementById('sm-modal').classList.add('open');}
+function openSM(code){const s=code?stockItems.find(x=>x.code===code):null;editSM=s?code:null;document.getElementById('sm-title').textContent=s?'Edit stock':'Add stock';document.getElementById('sm-del').style.display=s?'flex':'none';if(s){document.getElementById('sm-code').value=s.code;document.getElementById('sm-code').disabled=true;document.getElementById('sm-type').value=s.type||((s.code==='T07'||s.code==='T08')?'ttrim':'panel');document.getElementById('sm-qty').value=s.qty;document.getElementById('sm-dmg').value=s.damaged;document.getElementById('sm-notes').value=s.notes||'';document.getElementById('sm-ctn-per').value=(s.pcsPerCtn||'');}else{document.getElementById('sm-code').value=(code||'');document.getElementById('sm-code').disabled=false;document.getElementById('sm-type').value=smGuessType(code);['sm-qty','sm-dmg','sm-notes','sm-ctn-per'].forEach(x=>document.getElementById(x).value='');}document.getElementById('sm-ctn').value='';var _cr=document.getElementById('sm-ctn-res');if(_cr)_cr.textContent='0';document.getElementById('sm-move').value='';var _mn=document.getElementById('sm-move-note');if(_mn)_mn.style.display='none';document.getElementById('sm-move-row').style.display=s?'flex':'none';document.getElementById('sm-modal').classList.add('open');}
 // Count by CTN → auto-fill Grade A (pcs = CTN × pcs/CTN). pcs/CTN is remembered per product.
 function smCtnCalc(){
   var ctn=parseFloat((document.getElementById('sm-ctn')||{}).value)||0;
@@ -4827,15 +4828,39 @@ function smCtnCalc(){
   var r=document.getElementById('sm-ctn-res'); if(r) r.textContent=res.toLocaleString();
   if(ctn>0 && per>0){ document.getElementById('sm-qty').value=res; }
 }
-// Move broken panels Grade A → Grade B (updates the modal fields; Save persists).
+// Move broken panels Grade A → Grade B.
+// This used to only rewrite the two input fields and leave the actual booking to
+// the Save button. On screen the numbers moved, in the warehouse nothing did, and
+// closing the modal threw the move away without a word. A button that says A→B
+// books A→B: the move is written and synced straight away, and says so.
 function smMoveToB(){
   var n=parseInt(document.getElementById('sm-move').value)||0;
   if(n<=0){ alert('Enter amount / ใส่จำนวน'); return; }
   var a=parseInt(document.getElementById('sm-qty').value)||0, b=parseInt(document.getElementById('sm-dmg').value)||0;
-  if(n>a){ alert('Not enough Grade A stock ('+a+' pcs) / สต็อก A ไม่พอ'); return; }
+  if(n>a){ alert('Not enough Grade A stock ('+a.toLocaleString()+' pcs) / สต็อก A ไม่พอ'); return; }
   document.getElementById('sm-qty').value=a-n;
   document.getElementById('sm-dmg').value=b+n;
   document.getElementById('sm-move').value='';
+  var s=editSM ? stockItems.find(function(x){return x.code===editSM;}) : null;
+  // Adding a brand-new product has nothing to book against yet — there the fields
+  // really are the only thing to change, and Save is what creates the item.
+  if(!s){ smMoveNote(n.toLocaleString()+' pcs → Grade B. Press Save to book it. / กด Save', false); return; }
+  s.qty=a-n; s.damaged=b+n;
+  // A carton count left in the box would recompute Grade A on the next keystroke
+  // and quietly undo what was just booked.
+  var _c=document.getElementById('sm-ctn'); if(_c) _c.value='';
+  var _cr=document.getElementById('sm-ctn-res'); if(_cr) _cr.textContent='0';
+  addLog(s.code+' '+n+' pcs A→B (Grade B) / ย้ายเป็นเกรด B','-');
+  mgRender(); syncStockItems();
+  smMoveNote('✓ '+n.toLocaleString()+' pcs moved to Grade B / ย้ายแล้ว — A '+(a-n).toLocaleString()+' · B '+(b+n).toLocaleString(), true);
+}
+function smMoveNote(txt, ok){
+  var el=document.getElementById('sm-move-note'); if(!el) return;
+  el.textContent=txt;
+  el.style.color = ok ? 'var(--green)' : 'var(--orange-t)';
+  el.style.background = ok ? 'var(--green-bg)' : 'var(--orange-l)';
+  el.style.display='block';
+  clearTimeout(el._t); el._t=setTimeout(function(){ el.style.display='none'; }, 8000);
 }
 function closeSM(){document.getElementById('sm-modal').classList.remove('open');editSM=null;document.getElementById('sm-code').disabled=false;}
 function saveSM(){const code=document.getElementById('sm-code').value.trim().toUpperCase();if(!code){alert('Enter a code');return;}const qty=parseInt(document.getElementById('sm-qty').value)||0,dmg=parseInt(document.getElementById('sm-dmg').value)||0,type=document.getElementById('sm-type').value,notes=document.getElementById('sm-notes').value,pcsPerCtn=parseInt(document.getElementById('sm-ctn-per').value)||0;if(editSM){const s=stockItems.find(x=>x.code===editSM);const d=qty-s.qty;const db=dmg-(parseInt(s.damaged)||0);s.qty=qty;s.damaged=dmg;s.type=type;s.notes=notes;if(pcsPerCtn>0)s.pcsPerCtn=pcsPerCtn;if(d!==0)addLog(code+' '+(d>0?'+'+d:d)+' pcs',d>0?'+':'-');if(db!==0)addLog(code+' Grade B '+(db>0?'+'+db:db)+' pcs',db>0?'+':'-');}else{if(stockItems.find(x=>x.code.toUpperCase()===code.toUpperCase())){alert('Code already exists: '+code);return;}var _ni={code,type,qty,damaged:dmg,notes};if(pcsPerCtn>0)_ni.pcsPerCtn=pcsPerCtn;stockItems.push(_ni);addLog(code+' added: '+qty+' pcs','+');}closeSM();mgRender();syncStockItems();}
