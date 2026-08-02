@@ -690,6 +690,15 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     window.showInAppNotif = showInAppNotif;
 
     function startListeners() {
+      // ── REMOTE RELOAD ───────────────────────────────────────────────────────
+      // Office tabs stay open for days, so after a deploy some devices go on running
+      // the OLD build and writing into this same database — that is how one tour
+      // collected five IDs hours after the fix was live. The newest client publishes
+      // its build number here; every older tab reloads itself. "โหลดใหม่ทุกเครื่อง /
+      // Reload all devices" (Management → Audit Log) pushes a reload without a deploy.
+      db.ref('appVersion').on('value', function(snap) {
+        try{ kpVersionCheck(snap.val()||{}); }catch(e){}
+      });
       db.ref('managerPin').on('value', function(snap) {
         if(snap.val() && snap.val().pin) managerPin = snap.val().pin;
       });
@@ -1400,6 +1409,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 
   </div></div>
   <div class="view" id="mgv-audit"><div class="sec">
+    <div style="border:1.5px solid var(--border);border-radius:var(--rs);padding:12px;margin-bottom:14px;background:var(--bg2)">
+      <div class="stit" style="margin-bottom:6px"><i class="ti ti-refresh"></i> โหลดใหม่ทุกเครื่อง / Reload all devices</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">แท็บที่เปิดค้างไว้หลายวันยังใช้โค้ดเก่า — ปุ่มนี้สั่งให้ทุกเครื่องโหลดแอปใหม่ / A tab left open for days still runs old code. This tells every device to reload the app.</div>
+      <button type="button" class="btnsm btnsmp" style="width:100%;justify-content:center" onclick="kpForceReloadAll(this)"><i class="ti ti-refresh"></i> โหลดใหม่ทุกเครื่อง / Reload all devices</button>
+    </div>
     <div style="border:1.5px solid var(--border);border-radius:var(--rs);padding:12px;margin-bottom:14px;background:var(--bg2)">
       <div class="stit" style="margin-bottom:6px"><i class="ti ti-table-export"></i> Google Sheets Sync</div>
       <div style="font-size:11px;color:var(--text2);margin-bottom:10px">One-time import of all orders since 1/6/2026 to the connected Sheet. Run the dry-run first to preview — it writes nothing.</div>
@@ -5908,6 +5922,107 @@ function appRefresh(btn){
     try{ location.reload(); }
     catch(e){ try{ location.href = location.href.split('#')[0]; }catch(_){} }
   }, 100);
+}
+
+// ── BUILD NUMBER + REMOTE RELOAD ────────────────────────────────────────────
+// KP_BUILD goes up with EVERY deploy of this file. A tab that sees a higher build in
+// Firebase knows it is running outdated code and reloads itself — the only way to get
+// a device that has been open since yesterday onto the new version without walking to
+// it. Firebase node: appVersion { build, force, at, by }.
+//
+// It can only ever reach tabs that already run a build carrying this check. A tab that
+// was opened BEFORE this went live executes none of it and still has to be refreshed
+// once by hand (the round KP button, bottom right).
+var KP_BUILD = 20260802001;
+var _kpReloading = false;
+
+function kpVersionCheck(v){
+  v = v || {};
+  var build = parseInt(v.build) || 0;
+  var force = parseInt(v.force) || 0;
+  // Newest tab in the house → announce the build, so the older ones can see it.
+  if(build < KP_BUILD){
+    try{ if(window.fbDB) window.fbDB.ref('appVersion').update({ build: KP_BUILD, at: Date.now() }); }catch(e){}
+  } else if(build > KP_BUILD){
+    kpReloadSoon('มีเวอร์ชันใหม่ / new version', 'b'+build);
+    return;
+  }
+  // A pushed reload is remembered by its timestamp, not compared against this device's
+  // clock — a device running a few minutes fast would otherwise reload for ever.
+  var seen = null;
+  try{ seen = localStorage.getItem('kp-force-seen'); }catch(e){}
+  if(seen === null){ try{ localStorage.setItem('kp-force-seen', String(force)); }catch(e){} return; }
+  if(force > (parseInt(seen)||0)){
+    try{ localStorage.setItem('kp-force-seen', String(force)); }catch(e){}
+    kpReloadSoon('รีเฟรชจากสำนักงาน / refresh sent from the office', 'f'+force);
+  }
+}
+// Never yank the page away from someone mid-form: while a modal is open the banner
+// stays up and the reload waits for it to be closed.
+function kpReloadSoon(why, tag){
+  if(_kpReloading) return;
+  _kpReloading = true;
+  // If the new code is not on the CDN yet (GitHub Pages caches for 10 min) the reload
+  // would come back to the same build and start over — so give up after two tries and
+  // leave the banner with its manual button.
+  var auto = true;
+  try{
+    var k = 'kp-rl-'+tag, n = parseInt(sessionStorage.getItem(k)||'0')||0;
+    if(n >= 2) auto = false; else sessionStorage.setItem(k, String(n+1));
+  }catch(e){}
+  kpShowReloadBanner(why, !auto);
+  if(!auto) return;
+  var tick = function(){
+    if(kpModalOpen()){ setTimeout(tick, 2000); return; }   // form open → wait for it
+    kpHardReload();
+  };
+  setTimeout(tick, 4000);
+}
+// A plain reload can still be answered from the browser's HTTP cache (GitHub Pages
+// sends max-age=600), so drop the caches and put the moment in the URL.
+function kpHardReload(){
+  var done = false;
+  var go = function(){
+    if(done) return; done = true;
+    try{ location.replace(location.pathname + '?b=' + Date.now()); }
+    catch(e){ try{ location.reload(); }catch(_){} }
+  };
+  try{
+    if(window.caches && caches.keys){
+      caches.keys().then(function(ks){
+        return Promise.all(ks.map(function(k){ return caches.delete(k); }));
+      }).then(go, go);
+      setTimeout(go, 2500);          // never hang waiting for the cache API
+      return;
+    }
+  }catch(e){}
+  go();
+}
+function kpShowReloadBanner(why, manualOnly){
+  var b = document.getElementById('kp-reload-bar');
+  if(!b){
+    b = document.createElement('div');
+    b.id = 'kp-reload-bar';
+    b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;background:#1D4ED8;color:#fff;'
+      + 'padding:9px 14px;font-size:12.5px;font-weight:700;display:flex;align-items:center;'
+      + 'justify-content:center;gap:10px;flex-wrap:wrap;box-shadow:0 2px 10px rgba(0,0,0,.25)';
+    document.body.appendChild(b);
+  }
+  b.innerHTML = '<span>🔄 ' + why + (manualOnly ? '' : ' — กำลังโหลดใหม่ / reloading…') + '</span>'
+    + '<button type="button" onclick="kpHardReload()" style="border:none;border-radius:8px;padding:5px 11px;'
+    + 'background:#fff;color:#1D4ED8;font-size:12px;font-weight:800;cursor:pointer">โหลดใหม่เลย / Reload now</button>';
+}
+// Management button: every device reloads, no deploy needed.
+function kpForceReloadAll(btn){
+  if(!window.fbDB){ alert('ออฟไลน์ / offline'); return; }
+  if(!confirm('โหลดแอปใหม่ทุกเครื่องเลยไหม? / Reload the app on every device now?\n\n'
+    + 'เครื่องที่เปิดหน้าต่างค้างไว้จะโหลดใหม่หลังปิดหน้าต่าง / a device with a form open reloads as soon as it is closed.\n\n'
+    + '⚠ เครื่องที่ยังใช้เวอร์ชันเก่ามาก ต้องกดปุ่ม KP เอง / a device still on a very old build must be refreshed with its own KP button.')) return;
+  try{
+    window.fbDB.ref('appVersion').update({ build: KP_BUILD, force: Date.now(), at: Date.now(),
+      by: (typeof ofWho==='function' ? ofWho() : '') });
+  }catch(e){}
+  if(btn){ btn.disabled = true; btn.textContent = '✓ ส่งแล้ว / sent'; }
 }
 
 function notifClick() {
