@@ -1712,7 +1712,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     </div>
     <div id="of-active-tours"><div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div></div>
     <div id="of-tourid-wrap">
-    <div class="stit" style="margin-top:4px">🆔 Tour IDs / รหัสทัวร์ <span id="of-tourid-cnt" style="font-weight:500;color:var(--text2);font-size:12px"></span></div>
+    <div class="stit" style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span>🆔 Tour IDs / รหัสทัวร์ <span id="of-tourid-cnt" style="font-weight:500;color:var(--text2);font-size:12px"></span></span>
+      <button type="button" onclick="ofTourIdsRenumber()" title="เรียงรหัสใหม่ตามวันที่สร้าง / rebuild all IDs from the real creation order" style="flex-shrink:0;font-size:11px;padding:4px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);cursor:pointer;font-weight:700">🔢 เรียงรหัสใหม่ / Renumber</button>
+    </div>
     <input type="text" id="of-tourid-q" placeholder="ค้นหา / search: 260801-1, 260801, driver, order id" oninput="ofRenderTourIds()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:8px">
     <div id="of-tourid-list"></div>
     </div>
@@ -9526,6 +9529,7 @@ function ofSetTourPay(tourId, val){
   // Lalamove tours: Tour pay and the Lalamove tab's "Car fee" are the same money —
   // mirror it so editing either side shows on both.
   if(ofIsLala(t)) t.carFee = (val===''||val==null) ? 0 : (parseFloat(val)||0);
+  try{ tourRegUpsert(t); }catch(e){}   // keep the tour-ID card's day total in sync
   syncTours();
   try{ ofRenderTour(); }catch(e){}   // refresh the "pay at end" net hint
   try{ ofRenderLala(); }catch(e){}
@@ -9980,6 +9984,10 @@ var _tnoPending={};   // tours whose ID is currently being allocated (no double-
 // several office devices create tours at once), then stamp it on tour + orders.
 function tourAllocNo(t, cb){
   if(!t || tidOk(t.tid)){ if(cb) cb(); return; }
+  // This tour already HAS an ID in the registry (its tid write was lost, or another
+  // device numbered it) — adopt it instead of minting a second one for the same tour.
+  var ex=tourRegFindByTourId(t.id);
+  if(ex){ t.tid=ex; tourStampOrders(t); tourRegUpsert(t); try{ syncTours(); }catch(e){} try{ syncOrders(); }catch(e){} if(cb) cb(); return; }
   var day=tidDayStr(), floor=tourMaxSeqOfDay(day);
   var finish=function(n){
     t.tid=day+'-'+n; tourStampOrders(t); tourRegUpsert(t);
@@ -10015,6 +10023,13 @@ function tourStampOrders(t){
   });
 }
 function tourRegRec(id){ return (tourReg||{})[String(id||'')]||null; }
+// The ID already registered for this tour (guards against handing out a second one).
+function tourRegFindByTourId(tourId){
+  if(!tourId) return null;
+  var hit=null;
+  Object.keys(tourReg||{}).forEach(function(k){ if(!hit && tidOk(k) && (tourReg[k]||{}).tourId===tourId) hit=k; });
+  return hit;
+}
 // Write / refresh the registry entry of a live tour.
 function tourRegUpsert(t){
   if(!t||!tidOk(t.tid)) return;
@@ -10058,17 +10073,6 @@ function tourRecAny(reg){
   });
   return found;
 }
-// Office marks that the driver has actually received the tour money (tick box).
-function tourRegTogglePaid(id){
-  var rec=tourRegRec(id); if(!rec) return;
-  rec.paid=!rec.paid;
-  rec.paidBy=rec.paid?((((typeof staffList!=='undefined'?staffList:[])||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office'):'';
-  rec.paidAt=rec.paid?Date.now():0;
-  tourReg[id]=rec;
-  try{ if(window.fbDB) window.fbDB.ref('tourReg/'+id).set(rec); }catch(e){}
-  try{ auditTour('pay','🆔 '+id, (rec.paid?'✅ คนขับรับเงินแล้ว / driver paid':'undo driver-paid')+(rec.driverName?' · '+rec.driverName:'')); }catch(e){}
-  ofRenderTourIds();
-}
 // Photos + pay slips of one tour ID — loaded on demand (base64 images are heavy).
 function ofTourIdPhotos(id){
   var box=document.getElementById('tidph_'+id); if(!box) return;
@@ -10085,14 +10089,33 @@ function ofTourIdPhotos(id){
   box.innerHTML=html;
   box.style.display='block';
 }
+// One tick box pays a whole day: the tours a driver drove on the same day are paid
+// out together (500 + 200 + 800 = 1,500 ฿, one transfer), so the flag is set on
+// every ID of that group at once.
+function tourRegTogglePaidGroup(idsCsv){
+  var ids=String(idsCsv||'').split(',').filter(tidOk); if(!ids.length) return;
+  var allPaid=ids.every(function(id){ return !!(tourRegRec(id)||{}).paid; });
+  var mkPaid=!allPaid;
+  var by=mkPaid?((((typeof staffList!=='undefined'?staffList:[])||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office'):'';
+  var at=mkPaid?Date.now():0, sum=0, drv='';
+  ids.forEach(function(id){
+    var rec=tourRegRec(id); if(!rec) return;
+    rec.paid=mkPaid; rec.paidBy=by; rec.paidAt=at;
+    sum+=Number(rec.driverPay)||0; drv=drv||rec.driverName||'';
+    tourReg[id]=rec;
+    try{ if(window.fbDB) window.fbDB.ref('tourReg/'+id).set(rec); }catch(e){}
+  });
+  try{ auditTour('pay','🆔 '+ids.join(', '), (mkPaid?'✅ คนขับรับเงินแล้ว / driver paid':'undo driver-paid')+(drv?' · '+drv:'')+(sum?' · '+sum.toLocaleString()+' ฿':'')); }catch(e){}
+  ofRenderTourIds();
+}
 // ── Tour-ID list (Tour tab) ──────────────────────────────────
+// Grouped by driver + day: one card per driver per day, because that is how the
+// tour pay is settled (all tours of that day summed, paid once).
 function ofRenderTourIds(){
   var el=document.getElementById('of-tourid-list'); if(!el) return;
   var qEl=document.getElementById('of-tourid-q');
   var q=qEl?qEl.value.trim().toLowerCase():'';
-  // Newest first: day, then the running number of that day (260801-10 after -9).
-  var list=Object.keys(tourReg||{}).filter(tidOk).map(function(k){ var r=tourReg[k]||{}; r.id=k; return r; })
-    .sort(function(a,b){ return tidSortKey(b.id)-tidSortKey(a.id); });
+  var list=Object.keys(tourReg||{}).filter(tidOk).map(function(k){ var r=tourReg[k]||{}; r.id=k; return r; });
   var cntEl=document.getElementById('of-tourid-cnt');
   if(cntEl) cntEl.textContent=list.length?('('+list.length+')'):'';
   if(q){
@@ -10106,48 +10129,179 @@ function ofRenderTourIds(){
     el.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">'+(q?'ไม่พบ / no match':'ยังไม่มีรหัสทัวร์ / no tour IDs yet')+'</div>';
     return;
   }
+  var groups={}, gkeys=[];
+  list.forEach(function(r){
+    var gk=(r.driverId||r.driverName||'?')+'|'+tidDay(r.id);
+    if(!groups[gk]){ groups[gk]={key:gk, day:tidDay(r.id), driverName:r.driverName||'—', tours:[], pay:0, minSeq:1e9}; gkeys.push(gk); }
+    var g=groups[gk];
+    g.tours.push(r); g.pay+=Number(r.driverPay)||0;
+    g.minSeq=Math.min(g.minSeq, tidSeq(r.id));
+    if(!g.driverName||g.driverName==='—') g.driverName=r.driverName||'—';
+  });
+  // Newest day on top; inside a day the first tour of the day first.
+  gkeys.sort(function(a,b){
+    var A=groups[a], B=groups[b];
+    if(A.day!==B.day) return A.day<B.day?1:-1;
+    return A.minSeq-B.minSeq;
+  });
   var _open=kpOpenIds('of-tourid-list');
-  el.innerHTML=list.map(function(r){
-    var no=r.id, bid='tid_'+no, deleted=r.state==='deleted', ended=r.state==='ended';
-    var col=deleted?'#dc2626':(ended?'#64748b':'#16a34a');
-    var bg =deleted?'#fee2e2':(ended?'#f1f5f9':'#dcfce7');
-    var stateTxt=deleted?'ลบแล้ว / deleted':(ended?'จบแล้ว / ended':'กำลังส่ง / active');
-    var ords=tidArr(r.orders);
-    var dates='🗓 '+(r.createdDate?fmtD(r.createdDate):'—')+(r.createdAt?' '+r.createdAt:'')
-      +' → '+((r.endedDate?fmtD(r.endedDate)+(r.endedAt?' '+r.endedAt:''):(deleted||ended?'—':'…')));
-    var ordHTML=ords.length
-      ? ords.map(function(id){
-          var o=(orders||[]).find(function(x){return x.id===id;});
-          return '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:5px 0;border-top:1px solid var(--border);font-size:11.5px">'
-            +'<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/['\\]/g,'')+'\')" style="font-weight:700;cursor:pointer">'+id+'</span>'
-            +'<span style="color:var(--text2);text-align:right;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+((o&&o.customer)||'—')+((o&&o.status)?' · '+o.status:'')+'</span>'
-            +'</div>';
-        }).join('')
-      : '<div style="font-size:11px;color:var(--text2);padding:6px 0">ไม่มีออเดอร์ / no orders</div>';
-    var payTxt=r.paid
-      ? '✅ จ่ายคนขับแล้ว / driver paid'+(r.paidBy?' · '+r.paidBy:'')+(r.paidAt?' · '+fmtD(new Date(r.paidAt).toISOString().slice(0,10)):'')
+  el.innerHTML=gkeys.map(function(gk){
+    var g=groups[gk];
+    g.tours.sort(function(a,b){ return tidSeq(a.id)-tidSeq(b.id); });
+    var gid='tidg_'+gk.replace(/[^a-zA-Z0-9]/g,'_');
+    var ids=g.tours.map(function(r){return r.id;});
+    var multi=g.tours.length>1;
+    var anyActive=g.tours.some(function(r){ return r.state!=='ended'&&r.state!=='deleted'; });
+    var allPaid=g.tours.every(function(r){ return !!r.paid; });
+    var ordCnt=g.tours.reduce(function(a,r){ return a+tidArr(r.orders).length; },0);
+    var dayLbl=(function(){ var d=g.day; return d?('20'+d.slice(0,2)+'-'+d.slice(2,4)+'-'+d.slice(4,6)):''; })();
+    var gcol=anyActive?'#16a34a':'#64748b';
+    // Pay line: single tour = the amount, several = the sum with its breakdown.
+    var parts=g.tours.filter(function(r){ return (Number(r.driverPay)||0)>0; }).map(function(r){ return Number(r.driverPay).toLocaleString(); });
+    var payLine=g.pay>0
+      ? '💰 ค่าทัวร์ / Tour pay: '+(parts.length>1?parts.join(' + ')+' = ':'')+'<b style="color:var(--green)">'+g.pay.toLocaleString()+' ฿</b>'+(multi?' <span style="color:var(--text2)">('+g.tours.length+' ทัวร์ จ่ายครั้งเดียว / paid once)</span>':'')
+      : '💰 ค่าทัวร์ / Tour pay: <b>—</b>';
+    var payTxt=allPaid
+      ? '✅ จ่ายคนขับแล้ว / driver paid'+(g.tours[0].paidBy?' · '+g.tours[0].paidBy:'')+(g.tours[0].paidAt?' · '+fmtD(new Date(g.tours[0].paidAt).toISOString().slice(0,10)):'')
       : '⬜ ยังไม่จ่ายคนขับ / not paid yet';
-    return '<div style="border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;background:var(--bg)">'
-      +'<div onclick="ofToggleMore(\''+bid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
-        +'<span style="font-weight:800;font-size:13px;color:'+col+';background:'+bg+';border-radius:8px;padding:2px 8px;white-space:nowrap">'+no+(deleted?' — ลบแล้ว':'')+'</span>'
-        +'<span style="font-weight:700;font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🚚 '+(r.driverName||'—')+'</span>'
-        +'<span style="font-size:10.5px;color:var(--text2);white-space:nowrap">'+ords.length+' orders'+(r.paid?' · 💰✅':'')+' ▾</span>'
-        +'<span style="width:100%;font-size:10.5px;color:var(--text2)">'+dates+' · <b style="color:'+col+'">'+stateTxt+'</b></span>'
-      +'</div>'
-      +'<div id="'+bid+'" style="display:none;padding:0 11px 9px">'
-        +'<div style="display:flex;gap:6px;flex-wrap:wrap;padding:2px 0 6px">'
-          +'<button type="button" onclick="event.stopPropagation();ofTourIdPhotos(\''+no+'\')" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:700;cursor:pointer">🖼️ รูป / Photos + สลิป</button>'
-          +'<label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid '+(r.paid?'#86efac':'var(--border)')+';border-radius:var(--rs);background:'+(r.paid?'#f0fdf4':'var(--bg)')+';font-size:11px;font-weight:700;color:'+(r.paid?'#166534':'var(--text2)')+';cursor:pointer">'
-            +'<input type="checkbox" '+(r.paid?'checked ':'')+'onchange="event.stopPropagation();tourRegTogglePaid(\''+no+'\')" style="width:16px;height:16px;cursor:pointer">'+payTxt
-          +'</label>'
+    // One block per tour of that day
+    var toursHTML=g.tours.map(function(r){
+      var no=r.id, bid='tid_'+no, deleted=r.state==='deleted', ended=r.state==='ended';
+      var col=deleted?'#dc2626':(ended?'#64748b':'#16a34a');
+      var bg =deleted?'#fee2e2':(ended?'#f1f5f9':'#dcfce7');
+      var stateTxt=deleted?'ลบแล้ว / deleted':(ended?'จบแล้ว / ended':'กำลังส่ง / active');
+      var ords=tidArr(r.orders);
+      var times=(r.createdAt||'—')+' → '+(r.endedAt||(deleted||ended?'—':'…'));
+      var ordHTML=ords.length
+        ? ords.map(function(id){
+            var o=(orders||[]).find(function(x){return x.id===id;});
+            return '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:5px 0;border-top:1px solid var(--border);font-size:11.5px">'
+              +'<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/['\\]/g,'')+'\')" style="font-weight:700;cursor:pointer">'+id+'</span>'
+              +'<span style="color:var(--text2);text-align:right;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+((o&&o.customer)||'—')+((o&&o.status)?' · '+o.status:'')+'</span>'
+              +'</div>';
+          }).join('')
+        : '<div style="font-size:11px;color:var(--text2);padding:6px 0">ไม่มีออเดอร์ / no orders</div>';
+      return '<div style="border:1px solid var(--border);border-radius:var(--rs);margin-top:6px;background:var(--bg2)">'
+        +'<div onclick="ofToggleMore(\''+bid+'\')" style="padding:7px 9px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap">'
+          +'<span style="font-weight:800;font-size:12px;color:'+col+';background:'+bg+';border-radius:8px;padding:2px 7px;white-space:nowrap">'+no+(deleted?' — ลบแล้ว':'')+'</span>'
+          +'<span style="font-size:10.5px;color:var(--text2);flex:1;min-width:0">🕒 '+times+' · <b style="color:'+col+'">'+stateTxt+'</b></span>'
+          +'<span style="font-size:10.5px;color:var(--text2);white-space:nowrap">'+ords.length+' orders'+((Number(r.driverPay)||0)>0?' · 💰'+Number(r.driverPay).toLocaleString():'')+' ▾</span>'
         +'</div>'
-        +'<div id="tidph_'+no+'" style="display:none"></div>'
-        +(r.driverPay>0?'<div style="font-size:11px;color:var(--text2);padding:2px 0 4px">💰 ค่าทัวร์ / Tour pay: <b>'+Number(r.driverPay).toLocaleString()+' ฿</b></div>':'')
-        +ordHTML
+        +'<div id="'+bid+'" style="display:none;padding:0 9px 8px">'
+          +'<button type="button" onclick="event.stopPropagation();ofTourIdPhotos(\''+no+'\')" style="margin:2px 0 4px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:700;cursor:pointer">🖼️ รูป / Photos + สลิป</button>'
+          +'<div id="tidph_'+no+'" style="display:none"></div>'
+          +ordHTML
+        +'</div>'
+        +'</div>';
+    }).join('');
+    return '<div style="border:1px solid '+(allPaid?'#bbf7d0':'var(--border)')+';border-radius:var(--rs);margin-bottom:8px;background:var(--bg)">'
+      +'<div onclick="ofToggleMore(\''+gid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+        +'<span style="font-weight:800;font-size:13px;color:'+gcol+';background:'+(anyActive?'#dcfce7':'#f1f5f9')+';border-radius:8px;padding:2px 8px;white-space:nowrap">'+ids[0]+(multi?' … -'+tidSeq(ids[ids.length-1]):'')+'</span>'
+        +'<span style="font-weight:700;font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🚚 '+g.driverName+'</span>'
+        +'<span style="font-size:10.5px;color:var(--text2);white-space:nowrap">'+g.tours.length+' ทัวร์ · '+ordCnt+' orders'+(allPaid?' · 💰✅':'')+' ▾</span>'
+        +'<span style="width:100%;font-size:10.5px;color:var(--text2)">🗓 '+(dayLbl?fmtD(dayLbl):'—')+' · '+payLine+'</span>'
+      +'</div>'
+      +'<div id="'+gid+'" style="display:none;padding:0 11px 10px">'
+        +'<label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid '+(allPaid?'#86efac':'var(--border)')+';border-radius:var(--rs);background:'+(allPaid?'#f0fdf4':'var(--bg)')+';font-size:11px;font-weight:700;color:'+(allPaid?'#166534':'var(--text2)')+';cursor:pointer">'
+          +'<input type="checkbox" '+(allPaid?'checked ':'')+'onchange="event.stopPropagation();tourRegTogglePaidGroup(\''+ids.join(',')+'\')" style="width:16px;height:16px;cursor:pointer">'+payTxt
+        +'</label>'
+        +toursHTML
       +'</div>'
       +'</div>';
   }).join('');
   kpRestoreOpen(_open);
+}
+// ── RENUMBER — rebuild every tour ID from the real creation order ─────────────
+// The IDs were first handed out in whatever order the tours happened to sit in the
+// list (and a lost write could mint a second ID for the same tour). This rebuilds
+// them cleanly: per day, the tours still on the road come first (in the order they
+// left), then the rest by creation time. Tour creation time comes from the tour's
+// own key ('t'+Date.now()), so it is the real one — not the day of the repair.
+function tourCreatedTs(tourId, fallback){
+  var m=/^t(\d{10,16})$/.exec(String(tourId||''));
+  var n=m?parseInt(m[1]):0;
+  return (n>1000000000000 && n<4000000000000) ? n : (fallback||0);
+}
+function tourDepartedTs(t){
+  if(!t) return 0;
+  var d=t.departedDate||'', a=t.departedAt||'';
+  if(!d) return 0;
+  var ts=new Date(d+'T'+(/^\d{2}:\d{2}$/.test(a)?a:'00:00')+':00').getTime();
+  return isNaN(ts)?0:ts;
+}
+function ofTourIdsRenumber(){
+  var items=[], curMK=kpNowMK();
+  (activeTours||[]).forEach(function(t){
+    if(!t||!t.id) return;
+    items.push({ tourId:t.id, driverId:t.driverId||'', driverName:t.driverName||'',
+      createdTs:tourCreatedTs(t.id, Date.now()), departedTs:tourDepartedTs(t),
+      active:true, tour:t, orders:(t.orders||[]).slice(),
+      driverPay:parseFloat(t.driverPay)||0, created:t.created||'', hist:null });
+  });
+  Object.keys(tourHistory||{}).forEach(function(dk){
+    var recs=tourHistory[dk]||{};
+    Object.keys(recs).forEach(function(k){
+      var r=recs[k]||{};
+      var ts=tourCreatedTs(r.tourId, r.ts||0); if(!ts) return;
+      if(kpMKey(new Date(ts).toISOString().slice(0,10))!==curMK) return;   // this month only
+      items.push({ tourId:r.tourId||('h_'+dk+'_'+k), driverId:r.driverId||'', driverName:r.driverName||'',
+        createdTs:ts, departedTs:tourDepartedTs(r), active:false, tour:null,
+        orders:tidArr(r.orders).map(function(o){ return o&&o.id?o.id:o; }),
+        driverPay:parseFloat(r.driverPay)||0, created:r.created||'', hist:r, histPath:'tourHistory/'+dk+'/'+k,
+        endedDate:r.endedDate||'', endedAt:r.endedAt||'' });
+    });
+  });
+  if(!items.length){ alert('ไม่มีทัวร์ / nothing to renumber'); return; }
+  // Per day: tours still on the road first (in departure order), then by creation time.
+  items.sort(function(a,b){
+    var da=tidDayStr(new Date(a.createdTs)), db=tidDayStr(new Date(b.createdTs));
+    if(da!==db) return da<db?-1:1;
+    if(a.active!==b.active) return a.active?-1:1;
+    if(a.active&&b.active) return (a.departedTs||a.createdTs)-(b.departedTs||b.createdTs);
+    return a.createdTs-b.createdTs;
+  });
+  var seq={}, newReg={}, dayMax={};
+  items.forEach(function(it){
+    var day=tidDayStr(new Date(it.createdTs));
+    seq[day]=(seq[day]||0)+1; dayMax[day]=seq[day];
+    it.newId=day+'-'+seq[day];
+    var cd=new Date(it.createdTs);
+    newReg[it.newId]={ id:it.newId, tourId:it.tourId, driverId:it.driverId, driverName:it.driverName,
+      createdDate:cd.toISOString().slice(0,10),
+      createdAt:String(cd.getHours()).padStart(2,'0')+':'+String(cd.getMinutes()).padStart(2,'0'),
+      endedDate:it.endedDate||'', endedAt:it.endedAt||'',
+      state:it.active?'active':'ended', orders:it.orders, orderCount:it.orders.length,
+      driverPay:it.driverPay, paid:false, paidBy:'', paidAt:0, ts:it.createdTs };
+  });
+  var preview=items.slice(0,6).map(function(it){ return it.newId+' · '+(it.driverName||'?')+(it.active?' (on tour)':''); }).join('\n');
+  if(!confirm('เรียงรหัสทัวร์ใหม่ / Renumber '+items.length+' tours?\n\n'
+    +'รหัสเดิมทั้งหมดจะถูกแทนที่ / all current IDs are replaced:\n'+preview+(items.length>6?'\n…':'')
+    +'\n\n⚠ เครื่องหมาย "จ่ายแล้ว" จะถูกล้าง / the driver-paid ticks are reset.')) return;
+  // Keep the paid marks of IDs that map to the same tour.
+  var paidByTour={};
+  Object.keys(tourReg||{}).forEach(function(k){ var r=tourReg[k]||{}; if(r.paid&&r.tourId) paidByTour[r.tourId]={by:r.paidBy||'', at:r.paidAt||0}; });
+  Object.keys(newReg).forEach(function(k){ var p=paidByTour[newReg[k].tourId]; if(p){ newReg[k].paid=true; newReg[k].paidBy=p.by; newReg[k].paidAt=p.at; } });
+  tourReg=newReg;
+  try{ if(window.fbDB){
+    window.fbDB.ref('tourReg').set(newReg);
+    Object.keys(dayMax).forEach(function(d){ window.fbDB.ref('tourSeqDay/'+d).set(dayMax[d]); });
+  } }catch(e){}
+  // Stamp the new ID on the tours, their orders and the archived records.
+  items.forEach(function(it){
+    if(it.tour){ it.tour.tid=it.newId; _tnoPending[it.tour.id]=1; }
+    else if(it.histPath){ try{ if(window.fbDB) window.fbDB.ref(it.histPath+'/tid').set(it.newId); }catch(e){} }
+    it.orders.forEach(function(oid){
+      var o=(orders||[]).find(function(x){return x.id===oid;});
+      if(o) o.tourNo=it.newId;
+    });
+  });
+  try{ syncTours(); }catch(e){}
+  try{ syncOrders(); }catch(e){}
+  try{ auditTour('renumber','🆔 tour ids','Renumbered '+items.length+' tours by creation date'); }catch(e){}
+  try{ ofRenderTour(); }catch(e){}
+  try{ ofRenderOrders(); }catch(e){}
+  try{ ofDriversRender(); }catch(e){}
+  alert('✓ '+items.length+' รหัสทัวร์เรียงใหม่แล้ว / tour IDs renumbered.');
 }
 
 // Photo of the loaded tour vehicle — stored on the tour (t.carPhotos, shared with the
@@ -10311,6 +10465,12 @@ function ofDrvSaveTourPay(driverKey, tourKey, tourId, val){
   var upd={ driverPay:amt, driverPayNet:Math.max(0, amt-adv) };
   if(rec.lalaDriver||rec.plate) upd.carFee=amt;   // Lalamove: tour pay and car fee are the same money
   window.fbDB.ref('tourHistory/'+driverKey+'/'+tourKey).update(upd);   // listener re-renders
+  // Keep the tour-ID card's day total in sync with the corrected pay.
+  try{
+    var _rid=rec.tid||tourRegFindByTourId(rec.tourId);
+    var _rr=_rid?tourRegRec(_rid):null;
+    if(_rr){ _rr.driverPay=amt; tourReg[_rid]=_rr; window.fbDB.ref('tourReg/'+_rid).set(_rr); ofRenderTourIds(); }
+  }catch(e){}
   ofDrvBookPayDelta(rec, diff);
   try{ addLog('Tour pay '+(rec.driverName||'')+(rec.tourNo?' #'+rec.tourNo:'')+': '+old.toLocaleString()+' → '+amt.toLocaleString()+' ฿ (added later)','~'); }catch(e){}
 }
