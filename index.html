@@ -793,6 +793,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{ if(document.getElementById('ofv-drivers') && document.getElementById('ofv-drivers').classList.contains('active')) ofDriversRender(); }catch(e){}
         try{ if(document.getElementById('ofv-lala') && document.getElementById('ofv-lala').classList.contains('active')) ofRenderLala(); }catch(e){}
       });
+      // Tour-ID registry (T001…): running numbers incl. ended/deleted ones.
+      db.ref('tourReg').on('value', function(snap) {
+        tourReg = snap.val() || {};
+        try{ if(document.getElementById('ofv-tour') && document.getElementById('ofv-tour').classList.contains('active')) ofRenderTourIds(); }catch(e){}
+      });
       db.ref('revOrders').on('value', function(snap) {
         // Dedup by order id on load — one revenue entry per delivered order. Guards
         // against historical duplicates (an order delivered/re-delivered multiple
@@ -1706,6 +1711,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" id="of-tour-mappins-btn" onclick="ofBackfillPins(this)" title="Resolve all customer map-links into saved pins (one time)" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:600">📍 Map-Links → Pins</button>
     </div>
     <div id="of-active-tours"><div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div></div>
+    <div id="of-tourid-wrap">
+    <div class="stit" style="margin-top:4px">🆔 Tour IDs / รหัสทัวร์ <span id="of-tourid-cnt" style="font-weight:500;color:var(--text2);font-size:12px"></span></div>
+    <input type="text" id="of-tourid-q" placeholder="ค้นหา / search: T012, driver, order id" oninput="ofRenderTourIds()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:8px">
+    <div id="of-tourid-list"></div>
+    </div>
     <div id="of-tour-create-wrap">
     <div class="stit" style="margin-top:4px">Create new tour / สร้างทัวร์ใหม่</div>
     <div class="card">
@@ -3431,6 +3441,7 @@ let currentDriverTourId=null;
 function drTours(){ return (activeTours||[]).filter(function(t){return t.driverId===currentDriverId;}); }
 function drGetTour(){ var ts=drTours(); if(!ts.length) return null; var sel=ts.find(function(t){return t.id===currentDriverTourId;}); return sel||ts[0]; }
 var tourHistory={};
+var tourReg={};        // tour-ID registry: no -> {no,tourId,driver,state,orders,paid,…} (Firebase tourReg)
 let editId=null,editSM=null,editIM=null,editDM=null,selMonth='';
 
 function go(s){
@@ -6956,7 +6967,7 @@ function openTourDetail(ti) {
   const shp = t.orders.filter(id=>t.status[id]==='shipped').length;
   const pen = t.orders.length - del - can - shp;
 
-  document.getElementById('tdm-driver-name').textContent = t.driverName + "'s Tour / ทัวร์ของ" + t.driverName;
+  document.getElementById('tdm-driver-name').textContent = (t.tno?tourNoFmt(t.tno)+' · ':'') + t.driverName + "'s Tour / ทัวร์ของ" + t.driverName;
   document.getElementById('tdm-stats').textContent = pen + ' pending · ' + (shp>0?shp+' at shipper · ':'') + del + ' delivered · ' + can + ' cancelled — started ' + t.created;
 
   // Build stops list - sort: pending first, then done (shipped/delivered), then cancelled
@@ -7860,7 +7871,7 @@ function ofOrderCard(o, sfx){
       +'</div>';
   }
   var _drvTour = (o.status==='loaded'||o.status==='ready') ? activeTours.find(function(t){return t.orders && t.orders.indexOf(o.id)>=0;}) : null;
-  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:15px;font-weight:700">'+(_prioActive?'⭐ ':'')+o.id+'</span><div style="display:flex;align-items:center;gap:6px">'+(_drvTour?'<span style="font-size:11px;color:#1d4ed8;font-weight:700"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> '+_drvTour.driverName+'</span>':'')+'<span onclick="kpcDiscussOrder(\''+o.id+'\')" title="Ask team / ถามทีม" style="cursor:pointer;font-size:15px;line-height:1">💬</span><span class="badge '+BC[o.status]+'">'+SL[o.status]+'</span></div></div>';
+  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:15px;font-weight:700">'+(_prioActive?'⭐ ':'')+o.id+(o.tourNo?' <span title="Tour ID / รหัสทัวร์" style="font-size:10px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:1px 6px;vertical-align:2px">'+tourNoFmt(o.tourNo)+'</span>':'')+'</span><div style="display:flex;align-items:center;gap:6px">'+(_drvTour?'<span style="font-size:11px;color:#1d4ed8;font-weight:700"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> '+_drvTour.driverName+'</span>':'')+'<span onclick="kpcDiscussOrder(\''+o.id+'\')" title="Ask team / ถามทีม" style="cursor:pointer;font-size:15px;line-height:1">💬</span><span class="badge '+BC[o.status]+'">'+SL[o.status]+'</span></div></div>';
   s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-user" style="font-size:12px;vertical-align:-1px"></i> '+o.customer+zoneBadge(o.zone)+'</div>';
   s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-phone" style="font-size:12px;vertical-align:-1px"></i> '+phoneLinks(o.phone,'#0070f3')+'</div>';
   s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> '+o.address+'</div>';
@@ -8245,7 +8256,8 @@ function ofRenderOrders(){
   if(ofTodayOnly_){var td=new Date().toISOString().split('T')[0];f=f.filter(function(o){return (o.date||'')=== td;});}
   var searchEl=document.getElementById('of-search');
   var q=searchEl?searchEl.value.trim().toLowerCase():'';
-  if(q){f=f.filter(function(o){return (o.id||'').toLowerCase().indexOf(q)>=0||(o.customer||'').toLowerCase().indexOf(q)>=0||(o.phone||'').toLowerCase().indexOf(q)>=0||(o.address||'').toLowerCase().indexOf(q)>=0||(o.panels||'').toLowerCase().indexOf(q)>=0||(o.zone||'').toLowerCase().indexOf(q)>=0;});}
+  // Searching a tour ID (T012 / 12) returns every order of that tour.
+  if(q){f=f.filter(function(o){return (o.id||'').toLowerCase().indexOf(q)>=0||(o.tourNo&&(tourNoFmt(o.tourNo).toLowerCase()===q||String(o.tourNo)===q))||(o.customer||'').toLowerCase().indexOf(q)>=0||(o.phone||'').toLowerCase().indexOf(q)>=0||(o.address||'').toLowerCase().indexOf(q)>=0||(o.panels||'').toLowerCase().indexOf(q)>=0||(o.zone||'').toLowerCase().indexOf(q)>=0;});}
   if(f.length===0){document.getElementById('of-olist').innerHTML='<div class="empty">'+(ofTodayOnly_?'No orders today / วันนี้ยังไม่มีออเดอร์':'No orders yet / ยังไม่มีออเดอร์')+'</div>';return;}
   // Switching filter / Today / search starts a different list → back to the first chunk.
   var _lk=ofFilt_+'|'+(ofTodayOnly_?'T':'')+'|'+q;
@@ -8589,6 +8601,9 @@ function ofBackfillTourDrivers(){
 function ofRenderTour(){
   ofUpdTourDot();
   try{ ofBackfillTourDrivers(); }catch(e){}
+  // Tour IDs: tours created before this feature (or while offline) get their number now.
+  try{ (activeTours||[]).forEach(function(t){ if(t&&t.id&&!t.tno&&!_tnoPending[t.id]){ _tnoPending[t.id]=1; tourAllocNo(t); } }); }catch(e){}
+  try{ ofRenderTourIds(); }catch(e){}
   // Reconcile tour-stop status with the order's own status. An order marked
   // delivered at ORDER level (e.g. via the order card) but still loaded/ready
   // inside the tour would otherwise be dropped from the tour's slip count AND
@@ -8896,7 +8911,7 @@ function ofRenderTour(){
       : '';
     return '<div class="tmgmt">'+
       '<div '+(ro?'':'onclick="openTourDetail('+ti+')" style="cursor:pointer"')+'>'+
-      '<div style="text-align:center;font-size:16px;font-weight:700;color:var(--text);margin-bottom:8px"><i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+(ro?'':'<i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2);vertical-align:-2px;margin-left:4px"></i>')+'</div>'+
+      '<div style="text-align:center;font-size:16px;font-weight:700;color:var(--text);margin-bottom:8px">'+(t.tno?'<span title="Tour ID / รหัสทัวร์" style="font-size:12px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px;margin-right:7px;vertical-align:2px">'+tourNoFmt(t.tno)+'</span>':'')+'<i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+(ro?'':'<i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2);vertical-align:-2px;margin-left:4px"></i>')+'</div>'+
       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:8px">'+
       kpcTourBubble(t.id)+
       '<button type="button" onclick="event.stopPropagation();printTourReceipts('+ti+')" title="Customer receipts / ใบเสร็จลูกค้า" style="font-size:11px;padding:3px 8px;border:none;background:#1D4ED8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600"><i class="ti ti-receipt"></i> Print receipts / พิมพ์ใบเสร็จ</button>'+
@@ -9489,7 +9504,10 @@ function archiveTour(t){
       total:o.total||'', status:(t.status&&t.status[id])||o.status||'', panels:o.panels||'', lcorner:o.lcorner||'',
       clips:parseInt(o.clips)||0, shipper:o.shipper||'', location:o.location||'' };
   });
-  var rec={ tourNo:existing+1, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
+  // The tour ID (T001…) is burnt now: the number stays in the registry as "ended".
+  try{ if(t.tno) tourRegMark(t.tno,'ended',{ tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
+    orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length, driverPay:parseFloat(t.driverPay)||0 }); }catch(e){}
+  var rec={ tno:t.tno||null, tourNo:existing+1, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
     created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
     endedDate:now.toISOString().slice(0,10), endedAt:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0, driverPayNet:tourNetPay(t),
@@ -9927,6 +9945,205 @@ function tourPayBadgeHTML(t){
     +(st.how==='cash'?'💵 เงินสด':'🏦 โอน (สลิป)')+(st.by?' · '+st.by:'')+(when?' · '+when:'')+'</span>';
 }
 
+// ════════════════════════════════════════════════════════════
+//  TOUR IDs / รหัสทัวร์ — one short running number per tour (T001, T002 …)
+//  The number is handed out when the tour is sent to the driver, stamped on every
+//  order in that tour (o.tourNo → searchable in the Orders tab) and shown on the
+//  tour card, in the Drivers tab and on the order card. A number is NEVER re-used:
+//  ending a tour marks it "ended", deleting one marks it "deleted" — both keep the
+//  number burnt. Registry: Firebase tourReg/<no>, counter: tourSeq.
+// ════════════════════════════════════════════════════════════
+function tourNoFmt(n){ n=parseInt(n)||0; return n?('T'+String(n).padStart(3,'0')):''; }
+function tidArr(v){ return Array.isArray(v)?v:(v&&typeof v==='object'?Object.keys(v).map(function(k){return v[k];}):[]); }
+// Highest number this client knows — the floor for the next allocation, so a lost or
+// reset counter can never hand out a number that is already in use somewhere.
+function tourMaxNoLocal(){
+  var mx=0;
+  Object.keys(tourReg||{}).forEach(function(k){ var n=parseInt(k)||0; if(n>mx) mx=n; });
+  (activeTours||[]).forEach(function(t){ var n=parseInt(t&&t.tno)||0; if(n>mx) mx=n; });
+  Object.keys(tourHistory||{}).forEach(function(dk){
+    var recs=tourHistory[dk]||{};
+    Object.keys(recs).forEach(function(k){ var n=parseInt((recs[k]||{}).tno)||0; if(n>mx) mx=n; });
+  });
+  return mx;
+}
+function tourTimeStr(){ var d=new Date(); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+var _tnoPending={};   // tours whose number is currently being allocated (no double-alloc)
+// Allocate the next free number via a Firebase transaction (safe when several office
+// devices create tours at the same time), then stamp it on the tour and its orders.
+function tourAllocNo(t, cb){
+  if(!t || t.tno){ if(cb) cb(); return; }
+  var floor=tourMaxNoLocal();
+  var finish=function(n){
+    t.tno=n; tourStampOrders(t); tourRegUpsert(t);
+    try{ syncTours(); }catch(e){}
+    try{ syncOrders(); }catch(e){}
+    // Re-render outside the current call stack — tourAllocNo is also called FROM a
+    // render (backfill), and rendering inside a render would nest innerHTML rebuilds.
+    setTimeout(function(){
+      try{ ofRenderTour(); }catch(e){}
+      try{ ofRenderOrders(); }catch(e){}
+      try{ ofRenderTourIds(); }catch(e){}
+    },0);
+    if(cb) cb();
+  };
+  if(!window.fbDB){ finish(floor+1); return; }
+  try{
+    window.fbDB.ref('tourSeq').transaction(
+      function(cur){ return Math.max(parseInt(cur)||0, floor)+1; },
+      function(err, committed, snap){
+        var n=(snap&&parseInt(snap.val()))||0;
+        finish((err||!committed||!n)?(floor+1):n);
+      });
+  }catch(e){ finish(floor+1); }
+}
+// Every order of the tour carries the tour number — that is what makes "search T012"
+// return all orders (and their slips/photos) of that tour.
+function tourStampOrders(t){
+  if(!t||!t.tno) return;
+  (t.orders||[]).forEach(function(id){
+    var o=(orders||[]).find(function(x){return x.id===id;});
+    if(o && o.tourNo!==t.tno) o.tourNo=t.tno;
+  });
+}
+function tourRegRec(no){ return (tourReg||{})[String(parseInt(no)||0)]||null; }
+// Write / refresh the registry entry of a live tour.
+function tourRegUpsert(t){
+  if(!t||!t.tno) return;
+  var old=tourRegRec(t.tno)||{};
+  var rec={ no:t.tno, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
+    createdDate:old.createdDate||new Date().toISOString().slice(0,10),
+    createdAt:old.createdAt||t.created||tourTimeStr(),
+    endedDate:old.endedDate||'', endedAt:old.endedAt||'',
+    state:(old.state==='deleted'?'deleted':(old.state==='ended'?'ended':'active')),
+    orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length,
+    driverPay:parseFloat(t.driverPay)||0,
+    paid:!!old.paid, paidBy:old.paidBy||'', paidAt:old.paidAt||0, ts:old.ts||Date.now() };
+  tourReg[String(t.tno)]=rec;
+  try{ if(window.fbDB) window.fbDB.ref('tourReg/'+t.tno).set(rec); }catch(e){}
+}
+// Close a number: 'ended' (tour finished) or 'deleted' (tour removed). Either way the
+// number stays in the list and is never handed out again.
+function tourRegMark(no, state, extra){
+  no=parseInt(no)||0; if(!no) return;
+  var rec=tourRegRec(no)||{no:no, orders:[], orderCount:0, paid:false, ts:Date.now()};
+  rec.no=no; rec.state=state;
+  rec.endedDate=new Date().toISOString().slice(0,10); rec.endedAt=tourTimeStr();
+  if(extra) for(var k in extra){ if(extra[k]!==undefined) rec[k]=extra[k]; }
+  tourReg[String(no)]=rec;
+  try{ if(window.fbDB) window.fbDB.ref('tourReg/'+no).set(rec); }catch(e){}
+  try{ auditTour(state==='deleted'?'delete':'end','🆔 '+tourNoFmt(no), (rec.driverName||'')+' · tour '+state); }catch(e){}
+  try{ ofRenderTourIds(); }catch(e){}
+}
+// The live tour or its archived history record — used for the photos/slips of an ID.
+function tourRecAny(reg){
+  if(!reg) return null;
+  var at=(activeTours||[]).find(function(x){ return x && ((reg.no&&x.tno===reg.no)||(reg.tourId&&x.id===reg.tourId)); });
+  if(at) return at;
+  var found=null;
+  Object.keys(tourHistory||{}).forEach(function(dk){
+    var recs=tourHistory[dk]||{};
+    Object.keys(recs).forEach(function(k){
+      var r=recs[k]||{};
+      if(!found && ((reg.tourId&&r.tourId===reg.tourId)||(reg.no&&r.tno===reg.no))) found=r;
+    });
+  });
+  return found;
+}
+// Office marks that the driver has actually received the tour money (tick box).
+function tourRegTogglePaid(no){
+  no=parseInt(no)||0;
+  var rec=tourRegRec(no); if(!rec) return;
+  rec.paid=!rec.paid;
+  rec.paidBy=rec.paid?((((typeof staffList!=='undefined'?staffList:[])||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office'):'';
+  rec.paidAt=rec.paid?Date.now():0;
+  tourReg[String(no)]=rec;
+  try{ if(window.fbDB) window.fbDB.ref('tourReg/'+no).set(rec); }catch(e){}
+  try{ auditTour('pay','🆔 '+tourNoFmt(no), (rec.paid?'✅ คนขับรับเงินแล้ว / driver paid':'undo driver-paid')+(rec.driverName?' · '+rec.driverName:'')); }catch(e){}
+  ofRenderTourIds();
+}
+// Photos + pay slips of one tour ID — loaded on demand (base64 images are heavy).
+function ofTourIdPhotos(no){
+  var box=document.getElementById('tidph_'+no); if(!box) return;
+  if(box.style.display==='block'){ box.style.display='none'; return; }
+  var reg=tourRegRec(no), src=tourRecAny(reg);
+  var car=src?tidArr(src.carPhotos):[], slips=src?tidArr(src.carFeeSlips):[];
+  var thumbs=function(arr){ return '<div style="display:flex;gap:4px;flex-wrap:wrap">'+arr.map(function(s){
+      return '<img src="'+s+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:64px;height:64px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';
+    }).join('')+'</div>'; };
+  var html='';
+  if(car.length) html+='<div style="font-size:11px;font-weight:700;color:#1d4ed8;margin:6px 0 3px">🚚 รูปรถ / Vehicle ('+car.length+')</div>'+thumbs(car);
+  if(slips.length) html+='<div style="font-size:11px;font-weight:700;color:#16a34a;margin:8px 0 3px">🧾 สลิปค่าทัวร์ / Pay slips ('+slips.length+')</div>'+thumbs(slips);
+  if(!html) html='<div style="font-size:11px;color:var(--text2);padding:6px 0">'+((reg&&reg.state==='deleted')?'ทัวร์ถูกลบ — ไม่มีรูป / tour deleted, no photos':'ยังไม่มีรูป / no photos yet')+'</div>';
+  box.innerHTML=html;
+  box.style.display='block';
+}
+// ── Tour-ID list (Tour tab) ──────────────────────────────────
+function ofRenderTourIds(){
+  var el=document.getElementById('of-tourid-list'); if(!el) return;
+  var qEl=document.getElementById('of-tourid-q');
+  var q=qEl?qEl.value.trim().toLowerCase():'';
+  var list=Object.keys(tourReg||{}).map(function(k){ return tourReg[k]; })
+    .filter(function(r){ return r && parseInt(r.no); })
+    .sort(function(a,b){ return b.no-a.no; });
+  var cntEl=document.getElementById('of-tourid-cnt');
+  if(cntEl) cntEl.textContent=list.length?('('+list.length+')'):'';
+  if(q){
+    list=list.filter(function(r){
+      return tourNoFmt(r.no).toLowerCase().indexOf(q)>=0
+        || String(r.no).indexOf(q)>=0
+        || (r.driverName||'').toLowerCase().indexOf(q)>=0
+        || tidArr(r.orders).some(function(id){ return String(id).toLowerCase().indexOf(q)>=0; });
+    });
+  }
+  if(!list.length){
+    el.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">'+(q?'ไม่พบ / no match':'ยังไม่มีรหัสทัวร์ / no tour IDs yet')+'</div>';
+    return;
+  }
+  var _open=kpOpenIds('of-tourid-list');
+  el.innerHTML=list.map(function(r){
+    var no=r.no, bid='tid_'+no, deleted=r.state==='deleted', ended=r.state==='ended';
+    var col=deleted?'#dc2626':(ended?'#64748b':'#16a34a');
+    var bg =deleted?'#fee2e2':(ended?'#f1f5f9':'#dcfce7');
+    var stateTxt=deleted?'ลบแล้ว / deleted':(ended?'จบแล้ว / ended':'กำลังส่ง / active');
+    var ords=tidArr(r.orders);
+    var dates='🗓 '+(r.createdDate?fmtD(r.createdDate):'—')+(r.createdAt?' '+r.createdAt:'')
+      +' → '+((r.endedDate?fmtD(r.endedDate)+(r.endedAt?' '+r.endedAt:''):(deleted||ended?'—':'…')));
+    var ordHTML=ords.length
+      ? ords.map(function(id){
+          var o=(orders||[]).find(function(x){return x.id===id;});
+          return '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:5px 0;border-top:1px solid var(--border);font-size:11.5px">'
+            +'<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/['\\]/g,'')+'\')" style="font-weight:700;cursor:pointer">'+id+'</span>'
+            +'<span style="color:var(--text2);text-align:right;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+((o&&o.customer)||'—')+((o&&o.status)?' · '+o.status:'')+'</span>'
+            +'</div>';
+        }).join('')
+      : '<div style="font-size:11px;color:var(--text2);padding:6px 0">ไม่มีออเดอร์ / no orders</div>';
+    var payTxt=r.paid
+      ? '✅ จ่ายคนขับแล้ว / driver paid'+(r.paidBy?' · '+r.paidBy:'')+(r.paidAt?' · '+fmtD(new Date(r.paidAt).toISOString().slice(0,10)):'')
+      : '⬜ ยังไม่จ่ายคนขับ / not paid yet';
+    return '<div style="border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;background:var(--bg)">'
+      +'<div onclick="ofToggleMore(\''+bid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+        +'<span style="font-weight:800;font-size:13px;color:'+col+';background:'+bg+';border-radius:8px;padding:2px 8px;white-space:nowrap">'+tourNoFmt(no)+(deleted?' — ลบแล้ว':'')+'</span>'
+        +'<span style="font-weight:700;font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🚚 '+(r.driverName||'—')+'</span>'
+        +'<span style="font-size:10.5px;color:var(--text2);white-space:nowrap">'+ords.length+' orders'+(r.paid?' · 💰✅':'')+' ▾</span>'
+        +'<span style="width:100%;font-size:10.5px;color:var(--text2)">'+dates+' · <b style="color:'+col+'">'+stateTxt+'</b></span>'
+      +'</div>'
+      +'<div id="'+bid+'" style="display:none;padding:0 11px 9px">'
+        +'<div style="display:flex;gap:6px;flex-wrap:wrap;padding:2px 0 6px">'
+          +'<button type="button" onclick="event.stopPropagation();ofTourIdPhotos('+no+')" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:700;cursor:pointer">🖼️ รูป / Photos + สลิป</button>'
+          +'<label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid '+(r.paid?'#86efac':'var(--border)')+';border-radius:var(--rs);background:'+(r.paid?'#f0fdf4':'var(--bg)')+';font-size:11px;font-weight:700;color:'+(r.paid?'#166534':'var(--text2)')+';cursor:pointer">'
+            +'<input type="checkbox" '+(r.paid?'checked ':'')+'onchange="event.stopPropagation();tourRegTogglePaid('+no+')" style="width:16px;height:16px;cursor:pointer">'+payTxt
+          +'</label>'
+        +'</div>'
+        +'<div id="tidph_'+no+'" style="display:none"></div>'
+        +(r.driverPay>0?'<div style="font-size:11px;color:var(--text2);padding:2px 0 4px">💰 ค่าทัวร์ / Tour pay: <b>'+Number(r.driverPay).toLocaleString()+' ฿</b></div>':'')
+        +ordHTML
+      +'</div>'
+      +'</div>';
+  }).join('');
+  kpRestoreOpen(_open);
+}
+
 // Photo of the loaded tour vehicle — stored on the tour (t.carPhotos, shared with the
 // Lalamove tab) so it also shows in the Drivers tab + Lalamove history.
 function ofTourAddLoadPhoto(input, tourId){
@@ -10033,7 +10250,7 @@ function ofActiveTourRec(t){
       total:o.total||'', status:(t.status&&t.status[id])||o.status||'', panels:o.panels||'', lcorner:o.lcorner||'',
       clips:parseInt(o.clips)||0, shipper:o.shipper||'', location:o.location||'' };
   });
-  return { tourNo:null, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
+  return { tourNo:null, tno:t.tno||null, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
     created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0,
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
@@ -10231,7 +10448,7 @@ function ofDriversRender(){
         +'</div>';
       return '<div style="border:1px solid '+(t._active?'#16a34a':'var(--border)')+';'+(t._active?'background:#f0fdf4;':'')+'border-radius:var(--rs);margin-bottom:6px">'
         +'<div onclick="ofToggleMore(\''+otid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">'
-          +'<span style="font-weight:700">'+(t._active?'🚚 On tour / กำลังส่ง':'🚚 Tour '+(t.tourNo||'?'))+' <span style="font-size:11px;color:var(--text2);font-weight:500">· '+dateStr+(t.departedAt?' '+t.departedAt:'')+'</span></span>'
+          +'<span style="font-weight:700">'+(t.tno?'<span title="Tour ID / รหัสทัวร์" style="font-size:11px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:1px 6px;margin-right:5px">'+tourNoFmt(t.tno)+'</span>':'')+(t._active?'🚚 On tour / กำลังส่ง':'🚚 Tour '+(t.tourNo||'?'))+' <span style="font-size:11px;color:var(--text2);font-weight:500">· '+dateStr+(t.departedAt?' '+t.departedAt:'')+'</span></span>'
           +'<span style="font-size:11px;color:var(--text2)">'+(t.orderCount||(t.orders||[]).length)+' orders'+(t.driverPay>0?' · 💰'+t.driverPay.toLocaleString():'')+(t.kmMode?' · 🛣️'+kmFmt(kmTotal(t))+'กม.':'')+' ▾</span>'
         +'</div>'
         +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+payHTML+photoHTML+uploadHTML+printHTML+payEditHTML+((t.kmMode||kmLogOf(t).length)?kmSummaryHTML(t):'')+ordersHtml+'</div>'
@@ -10346,11 +10563,12 @@ function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.
   if(ord && ord.status!=='new' && ord.status!=='packing' && ord.status!=='ready'){
     var _o=ord.status; ord.status='ready'; addStatusLog(ord,'ready',ofWho()); auditStatus(orderId,_o,'ready',ofWho());
   }
-  // If tour is now empty, remove it
+  // If tour is now empty, remove it — its tour ID is burnt ("T012 — deleted").
   if(t.orders.length===0) {
+    try{ if(t.tno) tourRegMark(t.tno,'deleted'); }catch(e){}
     activeTours = activeTours.filter(function(x){return x.id!==tourId;});
     fbRemoveTour(tourId);
-  }
+  } else { try{ tourRegUpsert(t); }catch(e){} }
   ofRenderTour();
   ofRenderOrders();
   syncTours();
@@ -10456,8 +10674,12 @@ function ofMoveOrder(fromTourId, orderId){
   if(from.status) delete from.status[orderId];
   if(target.orders.indexOf(orderId)<0) target.orders.push(orderId);
   target.status=target.status||{}; target.status[orderId]=st;
-  // remove now-empty source tour
-  if(from.orders.length===0){ activeTours=activeTours.filter(function(x){return x.id!==fromTourId;}); fbRemoveTour(fromTourId); }
+  // The order now belongs to the target tour → it carries the target's tour ID.
+  try{ if(target.tno){ var _mo=(orders||[]).find(function(x){return x.id===orderId;}); if(_mo){ _mo.tourNo=target.tno; syncOrders(); } } }catch(e){}
+  // remove now-empty source tour (its tour ID is burnt as "deleted")
+  if(from.orders.length===0){ try{ if(from.tno) tourRegMark(from.tno,'deleted'); }catch(e){} activeTours=activeTours.filter(function(x){return x.id!==fromTourId;}); fbRemoveTour(fromTourId); }
+  else { try{ tourRegUpsert(from); }catch(e){} }
+  try{ tourRegUpsert(target); }catch(e){}
   auditTour('move', orderId, 'Moved: '+(from.driverName||'?')+' → '+(target.driverName||'?'));
   ofRenderTour(); syncTours();
 }
@@ -10538,6 +10760,8 @@ function ofAddConfirm(){
     try{ addLog('Order '+o.id+' added to '+t.driverName+"'s tour",'+'); }catch(e){}
   });
   auditTour('add','🚚 '+_addDrv, '+'+_addedIds.length+' order'+(_addedIds.length!==1?'s':'')+': '+_addedIds.join(', '));
+  // Added orders carry the tour ID too (tours from before this feature get one now).
+  try{ if(t.tno){ tourStampOrders(t); tourRegUpsert(t); } else { tourAllocNo(t); } }catch(e){}
   closeTourAdd();
   ofRenderTour(); ofRenderOrders(); mgRender(); syncTours(); syncOrders();
 }
@@ -11156,6 +11380,12 @@ function ofCreateTour(){
     var _od=orders.find(function(x){return x.id===id;});
     if(_od){ _od.deliveredBy=d.name; try{ sheetsSyncOrder(_od); }catch(e){} }
   }); }
+  // Tour ID: a new tour gets the next running number, an existing one keeps its own —
+  // either way every order in the tour is stamped with it (searchable everywhere).
+  try{
+    var _tt=activeTours.find(function(x){return x&&x.id===_tourId;});
+    if(_tt){ if(_tt.tno){ tourStampOrders(_tt); tourRegUpsert(_tt); } else { tourAllocNo(_tt); } }
+  }catch(e){}
   ofSelDriver=null;ofSelOrders=[];var _ntc=document.getElementById('of-newtour-chk');if(_ntc)_ntc.checked=false;setTimeout(()=>{res.style.display='none';},3000);
   ofRenderTour();ofRenderOrders();mgRender();syncTours();syncOrders();
   try{ ofOptimizeTour(_tourId, true); }catch(e){} // resolve map-links, then refine the route order (no alert)
