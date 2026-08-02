@@ -4843,7 +4843,7 @@ function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filte
 // Management view "End tour". It never archived the tour, so a tour ended here was
 // missing from the Drivers tab entirely — archiveTour is idempotent, so calling it
 // from both end paths is safe.
-function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndOpenWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;activeTours.splice(i,1);fbRemoveTour(_rid);mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndOpenWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;var _oids=(t.orders||[]).slice();activeTours.splice(i,1);fbRemoveTour(_rid);try{var _ch=false;_oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; });if(_ch) syncOrders();}catch(e){}mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').valueAsDate=new Date();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -7265,8 +7265,12 @@ function ofEndTourFromDetail() {
   try{ archiveTour(t); }catch(e){}
   try{ endTourPayroll(t); }catch(e){}
   var _rid = t && t.id;
+  var _oids = (t.orders||[]).slice();
   activeTours.splice(currentTourDetailIdx, 1);
   fbRemoveTour(_rid);
+  // Orders that were never delivered leave the tour with it → clear their driver
+  // from the sheet's "Delivered by" (col AC). Delivered ones keep it.
+  try{ var _ch=false; _oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; }); if(_ch) syncOrders(); }catch(e){}
   closeTourDetail();
   ofRenderTour();
   mgRender();
@@ -8743,10 +8747,28 @@ function ofUpdTourDot(){
   var hot=Object.keys(byZone).some(function(z){ return byZone[z]>100000; });
   var el=document.getElementById('oft-tour-dot'); if(el){ if(hot) el.classList.add('on'); else el.classList.remove('on'); }
 }
-// Self-heal: stamp the tour's driver into "Delivered by" (sheet col AC) for any
-// order already assigned to an active tour but still missing a driver (e.g. tours
-// created before this feature existed). Only touches orders that need it, then
-// syncs once — so repeated renders don't spam the sheet.
+// "Delivered by" (sheet col AC) follows the TOUR, so it must also disappear when the
+// order leaves the tour (pulled off it, moved, or the tour ended without delivering) —
+// otherwise the sheet keeps a driver who never delivered that order. Call this AFTER
+// activeTours has been updated. Returns true if the order changed (caller syncs once).
+// An order that really was delivered keeps its driver forever.
+function ofSyncOrderDriver(orderId){
+  var o=(orders||[]).find(function(x){return x.id===orderId;}); if(!o) return false;
+  if(o.status==='delivered' || o.status==='shipped') return false;
+  if((o.statusLog||[]).some(function(e){ return e && e.status==='delivered'; })) return false;
+  var now=kpTourDriver(orderId)||'';        // driver of the tour holding it NOW ('' = no tour)
+  if((o.deliveredBy||'')===now) return false;
+  if(now) o.deliveredBy=now; else delete o.deliveredBy;
+  try{ sheetsSyncOrder(o); }catch(e){}
+  return true;
+}
+// Self-heal, both directions:
+//  • stamp the tour's driver into "Delivered by" for any order already on an active
+//    tour but still missing a driver (tours created before this feature existed), and
+//  • clear a driver left over on an order that is no longer on any tour and was never
+//    delivered (tour deleted/ended, order pulled off it while the app was closed).
+// Only touches orders that need it, then syncs once — repeated renders don't spam the
+// sheet. Clearing is capped per run so a big backlog trickles out instead of flooding.
 function ofBackfillTourDrivers(){
   var changed=false;
   (activeTours||[]).forEach(function(t){
@@ -8758,6 +8780,13 @@ function ofBackfillTourDrivers(){
         try{ sheetsSyncOrder(o); }catch(e){}
       }
     });
+  });
+  var left=25;
+  (orders||[]).forEach(function(o){
+    if(left<=0 || !o || !o.deliveredBy) return;
+    if(o.status==='delivered' || o.status==='shipped') return;
+    if(kpTourDriver(o.id)) return;            // still on a tour → keep
+    if(ofSyncOrderDriver(o.id)){ changed=true; left--; }
   });
   if(changed){ try{ syncOrders(); }catch(e){} }
 }
@@ -11311,6 +11340,8 @@ function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.
     activeTours = activeTours.filter(function(x){return x.id!==tourId;});
     fbRemoveTour(tourId);
   } else { try{ tourRegUpsert(t); }catch(e){} }
+  // Order is off the tour → its driver leaves the sheet's "Delivered by" too.
+  try{ ofSyncOrderDriver(orderId); }catch(e){}
   ofRenderTour();
   ofRenderOrders();
   syncTours();
@@ -11423,6 +11454,8 @@ function ofMoveOrder(fromTourId, orderId){
   else { try{ tourRegUpsert(from); }catch(e){} }
   try{ tourRegUpsert(target); }catch(e){}
   auditTour('move', orderId, 'Moved: '+(from.driverName||'?')+' → '+(target.driverName||'?'));
+  // "Delivered by" follows the order to the new tour's driver.
+  try{ if(ofSyncOrderDriver(orderId)) syncOrders(); }catch(e){}
   ofRenderTour(); syncTours();
 }
 
