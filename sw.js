@@ -1,4 +1,17 @@
-const CACHE = 'kp-v2';
+// KP Wallpanel service worker.
+//
+// BUILD must go up with EVERY deploy, together with KP_BUILD in index.html. The browser
+// only starts a service-worker update when the bytes of THIS file change, and that
+// update is the only handle we have on a tab that has been open since before the
+// deploy: such a tab runs code that knows nothing about the new build, so it can not
+// reload itself and nothing sent through Firebase reaches it.
+//
+// The browser fetches this file again on any navigation in scope, and — for a worker it
+// has not checked in 24 hours — on ordinary fetch events too. So a device that is simply
+// left running picks the new build up by itself within a day, and one where somebody
+// opens the app picks it up at once.
+const BUILD = 20260802002;
+const CACHE = 'kp-' + BUILD;
 const SHELL = [
   '/kp-wallpanel/',
   '/kp-wallpanel/index.html'
@@ -12,12 +25,35 @@ self.addEventListener('install', function(e) {
 });
 
 self.addEventListener('activate', function(e) {
-  e.waitUntil(
-    caches.keys().then(function(keys) {
-      return Promise.all(keys.filter(function(k){ return k!==CACHE; }).map(function(k){ return caches.delete(k); }));
-    })
-  );
-  self.clients.claim();
+  e.waitUntil((async function() {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(function(k){ return k !== CACHE; })
+                          .map(function(k){ return caches.delete(k); }));
+    await self.clients.claim();
+
+    // Tell every open window that a new build is live. A window already running this
+    // build answers "kp-alive" and then reloads itself POLITELY — it waits until no
+    // form is open, so nobody loses a half-typed order. A window on an older build has
+    // no such handler, never answers, and is navigated the hard way. That is the whole
+    // point of this block: it is the only way to reach a tab that has been open since
+    // before the fix went live.
+    const wins = await self.clients.matchAll({ type: 'window' });
+    if (!wins.length) return;
+
+    const acked = {};
+    const onMsg = function(ev) {
+      if (ev.data && ev.data.type === 'kp-alive' && ev.source) acked[ev.source.id] = 1;
+    };
+    self.addEventListener('message', onMsg);
+    wins.forEach(function(c) { try { c.postMessage({ type: 'kp-newbuild', build: BUILD }); } catch(err) {} });
+    await new Promise(function(r) { setTimeout(r, 3000); });
+    self.removeEventListener('message', onMsg);
+
+    for (const c of wins) {
+      if (acked[c.id]) continue;
+      try { await c.navigate(c.url); } catch(err) {}
+    }
+  })());
 });
 
 self.addEventListener('fetch', function(e) {
@@ -33,6 +69,9 @@ self.addEventListener('fetch', function(e) {
     );
     return;
   }
+
+  // Never cache the worker itself — a stale copy here would stop every future update.
+  if(url.indexOf('/sw.js')>=0) return;
 
   // App shell — NETWORK FIRST so the latest deployed code always loads when
   // online; fall back to cache only when offline. (Previously cache-first,

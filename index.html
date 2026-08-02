@@ -3324,6 +3324,24 @@ const GL='#D1FAE5',GT='#065F46',OL='#FEF3C7',OT='#92400E';
 // ── SERVICE WORKER + OFFLINE ──
 if('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/kp-wallpanel/sw.js').catch(function(){});
+  // A new worker announces every deploy to all open windows (see sw.js). Answering
+  // "kp-alive" is what marks this window as one that can reload itself politely — it
+  // waits for an open form to be closed first. A window on an older build has no such
+  // handler, never answers, and the worker navigates it instead. That is the only way
+  // to reach a device nobody is going to touch.
+  try{
+    navigator.serviceWorker.addEventListener('message', function(ev){
+      if(!ev.data || ev.data.type!=='kp-newbuild') return;
+      var reply=(ev.source && ev.source.postMessage) ? ev.source : navigator.serviceWorker.controller;
+      try{ if(reply) reply.postMessage({ type:'kp-alive', build: KP_BUILD }); }catch(e){}
+      if((parseInt(ev.data.build)||0) > KP_BUILD) kpReloadSoon('มีเวอร์ชันใหม่ / new version', 'sw'+ev.data.build);
+    });
+    // An always-open tab is not asked to check for a new worker very often — nudge it
+    // every two hours so a device left running does not sit on old code for a whole day.
+    setInterval(function(){
+      try{ navigator.serviceWorker.getRegistration('/kp-wallpanel/').then(function(r){ if(r) r.update(); }); }catch(e){}
+    }, 2*60*60*1000);
+  }catch(e){}
 }
 
 var _offlineQueue = JSON.parse(localStorage.getItem('kp-offline-queue')||'[]');
@@ -5933,7 +5951,9 @@ function appRefresh(btn){
 // It can only ever reach tabs that already run a build carrying this check. A tab that
 // was opened BEFORE this went live executes none of it and still has to be refreshed
 // once by hand (the round KP button, bottom right).
-var KP_BUILD = 20260802001;
+// Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
+// browser never starts an update and the devices nobody touches stay on the old code.
+var KP_BUILD = 20260802002;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
