@@ -9510,6 +9510,9 @@ function ofSetDeparted(ti){
   t.driving=true;
   t.departedAt=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   if(!t.departedDate) t.departedDate=now.toISOString().slice(0,10);
+  // Departure is the moment the goods leave the yard — who pressed it, and when, goes on record.
+  try{ var _dn=(t.orders||[]).length;
+    auditTour('depart','🚚 '+(t.driverName||''),'🚀 ออกรถ / departed '+t.departedAt+' · '+_dn+' order'+(_dn!==1?'s':'')+(_dn?': '+t.orders.join(', '):'')); }catch(e){}
   ofRenderTour();syncTours();
 }
 
@@ -10022,12 +10025,16 @@ function ofToggleKmMode(tourId){
   if(t.kmMode && (t.kmRate==null||t.kmRate==='')) t.kmRate=KM_RATE_DEFAULT;
   if(t.kmMode && t.kmInput!=='odo' && t.kmInput!=='leg') t.kmInput=kmInputMode(t);
   t.kmOrderTs = Date.now();   // tells the driver app to reload the office sequence
+  // Switching a tour to km pay changes what the driver earns → audit it.
+  try{ auditTour('km','🚚 '+(t.driverName||''), t.kmMode?('🛣️ KM ON · '+(t.kmRate||KM_RATE_DEFAULT)+' ฿/กม.'):'🛣️ KM OFF'); }catch(e){}
   syncTours();
   try{ ofRenderTour(); }catch(e){}
 }
 function ofSetKmRate(tourId, val){
   var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var _oldR=(t.kmRate==null||t.kmRate==='')?KM_RATE_DEFAULT:(parseFloat(t.kmRate)||0);
   t.kmRate = (val===''||val==null) ? KM_RATE_DEFAULT : (parseFloat(val)||0);
+  if(t.kmRate!==_oldR){ try{ auditTour('km','🚚 '+(t.driverName||''),'💰 ค่ากิโลเมตร / km rate: '+_oldR+' → '+t.kmRate+' ฿/กม.'); }catch(e){} }
   syncTours();
   try{ ofRenderTour(); }catch(e){}
 }
@@ -14525,8 +14532,14 @@ function ofLoadSlipPhotos(orderId){
 }
 function ofSetSlipReview(orderId, status){
   var o=orders.find(function(x){return x.id===orderId;}); if(!o) return;
+  var _prevSR=(o.slipReview&&o.slipReview.status)||'';
   if(o.slipReview && o.slipReview.status===status) o.slipReview=null;   // tap again → clear
   else o.slipReview={status:status, by:(currentStaffName||'Office'), ts:Date.now()};
+  // Approving or flagging a transfer slip is a money decision, not a display toggle → audit it.
+  try{ var _nowSR=(o.slipReview&&o.slipReview.status)||'';
+    auditTour('slip', orderId, _nowSR==='ok' ? '🧾 ✅ สลิปถูกต้อง / slip approved'
+      : _nowSR==='flag' ? '🧾 🚩 สลิปมีปัญหา / slip flagged'
+      : '🧾 ยกเลิกการตรวจสลิป / slip check cleared'+(_prevSR?' (was '+_prevSR+')':'')); }catch(e){}
   try{ syncOrders(); }catch(e){}
   var el=document.getElementById('slrev_btn_'+safeOrderId(orderId)); if(el) el.innerHTML=ofSlipReviewButtons(o);
   try{ ofRenderTour(); }catch(e){}   // refresh the header 🧾 Slips count/colour
