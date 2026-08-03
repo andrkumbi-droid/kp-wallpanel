@@ -8365,11 +8365,15 @@ function ofPayCO(o){
   // total. Method falls back to payMethodPartial then cash when not explicitly set.
   var amt=(o&&o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):((o&&o.payMethod)?(parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0):0);
   if(amt>0){
-    var m=(o.payMethod||o.payMethodPartial||'cash');
-    if(m==='online') return {cash:0, online:amt};
-    return {cash:amt, online:0};      // cash / unknown-but-paid → cash
+    var m=(o.payMethod||o.payMethodPartial||'');
+    if(m==='online') return {cash:0, online:amt, unknown:0};
+    if(m==='cash')   return {cash:amt, online:0, unknown:0};
+    // Paid, but no method on record. This used to fall through to "cash", which put
+    // a banknote on the tour card and money into the driver's cash total that he had
+    // never received. An amount without a method is now reported as exactly that.
+    return {cash:0, online:0, unknown:amt};
   }
-  return {cash:0, online:0};
+  return {cash:0, online:0, unknown:0};
 }
 // Find orders whose stored total STRING was collapsed by the German '.'/',' confusion
 // (e.g. "17.873" instead of 17873), then fix + push the correct value to the sheet.
@@ -9171,7 +9175,7 @@ function ofRenderTour(){
         + shippers.filter(function(s){return s!=='ส่งเอง';}).map(function(s){ return '<option value="'+s+'"'+(shipVal===s?' selected':'')+'>🚚 '+s+'</option>'; }).join('');
       // Payment shown inline on the order row — driver split if present, else derived
       // from payMethod (office-marked payments) so paid orders always show.
-      var _co=ofPayCO(ord), _pc=_co.cash, _po=_co.online;
+      var _co=ofPayCO(ord), _pc=_co.cash, _po=_co.online, _pu=_co.unknown||0;
       // Compact payment chip — always shows something for a delivered order (the paid
       // amount(s), else an "unpaid" tag) so the row is never blank. Kept on one line.
       var payInline='';
@@ -9186,6 +9190,13 @@ function ofRenderTour(){
             +'<span onclick="event.stopPropagation();ofTourPayEdit(\''+String(id).replace(/['\\]/g,'')+'\')" title="Edit payment / แก้ไขการชำระเงิน — tap to change cash/online or amount" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;border-bottom:1px dotted var(--text3)">'+_pp.join('')+'</span>'
             +(_po>0?(ofSlipBadge(ord)||''):'')
             +'</span>';
+        } else if(_pu>0){
+          // Paid, method unknown — never guess a banknote here. Tapping opens the
+          // editor so the office picks cash or transfer once and for all.
+          payInline='<span style="font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0">'
+            +'<span onclick="event.stopPropagation();ofTourPayEdit(\''+String(id).replace(/['\\]/g,'')+'\')" title="Paid, but cash or transfer was never recorded — tap to set it / จ่ายแล้วแต่ยังไม่ระบุวิธี" style="cursor:pointer;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:1px 6px">❓'+_pu.toLocaleString()+'</span></span>';
+        } else if(ord && ord.payAtOffice){
+          payInline='<span style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap;flex-shrink:0">💼 เก็บที่ออฟฟิศ / at office</span>';
         } else {
           payInline='<span style="font-size:10px;font-weight:700;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px;white-space:nowrap;flex-shrink:0">⏳ ค้าง / unpaid</span>';
         }
@@ -9237,11 +9248,11 @@ function ofRenderTour(){
         '</div>';
     }).join('');
     // Tour payment totals — sum of confirmed cash / online across delivered orders.
-    var tourCash=0, tourOnline=0;
+    var tourCash=0, tourOnline=0, tourUnknown=0;
     t.orders.forEach(function(id){
       if((t.status[id]||'')!=='delivered') return;
       var o=orders.find(function(x){return x.id===id;}); if(!o) return;
-      var _co=ofPayCO(o); tourCash+=_co.cash; tourOnline+=_co.online;
+      var _co=ofPayCO(o); tourCash+=_co.cash; tourOnline+=_co.online; tourUnknown+=(_co.unknown||0);
     });
     // KM mode: one row under the stops — total km · ฿ per km · payout.
     var kmRow = '';
@@ -9259,10 +9270,14 @@ function ofRenderTour(){
         +'<div id="kmlog_'+t.id+'" style="display:none;width:100%">'+kmSummaryHTML(t)+'</div>'
         +'</div>';
     }
-    var payTotals = (tourCash>0||tourOnline>0)
-      ? '<div style="display:flex;justify-content:space-between;gap:8px;margin:8px 0 4px;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);font-size:12px">'
+    // The cash line is what the office counts notes against at the end of a tour, so
+    // an amount whose method was never recorded must NOT sit in it — it is shown on
+    // its own line instead.
+    var payTotals = (tourCash>0||tourOnline>0||tourUnknown>0)
+      ? '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:8px 0 4px;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);font-size:12px">'
         +'<span style="color:#166534;font-weight:700">💵 Cash / เงินสด: '+tourCash.toLocaleString()+' ฿</span>'
         +'<span style="color:#1d4ed8;font-weight:700">🏦 Online / โอน: '+tourOnline.toLocaleString()+' ฿</span>'
+        +(tourUnknown>0?'<span style="width:100%;color:#92400e;font-weight:700">❓ จ่ายแล้ว ยังไม่ระบุวิธี / paid, method not recorded: '+tourUnknown.toLocaleString()+' ฿ — not counted as cash</span>':'')
         +'</div>'
       : '';
     return '<div class="tmgmt">'+
@@ -13837,6 +13852,7 @@ function openDeliveryModal(id, shipMode){
   document.getElementById('dl-online-amt').value = '';
   document.getElementById('dl-pay-msg').textContent = '';
   var _po=document.getElementById('dl-payoffice-chk'); if(_po) _po.checked=false;
+  var _pa=document.getElementById('dl-paidalready-chk'); if(_pa) _pa.checked=false;
   ['dl-cash-chk','dl-online-chk','dl-cash-amt','dl-online-amt'].forEach(function(idv){var el=document.getElementById(idv);if(el){el.disabled=false;el.style.opacity='';}});
   _slipResult = null;
   var _sr=document.getElementById('dl-slip-result'); if(_sr) _sr.innerHTML='';
@@ -13970,16 +13986,28 @@ function dlPayManual(){ dlPayMsg(); }
 // "Customer pays at office" — driver confirms delivery without collecting money or a
 // slip; the order stays UNPAID so it lands in the office Pay tab (Delivered · unpaid)
 // for a staff member to record the payment later.
-function dlPayAtOfficeToggle(){
-  var on=!!(document.getElementById('dl-payoffice-chk')||{}).checked;
+// Two very different situations used to share one checkbox labelled "customer
+// transfers via chat page": the customer has ALREADY paid the office, and the
+// customer has NOT paid and the office will collect later. A driver reading that
+// label picks it for both — and the "already paid" case then wiped the payment the
+// office had recorded. They are now separate, mutually exclusive answers.
+function dlPayAtOfficeToggle(which){
+  var alr=document.getElementById('dl-paidalready-chk'), lat=document.getElementById('dl-payoffice-chk');
+  if(which==='already' && alr && alr.checked && lat) lat.checked=false;
+  if(which==='later'   && lat && lat.checked && alr) alr.checked=false;
+  var on = !!(alr&&alr.checked) || !!(lat&&lat.checked);
   ['dl-cash-chk','dl-online-chk','dl-cash-amt','dl-online-amt'].forEach(function(idv){var el=document.getElementById(idv);if(el){el.disabled=on;el.style.opacity=on?'0.4':'';}});
+  var msg=document.getElementById('dl-pay-msg');
   if(on){
     document.getElementById('dl-cash-chk').checked=false; document.getElementById('dl-online-chk').checked=false;
     document.getElementById('dl-cash-amt').value=''; document.getElementById('dl-online-amt').value='';
-    var msg=document.getElementById('dl-pay-msg'); if(msg){ msg.style.color='#92400e'; msg.textContent='💼 ลูกค้าขอโอนทางแชทเพจ — ออฟฟิศตรวจสอบภายหลัง / Customer transfers via chat page, office confirms later'; }
-  } else {
-    var msg2=document.getElementById('dl-pay-msg'); if(msg2) msg2.textContent='';
-  }
+    if(msg){
+      msg.style.color='#92400e';
+      msg.textContent = (alr&&alr.checked)
+        ? '✅ จ่ายที่ออฟฟิศแล้ว — ไม่ต้องเก็บเงิน / already paid at the office, collect nothing'
+        : '⏳ ยังไม่จ่าย — ออฟฟิศจะเก็บภายหลัง / not paid yet, the office will collect';
+    }
+  } else if(msg) msg.textContent='';
   try{ dlSlipRefresh(); }catch(e){}
 }
 function dlPaySum(){ return (parseFloat((document.getElementById('dl-cash-amt')||{}).value)||0) + (parseFloat((document.getElementById('dl-online-amt')||{}).value)||0); }
@@ -14007,8 +14035,8 @@ var _slipResult = null;
 function dlSlipRefresh(){
   var sec=document.getElementById('dl-slip-section'); if(!sec) return;
   // Pays-at-office → no slip needed; keep the section hidden.
-  var poff=document.getElementById('dl-payoffice-chk');
-  if(poff&&poff.checked){ sec.style.display='none'; var _pp=document.getElementById('dl-slip-preview'); if(_pp){_pp.style.display='none';_pp.innerHTML='';} return; }
+  var poff=document.getElementById('dl-payoffice-chk'), palr=document.getElementById('dl-paidalready-chk');
+  if((poff&&poff.checked)||(palr&&palr.checked)){ sec.style.display='none'; var _pp=document.getElementById('dl-slip-preview'); if(_pp){_pp.style.display='none';_pp.innerHTML='';} return; }
   var online=parseFloat((document.getElementById('dl-online-amt')||{}).value)||0;
   sec.style.display = online>0 ? 'block' : 'none';
   var prev=document.getElementById('dl-slip-preview'); if(!prev) return;
@@ -16284,9 +16312,10 @@ function confirmDelivery(){
     return;
   }
   var payOffice = !!(document.getElementById('dl-payoffice-chk')||{}).checked;
+  var paidAlready = !!(document.getElementById('dl-paidalready-chk')||{}).checked;
   var cash = parseFloat((document.getElementById('dl-cash-amt')||{}).value)||0;
   var online = parseFloat((document.getElementById('dl-online-amt')||{}).value)||0;
-  if(!payOffice){
+  if(!payOffice && !paidAlready){
     // Require payment to match the total (cash + online = total).
     if((cash+online) !== _deliveryTotal){
       alert('Payment must match the total / ยอดชำระต้องเท่ายอดรวม ('+_deliveryTotal.toLocaleString()+' ฿)');
@@ -16309,12 +16338,37 @@ function confirmDelivery(){
   var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
   // Save payment on the order.
   var ord = orders.find(function(x){return x.id===id;});
-  if(payOffice){
-    // Leave it UNPAID (no payMethod) so it appears under "Delivered · unpaid" in the
-    // office Pay tab; flag it so office sees the driver deferred collection on purpose.
-    if(ord){ delete ord.payMethod; ord.paidCash=0; ord.paidOnline=0; ord.payAtOffice=true; ord.deliveredBy=drName; }
+  // Was a payment already booked by the office before the driver arrived?
+  var _hadPay = !!ord && ((parseFloat(ord.paidAmount)||0)>0 || !!ord.payMethod
+    || (parseFloat(ord.paidCash)||0)>0 || (parseFloat(ord.paidOnline)||0)>0);
+  if(paidAlready){
+    // The customer settled with the office beforehand. The driver collected nothing,
+    // so NOTHING about the payment may be touched — the old single checkbox deleted
+    // payMethod here and left paidAmount behind, which is how an order ended up
+    // "paid 27,227 by an unknown method" and showed a banknote on the tour card.
+    if(ord){
+      ord.deliveredBy=drName; ord.paidAtOfficeBefore=true; delete ord.payAtOffice;
+      if(!_hadPay){
+        // Driver says paid, office never recorded it — do not invent a payment,
+        // hand it to the office to book.
+        ord.payAtOffice=true;
+        try{ pushSend('office','💼 Driver says already paid: '+id, ((ord&&ord.customer)||'')+' · '+_deliveryTotal.toLocaleString()+' ฿ — nothing is recorded yet, please book it', {tag:'pay-office', orderId:id}); }catch(e){}
+      }
+    }
+  } else if(payOffice){
+    // Genuinely unpaid, the office collects later. If the office HAS already booked
+    // something, ask before throwing it away — and then clear it consistently
+    // (paidAmount included) instead of leaving half a record behind.
+    if(_hadPay && !confirm('The office has already recorded '+((parseFloat(ord.paidAmount)||0)||_deliveryTotal).toLocaleString()+' ฿ for '+id+'.\n'
+        +'ออฟฟิศบันทึกการชำระเงินแล้ว\n\nMark it as NOT paid anyway? / ยืนยันว่ายังไม่จ่าย?\n\n'
+        +'Cancel = keep the recorded payment (tick "already paid the office" instead).')) return;
+    if(ord){
+      delete ord.payMethod; delete ord.payMethodPartial;
+      ord.paidCash=0; ord.paidOnline=0; ord.paidAmount=0;
+      ord.payAtOffice=true; ord.deliveredBy=drName;
+    }
     try{ pushSend('office','💼 Pay at office: '+id, ((ord&&ord.customer)||'')+' · '+_deliveryTotal.toLocaleString()+' ฿ — collect / record payment', {tag:'pay-office', orderId:id}); }catch(e){}
-  } else if(ord){ ord.payMethod=payMethod; ord.paidCash=cash; ord.paidOnline=online; ord.paidBy=drName; ord.payDate=new Date().toISOString().split('T')[0]; }
+  } else if(ord){ ord.payMethod=payMethod; ord.paidCash=cash; ord.paidOnline=online; ord.paidAmount=cash+online; ord.paidBy=drName; ord.payDate=new Date().toISOString().split('T')[0]; delete ord.payAtOffice; }
   dlKmCommit(id);
   closeDeliveryModal();
   drDoDeliver(id, null);
@@ -19413,7 +19467,14 @@ function calcViz() {
         <span style="font-size:16px;font-weight:800;color:var(--green)" id="dl-total">0 ฿</span>
       </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;cursor:pointer;background:#fef3c7;border:1px solid #fde68a;border-radius:var(--rs);padding:9px 10px;margin-bottom:10px;color:#92400e">
-        <input type="checkbox" id="dl-payoffice-chk" onchange="dlPayAtOfficeToggle()" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">💼 ลูกค้า ขอโอนเงินทางแชทเพจ / Customer transfers via chat page
+        <input type="checkbox" id="dl-paidalready-chk" onchange="dlPayAtOfficeToggle('already')" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">
+        <span>✅ ลูกค้าจ่ายที่ออฟฟิศแล้ว / Customer already paid the office
+          <span style="display:block;font-weight:600;font-size:11px;opacity:.85">โอนแล้ว/จ่ายล่วงหน้า — ไม่ต้องเก็บเงิน / already transferred — collect nothing</span></span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:700;cursor:pointer;background:#fff7ed;border:1px solid #fed7aa;border-radius:var(--rs);padding:9px 10px;margin-bottom:10px;color:#9a3412">
+        <input type="checkbox" id="dl-payoffice-chk" onchange="dlPayAtOfficeToggle('later')" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">
+        <span>⏳ ยังไม่จ่าย — ออฟฟิศเก็บภายหลัง / Not paid yet — office collects later
+          <span style="display:block;font-weight:600;font-size:11px;opacity:.85">ลูกค้าจะโอนทางแชทเพจ / customer will transfer via the chat page</span></span>
       </label>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;width:110px;cursor:pointer">
