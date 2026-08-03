@@ -6145,7 +6145,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260803004;
+var KP_BUILD = 20260803005;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -22042,9 +22042,9 @@ function _catTotal(section,catId,mk){ return bills.reduce(function(a,b){ return 
 // Shipper cost section (Bills): collapse state per shipper + toggle by index.
 var _billShipOpen={};
 function billShipToggle(idx){ var keys=window._billShipKeys||[]; var k=keys[idx]; if(k==null) return; _billShipOpen[k]=!_billShipOpen[k]; costsRender(); }
-// The "no shipping cost" list starts OPEN (undefined → open), so the work to do is
+// The "still on tour" list starts OPEN (undefined → open), so what is coming is
 // visible without a tap; collapsing it stores an explicit false.
-function billShipMissToggle(){ _billShipOpen['__missing']=(_billShipOpen['__missing']===false); costsRender(); }
+function billShipTourToggle(){ _billShipOpen['__ontour']=(_billShipOpen['__ontour']===false); costsRender(); }
 // Bucket a payroll person into Driver / Warehouse / Lalamove / Other for the Bills split.
 // Lalamove (a carrier logged as a payroll line) is always its own group, regardless of role.
 function _billStaffGroup(who, name){
@@ -22091,25 +22091,70 @@ function billsEndedTourByOrder(){
   });
   return map;
 }
+// Orders that are still out on a running tour → id: {tid,driverName}. Nothing can
+// be booked for them yet, so they are listed on their own above the companies.
+function billsActiveTourOrders(){
+  var set={};
+  (typeof activeTours!=='undefined'?activeTours:[]).forEach(function(t){
+    if(!t) return;
+    (t.orders||[]).forEach(function(id){ set[String(id)]={ tid:t.tid||'', driverName:t.driverName||'', live:true }; });
+  });
+  Object.keys(typeof tourReg!=='undefined'?tourReg:{}).forEach(function(k){
+    var r=(tourReg[k]||{}); if(r.state!=='active') return;
+    (typeof tidArr==='function'?tidArr(r.orders):[]).forEach(function(id){
+      if(!set[String(id)]) set[String(id)]={ tid:k, driverName:r.driverName||'' };
+    });
+  });
+  return set;
+}
 // "Went to a carrier" = a carrier company is picked, or the order sits in the
 // 'shipped' status (driver handed it over — see the shipped-status rule). Plain
-// self-delivery ('ส่งเอง') never has a carrier bill, so it is not missing anything.
+// self-delivery ('ส่งเอง') never has a carrier bill, whatever its status.
 function billsShipIsCarrier(o){
   if(!o) return false;
-  if(o.shipper && o.shipper!=='ส่งเอง') return true;
+  if(o.shipper==='ส่งเอง') return false;
+  if(o.shipper) return true;
   return o.status==='shipped';
 }
-function billsShipMissing(mk){
-  var ended=billsEndedTourByOrder(), out=[];
-  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
-    if((parseFloat(o.shipCost)||0)>0) return;          // already entered
-    if(!billsShipIsCarrier(o)) return;
-    var t=ended[String(o.id)]; if(!t) return;          // only once the tour is over
-    // No shipCostDate yet, so the tour day decides which month it belongs to.
-    if(billsMKey(t.endedDate||t.createdDate||o.date)!==mk) return;
-    out.push({ o:o, tour:t });
+// Everything the Shipper block shows: one group per carrier company — ALL of them
+// from the office's shipper list, even the ones with nothing this month — holding
+// every finished order of the month that went there, priced or not. Orders whose
+// tour is still running sit in their own bucket above; there is still time for them.
+var BILL_SHIP_NONE='— ไม่ระบุบริษัท / no company —';
+function billsShipData(mk){
+  var ended=billsEndedTourByOrder(), active=billsActiveTourOrders();
+  var groups={}, order=[], onTour=[], total=0;
+  (typeof shippers!=='undefined'?shippers:[]).forEach(function(s){
+    if(!s || s==='ส่งเอง') return;                   // self-delivery has no carrier bill
+    if(groups[s]) return;
+    groups[s]={ id:s, label:s, total:0, rows:[], missing:0 }; order.push(s);
   });
-  return out.sort(function(a,b){ return String(b.tour.endedDate||'').localeCompare(String(a.tour.endedDate||'')); });
+  function grp(k){
+    if(!groups[k]){ groups[k]={ id:k, label:k, total:0, rows:[], missing:0 }; order.push(k); }
+    return groups[k];
+  }
+  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
+    if(!billsShipIsCarrier(o)) return;
+    var amt=parseFloat(o.shipCost)||0;
+    var at=active[String(o.id)], et=ended[String(o.id)];
+    // Priced → the day it was priced. Not priced → the day its tour ended.
+    var mkey=amt>0 ? billsMKey(o.shipCostDate||o.date)
+                   : billsMKey((et&&(et.endedDate||et.createdDate))||o.date);
+    if(mkey!==mk) return;
+    if(at && amt<=0){ onTour.push({ o:o, tour:at }); return; }
+    var g=grp(o.shipper||BILL_SHIP_NONE);
+    g.total+=amt; g.rows.push({ o:o, tour:et||at||null }); if(amt<=0) g.missing++;
+    total+=amt;
+  });
+  // Newest first inside a company; unpriced ones on top — that is the work to do.
+  order.forEach(function(k){
+    groups[k].rows.sort(function(a,b){
+      var pa=(parseFloat(a.o.shipCost)||0)>0?1:0, pb=(parseFloat(b.o.shipCost)||0)>0?1:0;
+      if(pa!==pb) return pa-pb;
+      return String(b.o.shipCostDate||b.o.date||'').localeCompare(String(a.o.shipCostDate||a.o.date||''));
+    });
+  });
+  return { total:total, onTour:onTour, groups:order.map(function(k){ return groups[k]; }) };
 }
 
 // ── ONE source of truth for the monthly cost picture ──────────────────────
@@ -22141,20 +22186,14 @@ function billsCostData(mk){
   if(lost.length) blocks.push({ kind:'lost', label:'⚠️ Unknown section / หมวดที่ถูกลบ', total:_sumAmt(lost),
     children:[{ id:'', label:'Deleted main category / หมวดหลักที่ถูกลบ', total:_sumAmt(lost), items:lost }] });
 
-  // 3) Shipper — carrier shipping costs (o.shipCost) grouped by shipper
-  var g={};
-  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
-    var amt=parseFloat(o.shipCost)||0; if(amt<=0) return;
-    if(billsMKey(o.shipCostDate||o.date)!==mk) return;
-    var sh=o.shipper||'— ไม่ระบุ / unset —';
-    if(!g[sh]) g[sh]={tot:0,orders:[]};
-    g[sh].tot+=amt; g[sh].orders.push(o);
-  });
-  var shKeys=Object.keys(g).sort(function(a,b){ return g[b].tot-g[a].tot; });
+  // 3) Shipper — one group per carrier company, plus whatever is still on tour
+  var sd=billsShipData(mk);
   blocks.push({ kind:'shipper', label:'🚚 Shipper / ค่าส่ง',
-    total:shKeys.reduce(function(a,k){return a+g[k].tot;},0),
-    missing:billsShipMissing(mk),
-    children:shKeys.map(function(k){ return {id:k,label:k,total:g[k].tot,orders:g[k].orders}; }) });
+    total:sd.total, onTour:sd.onTour,
+    children:sd.groups.map(function(g){
+      return { id:g.id, label:g.label, total:g.total, missing:g.missing,
+               rows:g.rows, orders:g.rows.map(function(r){ return r.o; }) };
+    }) });
 
   // 4) Staff — net per person from the payroll log, split Driver / Warehouse / Lalamove / Other
   var perP={};
@@ -22322,54 +22361,61 @@ function costsRender(){
 
     if(blk.kind==='shipper'){
       var sInner=head(blk.label,blk.total);
-      // Tours ended without anybody entering the carrier's price → red, with the
-      // shipper/amount/receipt row right here so it can be typed in afterwards.
-      var miss=blk.missing||[];
-      if(miss.length){
-        var mOpen=_billShipOpen['__missing']!==false;   // open by default — it is a to-do list
-        sInner+='<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:var(--rs);margin-bottom:8px;overflow:hidden">'+
-          '<div onclick="billShipMissToggle()" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 9px;cursor:pointer">'+
-            '<span style="min-width:0;font-size:12.5px;font-weight:800;color:#b91c1c"><i class="ti ti-chevron-'+(mOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> ⚠️ No shipping cost / ยังไม่ได้ใส่ค่าส่ง <span style="font-weight:600">('+miss.length+')</span></span>'+
-            '<span style="font-size:11px;color:#b91c1c;white-space:nowrap">tour ended / ทัวร์จบแล้ว</span>'+
+      // One order line: who/where + the shared shipper/amount/receipt row + the
+      // handover photos. Red frame while no price has been entered.
+      var shipRow=function(r,idx,amber){
+        var o=r.o, t=r.tour, amt=parseFloat(o.shipCost)||0, open=amt>0?false:true;
+        var gid='bshipg_'+idx+'_'+safeOrderId(o.id), eid=String(o.id).replace(/['\\]/g,'');
+        var nG=0,nR=0; try{ nG=orderPhotoCount(o.id,'delivery'); nR=orderPhotoCount(o.id,'shipreceipt'); }catch(e){}
+        var pb=function(type,label,n){ return '<button type="button" onclick="ofDrvLoadPhotos(\''+eid+'\',\''+type+'\',\''+gid+'\')" style="flex:1;padding:5px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:600;cursor:pointer">'+label+' <span style="color:'+(n>0?'var(--blue)':'var(--text3)')+';font-weight:800">'+n+'</span></button>'; };
+        var line='';
+        if(t && t.tid) line='🆔 <span onclick="billTourInfo(\''+_esc(t.tid)+'\')" style="cursor:pointer;text-decoration:underline">'+_esc(t.tid)+'</span>'
+          +(t.driverName?' · 🚗 '+_esc(t.driverName):'')+(t.endedDate?' · '+fmtD(t.endedDate):'');
+        else if(o.shipCostDate) line=fmtD(o.shipCostDate)+(o.shipCostBy?' · 👤 '+_esc(o.shipCostBy):'');
+        var brd=amber?'#fcd34d':(open?'#fecaca':'var(--border)');
+        var col=amber?'#92400e':(open?'#b91c1c':'var(--text2)');
+        return '<div style="background:'+(amber||open?'var(--bg)':'var(--bg2)')+';border:1px solid '+brd+';border-radius:var(--rs);padding:6px 8px;margin-top:6px">'+
+          '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px">'+
+            '<span style="min-width:0;flex:1"><b>'+_esc(o.id)+'</b> <span style="color:var(--text2)">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</span>'+
+              (line?'<div style="font-size:11px;color:'+col+';margin-top:2px">'+line+'</div>':'')+'</span>'+
+            (amt>0?'<span style="font-weight:800;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'
+                  :'<span style="font-size:11px;font-weight:700;color:'+col+';white-space:nowrap">'+(amber?'บนทัวร์ / on tour':'⚠️ ยังไม่ใส่ / no cost')+'</span>')+
           '</div>'+
-          (mOpen?'<div style="padding:0 9px 9px">'+miss.map(function(m){
-            var o=m.o, t=m.tour;
-            var ctl=''; try{ ctl=shipCtrlHtml(o); }catch(e){}
-            return '<div style="background:var(--bg);border:1px solid #fecaca;border-radius:var(--rs);padding:6px 8px;margin-top:6px">'+
-              '<div style="font-size:12px;margin-bottom:5px"><b>'+_esc(o.id)+'</b> <span style="color:var(--text2)">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</span>'+
-                '<div style="font-size:11px;color:#b91c1c;margin-top:2px">🆔 <span onclick="billTourInfo(\''+_esc(t.tid)+'\')" style="cursor:pointer;text-decoration:underline">'+_esc(t.tid)+'</span>'+
-                  (t.driverName?' · 🚗 '+_esc(t.driverName):'')+(t.endedDate?' · '+fmtD(t.endedDate):'')+'</div></div>'+
-              ctl+
-            '</div>';
-          }).join('')+'</div>':'')+
+          '<div style="margin-top:5px">'+(function(){ try{ return shipCtrlHtml(o); }catch(e){ return ''; } })()+'</div>'+
+          '<div style="display:flex;gap:6px;margin-top:5px">'+pb('delivery','📦 สินค้า / Goods',nG)+pb('shipreceipt','🧾 ใบเสร็จ / Receipt',nR)+'</div>'+
+          '<div id="'+gid+'" style="display:none;margin-top:6px" data-type=""></div>'+
+        '</div>';
+      };
+
+      // Still driving — nothing to book yet, but the office sees what is coming.
+      var ot=blk.onTour||[];
+      if(ot.length){
+        var otOpen=_billShipOpen['__ontour']!==false;   // open by default
+        sInner+='<div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:var(--rs);margin-bottom:8px;overflow:hidden">'+
+          '<div onclick="billShipTourToggle()" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 9px;cursor:pointer">'+
+            '<span style="min-width:0;font-size:12.5px;font-weight:800;color:#92400e"><i class="ti ti-chevron-'+(otOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> 🚛 Still on tour / ยังอยู่บนทัวร์ <span style="font-weight:600">('+ot.length+')</span></span>'+
+            '<span style="font-size:11px;color:#92400e;white-space:nowrap">no cost yet / ยังไม่มีค่าส่ง</span>'+
+          '</div>'+
+          (otOpen?'<div style="padding:0 9px 9px">'+ot.map(function(r,i){ return shipRow(r,'t'+i,true); }).join('')+'</div>':'')+
         '</div>';
       }
-      if(!blk.children.length && !miss.length) sInner+='<div style="font-size:11px;color:var(--text2)">No shipping costs this month / ยังไม่มีค่าส่งเดือนนี้</div>';
+
+      // One fold-open row per carrier company — every company in the office list,
+      // even the ones with nothing this month.
+      if(!blk.children.length && !ot.length) sInner+='<div style="font-size:11px;color:var(--text2)">No shipping costs this month / ยังไม่มีค่าส่งเดือนนี้</div>';
       blk.children.forEach(function(c,idx){
         window._billShipKeys.push(c.id);
-        var open=!!_billShipOpen[c.id];
-        sInner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
+        var open=!!_billShipOpen[c.id], rows=c.rows||[], miss=c.missing||0;
+        sInner+='<div style="background:var(--bg);border:1px solid '+(miss?'#fecaca':'var(--border)')+';border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
           '<div onclick="billShipToggle('+idx+')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 9px;cursor:pointer">'+
-            '<span style="min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)+' <span style="color:var(--text2);font-size:11px;font-weight:400">('+c.orders.length+')</span></span>'+
+            '<span style="min-width:0;flex:1;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)+
+              (rows.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+rows.length+')</span>':'')+
+              (miss?' <span title="no cost entered / ยังไม่ได้ใส่ค่าส่ง" style="font-size:11px;font-weight:800;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px">⚠️ '+miss+'</span>':'')+'</span>'+
             '<span style="font-size:13px;font-weight:800;white-space:nowrap">'+c.total.toLocaleString()+' ฿</span>'+
           '</div>'+
-          (open ? '<div style="padding:0 9px 8px">'+c.orders.map(function(o){
-            var amt=parseFloat(o.shipCost)||0;
-            // The driver's handover proof, straight on the cost row: goods + carrier receipt.
-            var gid='bshipg_'+idx+'_'+safeOrderId(o.id), eid=String(o.id).replace(/['\\]/g,'');
-            var nG=0,nR=0; try{ nG=orderPhotoCount(o.id,'delivery'); nR=orderPhotoCount(o.id,'shipreceipt'); }catch(e){}
-            var pb=function(type,label,n){ return '<button type="button" onclick="ofDrvLoadPhotos(\''+eid+'\',\''+type+'\',\''+gid+'\')" style="flex:1;padding:5px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:600;cursor:pointer">'+label+' <span style="color:'+(n>0?'var(--blue)':'var(--text3)')+';font-weight:800">'+n+'</span></button>'; };
-            return '<div style="background:var(--bg2);border-radius:var(--rs);padding:5px 8px;margin-top:5px">'+
-              '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px">'+
-                '<span style="min-width:0;flex:1"><b>'+_esc(o.id)+'</b> <span style="color:var(--text2)">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</span>'+(o.shipCostDate?'<span style="color:var(--text2)"> · '+fmtD(o.shipCostDate)+'</span>':'')+'</span>'+
-                '<span style="font-weight:700;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'+
-              '</div>'+
-              // Same shipper/amount/receipt row as the Tour popup — corrections happen here.
-              '<div style="margin-top:5px">'+(function(){ try{ return shipCtrlHtml(o); }catch(e){ return ''; } })()+'</div>'+
-              '<div style="display:flex;gap:6px;margin-top:5px">'+pb('delivery','📦 สินค้า / Goods',nG)+pb('shipreceipt','🧾 ใบเสร็จ / Receipt',nR)+'</div>'+
-              '<div id="'+gid+'" style="display:none;margin-top:6px" data-type=""></div>'+
-            '</div>';
-          }).join('')+'</div>' : '')+
+          (open ? '<div style="padding:0 9px 8px">'+(rows.length
+              ? rows.map(function(r){ return shipRow(r,idx,false); }).join('')
+              : '<div style="font-size:11px;color:var(--text2);padding-top:6px">No orders this month / ไม่มีออเดอร์เดือนนี้</div>')+'</div>' : '')+
         '</div>';
       });
       html+=box(sInner);
