@@ -940,10 +940,21 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         costFixed=out;
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
       });
+      // Sub-categories per section. The keys are NOT fixed to the three built-ins any
+      // more — the office can create its own top sections, so whatever keys are in the
+      // database are kept (see costSections below).
       db.ref('costCats').on('value', function(snap) {
         var v=snap.val()||{}; function _arr(x){ return x?(Array.isArray(x)?x:Object.values(x)):[]; }
-        costCats={ utilities:_arr(v.utilities), food:_arr(v.food), other:_arr(v.other) };
+        var out={utilities:[],food:[],other:[]};
+        Object.keys(v).forEach(function(k){ out[k]=_arr(v[k]); });
+        costCats=out;
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
+        try{ if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active')) mgRenderBillCats(); }catch(e){}
+      });
+      db.ref('costSections').on('value', function(snap) {
+        var v=snap.val(); costSections = v?(Array.isArray(v)?v.filter(Boolean):Object.values(v)):[];
+        try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
+        try{ if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active')) mgRenderBillCats(); }catch(e){}
       });
       // Lightweight photo index (counts/metadata only, NOT the image data) so the
       // Pictures tab can list orders without downloading every photo on startup.
@@ -1398,6 +1409,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="view" id="mgv-staff"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="stit" style="margin-bottom:0">Office Staff / พนักงาน</div><button type="button" class="btnsm btnsmp" onclick="openStaffM(null)"><i class="ti ti-plus"></i> Add</button></div>
     <div id="mg-staff-list"><div class="empty"><i class="ti ti-user-circle" style="font-size:36px;display:block;margin-bottom:8px"></i>No staff yet<br>Add office team members</div></div>
+
+    <div style="height:1px;background:var(--border);margin:16px 0"></div>
+    <!-- Which Bills categories may be linked to a tour (fuel / gas / toll) -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div class="stit" style="margin-bottom:0">🧾 Bills categories / หมวดใบเสร็จ</div><button type="button" class="btnsm btnsmp" onclick="secAdd();mgRenderBillCats()"><i class="ti ti-plus"></i> Main cat.</button></div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Tick 🚚 to let a category be linked to a tour — fuel, gas, toll. Only ticked categories show the "Link tour" button on the receipt. / ติ๊ก 🚚 เพื่อให้เชื่อมกับทัวร์ได้ (น้ำมัน แก๊ส ค่าทาง)</div>
+    <div id="mg-billcats"></div>
 
     <div style="height:1px;background:var(--border);margin:16px 0"></div>
     <div class="stit">Management PIN / รหัสผู้จัดการ</div>
@@ -2312,7 +2329,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 
   <!-- BILLS VIEW -->
   <div class="view" id="ofv-bills"><div class="sec">
-    <div class="stit" style="margin-bottom:10px">🧾 Bills / ใบเสร็จ</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px">
+      <div class="stit" style="margin-bottom:0">🧾 Bills / ใบเสร็จ</div>
+      <button type="button" class="btnsm btnsmp" onclick="billsReportOpen()" title="Report + charts"><i class="ti ti-chart-pie"></i> Report / รายงาน</button>
+    </div>
     <!-- Receipt entry (top) -->
     <div id="bills-entry" style="margin-bottom:14px"></div>
     <!-- Month selector -->
@@ -2374,6 +2394,15 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       </div>
     </div>
   </div>
+
+  <!-- BILL DETAIL SHEET — tap a receipt anywhere in Bills: full info, photos, tour link -->
+  <div class="modal-overlay" id="bill-detail-modal"><div class="modal" id="bill-detail-body"></div></div>
+  <!-- TOUR PICKER — released per category in Management (fuel / gas / toll) -->
+  <div class="modal-overlay" id="bill-tour-modal"><div class="modal" id="bill-tour-body"></div></div>
+  <!-- TOUR INFO — driver, day, orders behind a linked tour ID -->
+  <div class="modal-overlay" id="bill-tourinfo-modal"><div class="modal" id="bill-tourinfo-body"></div></div>
+  <!-- BILLS REPORT — charts over every section + sub-category, with a print version -->
+  <div class="modal-overlay" id="bill-report-modal"><div class="modal" id="bill-report-body" style="max-width:620px"></div></div>
 
   <!-- PICTURES VIEW -->
   <div class="view" id="ofv-pics"><div class="sec">
@@ -3540,6 +3569,7 @@ var stockAudit=[];   // own book for stock edits — see stAudit()
 var bills=[];
 var costFixed={};                     // Bills: {"YYYY-MM":[{id,label,amount}]} per-month fixed costs (manual, carried over)
 var costCats={utilities:[],food:[],other:[]}; // Bills: sub-category defs per section (office add/remove); amounts come from receipts
+var costSections=[];                  // Bills: top-level sections [{id,label}] — label overrides for the 3 built-ins + office-made ones (Firebase 'costSections')
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
 let dArranged=[]; // driver route-arranger: ids placed in the RIGHT column (in order); persisted as tour.arranged
 let ofFilt_='all',ofSelDriver=null,ofSelOrders=[],currentDriverId=null;
@@ -6113,7 +6143,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260802008;
+var KP_BUILD = 20260803001;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -16539,8 +16569,35 @@ function delStaffM() {
   staffList = staffList.filter(x => x.id !== editStaffId);
   closeStaffM(); mgRenderStaff(); syncStaff();
 }
+// Management → Staff: which Bills categories may be linked to a tour, plus rename /
+// add / remove of the whole category tree in one place (the Bills tab can do it too).
+function mgRenderBillCats(){
+  var el=document.getElementById('mg-billcats'); if(!el) return;
+  if(typeof billSecs!=='function') return;
+  el.innerHTML=billSecs().map(function(s){
+    var cats=(typeof costCats!=='undefined'&&costCats[s.id])?costCats[s.id]:[];
+    return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:8px">'
+      +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">'
+        +'<input type="text" value="'+_esc(s.label)+'" onchange="secSetLabel(\''+s.id+'\',this.value);mgRenderBillCats()" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;background:var(--bg);color:var(--text)">'
+        +(s.builtin?'<span style="font-size:10px;color:var(--text2);white-space:nowrap">built-in</span>'
+                   :'<button type="button" onclick="secRemove(\''+s.id+'\');mgRenderBillCats()" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>')
+      +'</div>'
+      +(cats.length?cats.map(function(c){
+          return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">'
+            +'<label title="Allow tour link / เชื่อมทัวร์ได้" style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;flex-shrink:0;padding:0 2px">'
+              +'<input type="checkbox" '+(c.tourLink?'checked':'')+' onchange="catSetTourLink(\''+s.id+'\',\''+c.id+'\',this.checked)" style="width:16px;height:16px">🚚</label>'
+            +'<input type="text" value="'+_esc(c.label)+'" onchange="catSetLabel(\''+s.id+'\',\''+c.id+'\',this.value);mgRenderBillCats()" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
+            +'<button type="button" onclick="catRemove(\''+s.id+'\',\''+c.id+'\');mgRenderBillCats()" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>'
+          +'</div>';
+        }).join('')
+       :'<div style="font-size:11px;color:var(--text2);margin-bottom:5px">No categories yet / ยังไม่มีหมวด</div>')
+      +'<button type="button" onclick="catAdd(\''+s.id+'\');mgRenderBillCats()" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:6px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add category / เพิ่มหมวด</button>'
+    +'</div>';
+  }).join('');
+}
 function mgRenderStaff() {
   mgRenderShippers();
+  try{ mgRenderBillCats(); }catch(e){}
   const el = document.getElementById('mg-staff-list');
   if(!el) return;
   el.innerHTML = staffList.length === 0
@@ -21763,6 +21820,63 @@ function _costMonthKey(){ var m=document.getElementById('bills-filter-month'); r
 function _esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 function syncCostFixed(){ if(window.fbDB) window.fbDB.ref('costFixed').set(costFixed); }
 function syncCostCats(){ if(window.fbDB) window.fbDB.ref('costCats').set(costCats); }
+function syncCostSections(){ if(window.fbDB) window.fbDB.ref('costSections').set(costSections); }
+
+// ── Top sections (Oberkategorien) ────────────────────────────────────────
+// The three built-ins keep their ids for ever — every receipt ever booked carries
+// b.section, and the Food tab writes into 'food'. They can be RENAMED (the label
+// lives in costSections) but never removed. Anything else in costSections is an
+// office-made section and behaves exactly like the built-ins.
+var BILL_SEC_BUILTIN=[{id:'utilities',label:'⚡ Utilities / ค่าสาธารณูปโภค'},
+                      {id:'food',     label:'🍜 Food / ค่าอาหาร'},
+                      {id:'other',    label:'📦 Other / อื่นๆ'}];
+function billSecs(){
+  var out=BILL_SEC_BUILTIN.map(function(d){ return {id:d.id,label:d.label,builtin:true}; });
+  (costSections||[]).forEach(function(s){
+    if(!s||!s.id) return;
+    var b=out.find(function(x){ return x.id===s.id; });
+    if(b){ if(s.label) b.label=s.label; }
+    else out.push({id:s.id,label:s.label||s.id,builtin:false});
+  });
+  return out;
+}
+function billSecLabel(id){ var s=billSecs().find(function(x){return x.id===id;}); return s?s.label:(id||'—'); }
+function _secRec(id){
+  var r=(costSections||[]).find(function(x){ return x&&x.id===id; });
+  if(!r){ r={id:id,label:billSecLabel(id)}; costSections.push(r); }
+  return r;
+}
+function secAdd(){
+  var nm=prompt('New main category / ชื่อหมวดหลักใหม่:\n(e.g. "🚚 Vehicle / ค่ารถ")',''); if(nm===null) return;
+  nm=nm.trim(); if(!nm) return;
+  costSections.push({id:'s'+Date.now()+Math.floor(Math.random()*1000),label:nm});
+  syncCostSections(); costsRender();
+}
+function secSetLabel(id,val){
+  val=String(val||'').trim(); if(!val) return;
+  _secRec(id).label=val;
+  // Bills carry a copy of the SUB-category label only, so renaming a section is safe.
+  syncCostSections(); _billEdit={}; costsRender();
+}
+// Built-ins are never removable. A custom section takes its sub-categories with it —
+// its receipts stay in the log and surface under "⚠️ Unknown section" (see _lostBills).
+function secRemove(id){
+  var s=billSecs().find(function(x){return x.id===id;}); if(!s||s.builtin) return;
+  var linked=(typeof bills!=='undefined'?bills:[]).filter(function(b){ return b.section===id; });
+  var sum=linked.reduce(function(a,b){ return a+(parseFloat(b.amount)||0); },0);
+  var msg='Remove main category "'+(s.label||'')+'"? / ลบหมวดหลักนี้?';
+  if(linked.length) msg+='\n\n⚠️ '+linked.length+' receipt(s) for '+sum.toLocaleString()+' ฿ / มีใบเสร็จ '+linked.length+' ใบ รวม '+sum.toLocaleString()+' ฿\nThey stay in the log and show up as "⚠️ Unknown section" / จะแสดงเป็น "หมวดที่ถูกลบ"';
+  if(!confirm(msg)) return;
+  costSections=(costSections||[]).filter(function(x){ return !x||x.id!==id; });
+  delete costCats[id];
+  syncCostSections(); syncCostCats(); costsRender();
+}
+// Inline rename: a row shows plain text (tap = fold open) until the ✎ is pressed,
+// then that one row turns into an input. Key: 'sec|<id>' or 'cat|<section>|<id>'.
+var _billEdit={};
+function billEditOn(key){ _billEdit={}; _billEdit[key]=1; costsRender();
+  try{ var i=document.querySelector('[data-editkey="'+key+'"]'); if(i){ i.focus(); i.select(); } }catch(e){} }
+function billEditOff(){ _billEdit={}; costsRender(); }
 
 // Fixed costs — manual per-month, with auto-carryover into the current month.
 function _fixedArr(mk){ if(!costFixed[mk]) costFixed[mk]=[]; return costFixed[mk]; }
@@ -21770,8 +21884,33 @@ function fixedAdd(){ var mk=_costMonthKey(); _fixedArr(mk).push({id:'f'+Date.now
 function fixedRemove(id){ var mk=_costMonthKey(); costFixed[mk]=_fixedArr(mk).filter(function(r){return r.id!==id;}); syncCostFixed(); costsRender(); }
 function fixedSet(id,field,val){ var mk=_costMonthKey(); var r=_fixedArr(mk).find(function(x){return x.id===id;}); if(!r)return; if(field==='amount'){r.amount=(val===''?'':(parseFloat(val)||0));}else{r[field]=val;} syncCostFixed(); if(field==='amount')costsRender(); }
 
-// Sub-categories for utilities / food / other — office adds/removes them.
+// Sub-categories of a section — office adds/removes/renames them.
 function catAdd(section){ var nm=prompt('New category / ชื่อหมวดใหม่:',''); if(nm===null)return; nm=nm.trim(); if(!nm)return; if(!costCats[section])costCats[section]=[]; costCats[section].push({id:'k'+Date.now()+Math.floor(Math.random()*1000),label:nm}); syncCostCats(); costsRender(); }
+function catRec(section,id){ return (costCats[section]||[]).find(function(c){ return c.id===id; })||null; }
+// Renaming a sub-category also rewrites the label copy on its receipts, so the log
+// and the report do not keep showing the old name.
+function catSetLabel(section,id,val){
+  val=String(val||'').trim(); if(!val) return;
+  var c=catRec(section,id); if(!c) return;
+  var old=c.label; c.label=val; syncCostCats();
+  if(old!==val){
+    (typeof bills!=='undefined'?bills:[]).forEach(function(b){
+      if(b.section===section && b.subcatId===id && b.subcatLabel!==val){
+        b.subcatLabel=val;
+        if(window.fbDB) window.fbDB.ref('bills/'+b.id+'/subcatLabel').set(val);
+      }
+    });
+  }
+  _billEdit={}; costsRender();
+}
+// Tour link is released per category in Management (fuel / gas / toll …). Only then
+// does the receipt get the "🚚 link tour" button.
+function catSetTourLink(section,id,on){
+  var c=catRec(section,id); if(!c) return;
+  c.tourLink=!!on; syncCostCats();
+  try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
+}
+function catTourLinkOn(section,id){ var c=catRec(section,id); return !!(c&&c.tourLink); }
 // Removing a category does NOT delete its receipts — they keep section+subcatId and
 // would silently drop out of every total. So: warn with the exact count + amount, and
 // costsRender() lists whatever is left over as "⚠️ Not assigned" (see _orphanBills).
@@ -21822,6 +21961,108 @@ function _billStaffGroup(who, name){
   if(/warehouse/.test(role)) return 'Warehouse';
   return 'Other';
 }
+// Receipts whose whole SECTION was deleted — same idea as _orphanBills one level up.
+function _lostBills(mk){
+  var known={}; billSecs().forEach(function(s){ known[s.id]=1; });
+  return (typeof bills!=='undefined'?bills:[]).filter(function(b){
+    return b && b.section && !known[b.section] && billsMKey(b.date)===mk;
+  }).sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+}
+function _sumAmt(arr){ return (arr||[]).reduce(function(a,b){ return a+(parseFloat(b.amount)||0); },0); }
+
+// ── ONE source of truth for the monthly cost picture ──────────────────────
+// The dashboard (costsRender) and the report (billsReportOpen/print) both read
+// this, so a number can never differ between the screen and the printout.
+function billsCostData(mk){
+  var blocks=[], grand=0;
+
+  // 1) Fixed costs — manually kept lines
+  var frows=_fixedArr(mk);
+  blocks.push({ kind:'fixed', label:'🏠 Fixed costs / ค่าใช้จ่ายคงที่',
+    total:frows.reduce(function(a,r){return a+(parseFloat(r.amount)||0);},0), rows:frows,
+    children:frows.map(function(r){ return {id:r.id,label:r.label||'—',total:parseFloat(r.amount)||0}; }) });
+
+  // 2) Sections (3 built-ins + the office's own) — amounts come from the receipts
+  billSecs().forEach(function(s){
+    var children=(costCats[s.id]||[]).map(function(c){
+      var items=_catBills(s.id,c.id,mk);
+      return { id:c.id, label:c.label||'—', total:_sumAmt(items), items:items, tourLink:!!c.tourLink };
+    });
+    var orph=_orphanBills(s.id,mk);
+    if(orph.length) children.push({ id:'', label:'⚠️ Not assigned / ไม่ได้กำหนดหมวด', total:_sumAmt(orph), items:orph, orphan:true });
+    blocks.push({ kind:'section', section:s.id, builtin:s.builtin, label:s.label,
+      total:children.reduce(function(a,c){return a+c.total;},0), children:children });
+  });
+
+  // 2b) Receipts of a section that no longer exists — money stays visible and counted
+  var lost=_lostBills(mk);
+  if(lost.length) blocks.push({ kind:'lost', label:'⚠️ Unknown section / หมวดที่ถูกลบ', total:_sumAmt(lost),
+    children:[{ id:'', label:'Deleted main category / หมวดหลักที่ถูกลบ', total:_sumAmt(lost), items:lost }] });
+
+  // 3) Shipper — carrier shipping costs (o.shipCost) grouped by shipper
+  var g={};
+  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
+    var amt=parseFloat(o.shipCost)||0; if(amt<=0) return;
+    if(billsMKey(o.shipCostDate||o.date)!==mk) return;
+    var sh=o.shipper||'— ไม่ระบุ / unset —';
+    if(!g[sh]) g[sh]={tot:0,orders:[]};
+    g[sh].tot+=amt; g[sh].orders.push(o);
+  });
+  var shKeys=Object.keys(g).sort(function(a,b){ return g[b].tot-g[a].tot; });
+  blocks.push({ kind:'shipper', label:'🚚 Shipper / ค่าส่ง',
+    total:shKeys.reduce(function(a,k){return a+g[k].tot;},0),
+    children:shKeys.map(function(k){ return {id:k,label:k,total:g[k].tot,orders:g[k].orders}; }) });
+
+  // 4) Staff — net per person from the payroll log, split Driver / Warehouse / Lalamove / Other
+  var perP={};
+  (typeof payLog!=='undefined'?payLog:[]).forEach(function(e){
+    if(billsMKey(e.date)!==mk) return;
+    var amt=(typeof payCatMeta==='function'?payCatMeta(e.cat).sign:1)*(parseFloat(e.amount)||0);
+    if(!perP[e.who]) perP[e.who]={who:e.who,name:e.whoName||e.who,net:0};
+    perP[e.who].net+=amt;
+  });
+  var sg={Driver:[],Warehouse:[],Lalamove:[],Other:[]};
+  Object.keys(perP).forEach(function(k){ var p=perP[k]; sg[_billStaffGroup(p.who,p.name)].push(p); });
+  [['Driver','🚗 Driver / คนขับ',true],['Warehouse','🏭 Warehouse / คลัง',true],['Lalamove','🛺 Lalamove',true],['Other','👤 Other / อื่นๆ',false]].forEach(function(p){
+    var rows=sg[p[0]].sort(function(a,b){ return b.net-a.net; });
+    blocks.push({ kind:'staff', group:p[0], label:p[1], alwaysShow:p[2],
+      total:rows.reduce(function(a,r){return a+r.net;},0),
+      children:rows.map(function(r){ return {id:r.who,label:r.name,total:r.net}; }) });
+  });
+
+  blocks.forEach(function(b){ grand+=b.total; });
+  return { mk:mk, blocks:blocks, grand:grand };
+}
+
+// Inline-rename row: plain text (tap = fold open) until ✎ is pressed.
+function billSaveEdit(key){
+  var el=document.querySelector('[data-editkey="'+key+'"]'); if(!el) return;
+  var v=el.value, p=key.split('|');
+  if(p[0]==='sec') secSetLabel(p[1],v); else catSetLabel(p[1],p[2],v);
+}
+function _editRow(key,label){
+  return '<input type="text" data-editkey="'+key+'" value="'+_esc(label)+'" onclick="event.stopPropagation()" onkeydown="event.stopPropagation();if(event.key===\'Enter\'){billSaveEdit(\''+key+'\')}if(event.key===\'Escape\'){billEditOff()}" style="flex:1;min-width:0;padding:5px 8px;border:1.5px solid var(--blue);border-radius:var(--rs);font-size:13px;font-weight:600;background:var(--bg);color:var(--text)">'+
+    '<button type="button" onclick="event.stopPropagation();billSaveEdit(\''+key+'\')" title="Save" style="border:1px solid #bbf7d0;background:#dcfce7;color:#16a34a;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✓</button>'+
+    '<button type="button" onclick="event.stopPropagation();billEditOff()" title="Cancel" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>';
+}
+function _penBtn(key,title){
+  return '<button type="button" onclick="event.stopPropagation();billEditOn(\''+key+'\')" title="'+title+'" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>';
+}
+// One receipt line inside a category — tap opens the detail sheet (photos, tour link…).
+function _billItemRow(b){
+  var pic=(typeof billPhotos==='function'?billPhotos(b):[])[0]||'';
+  var tid=b.tourTid||'';
+  return '<div onclick="billOpen(\''+b.id+'\')" title="Details / รายละเอียด" style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;padding:5px 8px;background:var(--bg2);border-radius:var(--rs);margin-top:5px;cursor:pointer">'+
+    (pic?'<img src="'+_esc(pic)+'" alt="" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:30px;height:30px;flex-shrink:0;object-fit:cover;border-radius:4px;border:1px solid var(--border);cursor:zoom-in">':'')+
+    '<span style="min-width:0;flex:1">'+_esc(b.what||b.subcatLabel||'—')+
+      '<span style="color:var(--text2)"> · '+(b.date||'')+(b.by?' · 👤 '+_esc(b.by):'')+'</span>'+
+      (tid?'<br><span onclick="event.stopPropagation();billTourInfo(\''+_esc(tid)+'\')" style="display:inline-block;margin-top:3px;padding:1px 6px;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-weight:700;font-size:11px;cursor:pointer">🚚 '+_esc(tid)+'</span>':'')+
+    '</span>'+
+    '<span style="font-weight:700;white-space:nowrap">'+(parseFloat(b.amount)||0).toLocaleString()+' ฿</span>'+
+    '<i class="ti ti-chevron-right" style="font-size:14px;color:var(--text3);flex-shrink:0"></i>'+
+  '</div>';
+}
+
 function costsRender(){
   var el=document.getElementById('bills-costs'); if(!el) return;
   var mk=_costMonthKey();
@@ -21830,125 +22071,129 @@ function costsRender(){
     var prev=Object.keys(costFixed).filter(function(k){return k<mk && costFixed[k] && costFixed[k].length;}).sort();
     if(prev.length){ var src=costFixed[prev[prev.length-1]]; costFixed[mk]=src.map(function(r){return {id:'f'+Date.now()+Math.floor(Math.random()*1e6),label:r.label,amount:r.amount};}); syncCostFixed(); }
   }
-  var html='', grand=0;
+  var data=billsCostData(mk), html='';
+  var box=function(inner){ return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+inner+'</div>'; };
+  var head=function(lbl,tot,extra){ return '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:8px">'+
+      (extra||'<span style="flex:1;min-width:0;font-size:13px;font-weight:700">'+lbl+'</span>')+
+      '<span style="font-size:14px;font-weight:800;color:var(--blue);white-space:nowrap">'+tot.toLocaleString()+' ฿</span></div>'; };
+  var addBtn=function(fn,lbl){ return '<button type="button" onclick="'+fn+'" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> '+lbl+'</button>'; };
 
-  // 1) Fixed costs — editable line items
-  var frows=_fixedArr(mk), ftot=frows.reduce(function(a,r){return a+(parseFloat(r.amount)||0);},0); grand+=ftot;
-  html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">🏠 Fixed costs / ค่าใช้จ่ายคงที่</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+ftot.toLocaleString()+' ฿</span></div>';
-  frows.forEach(function(r){
-    html+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'+
-      '<input type="text" value="'+_esc(r.label)+'" placeholder="Rent, car, insurance…" onchange="fixedSet(\''+r.id+'\',\'label\',this.value)" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'+
-      '<input type="number" value="'+(r.amount!=null&&r.amount!==''?r.amount:'')+'" placeholder="0" onchange="fixedSet(\''+r.id+'\',\'amount\',this.value)" style="width:96px;flex-shrink:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
-      '<button type="button" onclick="fixedRemove(\''+r.id+'\')" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:32px;flex-shrink:0;cursor:pointer">✕</button>'+
-    '</div>';
-  });
-  html+='<button type="button" onclick="fixedAdd()" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add / เพิ่ม</button></div>';
-
-  // 2) & 3) Utilities + Food + Other — category lists (amounts come from receipts)
-  [['utilities','⚡ Utilities / ค่าสาธารณูปโภค'],['food','🍜 Food / ค่าอาหาร'],['other','📦 Other / อื่นๆ']].forEach(function(p){
-    var section=p[0], cats=costCats[section]||[];
-    var orph=_orphanBills(section,mk), otot=orph.reduce(function(a,b){return a+(parseFloat(b.amount)||0);},0);
-    var stot=cats.reduce(function(a,c){return a+_catTotal(section,c.id,mk);},0)+otot; grand+=stot;
-    html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">'+p[1]+'</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+stot.toLocaleString()+' ฿</span></div>';
-    if(cats.length===0 && orph.length===0){ html+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">No categories yet — add one below</div>'; }
-    cats.forEach(function(c){
-      var t=_catTotal(section,c.id,mk), rows=_catBills(section,c.id,mk), open=!!_billCatOpen[section+'|'+c.id];
-      html+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
-        '<div onclick="billCatToggle(\''+section+'\',\''+c.id+'\')" style="display:flex;gap:6px;align-items:center;padding:6px 9px;cursor:pointer">'+
-          '<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)+(rows.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+rows.length+')</span>':'')+'</span>'+
-          '<span style="font-size:13px;font-weight:800;color:var(--text)">'+t.toLocaleString()+' ฿</span>'+
-          '<button type="button" onclick="event.stopPropagation();catRemove(\''+section+'\',\''+c.id+'\')" title="Remove category" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>'+
-        '</div>'+
-        (open ? '<div style="padding:0 9px 8px">'+(rows.length ? rows.map(function(b){
-            // Receipt photo: thumbnail in the row, tap the row → full screen.
-            var pic=b.photoUrl||'';
-            return '<div'+(pic?' onclick="event.stopPropagation();openPhotoLightbox(this.querySelector(\'img\').src)" title="Show receipt / ดูใบเสร็จ"':'')+
-              ' style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;padding:5px 8px;background:var(--bg2);border-radius:var(--rs);margin-top:5px'+(pic?';cursor:zoom-in':'')+'">'+
-              (pic?'<img src="'+_esc(pic)+'" alt="" style="width:30px;height:30px;flex-shrink:0;object-fit:cover;border-radius:4px;border:1px solid var(--border)">':'')+
-              '<span style="min-width:0;flex:1">'+_esc(b.what||b.subcatLabel||'—')+
-                '<span style="color:var(--text2)"> · '+(b.date||'')+(b.by?' · 👤 '+_esc(b.by):'')+'</span></span>'+
-              '<span style="font-weight:700;white-space:nowrap">'+(parseFloat(b.amount)||0).toLocaleString()+' ฿</span>'+
-            '</div>';
-          }).join('') : '<div style="font-size:11px;color:var(--text2);padding-top:5px">No receipts this month / ยังไม่มีใบเสร็จเดือนนี้</div>')+'</div>' : '')+
-      '</div>';
-    });
-    // Receipts whose category was deleted — shown so the money stays visible and counted.
-    if(orph.length){
-      var _ol=orph.map(function(b){ return (b.subcatLabel||'?')+' '+(parseFloat(b.amount)||0).toLocaleString()+' ฿'+(b.date?' ('+b.date+')':''); }).join(', ');
-      html+='<div title="'+_esc(_ol)+'" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;padding:6px 9px;background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs)">'+
-        '<span style="flex:1;min-width:0;font-size:12px;font-weight:600;color:#92400e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">⚠️ Not assigned / ไม่ได้กำหนดหมวด ('+orph.length+')</span>'+
-        '<span style="font-size:13px;font-weight:800;color:#92400e;white-space:nowrap">'+otot.toLocaleString()+' ฿</span>'+
-      '</div>';
-    }
-    html+='<button type="button" onclick="catAdd(\''+section+'\')" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add category / เพิ่มหมวด</button></div>';
-  });
-
-  // 3.5) Shipper — carrier shipping costs (o.shipCost) grouped by shipper, this month.
-  // Two-level accordion: shipper → total, expand → the matching orders with amount + info.
-  var _shipGroups={}, shipTot=0;
-  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
-    var amt=parseFloat(o.shipCost)||0; if(amt<=0) return;
-    if(billsMKey(o.shipCostDate||o.date)!==mk) return;
-    var sh=o.shipper||'— ไม่ระบุ / unset —';
-    if(!_shipGroups[sh]) _shipGroups[sh]={tot:0,orders:[]};
-    _shipGroups[sh].tot+=amt; _shipGroups[sh].orders.push(o);
-  });
-  var _shKeys=Object.keys(_shipGroups).sort(function(a,b){return _shipGroups[b].tot-_shipGroups[a].tot;});
-  window._billShipKeys=_shKeys;
-  _shKeys.forEach(function(k){ shipTot+=_shipGroups[k].tot; }); grand+=shipTot;
-  html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">🚚 Shipper / ค่าส่ง</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+shipTot.toLocaleString()+' ฿</span></div>';
-  if(_shKeys.length===0){ html+='<div style="font-size:11px;color:var(--text2)">No shipping costs this month / ยังไม่มีค่าส่งเดือนนี้</div>'; }
-  _shKeys.forEach(function(k,idx){
-    var g=_shipGroups[k], open=!!_billShipOpen[k];
-    html+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
-      '<div onclick="billShipToggle('+idx+')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 9px;cursor:pointer">'+
-        '<span style="min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(k)+' <span style="color:var(--text2);font-size:11px;font-weight:400">('+g.orders.length+')</span></span>'+
-        '<span style="font-size:13px;font-weight:800;white-space:nowrap">'+g.tot.toLocaleString()+' ฿</span>'+
-      '</div>'+
-      (open ? '<div style="padding:0 9px 8px">'+g.orders.map(function(o){
-        var amt=parseFloat(o.shipCost)||0;
-        // The driver's handover proof, straight on the cost row: goods + carrier receipt.
-        var gid='bshipg_'+idx+'_'+safeOrderId(o.id), eid=String(o.id).replace(/['\\]/g,'');
-        var nG=0,nR=0; try{ nG=orderPhotoCount(o.id,'delivery'); nR=orderPhotoCount(o.id,'shipreceipt'); }catch(e){}
-        var pb=function(type,label,n){ return '<button type="button" onclick="ofDrvLoadPhotos(\''+eid+'\',\''+type+'\',\''+gid+'\')" style="flex:1;padding:5px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:600;cursor:pointer">'+label+' <span style="color:'+(n>0?'var(--blue)':'var(--text3)')+';font-weight:800">'+n+'</span></button>'; };
-        return '<div style="background:var(--bg2);border-radius:var(--rs);padding:5px 8px;margin-top:5px">'+
-          '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px">'+
-            '<span style="min-width:0;flex:1"><b>'+_esc(o.id)+'</b> <span style="color:var(--text2)">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</span>'+(o.shipCostDate?'<span style="color:var(--text2)"> · '+fmtD(o.shipCostDate)+'</span>':'')+'</span>'+
-            '<span style="font-weight:700;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'+
-          '</div>'+
-          '<div style="display:flex;gap:6px;margin-top:5px">'+pb('delivery','📦 สินค้า / Goods',nG)+pb('shipreceipt','🧾 ใบเสร็จ / Receipt',nR)+'</div>'+
-          '<div id="'+gid+'" style="display:none;margin-top:6px" data-type=""></div>'+
+  window._billShipKeys=[];
+  data.blocks.forEach(function(blk,bi){
+    if(blk.kind==='fixed'){
+      var inner=head(blk.label,blk.total);
+      blk.rows.forEach(function(r){
+        inner+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'+
+          '<input type="text" value="'+_esc(r.label)+'" placeholder="Rent, car, insurance…" onchange="fixedSet(\''+r.id+'\',\'label\',this.value)" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'+
+          '<input type="number" value="'+(r.amount!=null&&r.amount!==''?r.amount:'')+'" placeholder="0" onchange="fixedSet(\''+r.id+'\',\'amount\',this.value)" style="width:96px;flex-shrink:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
+          '<button type="button" onclick="fixedRemove(\''+r.id+'\')" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:32px;flex-shrink:0;cursor:pointer">✕</button>'+
         '</div>';
-      }).join('')+'</div>' : '')+
-    '</div>';
-  });
-  html+='</div>';
+      });
+      html+=box(inner+addBtn('fixedAdd()','Add / เพิ่ม'));
+      return;
+    }
 
-  // 4) Staff — net per person from the payroll log (payLog) for this month, SPLIT into
-  //    Driver / Warehouse / Lalamove (separate) / Other so each cost type is visible.
-  var _perP={};
-  (typeof payLog!=='undefined'?payLog:[]).forEach(function(e){
-    if(billsMKey(e.date)!==mk) return;
-    var amt=(typeof payCatMeta==='function'?payCatMeta(e.cat).sign:1)*(parseFloat(e.amount)||0);
-    if(!_perP[e.who]) _perP[e.who]={who:e.who, name:e.whoName||e.who, net:0};
-    _perP[e.who].net+=amt;
-  });
-  var _sg={Driver:{tot:0,rows:[]},Warehouse:{tot:0,rows:[]},Lalamove:{tot:0,rows:[]},Other:{tot:0,rows:[]}};
-  Object.keys(_perP).forEach(function(k){ var p=_perP[k]; var g=_billStaffGroup(p.who,p.name); _sg[g].tot+=p.net; _sg[g].rows.push(p); });
-  Object.keys(_sg).forEach(function(g){ _sg[g].rows.sort(function(a,b){return b.net-a.net;}); grand+=_sg[g].tot; });
-  [['Driver','🚗 Driver / คนขับ',true],['Warehouse','🏭 Warehouse / คลัง',true],['Lalamove','🛺 Lalamove',true],['Other','👤 Other / อื่นๆ',false]].forEach(function(p){
-    var g=_sg[p[0]]; if(!p[2] && g.rows.length===0) return;   // Other only shows when it has entries
-    html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;font-weight:700">'+p[1]+'</span><span style="font-size:14px;font-weight:800;color:var(--blue)">'+g.tot.toLocaleString()+' ฿</span></div>';
-    if(g.rows.length===0){ html+='<div style="font-size:11px;color:var(--text2)">—</div>'; }
-    g.rows.forEach(function(r){ html+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 9px;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px"><span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(r.name)+'</span><span style="font-weight:700">'+r.net.toLocaleString()+' ฿</span></div>'; });
-    html+='</div>';
+    if(blk.kind==='section'){
+      var sec=blk.section, eKey='sec|'+sec, editing=!!_billEdit[eKey];
+      var hExtra=editing
+        ? '<div style="display:flex;gap:5px;align-items:center;flex:1;min-width:0">'+_editRow(eKey,blk.label)+'</div>'
+        : '<span style="flex:1;min-width:0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(blk.label)+'</span>'+
+          _penBtn(eKey,'Rename / เปลี่ยนชื่อ')+
+          (blk.builtin?'':'<button type="button" onclick="secRemove(\''+sec+'\')" title="Remove main category" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>');
+      var inner=head(blk.label,blk.total,hExtra);
+      if(!blk.children.length) inner+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">No categories yet — add one below / ยังไม่มีหมวด</div>';
+      blk.children.forEach(function(c){
+        if(c.orphan){
+          var ol=c.items.map(function(b){ return (b.subcatLabel||'?')+' '+(parseFloat(b.amount)||0).toLocaleString()+' ฿'+(b.date?' ('+b.date+')':''); }).join(', ');
+          var oOpen=!!_billCatOpen[sec+'|__orphan'];
+          inner+='<div title="'+_esc(ol)+'" style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
+            '<div onclick="billCatToggle(\''+sec+'\',\'__orphan\')" style="display:flex;gap:6px;align-items:center;padding:6px 9px;cursor:pointer">'+
+              '<span style="flex:1;min-width:0;font-size:12px;font-weight:600;color:#92400e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(oOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+c.label+' ('+c.items.length+')</span>'+
+              '<span style="font-size:13px;font-weight:800;color:#92400e;white-space:nowrap">'+c.total.toLocaleString()+' ฿</span>'+
+            '</div>'+
+            (oOpen?'<div style="padding:0 9px 8px">'+c.items.map(_billItemRow).join('')+'</div>':'')+
+          '</div>';
+          return;
+        }
+        var ck=sec+'|'+c.id, open=!!_billCatOpen[ck], cKey='cat|'+sec+'|'+c.id, cEdit=!!_billEdit[cKey];
+        inner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
+          '<div onclick="billCatToggle(\''+sec+'\',\''+c.id+'\')" style="display:flex;gap:5px;align-items:center;padding:6px 9px;cursor:pointer">'+
+            (cEdit ? _editRow(cKey,c.label)
+                   : '<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)+
+                       (c.tourLink?' <span title="Tour link on / เชื่อมทัวร์ได้" style="font-size:11px">🚚</span>':'')+
+                       (c.items.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+c.items.length+')</span>':'')+'</span>'+
+                     '<span style="font-size:13px;font-weight:800;color:var(--text);white-space:nowrap">'+c.total.toLocaleString()+' ฿</span>'+
+                     _penBtn(cKey,'Rename / เปลี่ยนชื่อ')+
+                     '<button type="button" onclick="event.stopPropagation();catRemove(\''+sec+'\',\''+c.id+'\')" title="Remove category" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>')+
+          '</div>'+
+          (open ? '<div style="padding:0 9px 8px">'+(c.items.length ? c.items.map(_billItemRow).join('')
+              : '<div style="font-size:11px;color:var(--text2);padding-top:5px">No receipts this month / ยังไม่มีใบเสร็จเดือนนี้</div>')+'</div>' : '')+
+        '</div>';
+      });
+      html+=box(inner+addBtn('catAdd(\''+sec+'\')','Add category / เพิ่มหมวด'));
+      // after the LAST section: the button that creates a whole new main category
+      var next=data.blocks[bi+1];
+      if(!next || next.kind!=='section'){
+        html+='<button type="button" onclick="secAdd()" style="width:100%;margin-bottom:12px;background:var(--bg2);border:1.5px dashed var(--blue);color:var(--blue);border-radius:var(--rs);padding:9px;font-size:12.5px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add main category / เพิ่มหมวดหลัก</button>';
+      }
+      return;
+    }
+
+    if(blk.kind==='lost'){
+      var lOpen=!!_billCatOpen['__lost|'];   // billCatToggle keys are section+'|'+id
+      html+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+
+        '<div onclick="billCatToggle(\'__lost\',\'\')" style="display:flex;justify-content:space-between;align-items:center;gap:6px;cursor:pointer">'+
+          '<span style="flex:1;min-width:0;font-size:13px;font-weight:700;color:#92400e"><i class="ti ti-chevron-'+(lOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+blk.label+' ('+blk.children[0].items.length+')</span>'+
+          '<span style="font-size:14px;font-weight:800;color:#92400e;white-space:nowrap">'+blk.total.toLocaleString()+' ฿</span>'+
+        '</div>'+
+        (lOpen?'<div style="margin-top:6px">'+blk.children[0].items.map(_billItemRow).join('')+'</div>':'')+
+      '</div>';
+      return;
+    }
+
+    if(blk.kind==='shipper'){
+      var sInner=head(blk.label,blk.total);
+      if(!blk.children.length) sInner+='<div style="font-size:11px;color:var(--text2)">No shipping costs this month / ยังไม่มีค่าส่งเดือนนี้</div>';
+      blk.children.forEach(function(c,idx){
+        window._billShipKeys.push(c.id);
+        var open=!!_billShipOpen[c.id];
+        sInner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
+          '<div onclick="billShipToggle('+idx+')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 9px;cursor:pointer">'+
+            '<span style="min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)+' <span style="color:var(--text2);font-size:11px;font-weight:400">('+c.orders.length+')</span></span>'+
+            '<span style="font-size:13px;font-weight:800;white-space:nowrap">'+c.total.toLocaleString()+' ฿</span>'+
+          '</div>'+
+          (open ? '<div style="padding:0 9px 8px">'+c.orders.map(function(o){
+            var amt=parseFloat(o.shipCost)||0;
+            // The driver's handover proof, straight on the cost row: goods + carrier receipt.
+            var gid='bshipg_'+idx+'_'+safeOrderId(o.id), eid=String(o.id).replace(/['\\]/g,'');
+            var nG=0,nR=0; try{ nG=orderPhotoCount(o.id,'delivery'); nR=orderPhotoCount(o.id,'shipreceipt'); }catch(e){}
+            var pb=function(type,label,n){ return '<button type="button" onclick="ofDrvLoadPhotos(\''+eid+'\',\''+type+'\',\''+gid+'\')" style="flex:1;padding:5px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:600;cursor:pointer">'+label+' <span style="color:'+(n>0?'var(--blue)':'var(--text3)')+';font-weight:800">'+n+'</span></button>'; };
+            return '<div style="background:var(--bg2);border-radius:var(--rs);padding:5px 8px;margin-top:5px">'+
+              '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px">'+
+                '<span style="min-width:0;flex:1"><b>'+_esc(o.id)+'</b> <span style="color:var(--text2)">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</span>'+(o.shipCostDate?'<span style="color:var(--text2)"> · '+fmtD(o.shipCostDate)+'</span>':'')+'</span>'+
+                '<span style="font-weight:700;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'+
+              '</div>'+
+              '<div style="display:flex;gap:6px;margin-top:5px">'+pb('delivery','📦 สินค้า / Goods',nG)+pb('shipreceipt','🧾 ใบเสร็จ / Receipt',nR)+'</div>'+
+              '<div id="'+gid+'" style="display:none;margin-top:6px" data-type=""></div>'+
+            '</div>';
+          }).join('')+'</div>' : '')+
+        '</div>';
+      });
+      html+=box(sInner);
+      return;
+    }
+
+    // staff groups
+    if(!blk.alwaysShow && !blk.children.length) return;
+    var tInner=head(blk.label,blk.total);
+    if(!blk.children.length) tInner+='<div style="font-size:11px;color:var(--text2)">—</div>';
+    blk.children.forEach(function(r){
+      tInner+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:6px 9px;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px"><span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(r.label)+'</span><span style="font-weight:700">'+r.total.toLocaleString()+' ฿</span></div>';
+    });
+    html+=box(tInner);
   });
 
-  html+='<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);font-weight:800"><span style="font-size:13px">Total monthly / รวมต่อเดือน</span><span style="font-size:15px;color:var(--blue)">'+grand.toLocaleString()+' ฿</span></div>';
+  html+='<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);font-weight:800"><span style="font-size:13px">Total monthly / รวมต่อเดือน</span><span style="font-size:15px;color:var(--blue)">'+data.grand.toLocaleString()+' ฿</span></div>';
   el.innerHTML=html;
   try{ billsFillSubcats(); }catch(e){} // keep the receipt entry's sub-category dropdown in sync
 }
@@ -21982,17 +22227,19 @@ function billsRender(){
     listEl.innerHTML='<div class="empty" style="padding:18px"><i class="ti ti-receipt-off" style="font-size:30px;display:block;margin-bottom:6px"></i>No receipts this month / ไม่มีใบเสร็จ</div>';
     return;
   }
-  function secLbl(s){ return s==='utilities'?'⚡ Utilities':s==='food'?'🍜 Food':s==='other'?'📦 Other':(s||''); }
+  function secLbl(s){ return s?billSecLabel(s).split(' / ')[0]:''; }
   function whenStr(b){ var t=''; if(b.ts){ var d=new Date(b.ts); t=' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); } return (b.date||'')+t; }
   listEl.innerHTML = filtered.map(function(b){
     var title=b.subcatLabel||b.cat||b.what||'—';
     var sub=(b.what?_esc(b.what)+' · ':'')+whenStr(b)+(b.section?' · '+secLbl(b.section):'')+(b.by?' · 👤 '+_esc(b.by):'');
+    var ph=billPhotos(b);
     return '<div class="card" style="padding:10px 12px;margin-bottom:8px">'
       +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
-      +'<div style="flex:1;min-width:0">'
+      +'<div onclick="billOpen(\''+b.id+'\')" title="Details / รายละเอียด" style="flex:1;min-width:0;cursor:pointer">'
       +'<div style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(title)+'</div>'
       +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'+sub+'</div>'
-      +(b.photoUrl?'<div style="margin-top:6px"><img src="'+b.photoUrl+'" style="max-height:70px;border-radius:6px;cursor:zoom-in" onclick="openPhotoLightbox(this.src)" title="Show receipt / ดูใบเสร็จ"></div>':'')
+      +(b.tourTid?'<div style="margin-top:4px"><span onclick="event.stopPropagation();billTourInfo(\''+_esc(b.tourTid)+'\')" style="display:inline-block;padding:1px 6px;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-weight:700;font-size:11px;cursor:pointer">🚚 '+_esc(b.tourTid)+'</span></div>':'')
+      +(ph.length?'<div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap">'+ph.map(function(u){ return '<img src="'+_esc(u)+'" style="max-height:70px;border-radius:6px;cursor:zoom-in" onclick="event.stopPropagation();openPhotoLightbox(this.src)" title="Show receipt / ดูใบเสร็จ">'; }).join('')+'</div>':'')
       +'</div>'
       +'<div style="text-align:right;flex-shrink:0">'
       +'<div style="font-size:15px;font-weight:900">'+(parseFloat(b.amount)||0).toLocaleString()+' ฿</div>'
@@ -22015,6 +22262,8 @@ function billsRender(){
           }).join('');
     }
   }catch(e){}
+  // An open receipt sheet must follow the data (photo just uploaded, amount fixed…).
+  try{ if(_billDetailId && document.getElementById('bill-detail-modal').classList.contains('open')) billDetailRender(); }catch(e){}
 }
 
 // Receipt entry (top of Bills tab): pick section → sub-category, amount, photo.
@@ -22024,14 +22273,15 @@ function billsEntryRender(){
   el.innerHTML='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px">'
     +'<div style="font-size:13px;font-weight:700;margin-bottom:8px">➕ Add receipt / เพิ่มใบเสร็จ</div>'
     +'<div style="display:flex;gap:6px;margin-bottom:8px">'
-      +'<select id="bills-e-section" onchange="billsFillSubcats()" style="flex:1;'+inp+'"><option value="utilities">⚡ Utilities</option><option value="food">🍜 Food</option><option value="other">📦 Other</option></select>'
-      +'<select id="bills-e-subcat" style="flex:1;'+inp+'"></select>'
+      +'<select id="bills-e-section" onchange="billsFillSubcats()" style="flex:1;'+inp+'"></select>'
+      +'<select id="bills-e-subcat" onchange="billsEntryTourRow()" style="flex:1;'+inp+'"></select>'
     +'</div>'
     +'<div style="display:flex;gap:6px;margin-bottom:8px">'
       +'<input type="number" id="bills-e-amount" placeholder="Amount ฿ / จำนวน" style="flex:1;'+inp+';font-weight:700;text-align:right">'
       +'<input type="date" id="bills-e-date" lang="en-GB" style="flex:1;'+inp+'">'
     +'</div>'
     +'<input type="text" id="bills-e-what" placeholder="Note (optional) / รายละเอียด" style="width:100%;margin-bottom:8px;box-sizing:border-box;'+inp+'">'
+    +'<div id="bills-e-tour" style="margin-bottom:8px"></div>'
     +'<input type="file" id="bills-e-photo" accept="image/*" style="font-size:13px;display:block;margin-bottom:6px">'
     +'<div id="bills-e-photo-prev" style="margin-bottom:8px"></div>'
     +'<button type="button" onclick="billsEntrySubmit()" style="width:100%;padding:10px;border:none;border-radius:var(--rs);background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer"><i class="ti ti-plus"></i> Save receipt / บันทึก</button>'
@@ -22042,9 +22292,28 @@ function billsEntryRender(){
 function billsFillSubcats(){
   var sel=document.getElementById('bills-e-section'), sub=document.getElementById('bills-e-subcat');
   if(!sel||!sub) return;
+  // Section list is rebuilt every time — the office can add/rename sections at any moment.
+  var secs=billSecs(), keep=sel.value;
+  sel.innerHTML=secs.map(function(s){ return '<option value="'+_esc(s.id)+'">'+_esc(s.label.split(' / ')[0])+'</option>'; }).join('');
+  if(keep && secs.some(function(s){return s.id===keep;})) sel.value=keep;
   var sec=sel.value||'utilities', cats=costCats[sec]||[], prev=sub.value;
-  sub.innerHTML = cats.length ? cats.map(function(c){return '<option value="'+c.id+'">'+_esc(c.label)+'</option>';}).join('') : '<option value="">— add a category first —</option>';
+  sub.innerHTML = cats.length ? cats.map(function(c){return '<option value="'+c.id+'">'+(c.tourLink?'🚚 ':'')+_esc(c.label)+'</option>';}).join('') : '<option value="">— add a category first —</option>';
   if(prev && cats.some(function(c){return c.id===prev;})) sub.value=prev;
+  billsEntryTourRow();
+}
+// Tour link on the entry form — only for categories released in Management
+// (Management → Staff → "Bills categories"). Fuel / gas / toll get it, lunch does not.
+var _billEntryTid='';
+function billsEntryTourRow(){
+  var row=document.getElementById('bills-e-tour'); if(!row) return;
+  var sel=document.getElementById('bills-e-section'), sub=document.getElementById('bills-e-subcat');
+  var on=sel&&sub&&sub.value&&catTourLinkOn(sel.value,sub.value);
+  if(!on){ row.innerHTML=''; _billEntryTid=''; return; }
+  row.innerHTML = _billEntryTid
+    ? '<div style="display:flex;gap:6px;align-items:center;padding:7px 9px;background:#dbeafe;border:1px solid #bfdbfe;border-radius:var(--rs)">'
+        +'<span style="flex:1;min-width:0;font-size:12px;font-weight:700;color:#1d4ed8;cursor:pointer" onclick="billTourInfo(\''+_esc(_billEntryTid)+'\')">🚚 '+_esc(_billEntryTid)+' <span style="font-weight:400">'+_esc(_billTourLine(_billEntryTid))+'</span></span>'
+        +'<button type="button" onclick="_billEntryTid=\'\';billsEntryTourRow()" title="Unlink" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:28px;height:28px;flex-shrink:0;cursor:pointer">✕</button></div>'
+    : '<button type="button" onclick="billTourPick(\'\')" style="width:100%;padding:8px;border:1.5px dashed var(--blue);border-radius:var(--rs);background:var(--bg);color:var(--blue);font-size:12.5px;font-weight:700;cursor:pointer">🚚 Link tour / เชื่อมทัวร์</button>';
 }
 function billsEntrySubmit(){
   var sec=document.getElementById('bills-e-section').value;
@@ -22060,11 +22329,18 @@ function billsEntrySubmit(){
   function persist(url){
     var id='bill-'+Date.now();
     var rec={id:id,section:sec,subcatId:subId,subcatLabel:cat.label||'',what:what,amount:amt,date:date,ts:Date.now(),by:by,photoUrl:url||''};
+    // Tour link (fuel / gas / toll): the ID plus a snapshot of driver + day, so the
+    // receipt still says who drove even if the registry entry is gone one day.
+    if(_billEntryTid && cat.tourLink){
+      var reg=(typeof tourRegRec==='function'?tourRegRec(_billEntryTid):null)||{};
+      rec.tourTid=_billEntryTid; rec.tourDriver=reg.driverName||''; rec.tourDate=reg.createdDate||'';
+    }
     if(window.fbDB) window.fbDB.ref('bills/'+id).set(rec);
     var a=document.getElementById('bills-e-amount'); if(a)a.value='';
     var w=document.getElementById('bills-e-what'); if(w)w.value='';
     var p=document.getElementById('bills-e-photo'); if(p)p.value='';
     var pv=document.getElementById('bills-e-photo-prev'); if(pv)pv.innerHTML='';
+    _billEntryTid=''; try{ billsEntryTourRow(); }catch(e){}
   }
   if(photoFile && window.fbStorage){
     window.fbStorage.ref('bills/'+Date.now()+'_'+photoFile.name).put(photoFile).then(function(s){return s.ref.getDownloadURL();}).then(persist).catch(function(){persist('');});
@@ -22073,14 +22349,403 @@ function billsEntrySubmit(){
 }
 // Delete a receipt — requires the logged-in office user's OWN PIN + writes an audit entry.
 function billsDeletePin(id){
-  var b=bills.find(function(x){return x.id===id;}); if(!b) return;
+  var b=bills.find(function(x){return x.id===id;}); if(!b) return false;
   var me=(typeof staffList!=='undefined'&&typeof currentStaffId!=='undefined') ? staffList.find(function(s){return s.id===currentStaffId;}) : null;
-  if(!me){ alert('Log in with your office PIN to delete. / เข้าสู่ระบบด้วย PIN'); return; }
-  if(!me.pin){ alert('Your account has no PIN set.'); return; }
-  var entered=prompt('Enter YOUR office PIN to delete this receipt / ใส่ PIN ของคุณเพื่อลบ:'); if(entered===null) return;
-  if(String(entered).trim()!==String(me.pin)){ alert('Wrong PIN / PIN ไม่ถูกต้อง'); return; }
+  if(!me){ alert('Log in with your office PIN to delete. / เข้าสู่ระบบด้วย PIN'); return false; }
+  if(!me.pin){ alert('Your account has no PIN set.'); return false; }
+  var entered=prompt('Enter YOUR office PIN to delete this receipt / ใส่ PIN ของคุณเพื่อลบ:'); if(entered===null) return false;
+  if(String(entered).trim()!==String(me.pin)){ alert('Wrong PIN / PIN ไม่ถูกต้อง'); return false; }
   if(window.fbDB) window.fbDB.ref('bills/'+id).remove();
   try{ auditAdd({type:'delete', orderId:'Bill: '+(b.subcatLabel||b.what||b.cat||id)+' ('+(parseFloat(b.amount)||0)+'฿)', by:me.name}); }catch(e){}
+  return true;
+}
+
+
+// ══ RECEIPT DETAIL SHEET ═══════════════════════════════════════════════════
+// Tap any receipt — in a category, in the receipt log — and this opens: the full
+// record, every photo (add more here), and the tour link for fuel/gas/toll.
+// Legacy receipts only have b.photoUrl; new ones collect b.photos[] on top of it.
+var _billDetailId=null;
+function billRec(id){ return (typeof bills!=='undefined'?bills:[]).find(function(x){ return x.id===id; })||null; }
+function billPhotos(b){
+  if(!b) return [];
+  var extra=Array.isArray(b.photos)?b.photos:(b.photos&&typeof b.photos==='object'?Object.keys(b.photos).map(function(k){return b.photos[k];}):[]);
+  return (b.photoUrl?[b.photoUrl]:[]).concat(extra.filter(Boolean));
+}
+function billOpen(id){
+  if(!billRec(id)) return;
+  _billDetailId=id; billDetailRender();
+  document.getElementById('bill-detail-modal').classList.add('open');
+}
+function billCloseDetail(){ document.getElementById('bill-detail-modal').classList.remove('open'); _billDetailId=null; }
+function billSet(id,field,val){
+  var b=billRec(id); if(!b) return;
+  if(field==='amount') val=parseFloat(val)||0;
+  if(b[field]===val) return;
+  b[field]=val;
+  if(window.fbDB) window.fbDB.ref('bills/'+id+'/'+field).set(val);
+  try{ billsRender(); }catch(e){}
+}
+// Move a receipt into another category (also across sections) — the section pick and
+// the category pick are two dropdowns, exactly like the entry form.
+function billMove(id,sec,catId){
+  var b=billRec(id); if(!b) return;
+  var c=catRec(sec,catId);
+  b.section=sec; b.subcatId=catId||''; b.subcatLabel=c?c.label:'';
+  if(window.fbDB) window.fbDB.ref('bills/'+id).update({section:b.section,subcatId:b.subcatId,subcatLabel:b.subcatLabel});
+  billDetailRender(); try{ billsRender(); }catch(e){}
+}
+function billDetailSecChange(id){
+  var s=document.getElementById('bd-sec').value;
+  var cats=costCats[s]||[];
+  billMove(id,s,cats.length?cats[0].id:'');
+}
+function billAddPhoto(inp){
+  var id=_billDetailId, f=inp&&inp.files&&inp.files[0]; if(!id||!f) return;
+  var b=billRec(id); if(!b) return;
+  var st=document.getElementById('bd-upl'); if(st) st.textContent='⏳ Uploading… / กำลังอัปโหลด…';
+  function add(url){
+    var cur=Array.isArray(b.photos)?b.photos.slice():[];
+    cur.push(url); b.photos=cur;
+    if(window.fbDB) window.fbDB.ref('bills/'+id+'/photos').set(cur);
+    inp.value=''; billDetailRender(); try{ billsRender(); }catch(e){}
+  }
+  if(window.fbStorage){
+    window.fbStorage.ref('bills/'+Date.now()+'_'+f.name).put(f)
+      .then(function(s){ return s.ref.getDownloadURL(); }).then(add)
+      .catch(function(){ var r=new FileReader(); r.onload=function(e){ add(e.target.result); }; r.readAsDataURL(f); });
+  } else { var r=new FileReader(); r.onload=function(e){ add(e.target.result); }; r.readAsDataURL(f); }
+}
+// By index, not by URL — a base64 photo from an old receipt would otherwise end up
+// as a multi-megabyte onclick attribute.
+function billDelPhoto(i){
+  var id=_billDetailId, b=billRec(id); if(!b) return;
+  i=parseInt(i,10); if(isNaN(i) || i>=billPhotos(b).length) return;
+  if(!confirm('Remove this picture? / ลบรูปนี้?')) return;
+  var off=b.photoUrl?1:0;
+  if(off && i===0){ b.photoUrl=''; if(window.fbDB) window.fbDB.ref('bills/'+id+'/photoUrl').set(''); }
+  else {
+    var cur=(Array.isArray(b.photos)?b.photos.slice():[]);
+    cur.splice(i-off,1);
+    b.photos=cur; if(window.fbDB) window.fbDB.ref('bills/'+id+'/photos').set(cur);
+  }
+  billDetailRender(); try{ billsRender(); }catch(e){}
+}
+function billDetailRender(){
+  var el=document.getElementById('bill-detail-body'); if(!el) return;
+  var b=billRec(_billDetailId); if(!b){ billCloseDetail(); return; }
+  var inp='width:100%;box-sizing:border-box;padding:8px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)';
+  var ph=billPhotos(b), secs=billSecs(), cats=costCats[b.section]||[];
+  var when=b.ts?(new Date(b.ts)).toLocaleString():'';
+  var lnk=catTourLinkOn(b.section,b.subcatId);
+  el.innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:16px;font-weight:700">🧾 '+_esc(b.subcatLabel||b.what||'Receipt')+'</span>'
+      +'<button type="button" onclick="billCloseDetail()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:baseline;padding:10px 12px;background:var(--bg2);border-radius:var(--rs);margin-bottom:12px">'
+      +'<span style="font-size:12px;color:var(--text2)">Amount / จำนวนเงิน</span>'
+      +'<span style="font-size:22px;font-weight:900;color:var(--blue)">'+(parseFloat(b.amount)||0).toLocaleString()+' ฿</span></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:8px">'
+      +'<div style="flex:1"><label class="fl" style="margin-top:0">💰 Amount / จำนวน</label><input type="number" value="'+(b.amount!=null?b.amount:'')+'" onchange="billSet(\''+b.id+'\',\'amount\',this.value)" style="'+inp+';font-weight:700;text-align:right"></div>'
+      +'<div style="flex:1"><label class="fl" style="margin-top:0">📅 Date / วันที่</label><input type="date" lang="en-GB" value="'+_esc(b.date||'')+'" onchange="billSet(\''+b.id+'\',\'date\',this.value)" style="'+inp+'"></div></div>'
+    +'<label class="fl">🗂 Category / หมวด</label>'
+    +'<div style="display:flex;gap:8px">'
+      +'<select id="bd-sec" onchange="billDetailSecChange(\''+b.id+'\')" style="'+inp+';flex:1">'+secs.map(function(s){ return '<option value="'+_esc(s.id)+'"'+(s.id===b.section?' selected':'')+'>'+_esc(s.label.split(' / ')[0])+'</option>'; }).join('')+'</select>'
+      +'<select onchange="billMove(\''+b.id+'\',document.getElementById(\'bd-sec\').value,this.value)" style="'+inp+';flex:1">'
+        +(cats.length?cats.map(function(c){ return '<option value="'+c.id+'"'+(c.id===b.subcatId?' selected':'')+'>'+_esc(c.label)+'</option>'; }).join('')
+                     :'<option value="">— no category / ไม่มีหมวด —</option>')+'</select></div>'
+    +'<label class="fl">📝 Note / รายละเอียด</label>'
+    +'<input type="text" value="'+_esc(b.what||'')+'" placeholder="Note / รายละเอียด" onchange="billSet(\''+b.id+'\',\'what\',this.value)" style="'+inp+'">'
+    // ── tour link ──
+    +(lnk
+      ? '<label class="fl">🚚 Tour / ทัวร์</label>'
+        +(b.tourTid
+          ? '<div style="display:flex;gap:6px;align-items:center;padding:9px 10px;background:#dbeafe;border:1px solid #bfdbfe;border-radius:var(--rs)">'
+              +'<span onclick="billTourInfo(\''+_esc(b.tourTid)+'\')" style="flex:1;min-width:0;font-size:13px;font-weight:700;color:#1d4ed8;cursor:pointer">🚚 '+_esc(b.tourTid)+'<div style="font-size:11px;font-weight:500;color:#1e40af">'+_esc(_billTourLine(b.tourTid,b))+' · tap for details / กดดูรายละเอียด</div></span>'
+              +'<button type="button" onclick="billTourClear(\''+b.id+'\')" title="Unlink" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button></div>'
+          : '<button type="button" onclick="billTourPick(\''+b.id+'\')" style="width:100%;padding:9px;border:1.5px dashed var(--blue);border-radius:var(--rs);background:var(--bg);color:var(--blue);font-size:13px;font-weight:700;cursor:pointer">🚚 Link tour / เชื่อมทัวร์</button>')
+      : '')
+    // ── photos ──
+    +'<label class="fl">🖼 Receipts / ใบเสร็จ ('+ph.length+')</label>'
+    +(ph.length
+      ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'+ph.map(function(u,i){
+          return '<div style="position:relative"><img src="'+_esc(u)+'" onclick="openPhotoLightbox(this.src)" style="width:84px;height:84px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:zoom-in">'
+            +'<button type="button" onclick="billDelPhoto('+i+')" title="Remove" style="position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;font-size:11px;line-height:1;cursor:pointer">✕</button></div>';
+        }).join('')+'</div>'
+      : '<div style="font-size:12px;color:var(--text2);margin-bottom:8px">No picture yet / ยังไม่มีรูป</div>')
+    +'<input type="file" accept="image/*" onchange="billAddPhoto(this)" style="font-size:13px;display:block">'
+    +'<div id="bd-upl" style="font-size:11px;color:var(--text2);margin-top:4px"></div>'
+    // ── footer ──
+    +'<div style="font-size:11px;color:var(--text2);margin-top:12px;line-height:1.6">'
+      +'👤 '+_esc(b.by||'—')+(when?' · 🕐 '+_esc(when):'')+'<br>'
+      +'ID '+_esc(b.id)+'</div>'
+    +'<div style="display:flex;gap:8px;margin-top:12px">'
+      +'<button type="button" onclick="if(billsDeletePin(\''+b.id+'\'))billCloseDetail()" style="padding:10px 16px;border-radius:var(--rs);border:1px solid #fecaca;background:#fee2e2;color:#dc2626;font-weight:700;cursor:pointer"><i class="ti ti-trash"></i></button>'
+      +'<button type="button" onclick="billCloseDetail()" style="flex:1;padding:10px;border-radius:var(--rs);border:none;background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer">Done / เสร็จ</button></div>';
+}
+
+// ══ TOUR LINK ══════════════════════════════════════════════════════════════
+// The tours come out of the tour-ID registry (tourReg) — the same list the Tour tab
+// shows. Deleted tours are left out; everything else can be linked, also weeks later.
+function _billTourLine(tid,b){
+  var r=(typeof tourRegRec==='function'?tourRegRec(tid):null);
+  if(!r) return (b&&(b.tourDriver||b.tourDate)) ? [b.tourDriver,b.tourDate?fmtD(b.tourDate):''].filter(Boolean).join(' · ') : 'tour not found / ไม่พบทัวร์';
+  var n=(typeof tidArr==='function'?tidArr(r.orders):[]).length||r.orderCount||0;
+  return [r.driverName||'—', r.createdDate?fmtD(r.createdDate):'', n?(n+' orders'):''].filter(Boolean).join(' · ');
+}
+function billTourList(q){
+  q=String(q||'').trim().toLowerCase();
+  var list=Object.keys(typeof tourReg!=='undefined'?tourReg:{}).filter(function(k){ return typeof tidOk==='function'?tidOk(k):true; })
+    .map(function(k){ var r=Object.assign({},tourReg[k]); r.id=k; return r; })
+    .filter(function(r){ return r.state!=='deleted'; });
+  if(q) list=list.filter(function(r){
+    return String(r.id).toLowerCase().indexOf(q)>=0
+      || (r.driverName||'').toLowerCase().indexOf(q)>=0
+      || (r.createdDate||'').indexOf(q)>=0
+      || tidArr(r.orders).some(function(id){ return String(id).toLowerCase().indexOf(q)>=0; });
+  });
+  return list.sort(function(a,b){ return (typeof tidSortKey==='function'?tidSortKey(b.id)-tidSortKey(a.id):0); });
+}
+var _billTourFor='';   // '' = the entry form at the top, otherwise a bill id
+// The search box is rendered ONCE — only the list below it is redrawn while typing,
+// otherwise every keystroke would kill the focus and drop the phone keyboard.
+function billTourPick(billId){
+  _billTourFor=billId||'';
+  var el=document.getElementById('bill-tour-body'); if(!el) return;
+  el.innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +'<span style="font-size:16px;font-weight:700">🚚 Pick a tour / เลือกทัวร์</span>'
+      +'<button type="button" onclick="billTourPickClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<input type="text" id="bt-q" oninput="billTourPickRender()" placeholder="ID, driver, date, order… / ค้นหา" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:10px">'
+    +'<div id="bt-list"></div>';
+  billTourPickRender();
+  document.getElementById('bill-tour-modal').classList.add('open');
+  setTimeout(function(){ try{ document.getElementById('bt-q').focus(); }catch(e){} },100);
+}
+function billTourPickClose(){ document.getElementById('bill-tour-modal').classList.remove('open'); }
+function billTourPickRender(){
+  var el=document.getElementById('bt-list'); if(!el) return;
+  var q=(document.getElementById('bt-q')||{}).value||'';
+  var list=billTourList(q);
+  el.innerHTML=
+    (list.length
+      ? list.slice(0,80).map(function(r){
+          var n=tidArr(r.orders).length||r.orderCount||0;
+          return '<div onclick="billTourSet(\''+_esc(r.id)+'\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;cursor:pointer">'
+            +'<div style="min-width:0"><div style="font-size:13px;font-weight:700">🆔 '+_esc(r.id)+(r.state==='ended'?' <span style="font-size:10px;font-weight:600;color:var(--text2)">· ended</span>':'')+'</div>'
+            +'<div style="font-size:11px;color:var(--text2)">'+_esc(r.driverName||'—')+(r.createdDate?' · '+fmtD(r.createdDate):'')+(n?' · '+n+' orders':'')+'</div></div>'
+            +'<span style="font-size:12px;font-weight:700;white-space:nowrap;color:var(--blue)">'+((parseFloat(r.driverPay)||0).toLocaleString())+' ฿</span></div>';
+        }).join('')+(list.length>80?'<div style="font-size:11px;color:var(--text2);text-align:center;padding:6px">… '+(list.length-80)+' more — narrow the search / ค้นหาให้แคบลง</div>':'')
+      : '<div class="empty" style="padding:16px;font-size:13px">No tour found / ไม่พบทัวร์</div>');
+}
+function billTourSet(tid){
+  if(_billTourFor){
+    var b=billRec(_billTourFor);
+    if(b){
+      var reg=(typeof tourRegRec==='function'?tourRegRec(tid):null)||{};
+      var upd={tourTid:tid, tourDriver:reg.driverName||'', tourDate:reg.createdDate||''};
+      b.tourTid=upd.tourTid; b.tourDriver=upd.tourDriver; b.tourDate=upd.tourDate;
+      if(window.fbDB) window.fbDB.ref('bills/'+b.id).update(upd);
+    }
+    billTourPickClose(); billDetailRender(); try{ billsRender(); }catch(e){}
+  } else {
+    _billEntryTid=tid; billTourPickClose(); billsEntryTourRow();
+  }
+}
+function billTourClear(billId){
+  var b=billRec(billId); if(!b) return;
+  b.tourTid=''; b.tourDriver=''; b.tourDate='';
+  if(window.fbDB) window.fbDB.ref('bills/'+billId).update({tourTid:'',tourDriver:'',tourDate:''});
+  billDetailRender(); try{ billsRender(); }catch(e){}
+}
+// Tap a linked tour ID → who drove, which day, which orders, what the tour paid.
+function billTourInfo(tid){
+  var el=document.getElementById('bill-tourinfo-body'); if(!el) return;
+  var r=(typeof tourRegRec==='function'?tourRegRec(tid):null);
+  var ords=r?tidArr(r.orders):[];
+  var body;
+  if(!r){
+    body='<div style="font-size:13px;color:var(--text2);padding:10px 0">Tour '+_esc(tid)+' is no longer in the registry / ไม่พบทัวร์นี้แล้ว</div>';
+  } else {
+    var row=function(k,v){ return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:7px 10px;background:var(--bg2);border-radius:var(--rs);margin-bottom:6px"><span style="color:var(--text2)">'+k+'</span><span style="font-weight:700;text-align:right;min-width:0">'+v+'</span></div>'; };
+    body=row('🚗 Driver / คนขับ',_esc(r.driverName||'—'))
+      +row('📅 Tour day / วันที่',(r.createdDate?fmtD(r.createdDate):'—')+(r.createdAt?' · '+_esc(r.createdAt):''))
+      +(r.endedDate?row('🏁 Ended / จบทัวร์',fmtD(r.endedDate)+(r.endedAt?' · '+_esc(r.endedAt):'')):'')
+      +row('📦 Orders / ออเดอร์',String(ords.length||r.orderCount||0))
+      +row('💵 Tour pay / ค่าทัวร์',(parseFloat(r.driverPay)||0).toLocaleString()+' ฿')
+      +row('✅ Paid / จ่ายแล้ว',r.paid?('yes'+(r.paidBy?' · '+_esc(r.paidBy):'')):'no / ยัง')
+      +row('📌 State / สถานะ',_esc(r.state||'active'))
+      +(ords.length?'<div style="font-size:11px;font-weight:700;color:var(--text2);margin:10px 0 4px">📦 Orders / ออเดอร์</div>'
+        +'<div style="display:flex;flex-wrap:wrap;gap:5px">'+ords.map(function(oid){
+            var o=(typeof orders!=='undefined'?orders:[]).find(function(x){ return String(x.id)===String(oid); });
+            return '<span title="'+_esc(o?(o.customer||''):'')+'" style="padding:3px 8px;border-radius:999px;background:var(--bg2);border:1px solid var(--border);font-size:11px;font-weight:600">'+_esc(oid)+(o&&o.customer?' · '+_esc(String(o.customer).slice(0,14)):'')+'</span>';
+          }).join('')+'</div>':'');
+  }
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:16px;font-weight:700">🆔 '+_esc(tid)+'</span>'
+      +'<button type="button" onclick="document.getElementById(\'bill-tourinfo-modal\').classList.remove(\'open\')" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +body
+    +'<button type="button" onclick="document.getElementById(\'bill-tourinfo-modal\').classList.remove(\'open\')" style="width:100%;margin-top:12px;padding:10px;border-radius:var(--rs);border:none;background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer">Close / ปิด</button>';
+  document.getElementById('bill-tourinfo-modal').classList.add('open');
+}
+
+// ══ BILLS REPORT ═══════════════════════════════════════════════════════════
+// Charts over every main category and its sub-categories for the chosen month,
+// plus a 6-month trend — and the same thing again as a print sheet.
+var BILL_CHART_COLORS=['#2563eb','#16a34a','#ea580c','#7c3aed','#db2777','#0891b2','#ca8a04','#dc2626','#4f46e5','#059669','#d97706','#9333ea'];
+function _bcColor(i){ return BILL_CHART_COLORS[i%BILL_CHART_COLORS.length]; }
+function _bcMoney(n){ return (Math.round(n)||0).toLocaleString(); }
+// Donut over the top blocks. Explicit hex colours only — this SVG is also written
+// into the print window, where the app's CSS variables do not exist.
+function _bcDonut(segs,total,txt){
+  var W=300,H=300,cx=150,cy=150,r=112,ri=66;
+  if(!total||!segs.length) return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:300px;height:auto"><text x="'+cx+'" y="'+cy+'" text-anchor="middle" style="font-size:13px;fill:'+txt.muted+'">No data / ไม่มีข้อมูล</text></svg>';
+  function polar(rad,deg){ var a=(deg-90)*Math.PI/180; return [cx+rad*Math.cos(a),cy+rad*Math.sin(a)]; }
+  var paths='',labs='',start=0;
+  if(segs.length===1){
+    paths='<circle cx="'+cx+'" cy="'+cy+'" r="'+((r+ri)/2)+'" fill="none" stroke="'+segs[0].color+'" stroke-width="'+(r-ri)+'"/>';
+  } else segs.forEach(function(s){
+    var frac=s.value/total, end=start+frac*360, mid=start+frac*180;
+    var a=polar(r,start), b=polar(r,end), c=polar(ri,end), d=polar(ri,start), lg=(frac*360)>180?1:0;
+    paths+='<path d="M'+a[0].toFixed(1)+' '+a[1].toFixed(1)+' A'+r+' '+r+' 0 '+lg+' 1 '+b[0].toFixed(1)+' '+b[1].toFixed(1)
+      +' L'+c[0].toFixed(1)+' '+c[1].toFixed(1)+' A'+ri+' '+ri+' 0 '+lg+' 0 '+d[0].toFixed(1)+' '+d[1].toFixed(1)+' Z" fill="'+s.color+'"/>';
+    if(frac>=0.07){ var p=polar((r+ri)/2,mid);
+      labs+='<text x="'+p[0].toFixed(1)+'" y="'+p[1].toFixed(1)+'" text-anchor="middle" dominant-baseline="central" style="font-size:13px;font-weight:800;fill:#fff">'+Math.round(frac*100)+'%</text>'; }
+    start=end;
+  });
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:300px;height:auto">'+paths+labs
+    +'<text x="'+cx+'" y="'+(cy-8)+'" text-anchor="middle" style="font-size:12px;fill:'+txt.muted+'">Total / รวม</text>'
+    +'<text x="'+cx+'" y="'+(cy+14)+'" text-anchor="middle" style="font-size:17px;font-weight:800;fill:'+txt.text+'">'+_bcMoney(total)+' ฿</text></svg>';
+}
+// Horizontal bars — plain HTML so it survives both the app's dark mode and print.
+function _bcBars(rows,txt,colored){
+  var max=rows.reduce(function(a,r){ return Math.max(a,Math.abs(r.value)); },0)||1;
+  var tot=rows.reduce(function(a,r){ return a+r.value; },0)||0;
+  if(!rows.length) return '<div style="font-size:12px;color:'+txt.muted+';padding:4px 0">—</div>';
+  return rows.map(function(r,i){
+    var w=Math.max(2,Math.round(Math.abs(r.value)/max*100));
+    var pct=tot?Math.round(r.value/tot*100):0;
+    return '<div style="margin-bottom:7px">'
+      +'<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-bottom:3px">'
+        +'<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:'+txt.text+'">'+_esc(r.label)+'</span>'
+        +'<span style="white-space:nowrap;font-weight:700;color:'+txt.text+'">'+_bcMoney(r.value)+' ฿<span style="font-weight:400;color:'+txt.muted+'"> · '+pct+'%</span></span></div>'
+      +'<div style="height:9px;border-radius:5px;background:'+txt.track+';overflow:hidden">'
+        +'<div style="height:100%;width:'+w+'%;background:'+(colored?_bcColor(i):(r.value<0?'#dc2626':'#2563eb'))+';border-radius:5px"></div></div></div>';
+  }).join('');
+}
+// Last N months of grand totals — same maths as the dashboard, month by month.
+function billsTrend(mk,n){
+  var p=String(mk).split('-'), y=parseInt(p[0]), m=parseInt(p[1])-1, out=[];
+  for(var i=n-1;i>=0;i--){
+    var d=new Date(y,m-i,1);
+    var k=d.getFullYear()+'-'+(d.getMonth()+1<10?'0':'')+(d.getMonth()+1);
+    out.push({mk:k, label:['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]+' '+String(d.getFullYear()).slice(2), value:billsCostData(k).grand});
+  }
+  return out;
+}
+function _bcTrend(rows,txt){
+  var max=rows.reduce(function(a,r){ return Math.max(a,r.value); },0)||1;
+  return '<div style="display:flex;align-items:flex-end;gap:6px;height:110px">'+rows.map(function(r,i){
+    var h=Math.max(3,Math.round(r.value/max*84));
+    return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px">'
+      +'<div style="font-size:9px;color:'+txt.muted+';white-space:nowrap">'+(r.value?_bcMoney(r.value/1000)+'k':'0')+'</div>'
+      +'<div title="'+_bcMoney(r.value)+' ฿" style="width:100%;height:'+h+'px;border-radius:4px 4px 0 0;background:'+(i===rows.length-1?'#2563eb':'#93c5fd')+'"></div>'
+      +'<div style="font-size:9.5px;color:'+txt.muted+';white-space:nowrap">'+r.label+'</div></div>';
+  }).join('')+'</div>';
+}
+function _billReportMk(){
+  var s=document.getElementById('br-month');
+  return (s&&s.value)||_costMonthKey();
+}
+function billsReportOpen(){ billsReportRender(); document.getElementById('bill-report-modal').classList.add('open'); }
+function billsReportClose(){ document.getElementById('bill-report-modal').classList.remove('open'); }
+function billsReportRender(){
+  var el=document.getElementById('bill-report-body'); if(!el) return;
+  var mk=_billReportMk(), data=billsCostData(mk);
+  var txt={text:'var(--text)',muted:'var(--text2)',track:'var(--bg2)'};
+  var live=data.blocks.filter(function(b){ return b.total>0 || (b.children&&b.children.length); });
+  var segs=data.blocks.filter(function(b){ return b.total>0; })
+    .map(function(b,i){ return {label:b.label,value:b.total,color:''}; })
+    .sort(function(a,b){ return b.value-a.value; });
+  segs.forEach(function(s,i){ s.color=_bcColor(i); });
+
+  // month picker: every month that has data + the last 12
+  var mset={}; var now=new Date();
+  for(var i=0;i<12;i++){ var d=new Date(now.getFullYear(),now.getMonth()-i,1); mset[d.getFullYear()+'-'+(d.getMonth()+1<10?'0':'')+(d.getMonth()+1)]=1; }
+  (typeof bills!=='undefined'?bills:[]).forEach(function(b){ if(b.date) mset[billsMKey(b.date)]=1; });
+  Object.keys(costFixed||{}).forEach(function(k){ mset[k]=1; });
+  mset[mk]=1;
+  var MNS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var mopts=Object.keys(mset).sort().reverse().map(function(k){ var p=k.split('-'); return '<option value="'+k+'"'+(k===mk?' selected':'')+'>'+MNS[parseInt(p[1])-1]+' '+p[0]+'</option>'; }).join('');
+
+  el.innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +'<span style="font-size:16px;font-weight:700">📊 Cost report / รายงานค่าใช้จ่าย</span>'
+      +'<button type="button" onclick="billsReportClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:12px">'
+      +'<select id="br-month" onchange="billsReportRender()" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">'+mopts+'</select>'
+      +'<button type="button" onclick="billsReportPrint()" style="padding:8px 14px;border-radius:var(--rs);border:1px solid var(--blue);background:var(--blue);color:#fff;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap"><i class="ti ti-printer"></i> Print / พิมพ์</button></div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:baseline;padding:10px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);margin-bottom:14px">'
+      +'<span style="font-size:13px;font-weight:700">Total / รวมทั้งหมด</span>'
+      +'<span style="font-size:19px;font-weight:900;color:var(--blue)">'+_bcMoney(data.grand)+' ฿</span></div>'
+    +'<div style="text-align:center;margin-bottom:10px">'+_bcDonut(segs,data.grand,txt)+'</div>'
+    +'<div style="margin-bottom:16px">'+_bcBars(segs.map(function(s){ return {label:s.label,value:s.value}; }),txt,true)+'</div>'
+    +'<div style="font-size:12px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Sub-categories / หมวดย่อย</div>'
+    +live.map(function(b){
+        var kids=(b.children||[]).filter(function(c){ return c.total!==0; }).sort(function(x,y){ return y.total-x.total; });
+        if(!kids.length && !b.total) return '';
+        return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+            +'<span style="font-size:13px;font-weight:700">'+_esc(b.label)+'</span>'
+            +'<span style="font-size:13px;font-weight:800;color:var(--blue)">'+_bcMoney(b.total)+' ฿</span></div>'
+          +_bcBars(kids.map(function(c){ return {label:c.label,value:c.total}; }),txt,false)+'</div>';
+      }).join('')
+    +'<div style="font-size:12px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px">6 months / 6 เดือน</div>'
+    +'<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px">'+_bcTrend(billsTrend(mk,6),txt)+'</div>'
+    +'<button type="button" onclick="billsReportClose()" style="width:100%;margin-top:14px;padding:10px;border-radius:var(--rs);border:none;background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer">Close / ปิด</button>';
+}
+function billsReportPrint(){
+  var mk=_billReportMk(), data=billsCostData(mk);
+  var txt={text:'#111827',muted:'#6b7280',track:'#e5e7eb'};
+  var MNS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var p=mk.split('-'), mLbl=MNS[parseInt(p[1])-1]+' '+p[0];
+  var segs=data.blocks.filter(function(b){ return b.total>0; }).map(function(b){ return {label:b.label,value:b.total,color:''}; })
+    .sort(function(a,b){ return b.value-a.value; });
+  segs.forEach(function(s,i){ s.color=_bcColor(i); });
+  var body='<h1>📊 Cost report / รายงานค่าใช้จ่าย — '+mLbl+'</h1>'
+    +'<div class="tot">Total / รวมทั้งหมด <b>'+_bcMoney(data.grand)+' ฿</b></div>'
+    +'<div class="two"><div class="cell">'+_bcDonut(segs,data.grand,txt)+'</div>'
+      +'<div class="cell">'+_bcBars(segs.map(function(s){ return {label:s.label,value:s.value}; }),txt,true)+'</div></div>'
+    +'<table><thead><tr><th>หมวด / Category</th><th class="r">จำนวน / Amount</th><th class="r">%</th></tr></thead><tbody>'
+    +data.blocks.map(function(b){
+        var kids=(b.children||[]).filter(function(c){ return c.total!==0; }).sort(function(x,y){ return y.total-x.total; });
+        if(!b.total && !kids.length) return '';
+        return '<tr class="hd"><td>'+_esc(b.label)+'</td><td class="r">'+_bcMoney(b.total)+' ฿</td><td class="r">'+(data.grand?Math.round(b.total/data.grand*100):0)+'%</td></tr>'
+          +kids.map(function(c){ return '<tr><td class="sub">'+_esc(c.label)+(c.items&&c.items.length?' <span class="n">('+c.items.length+')</span>':'')+'</td>'
+            +'<td class="r">'+_bcMoney(c.total)+' ฿</td><td class="r">'+(b.total?Math.round(c.total/b.total*100):0)+'%</td></tr>'; }).join('');
+      }).join('')
+    +'<tr class="gr"><td>รวมทั้งหมด / TOTAL</td><td class="r">'+_bcMoney(data.grand)+' ฿</td><td class="r">100%</td></tr>'
+    +'</tbody></table>'
+    +'<h2>6 เดือนล่าสุด / Last 6 months</h2>'+_bcTrend(billsTrend(mk,6),txt)
+    +'<div class="note">Printed '+new Date().toLocaleString()+' · KP Wallpanel</div>';
+  var css='*{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    +'body{font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;margin:14mm 10mm;color:#111827}'
+    +'h1{font-size:15pt;margin:0 0 10px}h2{font-size:11pt;margin:16px 0 8px}'
+    +'.tot{font-size:12pt;padding:8px 12px;border:1.5px solid #2563eb;border-radius:8px;display:flex;justify-content:space-between;margin-bottom:14px}'
+    +'.two{display:flex;gap:16px;align-items:center;margin-bottom:16px}.cell{flex:1;min-width:0}'
+    +'table{width:100%;border-collapse:collapse;font-size:9.5pt}'
+    +'th,td{border:1px solid #d1d5db;padding:4px 7px;text-align:left}'
+    +'th{background:#f1f5f9;font-size:8.5pt;text-transform:uppercase}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.r{text-align:right}.hd td{background:#f8fafc;font-weight:800}'
+    +'.sub{padding-left:22px}.n{color:#6b7280;font-weight:400}'
+    +'.gr td{background:#dbeafe;font-weight:900;border-top:2px solid #2563eb}'
+    +'.note{margin-top:12px;font-size:8pt;color:#6b7280}';
+  var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Cost report '+mLbl+'</title><style>'+css+'</style></head><body>'
+    +body+'<scr'+'ipt>setTimeout(function(){window.print();},350);<\/scr'+'ipt></body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(full); w.document.close(); w.focus();
 }
 
 // ── FOOD TAB ───────────────────────────────────────────────────────────────
