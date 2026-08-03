@@ -11276,6 +11276,29 @@ function tourEndPaySummary(t){
   if(ad>0) s+='\n(advance '+ad.toLocaleString()+' ฿ paid at start · hand over at end: '+tourNetPay(t).toLocaleString()+' ฿)';
   return s;
 }
+// ── The day a tour's PAY belongs to ──────────────────────────────────────
+// tourCountDate() answers from the record in hand. For a tour that was never marked
+// "Departed" and never got a tour day, every fallback there is empty and it ends up
+// at the record's timestamp — the day the office happened to CLOSE the tour. That is
+// what booked a 29.07 tour into the August payroll. The registry always knows the
+// real day (the tour ID is built from it), so it is asked first.
+function tourPayDate(t){
+  var today=new Date().toISOString().slice(0,10);
+  if(!t) return today;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(t.tourDay||'')) return t.tourDay;
+  try{
+    var rid=t.tid||tourRegFindByTourId(t.tourId||t.id);
+    var r=rid?tourRegRec(rid):null;
+    var d=r&&(r.tourDay||r.createdDate||r.departedDate);
+    if(/^\d{4}-\d{2}-\d{2}$/.test(d||'')) return d;
+  }catch(e){}
+  return tourCountDate(t)||today;
+}
+// The registry ID of a tour, for stamping onto the payroll line.
+function tourPayTid(t){
+  if(!t) return '';
+  try{ return t.tid||tourRegFindByTourId(t.tourId||t.id)||''; }catch(e){ return t.tid||''; }
+}
 // Category key for tour pay: the office-managed "Tour Pay" category if present, else 'tour_pay'.
 function payTourCatKey(){ try{ var c=payCats().find(function(x){ return x.key==='tour_pay' || /tour\s*pay/i.test(x.label||''); }); return c?c.key:'tour_pay'; }catch(e){ return 'tour_pay'; } }
 // On End tour: book the FULL tour pay into the driver's payroll (that's the total they
@@ -11293,8 +11316,8 @@ function endTourPayroll(t){
   // The tour ID travels with the payroll line, so a later day correction can find the
   // money again (see payLogMoveTourDay) instead of leaving it in the closed month.
   var rec={ id:'pl-'+Date.now(), who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:amt,
-    tid:(t.tid||''),
-    date: tourCountDate(t) || new Date().toISOString().slice(0,10), ts:Date.now(),
+    tid:tourPayTid(t),
+    date: tourPayDate(t), ts:Date.now(),
     note:'Tour'+(t.created?' '+t.created:'')+(adv>0?' (incl. advance '+adv.toLocaleString()+' paid at start, '+tourNetPay(t).toLocaleString()+' at end)':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
 }
@@ -11402,10 +11425,10 @@ function ofDrvBookPayDelta(rec, delta){
   var s=(staffList||[]).find(function(x){return x.driverId && x.driverId===rec.driverId;})
      || (staffList||[]).find(function(x){return x.name===rec.driverName;});
   if(!s){ alert('⚠ No payroll person for '+(rec.driverName||'')+' / ไม่พบพนักงาน — saved on the tour only.'); return; }
-  var when=tourCountDate(rec)||new Date().toISOString().slice(0,10);
+  var when=tourPayDate(rec);
   var id='pl-'+Date.now();
   var r={ id:id, who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:delta,
-    date:when, ts:Date.now(),
+    tid:tourPayTid(rec), date:when, ts:Date.now(),
     note:'Tour'+(rec.tourNo?' '+rec.tourNo:'')+(when?' '+when:'')+' · '+(delta>0?'ค่าทัวร์เพิ่มภายหลัง / added later':'ค่าทัวร์แก้ไข / corrected'),
     by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   window.fbDB.ref('payLog/'+id).set(r);
