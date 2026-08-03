@@ -114,7 +114,7 @@ Problem: Beim New Order sprang die nächste Nummer immer wieder hoch (#813 statt
 - Einzelnes Foto löschen (✕) + „Delete all photos".
 
 ### 4.6 Packer-Auswahl (Warehouse)
-- Im Packing zwischen CTN und Foto: Multi-Select-Chips mit festen Namen: **Way Aung, Rack Khan (Pit), Aung Lay, Mon, Lift** (Konstante `PACKERS`, lateinisch).
+- Im Packing zwischen CTN und Foto: Multi-Select-Chips mit festen Namen: **Way Aung, Rack Khan (Pit), Aung Lay, Mon, Mong, Soe, Lift, Amy, Petch** (Konstante `PACKERS`, lateinisch).
 - Beim Done werden Packer + `packedBy` (eingeloggter Warehouse-User) + `packedAt` gespeichert.
 - Order-Annahme speichert `acceptedBy` + `acceptedAt`.
 - Pictures zeigt: „📥 Accepted by … + Zeit" und „👷 Packed by: [eingeloggter + markierte Kollegen] + Zeit".
