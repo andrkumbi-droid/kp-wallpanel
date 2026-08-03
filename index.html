@@ -6371,7 +6371,7 @@ function ofRenderDashboard() {
   });
 
   // Unpaid (free replacements / 0 ฿ claims owe nothing → never counted as unpaid)
-  var unpaid = orders.filter(function(o){return o.status==='delivered'&&!o.payMethod&&!payIrrelevant(o);});
+  var unpaid = orders.filter(function(o){return o.status==='delivered'&&!payIsPaid(o)&&!payIrrelevant(o);});
   var unpaidWrap = document.getElementById('db-unpaid-wrap');
   if(unpaidWrap) {
     if(unpaid.length>0){
@@ -17194,6 +17194,22 @@ var payShipperFilt_ = '';
 
 // Payment-irrelevant orders: free replacements / claims and anything with a 0 ฿ total.
 // Nothing to collect → they must never appear as "unpaid" in the Pay tab, badge or alerts.
+// Is this order settled? ONE definition, used by the Pay tab, its badge, its totals,
+// its filter and the office dashboard — they each used to test `!!o.payMethod` on
+// their own, so an order the office had booked with an amount but no method showed
+// as "unpaid" here while the accounting counted it as paid.
+// A PARTIAL amount stays unpaid on purpose: that is what the deposit banner is for.
+function payIsPaid(o){
+  if(!o) return false;
+  if(o.payMethod) return true;
+  if((parseFloat(o.paidCash)||0)>0 || (parseFloat(o.paidOnline)||0)>0) return true;
+  var amt = parseFloat(o.paidAmount)||0;
+  if(amt<=0) return false;
+  var tot = 0;
+  try{ tot = ofOrderTotalNum(o)||0; }catch(e){}
+  if(!tot) tot = parseFloat(((o.total||0)+'').replace(/[^0-9]/g,''))||0;
+  return tot>0 && amt >= tot-0.5;
+}
 function payIrrelevant(o){
   if(!o) return true;
   if(o.free || o.isReplacement) return true;
@@ -17203,7 +17219,7 @@ function payIrrelevant(o){
 function payUpdateBadge() {
   var cnt = document.getElementById('oft-pay-cnt');
   if(!cnt) return;
-  var unpaid = orders.filter(function(o){ return o.status==='delivered' && !o.payMethod && !payIrrelevant(o); });
+  var unpaid = orders.filter(function(o){ return o.status==='delivered' && !payIsPaid(o) && !payIrrelevant(o); });
   if(unpaid.length > 0) { cnt.textContent = unpaid.length; cnt.style.display='inline-flex'; }
   else { cnt.style.display='none'; }
 }
@@ -17244,7 +17260,8 @@ function payToggleAllZones(btn){
 
 function payOrderCard(o) {
     var _pc = parseFloat(o.paidCash)||0, _po = parseFloat(o.paidOnline)||0;
-    var paid = !!o.payMethod || _pc>0 || _po>0;
+    var paid = payIsPaid(o);
+    var _unk = (ofPayCO(o).unknown)||0;   // paid, but cash or transfer never recorded
     var bg     = paid ? '#f0fdf4' : '#fef2f2';
     var border = paid ? '#16a34a' : '#dc2626';
     var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+' x'+i.qty;}).join(', ')||o.panels||'--';
@@ -17292,7 +17309,11 @@ function payOrderCard(o) {
       +(paid?
         '<div style="margin-top:10px;padding:8px 10px;background:rgba(0,0,0,0.04);border-radius:var(--rs)">'
         +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
-        +'<span style="font-size:11px;color:#6b7280">'+(function(){var co=ofPayCO(o);var p=[];if(co.cash>0)p.push('💵 '+co.cash.toLocaleString());if(co.online>0)p.push('🏦 '+co.online.toLocaleString());return p.join(' · ')||(o.payMethod==='cash'?'Cash':'Online');})()+(o.paidBy?' · '+o.paidBy:'')+(o.paidAt?' · '+o.paidAt:'')+'</span>'
+        +'<span style="font-size:11px;color:'+(_unk>0?'#92400e':'#6b7280')+'">'+(function(){var co=ofPayCO(o);var p=[];if(co.cash>0)p.push('💵 '+co.cash.toLocaleString());if(co.online>0)p.push('🏦 '+co.online.toLocaleString());
+          // Never print "Online" for a payment whose method nobody recorded — tick
+          // Cash or Online above and it becomes a real record.
+          if(!p.length && _unk>0) return '❓ '+_unk.toLocaleString()+' — จ่ายแล้ว ยังไม่ระบุวิธี / paid, tick cash or online';
+          return p.join(' · ')||(o.payMethod==='cash'?'Cash':'Online');})()+(o.paidBy?' · '+o.paidBy:'')+(o.paidAt?' · '+o.paidAt:'')+'</span>'
         +'<button type="button" onclick="payClear(\''+oid+'\')" style="background:none;border:none;font-size:11px;color:#9ca3af;cursor:pointer;padding:0;-webkit-tap-highlight-color:transparent">undo</button>'
         +'</div>'
         +'<div style="display:flex;align-items:center;gap:6px;margin-top:6px">'
@@ -17326,8 +17347,8 @@ function _payRenderNow() {
   delivered.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
 
   // ── Totals banner ──
-  var unpaidOrders = delivered.filter(function(o){ return !o.payMethod; });
-  var paidOrders   = delivered.filter(function(o){ return !!o.payMethod; });
+  var unpaidOrders = delivered.filter(function(o){ return !payIsPaid(o); });
+  var paidOrders   = delivered.filter(function(o){ return payIsPaid(o); });
   var unpaidTotal  = unpaidOrders.reduce(function(a,o){ return a+(parseFloat(((o.total||0)+'').replace(/[^0-9]/g,''))||0); },0);
   var paidTotal    = paidOrders.reduce(function(a,o){   return a+(parseFloat(((o.total||0)+'').replace(/[^0-9]/g,''))||0); },0);
   var totalsEl = document.getElementById('pay-totals');
@@ -17353,8 +17374,8 @@ function _payRenderNow() {
   if(psEl) pq = (psEl.value||'').trim().toLowerCase();
 
   var filtered = delivered.filter(function(o){
-    if(payFilt_==='unpaid' && !!o.payMethod) return false;
-    if(payFilt_==='paid'   && !o.payMethod)  return false;
+    if(payFilt_==='unpaid' && payIsPaid(o))  return false;
+    if(payFilt_==='paid'   && !payIsPaid(o)) return false;
     if(payShipperFilt_ && o.shipper !== payShipperFilt_) return false;
     if(pq){
       var hay = ((o.id||'')+' '+(o.customer||'')+' '+(o.phone||'')+' '+(o.address||'')+' '+(o.zone||'')).toLowerCase();
