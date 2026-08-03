@@ -1555,6 +1555,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" class="fbtn" onclick="auditFilt('status',this)">Status</button>
       <button type="button" class="fbtn" onclick="auditFilt('tour',this)">Tour</button>
       <button type="button" class="fbtn" onclick="auditFilt('payment',this)">Payment</button>
+      <button type="button" class="fbtn" onclick="auditFilt('payroll',this)">💰 Payroll</button>
       <button type="button" class="fbtn" onclick="auditFilt('delete',this)">Deleted</button>
       <button type="button" class="fbtn" onclick="auditFilt('claim',this)">Claims</button>
     </div>
@@ -11348,6 +11349,11 @@ function endTourPayroll(t){
     date: tourPayDate(t), ts:Date.now(),
     note:'Tour'+(t.created?' '+t.created:'')+(adv>0?' (incl. advance '+adv.toLocaleString()+' paid at start, '+tourNetPay(t).toLocaleString()+' at end)':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
+  // Money landing in payroll must be visible in the Payroll filter of the audit
+  // log too — not only under Tour, where nobody looks for a wage.
+  try{ auditAdd({type:'payroll', area:'payroll', orderId:'💰 '+(s.name||''),
+    detail:'🚚 Tour pay booked · +'+amt.toLocaleString()+' ฿ · '+rec.date+(t.created?' · Tour '+t.created:''),
+    by:rec.by}); }catch(e){}
 }
 // A tour day was corrected after the tour was ended → its pay has to move with it, or
 // the money stays behind in the month the tour happened to be closed in (that is how
@@ -11460,6 +11466,9 @@ function ofDrvBookPayDelta(rec, delta){
     note:'Tour'+(rec.tourNo?' '+rec.tourNo:'')+(when?' '+when:'')+' · '+(delta>0?'ค่าทัวร์เพิ่มภายหลัง / added later':'ค่าทัวร์แก้ไข / corrected'),
     by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   window.fbDB.ref('payLog/'+id).set(r);
+  try{ auditAdd({type:'payroll', area:'payroll', orderId:'💰 '+(s.name||''),
+    detail:'🚚 Tour pay corrected · '+(delta>0?'+':'')+delta.toLocaleString()+' ฿ · '+when+(rec.tourNo?' · Tour '+rec.tourNo:''),
+    by:r.by}); }catch(e){}
 }
 // ── MONTH VIEW HELPERS ───────────────────────────────────────────
 // The monthly restart of the Drivers / Payroll / Lalamove views is pure DISPLAY
@@ -21288,6 +21297,10 @@ function _auditRenderNow() {
     if(_auditFilt === 'all') {}
     else if(_auditFilt === 'status') { if(!(e.type === 'status' || e.type === 'create' || e.type === 'edit')) return false; }
     else if(_auditFilt === 'payment') { if(e.type !== 'payment') return false; }
+    // Payroll: everything the Payroll tab did. A payroll line that was DELETED or
+    // moved to another day is booked under its own type (delete/payment) so it also
+    // stays in those filters — e.area is what pulls it back in here.
+    else if(_auditFilt === 'payroll') { if(e.type !== 'payroll' && e.area !== 'payroll') return false; }
     else if(_auditFilt === 'delete') { if(e.type !== 'delete') return false; }
     else if(_auditFilt === 'tour') { if(e.type !== 'tour') return false; }
     else if(_auditFilt === 'claim') { if(e.type !== 'claim') return false; }
@@ -21306,9 +21319,9 @@ function _auditRenderNow() {
       + (_auditSearch ? 'No entries for "'+_esc(_auditSearch)+'" / ไม่พบ' : 'No entries yet') + '</div>';
     return;
   }
-  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', edit:'<i class="ti ti-pencil" style="color:var(--blue)"></i>', tour:'<i class="ti ti-map-route" style="color:#7c3aed"></i>', preorder:'<i class="ti ti-bookmark" style="color:#0891b2"></i>', 'change-request':'<i class="ti ti-edit" style="color:var(--orange)"></i>', 'change-confirmed':'<i class="ti ti-check" style="color:var(--green)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>', food:'🍜'};
-  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', edit:'var(--blue-l)', tour:'#f3e8ff', preorder:'#cffafe', 'change-request':'var(--orange-l)', 'change-confirmed':'var(--green-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2', food:'#fef3c7'};
-  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', edit:'var(--blue-t)', tour:'#7c3aed', preorder:'#0e7490', 'change-request':'var(--orange-t)', 'change-confirmed':'var(--green-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b', food:'#92400e'};
+  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', edit:'<i class="ti ti-pencil" style="color:var(--blue)"></i>', tour:'<i class="ti ti-map-route" style="color:#7c3aed"></i>', preorder:'<i class="ti ti-bookmark" style="color:#0891b2"></i>', 'change-request':'<i class="ti ti-edit" style="color:var(--orange)"></i>', 'change-confirmed':'<i class="ti ti-check" style="color:var(--green)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>', food:'🍜', payroll:'<i class="ti ti-coin" style="color:#0d9488"></i>'};
+  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', edit:'var(--blue-l)', tour:'#f3e8ff', preorder:'#cffafe', 'change-request':'var(--orange-l)', 'change-confirmed':'var(--green-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2', food:'#fef3c7', payroll:'#ccfbf1'};
+  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', edit:'var(--blue-t)', tour:'#7c3aed', preorder:'#0e7490', 'change-request':'var(--orange-t)', 'change-confirmed':'var(--green-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b', food:'#92400e', payroll:'#0f766e'};
   list.innerHTML = filtered.map(function(e) {
     var icon = typeIcon[e.type] || '<i class="ti ti-info-circle"></i>';
     var bg = typeBg[e.type] || 'var(--bg2)';
@@ -21322,9 +21335,11 @@ function _auditRenderNow() {
     else if(e.type === 'change-request') detail = '📝 Change requested' + (e.detail?': '+e.detail:'');
     else if(e.type === 'change-confirmed') detail = '✅ Change confirmed' + (e.requestedBy?' · requested by '+e.requestedBy:'') + (e.detail?': '+e.detail:'');
     else if(e.type === 'payment') detail = e.detail || ('Paid: ' + (e.method||''));
-    else if(e.type === 'delete') detail = 'Order deleted';
+    else if(e.type === 'delete') detail = e.detail || 'Order deleted';
     else if(e.type === 'claim') detail = '⚠️ Claim filed';
     else if(e.type === 'food') detail = e.detail || 'Food';
+    else if(e.type === 'payroll') detail = e.detail || 'Payroll';
+    else if(e.detail) detail = e.detail;
     return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)">'
       + '<div style="width:32px;height:32px;border-radius:50%;background:'+bg+';display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px">'+icon+'</div>'
       + '<div style="flex:1;min-width:0">'
@@ -21472,6 +21487,7 @@ function pgContAmt(n, R){
 // ── grid values ──────────────────────────────────────────────────────
 function pgVal(mk,sid,rk,d){ try{ return (((payGridData[mk]||{})[sid]||{})[rk]||{})['d'+d]; }catch(e){ return undefined; } }
 function pgSet(mk,sid,rk,d,v){
+  var old=parseFloat(pgVal(mk,sid,rk,d))||0;
   payGridData[mk]=payGridData[mk]||{};
   payGridData[mk][sid]=payGridData[mk][sid]||{};
   payGridData[mk][sid][rk]=payGridData[mk][sid][rk]||{};
@@ -21479,7 +21495,32 @@ function pgSet(mk,sid,rk,d,v){
   v=(v===''||v==null)?0:parseFloat(v)||0;
   if(!v){ delete payGridData[mk][sid][rk]['d'+d]; if(window.fbDB) window.fbDB.ref(path).remove(); }
   else   { payGridData[mk][sid][rk]['d'+d]=v;     if(window.fbDB) window.fbDB.ref(path).set(v); }
+  pgAudit(mk,sid,rk,d,old,v);
   pgRenderEmp(sid); pgRenderTotal();
+}
+// ── audit: every single box that is touched is written to Management → Audit Log.
+// Payroll is money, so nothing here happens quietly: who, which employee, which
+// row, which day, and what the box said before and after.
+function pgWho(){ return (typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office'; }
+function pgStaffName(sid){ return ((staffList||[]).find(function(x){return x.id===sid;})||{}).name||'—'; }
+function pgCellTxt(row, v){
+  v=parseFloat(v)||0;
+  if(!v) return '—';
+  if(row.k==='work') return v===2 ? '✕ off / ไม่มา' : '✓ present / มาทำงาน';
+  if(row.k==='abs')  return '✕ absent / ขาดงาน';
+  if(row.k==='ot')   return pgN(v)+' h';
+  if(row.type==='amt') return pgN(v)+' ฿';
+  return pgN(v)+' ×';
+}
+function pgAudit(mk, sid, rk, d, oldV, newV){
+  if((parseFloat(oldV)||0)===(parseFloat(newV)||0)) return;
+  try{
+    var row=pgFindRow(sid,mk,rk)||{k:rk, ic:'', en:rk, type:'amt'};
+    auditAdd({ type:'payroll', area:'payroll', orderId:'💰 '+pgStaffName(sid),
+      detail:(row.ic?row.ic+' ':'')+(row.en||rk)+' · '+mk+'-'+String(d).padStart(2,'0')+' · '
+             +pgCellTxt(row,oldV)+' → '+pgCellTxt(row,newV),
+      by:pgWho() });
+  }catch(e){}
 }
 
 // ── rows of one employee in one month (fixed + still-valid extra rows) ──
@@ -21835,14 +21876,21 @@ function pgRateSave(){
   var sid=_pgRateSid; if(!sid) return;
   function num(id){ var v=parseFloat((document.getElementById(id)||{}).value); return isNaN(v)?0:v; }
   var am=parseFloat((document.getElementById('pgr-absmult')||{}).value);
+  var was=pgRate(sid);
   var r={ day:num('pgr-day'), ot:num('pgr-ot'), cont1:num('pgr-c1'), cont2:num('pgr-c2'),
           contEach:num('pgr-ce'), absMult:(isNaN(am)?2:am), monthly:num('pgr-monthly') };
   payRates[sid]=r;
   if(window.fbDB) window.fbDB.ref('payRates/'+sid).set(r);
-  var st=(staffList||[]).find(function(x){return x.id===sid;})||{};
-  try{ auditAdd({type:'payroll', orderId:'Payroll rates: '+(st.name||''),
-    detail:'day '+r.day+' · OT '+r.ot+' · 📦 '+r.cont1+'/'+r.cont2+'/+'+r.contEach+' · absent ×'+r.absMult+(r.monthly?' · base '+r.monthly:''),
-    by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office'}); }catch(e){}
+  // Only what actually moved goes into the audit log — a rate change silently
+  // rewrites the whole month, so it has to be readable at a glance later.
+  var LB={day:'💵 Daily wage', ot:'⏱ OT ฿/h', cont1:'📦 Container 1', cont2:'📦 Container 2',
+          contEach:'📦 Each further', absMult:'🚫 Absent ×', monthly:'💰 Monthly base'};
+  var diff=Object.keys(LB).filter(function(k){ return was[k]!==r[k]; })
+    .map(function(k){ return LB[k]+' '+pgN(was[k])+' → '+pgN(r[k]); });
+  if(diff.length){
+    try{ auditAdd({ type:'payroll', area:'payroll', orderId:'💰 '+pgStaffName(sid),
+      detail:'⚙️ Rates · '+diff.join(' · '), by:pgWho() }); }catch(e){}
+  }
   pgRateClose(); pgRenderEmp(sid); pgRenderTotal();
 }
 
@@ -21896,10 +21944,12 @@ function pgRowSave(){
             fromMK:(old&&old.fromMK)||mk, months:months, ts:(old&&old.ts)||Date.now() };
   payRowsDef[sid]=payRowsDef[sid]||{}; payRowsDef[sid][id]=rec;
   if(window.fbDB) window.fbDB.ref('payRows/'+sid+'/'+id).set(rec);
-  var st=(staffList||[]).find(function(x){return x.id===sid;})||{};
-  try{ auditAdd({type:'payroll', orderId:'Payroll row: '+(st.name||''),
-    detail:(_pgRowSign<0?'−':'+')+amount+' ฿ · '+label+' · '+(_pgRowMode==='daily'?'per day':'whole month')+' · '+(months?months+' month(s)':'forever'),
-    by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office'}); }catch(e){}
+  try{ auditAdd({ type:'payroll', area:'payroll', orderId:'💰 '+pgStaffName(sid),
+    detail:(old?'✏️ Row changed · ':'➕ Row added · ')+_esc(label)+' · '+(_pgRowSign<0?'−':'+')+pgN(amount)+' ฿ · '
+      +(_pgRowMode==='daily'?'per day / รายวัน':'whole month / ทั้งเดือน')+' · '
+      +(months===0?'forever':(months===1?'this month only':months+' months'))
+      +(old&&((parseFloat(old.amount)||0)!==amount||(old.label||'')!==label)?' (was '+_esc(old.label||'')+' '+pgN(old.amount)+' ฿)':''),
+    by:pgWho() }); }catch(e){}
   pgRowClose(); pgRenderEmp(sid); pgRenderTotal();
 }
 function pgRowDelete(){
@@ -21917,8 +21967,9 @@ function pgRowDelete(){
       if(e && String(e.id||'').indexOf('pg-')===0 && String(e.id).indexOf('-'+sid+'-pgx_'+id)>0) window.fbDB.ref('payLog/'+e.id).remove();
     });
   }
-  try{ auditAdd({type:'delete', orderId:'Payroll row: '+((staffList||[]).find(function(x){return x.id===sid;})||{}).name+' · '+(d.label||''),
-    by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office'}); }catch(e){}
+  try{ auditAdd({type:'delete', area:'payroll', orderId:'💰 '+pgStaffName(sid),
+    detail:'🗑 Row deleted · '+_esc(d.label||'—')+' · '+((+d.sign<0)?'−':'+')+pgN(d.amount)+' ฿ · '+(d.mode==='daily'?'per day':'whole month'),
+    by:pgWho()}); }catch(e){}
   pgRowClose(); pgRenderEmp(sid); pgRenderTotal();
 }
 
@@ -21936,8 +21987,8 @@ function paySetDate(id){
   var was=e.date||'';
   e.date=v;
   if(window.fbDB) window.fbDB.ref('payLog/'+id).update({date:v});
-  try{ auditAdd({type:'payment', orderId:'Payroll: '+(e.whoName||''),
-    detail:payCatMeta(e.cat).label+' '+(parseFloat(e.amount)||0).toLocaleString()+' ฿ · '+was+' → '+v,
+  try{ auditAdd({type:'payment', area:'payroll', orderId:'💰 '+(e.whoName||''),
+    detail:'📅 Moved · '+payCatMeta(e.cat).label+' '+(parseFloat(e.amount)||0).toLocaleString()+' ฿ · '+was+' → '+v,
     by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office'}); }catch(err){}
   try{ pgRender(); }catch(err){}
   try{ costsRender(); }catch(err){}
@@ -21950,7 +22001,9 @@ function payDelete(id){
   var entered=prompt('Enter YOUR office PIN to delete / ใส่ PIN ของคุณเพื่อลบ:'); if(entered===null) return;
   if(String(entered).trim()!==String(me.pin)){ alert('Wrong PIN / PIN ไม่ถูกต้อง'); return; }
   if(window.fbDB) window.fbDB.ref('payLog/'+id).remove();
-  try{ auditAdd({type:'delete', orderId:'Payroll: '+(e.whoName||'')+' '+payCatMeta(e.cat).label+' ('+(parseFloat(e.amount)||0)+'฿)', by:me.name}); }catch(e2){}
+  try{ auditAdd({type:'delete', area:'payroll', orderId:'💰 '+(e.whoName||''),
+    detail:'🗑 Line deleted · '+payCatMeta(e.cat).label+' '+(parseFloat(e.amount)||0).toLocaleString()+' ฿'+(e.date?' · '+e.date:''),
+    by:me.name}); }catch(e2){}
 }
 
 // ─── BILLS / RECHNUNGEN ───────────────────────────────────────────────
