@@ -25287,16 +25287,24 @@ function acApDel(id){
   acctData.ap=(acctData.ap||[]).filter(function(x){return x.id!==id;});
   acSync(); acRenderData();
 }
+// Debts are typed straight into the row (no prompt chain) — the instalment is
+// known long before the remaining balance is, and both change every month, so
+// every field has to stay editable.
 function acLoanAdd(){
-  var l=prompt('Loan / debt name / ชื่อหนี้:',''); if(l===null) return;
-  var b=prompt('Remaining balance ฿ / ยอดคงเหลือ:',''); if(b===null) return;
-  var m=prompt('Monthly payment ฿ / ผ่อนต่อเดือน:','');
   if(!acctData.loans) acctData.loans=[];
-  acctData.loans.push({id:'ln'+Date.now(), label:(l||'').trim(), balance:acN(b), monthly:acN(m)});
+  var id='ln'+Date.now();
+  acctData.loans.push({id:id, label:'', balance:0, monthly:0});
+  acSync(); acRenderData();
+  setTimeout(function(){ var el=document.getElementById('acln-'+id); if(el){ el.focus(); } },30);
+}
+function acLoanSet(id, field, v){
+  var r=(acctData.loans||[]).find(function(x){return x.id===id;}); if(!r) return;
+  r[field] = (field==='label') ? String(v||'').trim() : acN(v);
   acSync(); acRenderData();
 }
 function acLoanDel(id){
-  if(!confirm('Remove this debt?')) return;
+  var r=(acctData.loans||[]).find(function(x){return x.id===id;});
+  if((r&&(r.label||acN(r.monthly)||acN(r.balance))) && !confirm('Remove "'+((r&&r.label)||'this debt')+'"? / ลบ?')) return;
   acctData.loans=(acctData.loans||[]).filter(function(x){return x.id!==id;});
   acSync(); acRenderData();
 }
@@ -26045,7 +26053,8 @@ function acRenderData(){
 
   // 1) Opening balance
   h+=box('1 · Opening cash balance / ยอดเงินตั้งต้น',
-    'The bank balance and the cash in the drawer at the START of one chosen month. From that point on the app rolls the balance forward itself (payments in, costs out). <b>Switches on:</b> cash balance, runway, current & quick ratio, working capital.',
+    'The bank balance and the cash in the drawer at the START of one chosen month. From that point on the app rolls the balance forward itself (payments in, costs out). <b>Switches on:</b> cash balance, runway, current & quick ratio, working capital.'
+    +'<br><br><b>Where to get it:</b> the bank statement — the CLOSING balance of the previous month is the opening balance of the month you pick here (June\'s statement → start month July). If you only have the statement, leave the cash at 0 and correct it when you have counted the drawer; it only shifts the balance by that amount.',
     row('Start month', '<input type="month" value="'+(op.mk||'')+'" onchange="acSetOpening(\'mk\',this.value)" style="width:150px;flex-shrink:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;background:var(--bg);color:var(--text)">')
     +row('🏦 Bank ฿', inp('n',op.bank||'','0','acSetOpening(\'bank\',this.value)'))
     +row('💵 Cash on hand ฿', inp('n',op.cash||'','0','acSetOpening(\'cash\',this.value)')));
@@ -26112,17 +26121,31 @@ function acRenderData(){
         +'<button type="button" onclick="acApAdd()" style="margin-top:6px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add invoice / เพิ่ม</button>'));
 
   // 4) Loans
+  var lnI=function(id,field,val,ph,w,num){
+    return '<input type="'+(num?'number':'text')+'"'+(num?'':' id="acln-'+id+'"')+' value="'+_esc(val==null?'':String(val))+'" placeholder="'+ph+'"'
+      +' onchange="acLoanSet(\''+id+'\',\''+field+'\',this.value)"'
+      +' style="width:'+w+';min-width:0;flex-shrink:0;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;font-weight:700;'
+      +(num?'text-align:right;':'')+'background:var(--bg);color:var(--text)">';
+  };
   var lnRows=(acctData.loans||[]).map(function(r){
-    return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">'
-      +'<span style="flex:1;min-width:0;font-size:12px"><b>'+_esc(r.label||'—')+'</b><span style="color:var(--text2)">'+(acN(r.monthly)>0?' · '+acB(acN(r.monthly))+'/mo':'')+'</span></span>'
-      +'<span style="font-size:13px;font-weight:800;white-space:nowrap">'+acB(acN(r.balance))+'</span>'
+    return '<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border)">'
+      +'<input type="text" id="acln-'+r.id+'" value="'+_esc(r.label||'')+'" placeholder="Car / loan name" onchange="acLoanSet(\''+r.id+'\',\'label\',this.value)" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;font-weight:700;background:var(--bg);color:var(--text)">'
+      +lnI(r.id,'monthly',(acN(r.monthly)||''),'฿/mo','86px',true)
+      +lnI(r.id,'balance',(acN(r.balance)||''),'still owed','96px',true)
       +'<button type="button" onclick="acLoanDel(\''+r.id+'\')" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:28px;height:28px;flex-shrink:0;cursor:pointer">✕</button>'
     +'</div>';
   }).join('');
   var lnMonthly=(acctData.loans||[]).reduce(function(a,r){ return a+acN(r.monthly); },0);
+  var lnBal=(acctData.loans||[]).reduce(function(a,r){ return a+acN(r.balance); },0);
+  var lnHead=(acctData.loans||[]).length
+    ? '<div style="display:flex;align-items:center;gap:6px;font-size:10px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;padding-bottom:3px">'
+      +'<span style="flex:1;min-width:0">Name / ชื่อ</span><span style="width:86px;flex-shrink:0;text-align:right">฿/month</span>'
+      +'<span style="width:96px;flex-shrink:0;text-align:right">Still owed</span><span style="width:28px;flex-shrink:0"></span></div>'
+    : '';
   h+=box('4 · Loans, car leases & debt / หนี้สิน',
-    'Bank loans, car instalments (C-tank, Toyota), private loans — remaining balance and monthly instalment. <b>Switches on:</b> debt ratio, working capital, health score, and the instalment as a fixed cost.',
-    (lnRows||'<div style="font-size:12px;color:var(--text2);margin-bottom:6px">Nothing entered yet.</div>')
+    'Bank loans, car instalments (C-tank, Toyota), private loans. Type straight into the row — every field stays editable. <b>Still owed</b> may stay empty until you look it up; the instalment alone already books the monthly cost. <b>Switches on:</b> debt ratio, working capital, health score, and the instalment as a fixed cost.',
+    lnHead+(lnRows||'<div style="font-size:12px;color:var(--text2);margin-bottom:6px">Nothing entered yet.</div>')
+    +((lnMonthly>0||lnBal>0)?'<div style="display:flex;align-items:center;gap:6px;padding:7px 0 0;font-size:12px;font-weight:800"><span style="flex:1;min-width:0">Total / รวม</span><span style="width:86px;flex-shrink:0;text-align:right">'+acB(lnMonthly)+'</span><span style="width:96px;flex-shrink:0;text-align:right">'+(lnBal>0?acB(lnBal):'—')+'</span><span style="width:28px;flex-shrink:0"></span></div>':'')
     +'<button type="button" onclick="acLoanAdd()" style="margin-top:6px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add debt / เพิ่ม</button>'
     +'<div style="height:8px"></div>'
     +acSwitch('loansInFixed', acctData.loansInFixed!==false, 'Count the monthly instalments as a fixed cost'+(lnMonthly>0?' ('+acB(lnMonthly)+'/month)':''),
