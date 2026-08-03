@@ -6156,7 +6156,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260803009;
+var KP_BUILD = 20260803010;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -9927,7 +9927,7 @@ function archiveTour(t){
     departedDate:t.departedDate||'', departedAt:t.departedAt||'',
     orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length, driverPay:parseFloat(t.driverPay)||0 }); }catch(e){}
   var rec={ tid:t.tid||'', tourNo:existing+1, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
-    created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
+    created:t.created||'', tourDay:t.tourDay||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
     endedDate:now.toISOString().slice(0,10), endedAt:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0, driverPayNet:tourNetPay(t),
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
@@ -10916,18 +10916,30 @@ function ofSendTourAsk(){
   if(!ofSelOrders.length){ res.style.display='block'; res.style.background=OL; res.style.color=OT; res.textContent='Add at least one order'; return; }
   res.style.display='none';
   var el=document.getElementById('td-date');
-  if(el) el.value=tdDayStr(new Date().getHours()>=17?1:0);   // after 17:00 → tomorrow
+  if(el){
+    el.value=tdDayStr(new Date().getHours()>=17?1:0);   // after 17:00 → tomorrow
+    el.min=tourDayMin();                                // no backdating out of this month
+  }
   var lbl=document.getElementById('td-send-label'), src=document.getElementById('of-send-label');
   if(lbl&&src) lbl.textContent=src.textContent;
   tdPreview();
   document.getElementById('tourday-modal').classList.add('open');
 }
 function closeTourDay(){ document.getElementById('tourday-modal').classList.remove('open'); }
-function tdPick(off){ var el=document.getElementById('td-date'); if(el) el.value=tdDayStr(off); tdPreview(); }
+function tdPick(off){
+  var el=document.getElementById('td-date'); if(!el) return;
+  var v=tdDayStr(off);
+  el.value=tourDayTooOld(v)?tourDayMin():v;
+  tdPreview();
+}
 function tdPreview(){
   var el=document.getElementById('td-date'), out=document.getElementById('td-prev'); if(!out) return;
   var v=el?el.value:'';
   if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ out.innerHTML='<span style="color:var(--red)">เลือกวันที่ / pick a date</span>'; return; }
+  if(tourDayTooOld(v)){
+    out.innerHTML='<span style="color:var(--red)">⛔ ย้อนหลังได้เฉพาะเดือนนี้ / only this month can be back-dated<br><span style="font-weight:500">เร็วสุด / earliest '+fmtD(tourDayMin())+'</span></span>';
+    return;
+  }
   var day=tidDayStr(new Date(v+'T00:00:00'));
   // Merging into a driver's still-loading tour keeps that tour's existing ID.
   var et=(!(document.getElementById('of-newtour-chk')||{}).checked && ofSelDriver)
@@ -10939,6 +10951,10 @@ function tdPreview(){
 function tdConfirm(){
   var el=document.getElementById('td-date'), v=el?el.value:'';
   if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ alert('เลือกวันที่ / pick a date'); return; }
+  if(tourDayTooOld(v)){
+    alert('ย้อนหลังได้เฉพาะเดือนนี้ / back-dating is limited to this month\nเร็วสุด / earliest: '+fmtD(tourDayMin()));
+    return;
+  }
   _tourDayPending=v;
   closeTourDay();
   ofCreateTour();
@@ -10954,6 +10970,8 @@ function ofTourIdSetDay(id){
   if(!v) return;
   v=String(v).trim();
   if(!/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(new Date(v+'T00:00:00'))){ alert('รูปแบบวันที่ / format: YYYY-MM-DD'); return; }
+  // Same rule as the send dialog — a correction must not push a tour into a closed month.
+  if(tourDayTooOld(v)){ alert('ย้อนหลังได้เฉพาะเดือนนี้ / back-dating is limited to this month\nเร็วสุด / earliest: '+fmtD(tourDayMin())); return; }
   var day=tidDayStr(new Date(v+'T00:00:00'));
   if(day===tidDay(id)){ return; }
   var t=(activeTours||[]).find(function(x){ return x && (x.tid===id || x.id===rec.tourId); });
@@ -11015,10 +11033,17 @@ function tourPlannedTs(t, ts){
 // Works on live tours, tourHistory records and tourReg entries alike.
 function tourCountDate(t){
   if(!t) return '';
-  var d=t.departedDate || t.tourDay || t.createdDate || t.endedDate || '';
+  // The day picked at "Send to driver" (t.tourDay, mirrored into the registry as
+  // createdDate) is the office's own statement of when the tour runs, so it wins.
+  // departedDate is the fallback for tours from before that picker existed.
+  var d=t.tourDay || t.createdDate || t.departedDate || t.endedDate || '';
   if(d) return d;
   return t.ts ? new Date(t.ts).toISOString().slice(0,10) : '';
 }
+// Backdating stops at the 1st of the running month — a closed month must not gain
+// a tour after the fact. Forward is free: tours are planned ahead all the time.
+function tourDayMin(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-01'; }
+function tourDayTooOld(v){ return /^\d{4}-\d{2}-\d{2}$/.test(v) && v < tourDayMin(); }
 function tourDepartedTs(t){
   if(!t) return 0;
   var d=t.departedDate||'', a=t.departedAt||'';
