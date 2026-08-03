@@ -10997,6 +10997,8 @@ function ofTourIdSetDay(id){
       tidArr(rec.orders).forEach(function(oid){ var o=(orders||[]).find(function(x){return x.id===oid;}); if(o) o.tourNo=nid; });
     }
     try{ syncOrders(); }catch(e){}
+    // The pay follows the day — otherwise the tour shows in July and its money in August.
+    try{ payLogMoveTourDay(id, nid, rec, v); }catch(e){}
     try{ auditTour('day','🆔 '+id+' → '+nid, 'Tour day set to '+v+(rec.driverName?' · '+rec.driverName:'')); }catch(e){}
     try{ ofRenderTour(); }catch(e){}
     try{ ofRenderOrders(); }catch(e){}
@@ -11288,10 +11290,35 @@ function endTourPayroll(t){
   if(!s){ return; } // can't attribute to a payroll person
   // Booked on the day the tour LEFT, not on the day it was ended — a tour that left
   // on 31.07 and is closed on 02.08 is July's cost.
+  // The tour ID travels with the payroll line, so a later day correction can find the
+  // money again (see payLogMoveTourDay) instead of leaving it in the closed month.
   var rec={ id:'pl-'+Date.now(), who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:amt,
+    tid:(t.tid||''),
     date: tourCountDate(t) || new Date().toISOString().slice(0,10), ts:Date.now(),
     note:'Tour'+(t.created?' '+t.created:'')+(adv>0?' (incl. advance '+adv.toLocaleString()+' paid at start, '+tourNetPay(t).toLocaleString()+' at end)':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
+}
+// A tour day was corrected after the tour was ended → its pay has to move with it, or
+// the money stays behind in the month the tour happened to be closed in (that is how
+// a July tour ends up in the August payroll). Entries booked before tour IDs were
+// stamped onto the payroll line are matched on driver + the tour's OLD day, which is
+// exact enough: same driver, same day, same tour-pay category.
+function payLogMoveTourDay(oldTid, newTid, rec, newDay){
+  if(!newDay || !rec) return;
+  var oldDay=rec.createdDate||'', cat=payTourCatKey();
+  var drv=String(rec.driverName||'').trim().toLowerCase();
+  (payLog||[]).forEach(function(e){
+    if(!e || (e.cat!==cat && e.cat!=='tour_pay')) return;
+    var mine = e.tid ? (e.tid===oldTid||e.tid===newTid)
+                     : (drv && String(e.whoName||'').trim().toLowerCase()===drv && String(e.date||'')===String(oldDay));
+    if(!mine || String(e.date||'')===String(newDay)) return;
+    var was=e.date||'';
+    e.date=newDay; e.tid=newTid;
+    if(window.fbDB) window.fbDB.ref('payLog/'+e.id).update({date:newDay, tid:newTid});
+    try{ auditTour('day','🆔 '+newTid, '💰 ค่าทัวร์ / tour pay '+(parseFloat(e.amount)||0).toLocaleString()+' ฿ · '+(e.whoName||'')+' · payroll '+was+' → '+newDay); }catch(err){}
+  });
+  try{ payBreakdownRender(); payRenderNameLog(); }catch(err){}
+  try{ costsRender(); }catch(err){}
 }
 // DRIVERS tab — list drivers → their past tours (Tour 1,2,… + date) → orders in each.
 // Shape a live (departed, not-yet-ended) tour like an archived tourHistory record so
@@ -21343,7 +21370,7 @@ function _auditRenderNow() {
     else if(e.type === 'preorder') detail = e.detail || 'Pre-order';
     else if(e.type === 'change-request') detail = '📝 Change requested' + (e.detail?': '+e.detail:'');
     else if(e.type === 'change-confirmed') detail = '✅ Change confirmed' + (e.requestedBy?' · requested by '+e.requestedBy:'') + (e.detail?': '+e.detail:'');
-    else if(e.type === 'payment') detail = 'Paid: ' + (e.method||'');
+    else if(e.type === 'payment') detail = e.detail || ('Paid: ' + (e.method||''));
     else if(e.type === 'delete') detail = 'Order deleted';
     else if(e.type === 'claim') detail = '⚠️ Claim filed';
     else if(e.type === 'food') detail = e.detail || 'Food';
@@ -21559,9 +21586,31 @@ function payRenderNameLog(){
       +(e.by?'<div style="font-size:11px;color:var(--text2);margin-top:1px">✍️ by '+_esc(e.by)+'</div>':'')
       +(e.photoUrl?'<div style="margin-top:6px"><img src="'+e.photoUrl+'" style="max-height:70px;border-radius:6px;cursor:zoom-in" onclick="openPhotoLightbox(this.src)" title="Show slip / ดูสลิป"></div>':'')
       +'</div><div style="text-align:right;flex-shrink:0"><div style="font-size:15px;font-weight:900;color:'+(neg?'#dc2626':'#16a34a')+'">'+(neg?'-':'+')+(parseFloat(e.amount)||0).toLocaleString()+' ฿</div>'
+      +'<button type="button" onclick="paySetDate(\''+e.id+'\')" title="เปลี่ยนวันที่ / Change date" style="margin-top:6px;margin-right:4px;border:1px solid var(--border);background:var(--bg2);color:var(--text2);border-radius:var(--rs);padding:3px 9px;font-size:11px;cursor:pointer">📅</button>'
       +'<button type="button" onclick="payDelete(\''+e.id+'\')" title="Delete (PIN)" style="margin-top:6px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);padding:3px 9px;font-size:11px;cursor:pointer"><i class="ti ti-trash"></i></button>'
       +'</div></div></div>';
   }).join('');
+}
+// Move a payroll line to another day — and with it, into another month. The case this
+// exists for: a tour day is corrected after the pay was already booked, so the money
+// has to be pulled back into the right month by hand. Deleting and retyping the entry
+// would work too but would lose who booked it and when, so this edits the date only.
+function paySetDate(id){
+  var e=(payLog||[]).find(function(x){return x.id===id;}); if(!e) return;
+  var cur=/^\d{4}-\d{2}-\d{2}$/.test(e.date||'')?e.date:kpTodayStr();
+  var v=prompt('เปลี่ยนวันที่ / Change date (YYYY-MM-DD)\n'+(e.whoName||'')+' · '+payCatMeta(e.cat).label+' · '+(parseFloat(e.amount)||0).toLocaleString()+' ฿', cur);
+  if(v===null) return;
+  v=String(v).trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(new Date(v+'T00:00:00'))){ alert('รูปแบบวันที่ / format: YYYY-MM-DD'); return; }
+  if(v===e.date) return;
+  var was=e.date||'';
+  e.date=v;
+  if(window.fbDB) window.fbDB.ref('payLog/'+id).update({date:v});
+  try{ auditAdd({type:'payment', orderId:'Payroll: '+(e.whoName||''),
+    detail:payCatMeta(e.cat).label+' '+(parseFloat(e.amount)||0).toLocaleString()+' ฿ · '+was+' → '+v,
+    by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office'}); }catch(err){}
+  try{ payBreakdownRender(); payRenderNameLog(); }catch(err){}
+  try{ costsRender(); }catch(err){}
 }
 function payDelete(id){
   var e=(payLog||[]).find(function(x){return x.id===id;}); if(!e) return;
@@ -22391,6 +22440,11 @@ function billsShipData(mk){
   (typeof orders!=='undefined'?orders:[]).forEach(function(o){
     if(!billsShipIsCarrier(o)) return;
     var amt=parseFloat(o.shipCost)||0;
+    // Still sitting in the warehouse — never went out, or pulled back off a tour: no
+    // carrier ever touched it, so there is no bill to chase. A shipper picked in
+    // advance is a plan, not an invoice. Anything already priced or marked free stays
+    // listed whatever the status, so entered money can never disappear from the month.
+    if(amt<=0 && !o.shipFree && ['new','packing','ready','cancelled'].indexOf(o.status)>=0) return;
     var at=active[String(o.id)], et=ended[String(o.id)];
     // Priced → the day it was priced. Not priced → the day its tour left the warehouse.
     var mkey=amt>0 ? billsMKey(o.shipCostDate||o.date)
