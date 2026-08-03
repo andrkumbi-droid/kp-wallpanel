@@ -6145,7 +6145,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260803002;
+var KP_BUILD = 20260803003;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -16576,11 +16576,14 @@ function delStaffM() {
 function mgRenderBillCats(){
   var el=document.getElementById('mg-billcats'); if(!el) return;
   if(typeof billSecs!=='function') return;
-  el.innerHTML=billSecs().map(function(s){
+  var secs=billSecs();
+  el.innerHTML=secs.map(function(s,si){
     var cats=(typeof costCats!=='undefined'&&costCats[s.id])?costCats[s.id]:[];
     return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:8px">'
       +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">'
         +'<input type="text" value="'+_esc(s.label)+'" onchange="secSetLabel(\''+s.id+'\',this.value);mgRenderBillCats()" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;background:var(--bg);color:var(--text)">'
+        +_ordBtn('secMove(\''+s.id+'\',-1)','▲','Move up / เลื่อนขึ้น',si===0)
+        +_ordBtn('secMove(\''+s.id+'\',1)','▼','Move down / เลื่อนลง',si===secs.length-1)
         +(s.builtin?'<span style="font-size:10px;color:var(--text2);white-space:nowrap">built-in</span>'
                    :'<button type="button" onclick="secRemove(\''+s.id+'\');mgRenderBillCats()" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>')
       +'</div>'
@@ -21835,14 +21838,17 @@ function syncCostSections(){ if(window.fbDB) window.fbDB.ref('costSections').set
 var BILL_SEC_BUILTIN=[{id:'utilities',label:'⚡ Utilities / ค่าสาธารณูปโภค'},
                       {id:'food',     label:'🍜 Food / ค่าอาหาร'},
                       {id:'other',    label:'📦 Other / อื่นๆ'}];
+// Order: built-ins 0/1/2, own sections behind them — until the office sorts them by
+// hand, then every section carries an explicit .order and that wins (see secMove).
 function billSecs(){
-  var out=BILL_SEC_BUILTIN.map(function(d){ return {id:d.id,label:d.label,builtin:true}; });
+  var out=BILL_SEC_BUILTIN.map(function(d,i){ return {id:d.id,label:d.label,builtin:true,order:i}; });
   (costSections||[]).forEach(function(s){
     if(!s||!s.id) return;
     var b=out.find(function(x){ return x.id===s.id; });
-    if(b){ if(s.label) b.label=s.label; }
-    else out.push({id:s.id,label:s.label||s.id,builtin:false});
+    if(b){ if(s.label) b.label=s.label; if(typeof s.order==='number') b.order=s.order; }
+    else out.push({id:s.id,label:s.label||s.id,builtin:false,order:(typeof s.order==='number'?s.order:1000+out.length)});
   });
+  out.sort(function(a,b){ return a.order-b.order; });   // stable — equal orders keep their place
   return out;
 }
 function billSecLabel(id){ var s=billSecs().find(function(x){return x.id===id;}); return s?s.label:(id||'—'); }
@@ -21862,6 +21868,20 @@ function secSetLabel(id,val){
   _secRec(id).label=val;
   // Bills carry a copy of the SUB-category label only, so renaming a section is safe.
   syncCostSections(); _billEdit={}; costsRender();
+}
+// Reorder the main categories. The first hand-sort writes an explicit .order onto
+// EVERY section (built-ins included), so from then on the list is fully office-owned
+// and no longer depends on the order of BILL_SEC_BUILTIN.
+function secMove(id,dir){
+  var list=billSecs();
+  var i=list.findIndex(function(s){ return s.id===id; }); if(i<0) return;
+  var j=i+(dir<0?-1:1); if(j<0 || j>=list.length) return;
+  var t=list[i]; list[i]=list[j]; list[j]=t;
+  list.forEach(function(s,k){ var r=_secRec(s.id); r.label=s.label; r.order=k; });
+  var key='sec|'+id, typed=null;
+  try{ var el=document.querySelector('[data-editkey="'+key+'"]'); if(el) typed=el.value; }catch(e){}
+  syncCostSections(); costsRender(); try{ mgRenderBillCats(); }catch(e){}
+  if(typed!==null){ try{ var el2=document.querySelector('[data-editkey="'+key+'"]'); if(el2) el2.value=typed; }catch(e){} }
 }
 // Built-ins are never removable. A custom section takes its sub-categories with it —
 // its receipts stay in the log and surface under "⚠️ Unknown section" (see _lostBills).
@@ -22159,12 +22179,26 @@ function costsRender(){
 
     if(blk.kind==='section'){
       var sec=blk.section, eKey='sec|'+sec, editing=!!_billEdit[eKey];
-      var hExtra=editing
-        ? '<div style="display:flex;gap:5px;align-items:center;flex:1;min-width:0">'+_editRow(eKey,blk.label)+'</div>'
-        : '<span style="flex:1;min-width:0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(blk.label)+'</span>'+
-          _penBtn(eKey,'Rename / เปลี่ยนชื่อ')+
-          (blk.builtin?'':'<button type="button" onclick="secRemove(\''+sec+'\')" title="Remove main category" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>');
-      var inner=head(blk.label,blk.total,hExtra);
+      var _sl=billSecs(), si=_sl.findIndex(function(x){ return x.id===sec; });
+      var inner;
+      if(editing){
+        // Rename on the first line, order + remove on the second.
+        inner='<div style="margin-bottom:8px">'
+          +'<div style="display:flex;gap:5px;align-items:center">'+_editRow(eKey,blk.label)+'</div>'
+          +'<div style="display:flex;gap:5px;align-items:center;margin-top:6px">'
+            +_ordBtn('secMove(\''+sec+'\',-1)','▲','Move up / เลื่อนขึ้น',si<=0)
+            +_ordBtn('secMove(\''+sec+'\',1)','▼','Move down / เลื่อนลง',si<0||si>=_sl.length-1)
+            +(blk.builtin
+              ? '<span style="flex:1;font-size:11px;color:var(--text2);padding-left:4px">built-in — rename &amp; move only / เปลี่ยนชื่อและย้ายได้</span>'
+              : '<button type="button" onclick="secRemove(\''+sec+'\')" style="flex:1;padding:6px 8px;border:1px solid #fecaca;border-radius:var(--rs);background:#fee2e2;color:#dc2626;font-size:12px;font-weight:600;cursor:pointer">✕ Remove / ลบหมวดหลัก</button>')
+            +'<span style="font-size:13px;font-weight:800;color:var(--blue);white-space:nowrap">'+blk.total.toLocaleString()+' ฿</span>'
+          +'</div></div>';
+      } else {
+        inner=head(blk.label,blk.total,
+          '<span style="flex:1;min-width:0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(blk.label)+'</span>'+
+          _penBtn(eKey,'Rename, order, remove / เปลี่ยนชื่อ-ย้าย')+
+          (blk.builtin?'':'<button type="button" onclick="secRemove(\''+sec+'\')" title="Remove main category" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>'));
+      }
       if(!blk.children.length) inner+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">No categories yet — add one below / ยังไม่มีหมวด</div>';
       blk.children.forEach(function(c){
         if(c.orphan){
