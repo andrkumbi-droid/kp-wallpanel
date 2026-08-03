@@ -546,7 +546,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   font-size:10px;font-weight:800;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;
   color:var(--text);user-select:none;padding:0;font-family:inherit}
 .pg-c:active{transform:scale(.9)}
+.pg-c:disabled{cursor:default}
+.pg-c:disabled:active{transform:none}
 .pg-c.fut{opacity:.45}
+/* filled by the system (tour pay) — dashed, so nobody tries to type in it */
+.pg-auto{background:var(--bg2);border-style:dashed;opacity:.65}
 .pg-on{background:#16a34a;border-color:#15803d;color:#fff}
 .pg-off{background:#dc2626;border-color:#b91c1c;color:#fff}
 .pg-pos{background:#dcfce7;border-color:#86efac;color:#166534}
@@ -21371,6 +21375,7 @@ var PG_FIX=[
   {k:'work', ic:'📆', en:'Work Days',   th:'วันทำงาน',       type:'day',  sign:1},
   {k:'ot',   ic:'⏱', en:'Overtime',    th:'โอที (ชม.)',     type:'half', sign:1},
   {k:'cont', ic:'📦', en:'Container',   th:'ลงตู้',          type:'int',  sign:1},
+  {k:'tour', ic:'🚚', en:'Tour Pay',    th:'ค่าทัวร์ (auto)', type:'auto', sign:1},
   {k:'adv',  ic:'💵', en:'Advance',     th:'เบิกล่วงหน้า',    type:'amt',  sign:-1},
   {k:'dmg',  ic:'💥', en:'Damage',      th:'ค่าเสียหาย',      type:'amt',  sign:-1},
   {k:'abs',  ic:'🚫', en:'Absent day',  th:'ขาดงาน',         type:'day',  sign:-1}
@@ -21515,6 +21520,9 @@ function pgRowCalc(sid, mk, row){
   } else if(row.k==='cont'){
     each(function(v){ cnt+=v; });
     amt=pgContAmt(cnt,R); expl='Container('+pgN(cnt)+')';
+  } else if(row.k==='tour'){
+    pgTourEntries(sid,mk).forEach(function(e){ amt+=Math.abs(parseFloat(e.amount)||0); cnt++; });
+    expl='Tours('+cnt+')';
   } else if(row.k==='abs'){
     each(function(v){ if(v>0) cnt++; });
     amt=cnt*R.day*R.absMult; expl='Days('+cnt+') × '+pgN(R.day*R.absMult);
@@ -21529,13 +21537,43 @@ function pgRowCalc(sid, mk, row){
   }
   return {cnt:cnt, amt:Math.round(amt*100)/100, expl:expl};
 }
-// payLog lines of this person/month that the grid did NOT write (tour pay, old entries)
+// ── tour pay: a row that fills itself ────────────────────────────────
+// The money is booked into payLog when a tour is ended (endTourPayroll), so the
+// Tour Pay row is READ-ONLY here — it just shows what the tours already earned,
+// on the day the tour left. Tapping a filled box opens the tours of that day.
+function pgIsTourCat(cat){
+  cat=String(cat||'');
+  if(cat==='tour_pay') return true;
+  try{ if(cat===payTourCatKey()) return true; }catch(e){}
+  try{ var c=payCats().find(function(x){return x.key===cat;}); if(c && /tour\s*pay|ค่าทัวร์/i.test(c.label||'')) return true; }catch(e){}
+  return false;
+}
+function pgTourEntries(sid, mk){
+  return (payLog||[]).filter(function(e){
+    return e && e.who==='staff:'+sid && kpMKey(e.date||e.ts)===mk && pgIsTourCat(e.cat);
+  }).sort(function(a,b){ return String(a.date||'').localeCompare(String(b.date||'')); });
+}
+function pgDayOf(e){
+  var m=String(e&&e.date||'').match(/^\d{4}-\d{2}-(\d{2})$/);
+  if(m) return parseInt(m[1],10);
+  if(e&&e.ts){ var d=new Date(e.ts); if(!isNaN(d)) return d.getDate(); }
+  return 0;
+}
+function pgTourByDay(sid, mk){
+  var out={};
+  pgTourEntries(sid,mk).forEach(function(e){
+    var d=pgDayOf(e); if(!d) return;
+    out[d]=(out[d]||0)+Math.abs(parseFloat(e.amount)||0);
+  });
+  return out;
+}
+// payLog lines of this person/month that neither the grid nor the tour row shows
 function pgExtras(sid, mk){
   return (payLog||[]).filter(function(e){
     if(!e || e.who!=='staff:'+sid) return false;
     if(kpMKey(e.date||e.ts)!==mk) return false;
     var c=String(e.cat||'');
-    return c.indexOf('pg_')!==0 && c.indexOf('pgx_')!==0;
+    return c.indexOf('pg_')!==0 && c.indexOf('pgx_')!==0 && !pgIsTourCat(c);
   }).sort(function(a,b){ return String(a.date||'').localeCompare(String(b.date||'')); });
 }
 function pgCalc(sid, mk){
@@ -21555,7 +21593,8 @@ function pgMirror(mk, sid){
   if(!window.fbDB) return;
   var st=(staffList||[]).find(function(x){return x.id===sid;})||{};
   var c=pgCalc(sid,mk), want={}, pre='pg-'+mk+'-'+sid+'-';
-  c.rows.forEach(function(r){ var a=r._c.amt; if(!a) return; want[(r.custom?'pgx_'+r.id:'pg_'+r.k)]=Math.abs(a); });
+  // the Tour Pay row is NOT mirrored — its lines are already real payLog entries
+  c.rows.forEach(function(r){ if(r.k==='tour') return; var a=r._c.amt; if(!a) return; want[(r.custom?'pgx_'+r.id:'pg_'+r.k)]=Math.abs(a); });
   if(c.R.monthly>0) want['pg_base']=c.R.monthly;
   Object.keys(want).forEach(function(cat){
     var id=pre+cat;
@@ -21681,11 +21720,18 @@ function pgRowHtml(sid, mk, row, dim, todayD, isCur, isPast){
     cells='<div class="pg-cells"><button type="button" class="pg-c '+(row.sign<0?'pg-neg':'pg-pos')+'" style="width:auto;flex:0 0 auto;padding:0 12px;font-size:11px" '
       +'onclick="pgRowOpen(\''+sid+'\',\''+row.id+'\')">'+(row.sign<0?'−':'+')+pgN(row.amount)+' ฿ · whole month / ทั้งเดือน</button></div>';
   } else {
-    var h='';
+    var h='', tourDays=(row.k==='tour')?pgTourByDay(sid,mk):null;
     for(var d=1; d<=dim; d++){
-      var v=parseFloat(pgVal(mk,sid,row.key,d))||0;
+      var v=tourDays ? (tourDays[d]||0) : (parseFloat(pgVal(mk,sid,row.key,d))||0);
       var future = isCur ? (d>todayD) : !isPast;
       var cls='pg-c', txt='', ttl='';
+      if(row.k==='tour'){
+        if(v>0){ cls+=' pg-pos'; txt=pgShort(v); ttl=pgN(v)+' ฿'; }
+        else { cls+=' pg-auto'+(future?' fut':''); }
+        h+='<button type="button" class="'+cls+'"'+(ttl?' title="'+ttl+'"':'')
+          +(v>0?' onclick="pgTourPop(event,\''+sid+'\','+d+')"':' disabled')+'>'+txt+'</button>';
+        continue;
+      }
       if(row.k==='work'){
         if(v===1){ cls+=' pg-on'; txt='✓'; }
         else if(v===2){ cls+=' pg-off'; txt='✕'; }
@@ -21736,6 +21782,24 @@ function pgPopAmt(cur){
     +pgPopClear();
 }
 function pgPopClear(){ return '<button type="button" class="pgp-b" style="width:100%;margin-top:7px" onclick="pgPick(0)">✕ Clear / ล้าง</button>'; }
+// The tours behind one Tour Pay box — read-only money, but the day can still be
+// corrected and a wrong booking deleted (both live in payLog).
+function pgTourPop(ev, sid, d){
+  var mk=pgMonth();
+  var es=pgTourEntries(sid,mk).filter(function(e){ return pgDayOf(e)===d; });
+  if(!es.length) return;
+  var h='<div style="max-width:300px"><div style="font-size:11px;font-weight:800;color:var(--text2);margin-bottom:4px">🚚 Tour pay / ค่าทัวร์ · '+mk+'-'+String(d).padStart(2,'0')+'</div>';
+  h+=es.map(function(e){
+    return '<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-top:1px solid var(--border)">'
+      +'<span style="flex:1;min-width:0;font-size:11.5px;line-height:1.3">'+_esc(e.note||'Tour')+'</span>'
+      +'<b style="font-size:13px;color:#16a34a;white-space:nowrap">+'+pgN(Math.abs(parseFloat(e.amount)||0))+' ฿</b>'
+      +'<button type="button" class="pg-xbtn" style="padding:3px 7px" onclick="pgPopClose();paySetDate(\''+e.id+'\')" title="Change date / เปลี่ยนวันที่">📅</button>'
+      +'<button type="button" class="pg-xbtn" style="padding:3px 7px;border-color:#fecaca;background:#fee2e2;color:#dc2626" onclick="pgPopClose();payDelete(\''+e.id+'\')" title="Delete / ลบ">✕</button>'
+      +'</div>';
+  }).join('');
+  h+='<div style="font-size:10px;color:var(--text2);margin-top:7px;line-height:1.4">Booked automatically when the tour is ended.<br>บันทึกอัตโนมัติเมื่อจบทัวร์</div></div>';
+  pgPopOpen(ev,h);
+}
 function pgPopOpen(ev, html){
   var p=document.getElementById('pg-pop'), bd=document.getElementById('pg-pop-bd');
   if(!p||!bd) return;
