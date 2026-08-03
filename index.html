@@ -951,6 +951,14 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
         try{ if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active')) mgRenderBillCats(); }catch(e){}
       });
+      // Chat stickers (own pictures used like emoji) — shared by the whole team.
+      db.ref('chatStickers').on('value', function(snap) {
+        var v=snap.val()||{};
+        chatStickers=Object.keys(v).map(function(k){ return v[k]; })
+          .filter(function(s){ return s && s.url; })
+          .sort(function(a,b){ return (a.ts||0)-(b.ts||0); });
+        try{ var r=document.getElementById('kpc-stickers'); if(r&&r.style.display==='flex') kpcStickerRow(); }catch(e){}
+      });
       db.ref('costSections').on('value', function(snap) {
         var v=snap.val(); costSections = v?(Array.isArray(v)?v.filter(Boolean):Object.values(v)):[];
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
@@ -6145,7 +6153,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260803005;
+var KP_BUILD = 20260803006;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -11831,7 +11839,7 @@ function ofSwapDrvPick(driverId){
 // TEAM CHAT — Stage 1: office-internal channel (text, realtime).
 // Data: v2/chat/channels/<channel>/messages/<pushId> = {by,byName,role,text,ts}
 // ─────────────────────────────────────────────────────────────
-var kpcInited=false, kpcOpen=false, kpcChannel='office', kpcLastSeen=0, kpcMsgs=[], kpcPendingRef=null, kpcPendingImg=null, kpcRef=null;
+var kpcInited=false, kpcOpen=false, kpcChannel='office', kpcLastSeen=0, kpcMsgs=[], kpcPendingRef=null, kpcPendingImg=null, kpcPendingSticker=false, kpcRef=null;
 // Per-channel unread flags → shown as a 🔴 marker on that channel's dropdown option
 // so you can see WHICH other channel got a new message while you're reading another.
 var kpcUnreadCh={};
@@ -12045,7 +12053,7 @@ function kpcBubble(m){
     +(mine?'':'<div style="font-size:11px;font-weight:700;color:var(--blue);margin-bottom:2px">'+kpcEsc(m.byName||'')+'</div>')
     +(m.text?'<div style="font-size:14px;white-space:pre-wrap;word-break:break-word">'+kpcEsc(m.text)+'</div>':'')
     +(m.ref?'<div style="margin-top:'+((m.text)?'6px':'0')+'">'+kpcRefChip(m.ref,true)+'</div>':'')
-    +(m.img?'<div style="margin-top:'+((m.text||m.ref)?'6px':'0')+'"><img src="'+m.img+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="max-width:200px;max-height:220px;border-radius:10px;cursor:pointer;display:block"></div>':'')
+    +(m.img?'<div style="margin-top:'+((m.text||m.ref)?'6px':'0')+'"><img src="'+m.img+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="'+(m.sticker?'width:96px;height:96px;object-fit:cover;border-radius:50%':'max-width:200px;max-height:220px;border-radius:10px')+';cursor:pointer;display:block"></div>':'')
     +(m.tr&&m.tr.text?'<div style="font-size:13px;white-space:pre-wrap;word-break:break-word;margin-top:5px;padding-top:5px;border-top:1px dashed '+(mine?'rgba(255,255,255,.4)':'var(--border)')+';opacity:.92">🌐 '+kpcEsc(m.tr.text)+'</div>':'')
     +(kpcTrCache[m._id]?'<div style="font-size:13px;white-space:pre-wrap;word-break:break-word;margin-top:5px;padding-top:5px;border-top:1px dashed '+(mine?'rgba(255,255,255,.4)':'var(--border)')+';opacity:.92">🌐 '+kpcEsc(kpcTrCache[m._id])+'</div>':'')
     +'<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:3px"><span style="font-size:10px;opacity:.7">'+t+'</span>'+trCtrl+pinCtrl+'</div>'
@@ -12144,13 +12152,75 @@ var KPC_EMOJIS=(
   // activities / misc
   +'⚽ 🏀 🏈 ⚾ 🎾 🏐 🎱 🏓 🎯 🎳 🎮 🎲 🎸 🎵 🎶 🎤 🎧 📚 ✏️ 🖍️ 🎨 🧩 '
 ).trim().split(/\s+/).filter(function(e){ return e && !/[a-zA-Z“”_�]/.test(e); });
+// ── OWN STICKERS ───────────────────────────────────────────────────────────
+// A face from a photo instead of a yellow smiley: the team uploads pictures and
+// they sit as round stickers on top of the emoji picker, shared by everybody
+// (Firebase 'chatStickers'). Sending one reuses the ordinary photo-message path,
+// it is only drawn smaller and round (msg.sticker).
+var chatStickers=[];
+// Sticker-sized crop: centre square, 200 px, so a whole gallery of them still
+// costs less than one chat photo (they live inside the message as a data URL).
+function kpcStickerCrop(file, cb){
+  var r=new FileReader();
+  r.onload=function(e){
+    var img=new Image();
+    img.onload=function(){
+      var S=200, side=Math.min(img.width,img.height);
+      var sx=Math.round((img.width-side)/2), sy=Math.round((img.height-side)/2);
+      var cv=document.createElement('canvas'); cv.width=S; cv.height=S;
+      cv.getContext('2d').drawImage(img, sx, sy, side, side, 0, 0, S, S);
+      cb(cv.toDataURL('image/jpeg',0.75));
+    };
+    img.onerror=function(){ cb(''); };
+    img.src=e.target.result;
+  };
+  r.onerror=function(){ cb(''); };
+  r.readAsDataURL(file);
+}
+function kpcStickerAdd(input){
+  var f=input&&input.files&&input.files[0]; input.value='';
+  if(!f) return;
+  if(!window.fbDB){ alert('Offline'); return; }
+  kpcStickerCrop(f,function(url){
+    if(!url){ alert('Picture could not be read / อ่านรูปไม่ได้'); return; }
+    var me=kpcMe(), id='st'+Date.now();
+    window.fbDB.ref('chatStickers/'+id).set({ id:id, url:url, by:me.id, byName:me.name, ts:Date.now() });
+  });
+}
+function kpcStickerDel(id){
+  var s=(chatStickers||[]).find(function(x){ return x.id===id; }); if(!s) return;
+  if(!confirm('Remove this sticker for everybody? / ลบสติกเกอร์นี้ทั้งหมด?')) return;
+  if(window.fbDB) window.fbDB.ref('chatStickers/'+id).remove();
+}
+function kpcStickerRow(){
+  var el=document.getElementById('kpc-stickers'); if(!el) return;
+  var tile='width:44px;height:44px;border-radius:50%;flex-shrink:0;cursor:pointer';
+  el.innerHTML='<span style="font-size:10px;font-weight:800;color:var(--text2);align-self:center;white-space:nowrap;margin-right:2px">MY STICKERS</span>'
+    +(chatStickers||[]).map(function(s){
+        return '<span style="position:relative;flex-shrink:0;line-height:0">'
+          +'<img src="'+s.url+'" onclick="kpcPickSticker(\''+s.id+'\')" title="'+_esc(s.byName||'')+'" style="'+tile+';object-fit:cover;border:1.5px solid var(--border)">'
+          +'<button type="button" onclick="event.stopPropagation();kpcStickerDel(\''+s.id+'\')" title="Remove / ลบ" style="position:absolute;top:-4px;right:-4px;width:18px;height:18px;border-radius:50%;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;font-size:10px;line-height:1;cursor:pointer;padding:0">✕</button></span>';
+      }).join('')
+    +'<button type="button" onclick="document.getElementById(\'kpc-sticker-file\').click()" title="Add a picture as a sticker / เพิ่มรูปเป็นสติกเกอร์" style="'+tile+';border:1.5px dashed var(--blue);background:var(--bg);color:var(--blue);font-size:20px;line-height:1">＋</button>';
+}
+function kpcPickSticker(id){
+  var s=(chatStickers||[]).find(function(x){ return x.id===id; }); if(!s) return;
+  kpcPendingImg=s.url; kpcPendingSticker=true;
+  kpcRenderPending();
+  var p=document.getElementById('kpc-emoji'), r=document.getElementById('kpc-stickers');
+  if(p) p.style.display='none'; if(r) r.style.display='none';
+  var i=document.getElementById('kpc-input'); if(i) i.focus();
+}
 function kpcToggleEmoji(){
-  var p=document.getElementById('kpc-emoji'); if(!p) return;
-  if(p.style.display==='flex'){ p.style.display='none'; return; }
+  var p=document.getElementById('kpc-emoji'), r=document.getElementById('kpc-stickers');
+  if(!p) return;
+  if(p.style.display==='flex'){ p.style.display='none'; if(r) r.style.display='none'; return; }
   if(!p.getAttribute('data-built')){
     p.innerHTML=KPC_EMOJIS.map(function(e){ return '<span onclick="kpcInsertEmoji(\''+e+'\')" style="font-size:22px;cursor:pointer;padding:4px 6px;border-radius:8px;line-height:1;-webkit-tap-highlight-color:transparent">'+e+'</span>'; }).join('');
     p.setAttribute('data-built','1');
   }
+  kpcStickerRow();                      // rebuilt every time — the set can change
+  if(r) r.style.display='flex';
   p.style.display='flex';
 }
 function kpcInsertEmoji(e){
@@ -12212,6 +12282,7 @@ function kpcSend(){
   var msg={ by:me.id, byName:me.name, role:me.role, text:text, ts:Date.now() };
   if(kpcPendingRef) msg.ref = kpcPendingRef;
   if(kpcPendingImg) msg.img = kpcPendingImg;
+  if(kpcPendingImg && kpcPendingSticker) msg.sticker = 1;   // drawn round + small
   var _ch=kpcChannel;
   var _ref=window.fbDB.ref('chat/channels/'+_ch+'/messages').push(msg);
   // Auto-translate TH↔MY in Warehouse/DM channels — patched onto the message async.
@@ -12341,15 +12412,15 @@ function kpcRenderPending(){
   box.style.display='block';
   var h='';
   if(kpcPendingRef) h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'+kpcRefChip(kpcPendingRef,false)+'<button type="button" onclick="kpcClearPending()" title="Remove / เอาออก" style="border:none;background:none;color:var(--red);font-size:20px;cursor:pointer;flex-shrink:0;line-height:1">×</button></div>';
-  if(kpcPendingImg) h+='<div style="display:flex;align-items:center;gap:8px"><img src="'+kpcPendingImg+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;border:1px solid var(--border)"><button type="button" onclick="kpcClearImg()" title="Remove / เอาออก" style="border:none;background:none;color:var(--red);font-size:20px;cursor:pointer;flex-shrink:0;line-height:1">×</button></div>';
+  if(kpcPendingImg) h+='<div style="display:flex;align-items:center;gap:8px"><img src="'+kpcPendingImg+'" style="width:52px;height:52px;object-fit:cover;border-radius:'+(kpcPendingSticker?'50%':'8px')+';border:1px solid var(--border)"><button type="button" onclick="kpcClearImg()" title="Remove / เอาออก" style="border:none;background:none;color:var(--red);font-size:20px;cursor:pointer;flex-shrink:0;line-height:1">×</button></div>';
   box.innerHTML=h;
 }
 function kpcClearPending(){ kpcPendingRef=null; kpcRenderPending(); }
-function kpcClearImg(){ kpcPendingImg=null; var f=document.getElementById('kpc-file'); if(f) f.value=''; kpcRenderPending(); }
+function kpcClearImg(){ kpcPendingImg=null; kpcPendingSticker=false; var f=document.getElementById('kpc-file'); if(f) f.value=''; kpcRenderPending(); }
 function kpcPickImage(input){
   var file=input&&input.files&&input.files[0]; if(!file) return;
   if(typeof compressPhotoFile!=='function'){ alert('Image not supported'); return; }
-  compressPhotoFile(file, function(dataUrl){ kpcPendingImg=dataUrl; kpcRenderPending(); var i=document.getElementById('kpc-input'); if(i) i.focus(); });
+  compressPhotoFile(file, function(dataUrl){ kpcPendingImg=dataUrl; kpcPendingSticker=false; kpcRenderPending(); var i=document.getElementById('kpc-input'); if(i) i.focus(); });
   input.value='';
 }
 // "Ask" from an order card → open chat with that order pre-attached.
@@ -25822,6 +25893,9 @@ function acRenderData(){
     <div id="kpc-list" style="flex:1;overflow-y:auto;padding:12px 14px;background:var(--bg2)"></div>
     <div style="border-top:1px solid var(--border)">
       <div id="kpc-pending" style="display:none;padding:8px 12px 0"></div>
+      <!-- Own picture stickers, on top of the emoji grid -->
+      <div id="kpc-stickers" style="display:none;align-items:center;gap:6px;padding:8px 12px;overflow-x:auto;border-bottom:1px solid var(--border)"></div>
+      <input type="file" id="kpc-sticker-file" accept="image/*" style="display:none" onchange="kpcStickerAdd(this)">
       <div id="kpc-emoji" style="display:none;flex-wrap:wrap;gap:2px;padding:8px 12px;max-height:140px;overflow-y:auto;border-bottom:1px solid var(--border)"></div>
       <div id="kpc-trbar" style="display:none;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);font-size:12px;flex-wrap:wrap">
         <span style="color:var(--text2)">🌐 แปลด้วย AI / AI translate →</span>
