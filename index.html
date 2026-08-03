@@ -6156,7 +6156,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260803008;
+var KP_BUILD = 20260803009;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -7504,8 +7504,8 @@ function ofDrvPrintSheet(driverKey, tourKey, tourId){
   var list = snaps.filter(function(sp){ return sp && sp.id && sp.status!=='cancelled'; })
     .map(function(sp){ return (orders||[]).find(function(x){return x.id===sp.id;}) || sp; });
   if(!list.length){ alert('No orders in this tour / ทัวร์นี้ไม่มีออเดอร์'); return; }
-  // A reprint carries the tour's OWN date (ended, else departed), not today's.
-  dsPrintSheet(rec.driverName||'', list, rec.endedDate||rec.departedDate||'');
+  // A reprint carries the tour's OWN date (the day it left), not today's.
+  dsPrintSheet(rec.driverName||'', list, tourCountDate(rec));
 }
 // dateISO ('YYYY-MM-DD') overrides the printed date — a sheet reprinted weeks later must
 // still show the day the tour ran. Left empty for a live tour: that prints today.
@@ -9628,7 +9628,7 @@ function ofLalaHistoryHTML(){
   arr.sort(function(a,b){return (b.ts||0)-(a.ts||0);});
   var renderRow=function(t){
     var bid='lalah_'+t._k;
-    var dateStr=t.endedDate?fmtD(t.endedDate):(t.departedDate?fmtD(t.departedDate):'');
+    var dateStr=tourCountDate(t)?fmtD(tourCountDate(t)):'';
     var infoBits=[];
     if(t.lalaDriver) infoBits.push('👤 '+esc(t.lalaDriver));
     if(t.plate) infoBits.push('🚗 '+esc(t.plate));
@@ -9653,7 +9653,7 @@ function ofLalaHistoryHTML(){
   var curMK=kpNowMK();
   var cur=[], past={};
   arr.forEach(function(t){
-    var mk=kpMKey(t.endedDate)||kpMKey(t.departedDate)||kpMKey(t.ts);
+    var mk=kpMKey(tourCountDate(t))||kpMKey(t.ts);
     if(!mk||mk===curMK) cur.push(t); else (past[mk]=past[mk]||[]).push(t);
   });
   var curHTML=cur.length ? cur.map(renderRow).join('')
@@ -9879,7 +9879,7 @@ function ofDrvCheckDupes(){
   var nDrop=dupes.reduce(function(a,d){ return a+d.drop.length; },0);
   var lines=dupes.map(function(d){
     var r=d.keep.r;
-    return '🚚 '+d.name+' · Tour '+(r.tourNo||'?')+' · '+(r.endedDate||r.departedDate||'?')
+    return '🚚 '+d.name+' · Tour '+(r.tourNo||'?')+' · '+(tourCountDate(r)||'?')
       +' · '+(r.orderCount||0)+' orders · '+(Number(r.driverPay)||0).toLocaleString('en-US')+' ฿'
       +'   →   +'+d.drop.length+' copy'+(d.drop.length>1?'ies':'');
   });
@@ -9924,6 +9924,7 @@ function archiveTour(t){
   });
   // The tour ID (T001…) is burnt now: the number stays in the registry as "ended".
   try{ if(tidOk(t.tid)) tourRegMark(t.tid,'ended',{ tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
+    departedDate:t.departedDate||'', departedAt:t.departedAt||'',
     orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length, driverPay:parseFloat(t.driverPay)||0 }); }catch(e){}
   var rec={ tid:t.tid||'', tourNo:existing+1, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
     created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
@@ -10585,6 +10586,8 @@ function tourRegUpsert(t){
     // The planned tour day wins over "whenever the office typed it in".
     createdDate:(/^\d{4}-\d{2}-\d{2}$/.test(t.tourDay||'')?t.tourDay:(old.createdDate||kpTodayStr())),
     createdAt:old.createdAt||t.created||tourTimeStr(),
+    // The day the vehicle actually left — what everything is counted on (tourCountDate).
+    departedDate:t.departedDate||old.departedDate||'', departedAt:t.departedAt||old.departedAt||'',
     endedDate:old.endedDate||'', endedAt:old.endedAt||'',
     state:(old.state==='deleted'?'deleted':(old.state==='ended'?'ended':'active')),
     orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length,
@@ -11003,6 +11006,19 @@ function tourPlannedTs(t, ts){
   pl.setHours(base.getHours(), base.getMinutes(), base.getSeconds(), 0);
   return pl.getTime();
 }
+// ── THE day a tour counts on ─────────────────────────────────────────────
+// The day the vehicle LEFT THE WAREHOUSE ("🚀 ออกรถ / Departed"), not the day the
+// office happened to close the tour. A tour that leaves on 31.07 and is ended on
+// 02.08 belongs to July — its pay, its month, its reports. Fallbacks in order:
+// the planned tour day, then the ended day, then the record timestamp, so a tour
+// that was never marked departed still lands somewhere instead of nowhere.
+// Works on live tours, tourHistory records and tourReg entries alike.
+function tourCountDate(t){
+  if(!t) return '';
+  var d=t.departedDate || t.tourDay || t.createdDate || t.endedDate || '';
+  if(d) return d;
+  return t.ts ? new Date(t.ts).toISOString().slice(0,10) : '';
+}
 function tourDepartedTs(t){
   if(!t) return 0;
   var d=t.departedDate||'', a=t.departedAt||'';
@@ -11236,9 +11252,10 @@ function endTourPayroll(t){
   var s=(staffList||[]).find(function(x){return x.driverId && x.driverId===t.driverId;})
        || (staffList||[]).find(function(x){return x.name===t.driverName;});
   if(!s){ return; } // can't attribute to a payroll person
-  var now=new Date();
+  // Booked on the day the tour LEFT, not on the day it was ended — a tour that left
+  // on 31.07 and is closed on 02.08 is July's cost.
   var rec={ id:'pl-'+Date.now(), who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:amt,
-    date: now.toISOString().slice(0,10), ts:Date.now(),
+    date: tourCountDate(t) || new Date().toISOString().slice(0,10), ts:Date.now(),
     note:'Tour'+(t.created?' '+t.created:'')+(adv>0?' (incl. advance '+adv.toLocaleString()+' paid at start, '+tourNetPay(t).toLocaleString()+' at end)':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
 }
@@ -11324,7 +11341,7 @@ function ofDrvBookPayDelta(rec, delta){
   var s=(staffList||[]).find(function(x){return x.driverId && x.driverId===rec.driverId;})
      || (staffList||[]).find(function(x){return x.name===rec.driverName;});
   if(!s){ alert('⚠ No payroll person for '+(rec.driverName||'')+' / ไม่พบพนักงาน — saved on the tour only.'); return; }
-  var when=rec.endedDate||rec.departedDate||new Date().toISOString().slice(0,10);
+  var when=tourCountDate(rec)||new Date().toISOString().slice(0,10);
   var id='pl-'+Date.now();
   var r={ id:id, who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:delta,
     date:when, ts:Date.now(),
@@ -11412,7 +11429,7 @@ function ofDriversRender(){
           +'<div id="'+rowId+'_det" style="display:none;margin-top:6px">'+ofDrvOrderDetail(o, rowId)+'</div>'
           +'</div>';
       }).join('')||'<div style="font-size:11px;color:var(--text2);padding:6px 0">No orders</div>';
-      var dateStr=t.departedDate?fmtD(t.departedDate):(t.endedDate?fmtD(t.endedDate):'');
+      var dateStr=tourCountDate(t)?fmtD(tourCountDate(t)):'';
       var infoBits=[];
       if(t.lalaDriver) infoBits.push('👤 '+esc(t.lalaDriver));
       if(t.plate) infoBits.push('🚗 '+esc(t.plate));
@@ -11469,7 +11486,7 @@ function ofDriversRender(){
     var tourPay=function(t){ return Number(t.driverPay)||0; };
     var cur=[], past={};
     hist.forEach(function(t){
-      var mk=t._active?curMK:(kpMKey(t.departedDate)||kpMKey(t.endedDate)||kpMKey(t.ts));
+      var mk=t._active?curMK:(kpMKey(tourCountDate(t))||kpMKey(t.ts));
       if(!mk||mk===curMK) cur.push(t); else (past[mk]=past[mk]||[]).push(t);
     });
     var curPay=cur.reduce(function(a,t){return a+tourPay(t);},0);
@@ -22254,8 +22271,10 @@ function billsEndedTourByOrder(){
     if(r.state!=='ended') return;
     (typeof tidArr==='function'?tidArr(r.orders):[]).forEach(function(oid){
       var key=String(oid), cur=map[key];
-      if(!cur || String(r.endedDate||'')>String(cur.endedDate||'')){
-        map[key]={ tid:k, driverName:r.driverName||'', endedDate:r.endedDate||'', createdDate:r.createdDate||'' };
+      var day=(typeof tourCountDate==='function')?tourCountDate(r):(r.departedDate||r.createdDate||r.endedDate||'');
+      if(!cur || String(day)>String(cur.day||'')){
+        map[key]={ tid:k, driverName:r.driverName||'', day:day,
+                   endedDate:r.endedDate||'', createdDate:r.createdDate||'', departedDate:r.departedDate||'' };
       }
     });
   });
@@ -22307,9 +22326,9 @@ function billsShipData(mk){
     if(!billsShipIsCarrier(o)) return;
     var amt=parseFloat(o.shipCost)||0;
     var at=active[String(o.id)], et=ended[String(o.id)];
-    // Priced → the day it was priced. Not priced → the day its tour ended.
+    // Priced → the day it was priced. Not priced → the day its tour left the warehouse.
     var mkey=amt>0 ? billsMKey(o.shipCostDate||o.date)
-                   : billsMKey((et&&(et.endedDate||et.createdDate))||o.date);
+                   : billsMKey((et&&et.day)||o.date);
     if(mkey!==mk) return;
     // Marked free → settled, so it belongs with its company, not in the pending bucket.
     if(at && amt<=0 && !o.shipFree){ onTour.push({ o:o, tour:at }); return; }
@@ -24503,7 +24522,7 @@ function acTourMap(){
     var recs=tourHistory[dk]||{};
     Object.keys(recs).forEach(function(k){
       var r=recs[k]||{};
-      var date=r.departedDate||r.endedDate||'';
+      var date=tourCountDate(r);   // day the vehicle left, not the day the tour was closed
       (r.orders||[]).forEach(function(os){
         var id=(os&&os.id)?os.id:os;
         // key counts tours, tid only labels them: tours from before the tour-ID
@@ -24516,7 +24535,7 @@ function acTourMap(){
   (activeTours||[]).forEach(function(t){
     if(!t||!t.orders) return;
     t.orders.forEach(function(id){
-      claim(id,{date:t.departedDate||'', driver:t.driverName||'', tid:t.tid||'', key:t.tid||t.id||'',
+      claim(id,{date:t.departedDate||t.tourDay||'', driver:t.driverName||'', tid:t.tid||'', key:t.tid||t.id||'',
                 tourNo:t.tno||'', ts:9e15, delivered:String((t.status||{})[id]||'')==='delivered', live:true});
     });
   });
