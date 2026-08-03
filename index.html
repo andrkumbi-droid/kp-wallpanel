@@ -2401,6 +2401,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="modal-overlay" id="bill-tour-modal"><div class="modal" id="bill-tour-body"></div></div>
   <!-- TOUR INFO — driver, day, orders behind a linked tour ID -->
   <div class="modal-overlay" id="bill-tourinfo-modal"><div class="modal" id="bill-tourinfo-body"></div></div>
+  <!-- MOVE A SUB-CATEGORY INTO ANOTHER MAIN CATEGORY (its receipts come along) -->
+  <div class="modal-overlay" id="cat-move-modal"><div class="modal" id="cat-move-body"></div></div>
   <!-- BILLS REPORT — charts over every section + sub-category, with a print version -->
   <div class="modal-overlay" id="bill-report-modal"><div class="modal" id="bill-report-body" style="max-width:620px"></div></div>
 
@@ -6143,7 +6145,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260803001;
+var KP_BUILD = 20260803002;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -16582,11 +16584,14 @@ function mgRenderBillCats(){
         +(s.builtin?'<span style="font-size:10px;color:var(--text2);white-space:nowrap">built-in</span>'
                    :'<button type="button" onclick="secRemove(\''+s.id+'\');mgRenderBillCats()" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>')
       +'</div>'
-      +(cats.length?cats.map(function(c){
+      +(cats.length?cats.map(function(c,ci){
           return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">'
             +'<label title="Allow tour link / เชื่อมทัวร์ได้" style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;flex-shrink:0;padding:0 2px">'
               +'<input type="checkbox" '+(c.tourLink?'checked':'')+' onchange="catSetTourLink(\''+s.id+'\',\''+c.id+'\',this.checked)" style="width:16px;height:16px">🚚</label>'
             +'<input type="text" value="'+_esc(c.label)+'" onchange="catSetLabel(\''+s.id+'\',\''+c.id+'\',this.value);mgRenderBillCats()" style="flex:1;min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
+            +_ordBtn('catMove(\''+s.id+'\',\''+c.id+'\',-1)','▲','Move up / เลื่อนขึ้น',ci===0)
+            +_ordBtn('catMove(\''+s.id+'\',\''+c.id+'\',1)','▼','Move down / เลื่อนลง',ci===cats.length-1)
+            +'<button type="button" onclick="catMoveOpen(\''+s.id+'\',\''+c.id+'\')" title="Move to another main category / ย้ายไปหมวดหลักอื่น" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">⇄</button>'
             +'<button type="button" onclick="catRemove(\''+s.id+'\',\''+c.id+'\');mgRenderBillCats()" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>'
           +'</div>';
         }).join('')
@@ -21911,6 +21916,62 @@ function catSetTourLink(section,id,on){
   try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
 }
 function catTourLinkOn(section,id){ var c=catRec(section,id); return !!(c&&c.tourLink); }
+// ── Moving sub-categories ────────────────────────────────────────────────
+// Order inside a section is just the array order in costCats — swap two entries.
+// The edit row stays open so the office can press ▲ several times in a row.
+function catMove(section,id,dir){
+  var arr=costCats[section]||[];
+  var i=arr.findIndex(function(c){ return c.id===id; }); if(i<0) return;
+  var j=i+(dir<0?-1:1); if(j<0 || j>=arr.length) return;
+  var t=arr[i]; arr[i]=arr[j]; arr[j]=t;
+  // Carry text typed but not yet saved through the re-render, so ▲▲▲ in a row
+  // does not silently throw away a half-finished rename.
+  var key='cat|'+section+'|'+id, typed=null;
+  try{ var el=document.querySelector('[data-editkey="'+key+'"]'); if(el) typed=el.value; }catch(e){}
+  syncCostCats(); costsRender(); try{ mgRenderBillCats(); }catch(e){}
+  if(typed!==null){ try{ var el2=document.querySelector('[data-editkey="'+key+'"]'); if(el2) el2.value=typed; }catch(e){} }
+}
+// Into another MAIN category. The receipts carry b.section themselves, so they have
+// to come along — otherwise they would drop out of their section and resurface as
+// "⚠️ Not assigned" with the money in the wrong place.
+var _catMoveFrom='', _catMoveId='';
+function catMoveOpen(section,id){
+  var c=catRec(section,id); if(!c) return;
+  _catMoveFrom=section; _catMoveId=id;
+  var el=document.getElementById('cat-move-body'); if(!el) return;
+  var n=(typeof bills!=='undefined'?bills:[]).filter(function(b){ return b.section===section && b.subcatId===id; }).length;
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +'<span style="font-size:16px;font-weight:700">⇄ Move category / ย้ายหมวด</span>'
+      +'<button type="button" onclick="catMoveClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="font-size:13px;font-weight:700;padding:9px 10px;background:var(--bg2);border-radius:var(--rs);margin-bottom:4px">'+_esc(c.label)+'</div>'
+    +'<div style="font-size:11px;color:var(--text2);margin-bottom:10px">'+(n?n+' receipt(s) move along / ใบเสร็จ '+n+' ใบย้ายตามไปด้วย':'No receipts yet / ยังไม่มีใบเสร็จ')+'</div>'
+    +billSecs().map(function(s){
+        var cur=s.id===section;
+        return '<div'+(cur?'':' onclick="catMoveTo(\''+_esc(s.id)+'\')"')+' style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid '+(cur?'var(--blue)':'var(--border)')+';border-radius:var(--rs);margin-bottom:6px;'+(cur?'opacity:.6':'cursor:pointer')+'">'
+          +'<span style="font-size:13px;font-weight:600">'+_esc(s.label)+'</span>'
+          +(cur?'<span style="font-size:11px;color:var(--blue);font-weight:700;white-space:nowrap">current / ปัจจุบัน</span>':'<i class="ti ti-chevron-right" style="color:var(--text3)"></i>')+'</div>';
+      }).join('');
+  document.getElementById('cat-move-modal').classList.add('open');
+}
+function catMoveClose(){ document.getElementById('cat-move-modal').classList.remove('open'); }
+function catMoveTo(to){
+  var from=_catMoveFrom, id=_catMoveId;
+  if(!from || !id || from===to) { catMoveClose(); return; }
+  var arr=costCats[from]||[];
+  var i=arr.findIndex(function(c){ return c.id===id; }); if(i<0){ catMoveClose(); return; }
+  var c=arr.splice(i,1)[0];
+  if(!costCats[to]) costCats[to]=[];
+  costCats[to].push(c);
+  (typeof bills!=='undefined'?bills:[]).forEach(function(b){
+    if(b.section===from && b.subcatId===id){
+      b.section=to;
+      if(window.fbDB) window.fbDB.ref('bills/'+b.id+'/section').set(to);
+    }
+  });
+  syncCostCats();
+  _billEdit={};                       // the row lives in another section now
+  catMoveClose(); costsRender(); try{ mgRenderBillCats(); }catch(e){}
+}
 // Removing a category does NOT delete its receipts — they keep section+subcatId and
 // would silently drop out of every total. So: warn with the exact count + amount, and
 // costsRender() lists whatever is left over as "⚠️ Not assigned" (see _orphanBills).
@@ -22048,6 +22109,9 @@ function _editRow(key,label){
 function _penBtn(key,title){
   return '<button type="button" onclick="event.stopPropagation();billEditOn(\''+key+'\')" title="'+title+'" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>';
 }
+function _ordBtn(fn,glyph,title,off){
+  return '<button type="button"'+(off?' disabled':'')+' onclick="event.stopPropagation();'+fn+'" title="'+title+'" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:32px;height:30px;flex-shrink:0;font-size:11px;'+(off?'opacity:.35;cursor:default':'cursor:pointer')+'">'+glyph+'</button>';
+}
 // One receipt line inside a category — tap opens the detail sheet (photos, tour link…).
 function _billItemRow(b){
   var pic=(typeof billPhotos==='function'?billPhotos(b):[])[0]||'';
@@ -22116,16 +22180,25 @@ function costsRender(){
           return;
         }
         var ck=sec+'|'+c.id, open=!!_billCatOpen[ck], cKey='cat|'+sec+'|'+c.id, cEdit=!!_billEdit[cKey];
+        var ci=(costCats[sec]||[]).findIndex(function(x){ return x.id===c.id; }), clen=(costCats[sec]||[]).length;
         inner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
-          '<div onclick="billCatToggle(\''+sec+'\',\''+c.id+'\')" style="display:flex;gap:5px;align-items:center;padding:6px 9px;cursor:pointer">'+
-            (cEdit ? _editRow(cKey,c.label)
-                   : '<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)+
-                       (c.tourLink?' <span title="Tour link on / เชื่อมทัวร์ได้" style="font-size:11px">🚚</span>':'')+
-                       (c.items.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+c.items.length+')</span>':'')+'</span>'+
-                     '<span style="font-size:13px;font-weight:800;color:var(--text);white-space:nowrap">'+c.total.toLocaleString()+' ฿</span>'+
-                     _penBtn(cKey,'Rename / เปลี่ยนชื่อ')+
-                     '<button type="button" onclick="event.stopPropagation();catRemove(\''+sec+'\',\''+c.id+'\')" title="Remove category" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>')+
-          '</div>'+
+          (cEdit
+            // Edit mode: rename on the first line, order + move on the second.
+            ? '<div style="padding:6px 9px">'
+                +'<div style="display:flex;gap:5px;align-items:center">'+_editRow(cKey,c.label)+'</div>'
+                +'<div style="display:flex;gap:5px;align-items:center;margin-top:6px">'
+                  +_ordBtn('catMove(\''+sec+'\',\''+c.id+'\',-1)','▲','Move up / เลื่อนขึ้น',ci<=0)
+                  +_ordBtn('catMove(\''+sec+'\',\''+c.id+'\',1)','▼','Move down / เลื่อนลง',ci<0||ci>=clen-1)
+                  +'<button type="button" onclick="event.stopPropagation();catMoveOpen(\''+sec+'\',\''+c.id+'\')" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer">⇄ Move to… / ย้ายไปหมวดหลัก</button>'
+                +'</div></div>'
+            : '<div onclick="billCatToggle(\''+sec+'\',\''+c.id+'\')" style="display:flex;gap:5px;align-items:center;padding:6px 9px;cursor:pointer">'
+                +'<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)
+                  +(c.tourLink?' <span title="Tour link on / เชื่อมทัวร์ได้" style="font-size:11px">🚚</span>':'')
+                  +(c.items.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+c.items.length+')</span>':'')+'</span>'
+                +'<span style="font-size:13px;font-weight:800;color:var(--text);white-space:nowrap">'+c.total.toLocaleString()+' ฿</span>'
+                +_penBtn(cKey,'Rename, order, move / เปลี่ยนชื่อ-ย้าย')
+                +'<button type="button" onclick="event.stopPropagation();catRemove(\''+sec+'\',\''+c.id+'\')" title="Remove category" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>'
+              +'</div>')+
           (open ? '<div style="padding:0 9px 8px">'+(c.items.length ? c.items.map(_billItemRow).join('')
               : '<div style="font-size:11px;color:var(--text2);padding-top:5px">No receipts this month / ยังไม่มีใบเสร็จเดือนนี้</div>')+'</div>' : '')+
         '</div>';
