@@ -888,6 +888,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{ tourHealTids(); }catch(e){}
         try{ if(document.getElementById('ofv-tour') && document.getElementById('ofv-tour').classList.contains('active')) ofRenderTourIds(); }catch(e){}
       });
+      // Driver payouts — one bank transfer, one slip, however many tours it covers.
+      db.ref('tourPayouts').on('value', function(snap) {
+        tourPayouts = snap.val() || {};
+        try{ if(document.getElementById('ofv-tour') && document.getElementById('ofv-tour').classList.contains('active')){ ofRenderTourIds(); ofRenderTour(); } }catch(e){}
+      });
       db.ref('revOrders').on('value', function(snap) {
         // Dedup by order id on load — one revenue entry per delivered order. Guards
         // against historical duplicates (an order delivered/re-delivered multiple
@@ -4004,6 +4009,7 @@ function drTours(){ return (activeTours||[]).filter(function(t){return t.driverI
 function drGetTour(){ var ts=drTours(); if(!ts.length) return null; var sel=ts.find(function(t){return t.id===currentDriverTourId;}); return sel||ts[0]; }
 var tourHistory={};
 var tourReg={};        // tour-ID registry: no -> {no,tourId,driver,state,orders,paid,…} (Firebase tourReg)
+var tourPayouts={};    // driver payouts: po-id -> {tourIds[],amount,slips[],…} — ONE transfer can cover several tours (Firebase tourPayouts)
 let editId=null,editSM=null,editIM=null,editDM=null,selMonth='';
 
 function go(s){
@@ -6598,7 +6604,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260804002;
+var KP_BUILD = 20260804003;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -9831,7 +9837,11 @@ function ofRenderTour(){
         // the slip. Both mark the tour as paid; the thumbnails open under the row.
         (isL ? '' : (function(){
           var half='flex:1 1 0;min-width:0;box-sizing:border-box;padding:8px 6px;border-radius:var(--rs);font-size:11.5px;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;gap:6px;min-height:40px';
-          var st=tourPayState(t), cnt=(t.carFeeSlips||[]).length;
+          var st=tourPayState(t);
+          // Slips of THIS tour plus the shared transfer slip, if the driver-day was
+          // settled with one payment (that picture lives on the payout, see tourPayouts).
+          var poS=[]; try{ poS=tourPayoutSlips(tourPayoutFor(t.tid||tourPayTid(t))); }catch(e){}
+          var cnt=(t.carFeeSlips||[]).length+poS.length;
           var cash = st.paid
             ? '<div style="'+half+';border:1.5px solid #86efac;background:#dcfce7;color:#166534">'+(st.how==='cash'?'✅ 💵 จ่ายเงินสด / paid cash':'✅ 🏦 โอนแล้ว / paid by transfer')
                 +(ro||st.how!=='cash'?'':'<span onclick="event.stopPropagation();ofTourPayCash(\''+t.id+'\')" title="ยกเลิก / undo" style="cursor:pointer;color:var(--text2);font-weight:400">✕</span>')+'</div>'
@@ -9845,7 +9855,10 @@ function ofRenderTour(){
                 +'<button type="button" onclick="event.stopPropagation();document.getElementById(\'tourslip-'+t.id+'\').click()" title="Take photo / ถ่ายรูปสลิป" style="flex-shrink:0;padding:3px 7px;border:1px solid #bbf7d0;background:var(--bg);color:#16a34a;border-radius:var(--rs);cursor:pointer;font-size:13px">📷</button>'
                 +'<button type="button" onclick="event.stopPropagation();document.getElementById(\'tourslipg-'+t.id+'\').click()" title="Upload one or more / อัปโหลดได้หลายสลิป" style="flex-shrink:0;padding:3px 7px;border:1px solid #bbf7d0;background:var(--bg);color:#16a34a;border-radius:var(--rs);cursor:pointer;font-size:13px">🖼️</button>'
               +'</div>';
-          var thumbs='<div id="tourslips_'+t.id+'" style="display:none;margin-top:6px"><div style="display:flex;gap:4px;flex-wrap:wrap">'+(t.carFeeSlips||[]).map(function(src,pi){return '<div style="position:relative;display:inline-block"><img src="'+src+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:56px;height:56px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">'+(ro?'':'<button type="button" onclick="event.stopPropagation();ofTourDelSlip(\''+t.id+'\','+pi+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:11px;cursor:pointer;line-height:1">×</button>')+'</div>';}).join('')+'</div></div>';
+          var thumbs='<div id="tourslips_'+t.id+'" style="display:none;margin-top:6px"><div style="display:flex;gap:4px;flex-wrap:wrap">'+(t.carFeeSlips||[]).map(function(src,pi){return '<div style="position:relative;display:inline-block"><img src="'+src+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:56px;height:56px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">'+(ro?'':'<button type="button" onclick="event.stopPropagation();ofTourDelSlip(\''+t.id+'\','+pi+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:11px;cursor:pointer;line-height:1">×</button>')+'</div>';}).join('')
+            // Read-only here: the shared slip is managed where the payout is ticked (Tour IDs).
+            +poS.map(function(src){ return '<div style="position:relative;display:inline-block"><img src="'+src+'" title="สลิปโอนรวม / shared transfer slip" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:56px;height:56px;object-fit:cover;border-radius:var(--rs);border:2px solid #86efac;cursor:pointer"></div>'; }).join('')
+            +'</div>'+(poS.length?'<div style="font-size:10.5px;color:#166534;margin-top:4px">🧾 กรอบเขียว = สลิปโอนรวมของวันนั้น / green border = the day\'s shared transfer slip</div>':'')+'</div>';
           return (ro?'':'<input type="file" accept="image/*" capture="environment" id="tourslip-'+t.id+'" style="display:none" onchange="ofTourAddSlip(this,\''+t.id+'\')">'
                       +'<input type="file" accept="image/*" multiple id="tourslipg-'+t.id+'" style="display:none" onchange="ofTourAddSlip(this,\''+t.id+'\')">')
             +'<div style="display:flex;gap:8px;align-items:stretch;margin-bottom:8px">'+cash+slips+'</div>'
@@ -10809,6 +10822,12 @@ function tourPayState(t){
   if(!t) return {paid:false};
   if(t.payMethodTour==='cash') return {paid:true, how:'cash', by:t.paidByTour||'', at:t.paidAtTour||0};
   if((t.carFeeSlips||[]).length>0) return {paid:true, how:'online', by:t.paidByTour||'', at:t.paidAtTour||0};
+  // Several tours settled with ONE transfer: the slip hangs on the payout, not on
+  // this tour — otherwise only the tour that happens to hold the picture looks paid.
+  try{
+    var po=tourPayoutFor(t.tid||tourPayTid(t));
+    if(po && tourPayoutSlips(po).length) return {paid:true, how:'online', by:po.by||'', at:po.at||0, po:po};
+  }catch(e){}
   return {paid:false};
 }
 function ofTourPayCash(tourId){
@@ -10833,8 +10852,144 @@ function tourPayBadgeHTML(t){
   var st=tourPayState(t); if(!st.paid) return '';
   var d=st.at?new Date(st.at):null;
   var when=d?(String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')):'';
+  var shared=(st.po && tidArr(st.po.tourIds).length>1)
+    ? ' · '+tidArr(st.po.tourIds).length+' ทัวร์ สลิปเดียวกัน / one slip'
+    : '';
   return '<span style="font-size:11px;font-weight:700;color:#166534;background:#dcfce7;border-radius:8px;padding:2px 7px;white-space:nowrap">✅ จ่ายแล้ว / paid '
-    +(st.how==='cash'?'💵 เงินสด':'🏦 โอน (สลิป)')+(st.by?' · '+st.by:'')+(when?' · '+when:'')+'</span>';
+    +(st.how==='cash'?'💵 เงินสด':'🏦 โอน (สลิป)')+(st.by?' · '+st.by:'')+(when?' · '+when:'')+shared+'</span>';
+}
+
+/* ══ DRIVER PAYOUTS 🧾 — one transfer, several tours ════════════════════════
+   A driver who drove 260804-1 (675 ฿) and 260804-2 (529 ฿) gets ONE transfer of
+   1,204 ฿ and hands back ONE slip. Hanging that slip on a tour would either mark
+   only one of the two as paid, or duplicate the picture — and then the bank
+   reconciliation shows two receipts over 1,204 ฿ for one transfer.
+   So the PAYOUT is its own record and the tours point at it:
+     tourPayouts/po-<ts> = {id, tourIds[], amount, method, slips[], driverName,
+                            driverId, day, date, by, at}
+   The slip picture is compressed and pushed to Storage (a data URL only as a
+   fallback), and its URL is stamped onto every payroll line of those tours, so
+   Payroll and Accounting see the receipt without a second copy of the image.
+════════════════════════════════════════════════════════════════════════════ */
+function tourPayoutArr(){
+  return Object.keys(tourPayouts||{}).map(function(k){ var p=tourPayouts[k]||{}; p.id=p.id||k; return p; });
+}
+function tourPayoutFor(tid){
+  if(!tid) return null;
+  var hit=null;
+  tourPayoutArr().forEach(function(p){ if(!hit && tidArr(p.tourIds).indexOf(tid)>=0) hit=p; });
+  return hit;
+}
+function tourPayoutSlips(p){ return p?tidArr(p.slips).filter(Boolean):[]; }
+function tourPayoutSave(p){
+  if(!p||!p.id) return;
+  tourPayouts[p.id]=p;
+  try{ if(window.fbDB) window.fbDB.ref('tourPayouts/'+p.id).set(p); }catch(e){}
+}
+function tourPayoutRemove(id){
+  if(!id) return;
+  delete tourPayouts[id];
+  try{ if(window.fbDB) window.fbDB.ref('tourPayouts/'+id).remove(); }catch(e){}
+}
+// Created the moment the office ticks "driver paid" for a whole driver-day.
+function tourPayoutEnsure(ids, sum, drv, by){
+  var po=tourPayoutFor(ids[0]);
+  var r0=tourRegRec(ids[0])||{};
+  if(!po){
+    po={ id:'po-'+Date.now()+Math.floor(Math.random()*1000), tourIds:ids.slice(), amount:sum,
+         method:'transfer', slips:[], driverName:drv||r0.driverName||'', driverId:r0.driverId||'',
+         date:r0.createdDate||r0.departedDate||new Date().toISOString().slice(0,10),
+         by:by||'Office', at:Date.now() };
+  } else {
+    // The day may have grown by another tour since the tick — keep it in step.
+    po.tourIds=ids.slice(); po.amount=sum;
+    if(!po.driverName) po.driverName=drv||'';
+  }
+  tourPayoutSave(po);
+  return po;
+}
+// The payroll lines of those tours get the slip URL, so the receipt shows up in
+// Payroll/Bills without the picture being stored a second time.
+function _tourPayoutStampPayLog(p){
+  if(!p) return;
+  var url=tourPayoutSlips(p)[0]||'', ids=tidArr(p.tourIds);
+  (typeof payLog!=='undefined'?payLog:[]).forEach(function(e){
+    if(!e||!e.id||!e.tid||ids.indexOf(e.tid)<0) return;
+    if(e.photoUrl===url) return;
+    e.photoUrl=url;
+    try{ if(window.fbDB) window.fbDB.ref('payLog/'+e.id+'/photoUrl').set(url); }catch(err){}
+  });
+}
+function tourPayoutAddSlip(input, poId){
+  var p=tourPayouts[poId];
+  var files=input&&input.files?Array.prototype.slice.call(input.files):[];
+  if(!p||!files.length){ if(input) input.value=''; return; }
+  var st=document.getElementById('poup-'+poId);
+  if(st){ st.textContent='⏳ กำลังอัปโหลด / uploading…'; st.style.display=''; }
+  var done=0, added=0;
+  var finish=function(){
+    if(st) st.style.display='none';
+    if(added){
+      tourPayoutSave(p); _tourPayoutStampPayLog(p);
+      try{ auditTour('pay','🆔 '+tidArr(p.tourIds).join(', '),'🧾 สลิปโอน / transfer slip +'+added+(p.amount?' · '+Number(p.amount).toLocaleString()+' ฿':'')); }catch(e){}
+      try{ ofRenderTourIds(); }catch(e){}
+      try{ ofRenderTour(); }catch(e){}
+    }
+  };
+  files.forEach(function(f){
+    compressPhotoFile(f, function(dataUrl){
+      if(!dataUrl){ if(++done===files.length) finish(); return; }
+      var push=function(url){
+        if(url){ p.slips=tourPayoutSlips(p).concat([url]); added++; }
+        if(++done===files.length) finish();
+      };
+      // Compressed first, then Storage — the database keeps a link, not a picture.
+      if(window.fbStorage){
+        window.fbStorage.ref('tourpay/'+poId+'_'+Date.now()+'.jpg').putString(dataUrl,'data_url')
+          .then(function(s){ return s.ref.getDownloadURL(); }).then(push)
+          .catch(function(){ push(dataUrl); });
+      } else push(dataUrl);
+    });
+  });
+  input.value='';
+}
+function tourPayoutDelSlip(poId, i){
+  var p=tourPayouts[poId]; if(!p) return;
+  var cur=tourPayoutSlips(p); i=parseInt(i,10);
+  if(isNaN(i)||i<0||i>=cur.length) return;
+  if(!confirm('ลบสลิปนี้? / Remove this slip?')) return;
+  cur.splice(i,1); p.slips=cur;
+  tourPayoutSave(p); _tourPayoutStampPayLog(p);
+  try{ auditTour('pay','🆔 '+tidArr(p.tourIds).join(', '),'🧾 สลิปโอนถูกลบ / transfer slip removed'); }catch(e){}
+  try{ ofRenderTourIds(); }catch(e){}
+  try{ ofRenderTour(); }catch(e){}
+}
+// The slip row under the "driver paid" tick — the one place where the transfer is
+// documented, whether the day held one tour or five.
+function tourPayoutBarHTML(ids, sum){
+  var po=tourPayoutFor(ids[0]); if(!po) return '';
+  var slips=tourPayoutSlips(po), n=slips.length, multi=ids.length>1;
+  var amt=Number(po.amount||sum)||0;
+  var btn='flex-shrink:0;padding:5px 9px;border:1px solid #bbf7d0;background:var(--bg);color:#16a34a;border-radius:var(--rs);cursor:pointer;font-size:13px';
+  return '<div style="margin-top:6px;padding:8px 10px;border:1px solid '+(n?'#bbf7d0':'#fed7aa')+';background:'+(n?'#f0fdf4':'#fff7ed')+';border-radius:var(--rs)">'
+    +'<input type="file" accept="image/*" capture="environment" id="poslip-'+po.id+'" style="display:none" onchange="event.stopPropagation();tourPayoutAddSlip(this,\''+po.id+'\')">'
+    +'<input type="file" accept="image/*" multiple id="poslipg-'+po.id+'" style="display:none" onchange="event.stopPropagation();tourPayoutAddSlip(this,\''+po.id+'\')">'
+    +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+      +'<span style="flex:1;min-width:0;font-size:11px;font-weight:700;color:'+(n?'#166534':'#c2410c')+'">'
+        +(n?'🧾 สลิปโอน / Transfer slip ('+n+')':'⚠️ ยังไม่มีสลิป / no slip yet')
+        +(amt?' · <b>'+amt.toLocaleString()+' ฿</b>':'')
+        +(multi?' <span style="font-weight:400">('+ids.length+' ทัวร์ โอนครั้งเดียว / one transfer)</span>':'')+'</span>'
+      +'<button type="button" onclick="event.stopPropagation();document.getElementById(\'poslip-'+po.id+'\').click()" title="ถ่ายรูปสลิป / take a photo" style="'+btn+'">📷</button>'
+      +'<button type="button" onclick="event.stopPropagation();document.getElementById(\'poslipg-'+po.id+'\').click()" title="อัปโหลด / upload" style="'+btn+'">🖼️</button>'
+    +'</div>'
+    +(n?'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">'+slips.map(function(src,pi){
+        return '<div style="position:relative;display:inline-block">'
+          +'<img src="'+src+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:56px;height:56px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">'
+          +'<button type="button" onclick="event.stopPropagation();tourPayoutDelSlip(\''+po.id+'\','+pi+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:11px;cursor:pointer;line-height:1">×</button>'
+        +'</div>';
+      }).join('')+'</div>':'')
+    +'<div id="poup-'+po.id+'" style="display:none;font-size:11px;color:var(--text2);margin-top:5px"></div>'
+  +'</div>';
 }
 
 // ════════════════════════════════════════════════════════════
@@ -11111,6 +11266,14 @@ function ofTourIdPhotos(id){
   var html='';
   if(car.length) html+='<div style="font-size:11px;font-weight:700;color:#1d4ed8;margin:6px 0 3px">🚚 รูปรถ / Vehicle ('+car.length+')</div>'+thumbs(car);
   if(slips.length) html+='<div style="font-size:11px;font-weight:700;color:#16a34a;margin:8px 0 3px">🧾 สลิปค่าทัวร์ / Pay slips ('+slips.length+')</div>'+thumbs(slips);
+  // The transfer that settled this tour — the same picture for every tour it covered.
+  var po=tourPayoutFor(id), poS=tourPayoutSlips(po);
+  if(poS.length){
+    var nT=tidArr(po.tourIds).length;
+    html+='<div style="font-size:11px;font-weight:700;color:#166534;margin:8px 0 3px">🧾 สลิปโอน / Transfer slip ('+poS.length+')'
+      +(po.amount?' · '+Number(po.amount).toLocaleString()+' ฿':'')
+      +(nT>1?' · '+nT+' ทัวร์ โอนครั้งเดียว / one transfer':'')+'</div>'+thumbs(poS);
+  }
   if(!html) html='<div style="font-size:11px;color:var(--text2);padding:6px 0">'+((reg&&reg.state==='deleted')?'ทัวร์ถูกลบ — ไม่มีรูป / tour deleted, no photos':'ยังไม่มีรูป / no photos yet')+'</div>';
   box.innerHTML=html;
   box.style.display='block';
@@ -11122,6 +11285,13 @@ function tourRegTogglePaidGroup(idsCsv){
   var ids=String(idsCsv||'').split(',').filter(tidOk); if(!ids.length) return;
   var allPaid=ids.every(function(id){ return !!(tourRegRec(id)||{}).paid; });
   var mkPaid=!allPaid;
+  // Undoing takes the payout with it — the slip is the proof of exactly this
+  // transfer, so it must not stay behind on a day that counts as unpaid again.
+  if(!mkPaid){
+    var po0=tourPayoutFor(ids[0]), nS=tourPayoutSlips(po0).length;
+    if(nS && !confirm('ยกเลิกการจ่าย? สลิป '+nS+' รูปจะถูกลบด้วย\nUndo the payout? Its '+nS+' slip(s) are removed too.')) return;
+    if(po0) tourPayoutRemove(po0.id);
+  }
   var by=mkPaid?((((typeof staffList!=='undefined'?staffList:[])||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office'):'';
   var at=mkPaid?Date.now():0, sum=0, drv='';
   ids.forEach(function(id){
@@ -11131,8 +11301,11 @@ function tourRegTogglePaidGroup(idsCsv){
     tourReg[id]=rec;
     try{ if(window.fbDB) window.fbDB.ref('tourReg/'+id).set(rec); }catch(e){}
   });
+  // One transfer for the whole driver-day → one payout record to hang the slip on.
+  if(mkPaid){ try{ tourPayoutEnsure(ids, sum, drv, by); }catch(e){} }
   try{ auditTour('pay','🆔 '+ids.join(', '), (mkPaid?'✅ คนขับรับเงินแล้ว / driver paid':'undo driver-paid')+(drv?' · '+drv:'')+(sum?' · '+sum.toLocaleString()+' ฿':'')); }catch(e){}
   ofRenderTourIds();
+  try{ ofRenderTour(); }catch(e){}
 }
 // Registry entries that point at the SAME tour — left over from an outdated tab, or
 // from the bug that minted a fresh ID on every reload. Which one survives follows
@@ -11311,6 +11484,7 @@ function ofRenderTourIds(){
               +'<input type="checkbox" '+(allPaid?'checked ':'')+'onchange="event.stopPropagation();tourRegTogglePaidGroup(\''+no0+'\')" style="width:16px;height:16px;cursor:pointer">'+payTxt
             +'</label>'
           +'</div>'
+          +(allPaid?tourPayoutBarHTML([no0], g.pay):'')
           +'<div id="tidph_'+no0+'" style="display:none"></div>'
           +(function(){ var os=tidArr(r0.orders); return os.length
               ? os.map(function(id){
@@ -11335,6 +11509,7 @@ function ofRenderTourIds(){
         +'<label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid '+(allPaid?'#86efac':'var(--border)')+';border-radius:var(--rs);background:'+(allPaid?'#f0fdf4':'var(--bg)')+';font-size:11px;font-weight:700;color:'+(allPaid?'#166534':'var(--text2)')+';cursor:pointer">'
           +'<input type="checkbox" '+(allPaid?'checked ':'')+'onchange="event.stopPropagation();tourRegTogglePaidGroup(\''+ids.join(',')+'\')" style="width:16px;height:16px;cursor:pointer">'+payTxt
         +'</label>'
+        +(allPaid?tourPayoutBarHTML(ids, g.pay):'')
         +toursHTML
       +'</div>'
       +'</div>';
