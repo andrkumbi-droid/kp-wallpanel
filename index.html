@@ -6604,7 +6604,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260804006;
+var KP_BUILD = 20260804007;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -9859,7 +9859,9 @@ function ofRenderTour(){
       (!ro && slipOrds.length>0?'<button type="button" onclick="event.stopPropagation();ofReviewTourSlips(\''+t.id+'\')" title="Check online-payment slips / ตรวจสลิปโอน" style="font-size:11px;padding:3px 8px;border:none;background:'+slipBtnBg+';color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🧾 Slips '+slipDone+'/'+slipOrds.length+(slipFlag>0?' ⚠':'')+'</button>':'')+
       (ro?'':'<button type="button" onclick="event.stopPropagation();ofToggleKmMode(\''+t.id+'\')" title="คิดค่าจ้างตามกิโลเมตร — กำหนดลำดับส่ง + คนขับถ่ายรูปเลขไมล์ / Pay this tour per kilometre" style="font-size:11px;padding:3px 8px;border:none;background:'+(_kmOn?'#1d4ed8':'#94a3b8')+';color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🛣️ KM '+(_kmOn?'ON':'OFF')+'</button>')+
       (ro?'':'<button type="button" onclick="event.stopPropagation();ofAddOrderToTour(\''+t.id+'\')" title="Add a ready order to this tour / เพิ่มออเดอร์เข้าทัวร์" style="font-size:11px;padding:3px 8px;border:none;background:#0ea5e9;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">➕ Add</button>')+
-      ((!t.driving && !t.departedAt)?'<button type="button" onclick="event.stopPropagation();ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 ออกรถ / Departed</button>':tourWhenHtml(t))+
+      ((!t.driving && !t.departedAt)?'<button type="button" onclick="event.stopPropagation();ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 ออกรถ / Departed</button>':(tourWhenHtml(t)
+        // Mis-tap on "Departed" (or the driver's "Back") — one button back to square one.
+        +(ro?'':'<button type="button" onclick="event.stopPropagation();ofUndoDeparted('+ti+')" title="กดผิด? ยกเลิกการออกรถ / pressed by mistake? undo the departure" style="font-size:11px;padding:3px 7px;border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);cursor:pointer;font-weight:700">↩︎</button>')))+
       '<span class="badge bactive">'+t.orders.length+' orders</span>'+
       '</div>'+
       '</div>'+
@@ -10059,6 +10061,25 @@ function ofSetDeparted(ti){
   try{ var _dn=(t.orders||[]).length;
     auditTour('depart','🚚 '+(t.driverName||''),'🚀 ออกรถ / departed '+t.departedAt+' · '+_dn+' order'+(_dn!==1?'s':'')+(_dn?': '+t.orders.join(', '):'')); }catch(e){}
   ofRenderTour();syncTours();
+}
+// Undo a mis-tapped departure (and the driver's "Back" that may follow it). Until now
+// the only way back was editing the database by hand: the "🚀 ออกรถ" button is hidden
+// as soon as departedAt exists, exactly so a second press cannot overwrite the real
+// departure time. Clears both times and leaves the orders alone — what happened stays
+// in the audit log.
+function ofUndoDeparted(ti){
+  var t=activeTours[ti]; if(!t) return;
+  if(!t.departedAt && !t.backAt && !t.driving) return;
+  var dep=((t.departedDate?fmtD(t.departedDate)+' ':'')+(t.departedAt||'')).trim();
+  var bak=(((t.backDate&&t.backDate!==t.departedDate)?fmtD(t.backDate)+' ':'')+(t.backAt||'')).trim();
+  var was='🚀 '+(dep||'—')+(bak?' · 🏁 '+bak:'')+(t.driving?' · กำลังส่ง / driving':'');
+  if(!confirm('ยกเลิกการออกรถ? / Undo the departure?\n\n'+was+'\n\n'
+    +'✓ ทัวร์กลับเป็น "ยังไม่ออกรถ" / the tour counts as not departed again\n'
+    +'✓ ออเดอร์ไม่เปลี่ยน / the orders stay exactly as they are\n'
+    +'✓ ประวัติยังอยู่ใน Audit Log / the original times stay in the audit log')) return;
+  t.driving=false; t.departedAt=null; t.departedDate=null; t.backAt=null; t.backDate=null;
+  try{ auditTour('depart','🚚 '+(t.driverName||''),'↩︎ ยกเลิกการออกรถ / departure undone — was: '+was, ofWho()); }catch(e){}
+  ofRenderTour(); syncTours();
 }
 
 // ════════════════════════════════════════════════════════════
