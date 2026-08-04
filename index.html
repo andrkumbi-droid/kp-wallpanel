@@ -1050,6 +1050,22 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
         try{ if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active')) mgRenderBillCats(); }catch(e){}
       });
+      // Finance tab (container / tax / installments / extra wages). Three own nodes,
+      // deliberately separate from the Bills tree so neither can damage the other.
+      db.ref('finSections').on('value', function(snap) {
+        var v=snap.val(); finSections = v?(Array.isArray(v)?v.filter(Boolean):Object.values(v)):[];
+        try{ if(document.getElementById('ofv-fin')&&document.getElementById('ofv-fin').classList.contains('active')) finRender(); }catch(e){}
+      });
+      db.ref('finCats').on('value', function(snap) {
+        var v=snap.val()||{}, out={};
+        Object.keys(v).forEach(function(k){ out[k]=v[k]?(Array.isArray(v[k])?v[k].filter(Boolean):Object.values(v[k])):[]; });
+        finCats=out;
+        try{ if(document.getElementById('ofv-fin')&&document.getElementById('ofv-fin').classList.contains('active')) finRender(); }catch(e){}
+      });
+      db.ref('finPays').on('value', function(snap) {
+        finPays = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}) : [];
+        try{ if(document.getElementById('ofv-fin')&&document.getElementById('ofv-fin').classList.contains('active')) finRender(); }catch(e){}
+      });
       // Lightweight photo index (counts/metadata only, NOT the image data) so the
       // Pictures tab can list orders without downloading every photo on startup.
       db.ref('photoIndex').on('value', function(snap) {
@@ -1654,6 +1670,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" class="tab" onclick="oft('inc')" id="oft-inc" style="flex-shrink:0">Incoming</button>
       <button type="button" class="tab" onclick="oft('bills')" id="oft-bills" style="display:none;flex-shrink:0">Bills <span class="tc" id="oft-bills-cnt" style="background:#fef3c7;color:#92400e;display:none"></span></button>
       <button type="button" class="tab" onclick="oft('food')" id="oft-food" style="display:none;flex-shrink:0">🍜 Food</button>
+      <button type="button" class="tab" onclick="oft('fin')" id="oft-fin" style="display:none;flex-shrink:0">💼 Finance</button>
       <button type="button" class="tab" onclick="oft('lala')" id="oft-lala" style="flex-shrink:0">🛺 Lalamove <span class="tc" id="oft-lala-cnt" style="background:#e0f2fe;color:#0369a1;display:none"></span></button>
       <button type="button" class="tab" onclick="oft('batch')" id="oft-batch" style="display:none;flex-shrink:0">📈 Batch</button>
       <button type="button" class="tab" onclick="ofGoQuote()" id="oft-quote" style="flex-shrink:0"><i class="ti ti-file-invoice" style="font-size:14px;color:#f59e0b;vertical-align:-2px;margin-right:3px"></i>Quotation</button>
@@ -2407,6 +2424,30 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div id="bills-list" style="padding:10px 12px"></div>
     </details>
   </div></div>
+
+  <!-- FINANCE VIEW — every payment that is NOT a daily receipt (Bills) and NOT a
+       payroll wage: container payments, tax, installments, wages of workers who are
+       not on the payroll grid. The office builds the whole category tree itself. -->
+  <div class="view" id="ofv-fin"><div class="sec">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
+      <div class="stit" style="margin-bottom:0">💼 Finance / การเงิน</div>
+      <button type="button" class="btnsm" onclick="finRestoreOpen()" title="Restore closed categories / กู้คืนหมวดที่ปิดไว้"><i class="ti ti-history"></i> ♻️ Restore</button>
+    </div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Payments outside Bills &amp; Payroll — container, tax, installments, extra wages / การจ่ายเงินนอกบิลและนอกเงินเดือน</div>
+    <!-- Entry form (top) -->
+    <div id="fin-entry" style="margin-bottom:14px"></div>
+    <!-- Month selector -->
+    <div style="display:flex;gap:6px;margin-bottom:12px;align-items:center">
+      <span style="font-size:12px;color:var(--text2);font-weight:700;white-space:nowrap">📅 Month / เดือน</span>
+      <select id="fin-filter-month" onchange="finRender()" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px"></select>
+    </div>
+    <div id="fin-total" style="margin-bottom:10px"></div>
+    <div id="fin-tree"></div>
+  </div></div>
+  <!-- FINANCE: reopen closed main categories / categories -->
+  <div class="modal-overlay" id="fin-restore-modal"><div class="modal" id="fin-restore-body"></div></div>
+  <!-- FINANCE: move a category into another main category -->
+  <div class="modal-overlay" id="fin-move-modal"><div class="modal" id="fin-move-body"></div></div>
 
   <!-- BILLS ADD/EDIT MODAL -->
   <div class="modal-overlay" id="bills-modal">
@@ -3475,6 +3516,11 @@ function _enterOffice(s){
   // Office/management reach the same data through the Bills tab, so this flag stands alone.
   const foodTab = document.getElementById('oft-food');
   if(foodTab) foodTab.style.display = s.foodAccess ? '' : 'none';
+  // Finance tab: container payments, tax, installments, wages outside the payroll
+  // grid. Own flag — Bills access does NOT hand this out (different money, different
+  // people). Management → Staff → "💼 Finance access".
+  const finTab = document.getElementById('oft-fin');
+  if(finTab) finTab.style.display = s.finAccess ? '' : 'none';
   // Stock keeper (Milk): may edit stock straight from the office Stock tab —
   // Grade A/B, move A→B, add a product. Everything she does lands in the stock
   // audit log under her name, which is the whole point of not sharing the
@@ -3942,6 +3988,11 @@ var stockAudit=[];   // own book for stock edits — see stAudit()
 var bills=[];
 var costFixed={};                     // Bills: {"YYYY-MM":[{id,label,amount}]} per-month fixed costs (manual, carried over)
 var costCats={utilities:[],food:[],other:[]}; // Bills: sub-category defs per section (office add/remove); amounts come from receipts
+// Finance tab — payments outside Bills/Payroll. Same shape as the Bills tree, but a
+// completely separate set of nodes: no built-in sections, the office builds it all.
+var finSections=[];                   // Finance: main categories [{id,label,order,hiddenFrom}]
+var finCats={};                       // Finance: {sectionId:[{id,label,docMode,hiddenFrom}]}
+var finPays=[];                       // Finance: payment records (Firebase 'finPays')
 var costSections=[];                  // Bills: top-level sections [{id,label}] — label overrides for the 3 built-ins + office-made ones (Firebase 'costSections')
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
 let dArranged=[]; // driver route-arranger: ids placed in the RIGHT column (in order); persisted as tour.arranged
@@ -5438,7 +5489,7 @@ function saveRM(){const id=document.getElementById('rm-id').value.trim();if(!id)
 // (CSS var --of-topbar-h). Re-run on tab switch + resize since the topbar height varies.
 function ofSyncStickyTop(){ try{ var tb=document.getElementById('of-topbar'); if(tb&&tb.offsetHeight) document.documentElement.style.setProperty('--of-topbar-h', tb.offsetHeight+'px'); }catch(e){} }
 try{ window.addEventListener('resize', ofSyncStickyTop); }catch(e){}
-function oft(t){ try{setTimeout(kpGoalWatch,0);}catch(e){} if(t==='orders') setTimeout(ofSyncStickyTop,0); if(t==='new' && window.ofInstoreOnly) ofApplyInstoreLock(); document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='drivers')ofDriversRender();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='batch')btSetMode(btMode);if(t==='new')ofRenderStock();if(t==='stock')ofStockCatalog();if(t==='lala')ofRenderLala();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='attend')ofAttRender();if(t==='bills')billsRender();if(t==='food')foodRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
+function oft(t){ try{setTimeout(kpGoalWatch,0);}catch(e){} if(t==='orders') setTimeout(ofSyncStickyTop,0); if(t==='new' && window.ofInstoreOnly) ofApplyInstoreLock(); document.querySelectorAll('#s-office .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-office .view').forEach(x=>x.classList.remove('active'));document.getElementById('oft-'+t).classList.add('active');document.getElementById('ofv-'+t).classList.add('active');if(t==='home')ofRenderDashboard();if(t==='orders')ofRenderOrders();if(t==='tour')ofRenderTour();if(t==='drivers')ofDriversRender();if(t==='pics')picsRender();if(t==='preorder')poRender();if(t==='inc')ofRenderInc();if(t==='batch')btSetMode(btMode);if(t==='new')ofRenderStock();if(t==='stock')ofStockCatalog();if(t==='lala')ofRenderLala();if(t==='sales'){ofRenderSales();ofRenderRevenue();ofDailyRender();}if(t==='pay')payRender();if(t==='attend')ofAttRender();if(t==='bills')billsRender();if(t==='food')foodRender();if(t==='fin')finRender();if(t==='cust'){custRender();try{blockRender();}catch(e){}}}
 function custBlockToggle(){
   var b=document.getElementById('cust-block-body'), ch=document.getElementById('cust-block-chev');
   if(!b) return;
@@ -6547,7 +6598,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260803011;
+var KP_BUILD = 20260804001;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -11878,6 +11929,10 @@ function kpRefreshMonthViews(){
   try{ if(act('ofv-lala'))    ofRenderLala(); }catch(e){}
   try{ if(act('ofv-attend'))  ofAttRender(); }catch(e){}
   try{ if(act('ofv-sales'))   ofRenderSales(); }catch(e){}
+  try{ if(act('ofv-fin')){ finRender();
+    var fm=document.getElementById('fin-filter-month');
+    if(fm && fm.value!==kpNowMK()){ fm.value=kpNowMK(); finRender(); }
+  } }catch(e){}
   try{ if(act('ofv-bills')){ billsRender();
     var bm=document.getElementById('bills-filter-month');
     if(bm && bm.value!==kpNowMK()){ bm.value=kpNowMK(); billsRender(); }
@@ -17147,6 +17202,7 @@ function openStaffM(id) {
     document.getElementById('staffm-logistics').checked = !!s.logisticsMode;
     document.getElementById('staffm-preorder').checked = !!s.preorderAccess;
     document.getElementById('staffm-bills').checked = !!s.billsAccess;
+    document.getElementById('staffm-fin').checked = !!s.finAccess;
     document.getElementById('staffm-food').checked = !!s.foodAccess;
     document.getElementById('staffm-stock').checked = !!s.stockEdit;
     document.getElementById('staffm-payroll').checked = !!s.payrollOn;
@@ -17173,6 +17229,7 @@ function openStaffM(id) {
     document.getElementById('staffm-logistics').checked = false;
     document.getElementById('staffm-preorder').checked = false;
     document.getElementById('staffm-bills').checked = false;
+    document.getElementById('staffm-fin').checked = false;
     document.getElementById('staffm-food').checked = false;
     document.getElementById('staffm-stock').checked = false;
     document.getElementById('staffm-payroll').checked = false;
@@ -17203,6 +17260,7 @@ function saveStaffM() {
   const logisticsMode = document.getElementById('staffm-logistics').checked;
   const preorderAccess = document.getElementById('staffm-preorder').checked;
   const billsAccess = document.getElementById('staffm-bills').checked;
+  const finAccess = document.getElementById('staffm-fin').checked;
   const foodAccess = document.getElementById('staffm-food').checked;
   const stockEdit = document.getElementById('staffm-stock').checked;
   const payrollOn = document.getElementById('staffm-payroll').checked;
@@ -17216,10 +17274,10 @@ function saveStaffM() {
   const lang = document.getElementById('staffm-lang').value || 'th';
   if(editStaffId) {
     const s = staffList.find(x => x.id === editStaffId);
-    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.foodAccess = foodAccess; s.stockEdit = stockEdit; s.payrollOn = payrollOn; s.isDriver = isDriver; s.calcAccess = calcAccess; s.quoteAccess = quoteAccess; s.countAccess = countAccess; s.payAccess = payAccess; s.phone = phone; s.vehicle = vehicle; s.lang = lang;
+    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.finAccess = finAccess; s.foodAccess = foodAccess; s.stockEdit = stockEdit; s.payrollOn = payrollOn; s.isDriver = isDriver; s.calcAccess = calcAccess; s.quoteAccess = quoteAccess; s.countAccess = countAccess; s.payAccess = payAccess; s.phone = phone; s.vehicle = vehicle; s.lang = lang;
     if(isDriver && !s.driverId) s.driverId = 'd' + Date.now();
   } else {
-    var ns = { id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, acctAccess, officeAccess, warehouseAccess, logisticsMode, preorderAccess, billsAccess, foodAccess, stockEdit, payrollOn, isDriver, calcAccess, quoteAccess, countAccess, payAccess, phone, vehicle, lang };
+    var ns = { id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, acctAccess, officeAccess, warehouseAccess, logisticsMode, preorderAccess, billsAccess, finAccess, foodAccess, stockEdit, payrollOn, isDriver, calcAccess, quoteAccess, countAccess, payAccess, phone, vehicle, lang };
     if(isDriver) ns.driverId = 'd' + Date.now();
     staffList.push(ns);
   }
@@ -19911,6 +19969,13 @@ function calcViz() {
     <div>
       <div style="font-size:13px;font-weight:600">🧾 Bills access / ใบเสร็จ</div>
       <div style="font-size:11px;color:var(--text2)">Can view & manage the Bills tab</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
+    <input type="checkbox" id="staffm-fin" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">💼 Finance access / การเงิน</div>
+      <div style="font-size:11px;color:var(--text2)">Container, tax, installments, wages outside payroll / นอกบิลและนอกเงินเดือน</div>
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
@@ -24282,6 +24347,640 @@ document.addEventListener('change', function(e){
     reader.readAsDataURL(f);
   }
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FINANCE  💼  /  การเงิน   — every payment that is neither a daily receipt
+   (Bills) nor a payroll wage: container payments, tax, installments, wages of
+   workers who are not on the payroll grid, and whatever the office invents next.
+   ───────────────────────────────────────────────────────────────────────────
+   The office builds the whole tree itself: main category → category → payments.
+   NOTHING is built in, not one section — that is the point of this tab.
+
+   Per category the office picks what may be attached to a payment (finCatSetDoc):
+     invoice  🧾  photo / PDF of an invoice only
+     docs     📊  Excel · CSV · PDF · a Google-Sheets link
+     all      📎  anything (default)
+     none     🚫  amounts only, no attachments
+
+   Data (own Firebase nodes, deliberately NOT shared with Bills):
+     finSections  [{id,label,order,hiddenFrom}]
+     finCats      {sectionId:[{id,label,docMode,hiddenFrom}]}
+     finPays      {id:{id,section,catId,catLabel,what,amount,date,status,files[]}}
+
+   Deleting rule is the one the Bills tab learned the hard way (03.08.2026): the
+   category list is ONE list for all months, so a category that already holds
+   payments is never deleted — it is CLOSED from the month on screen
+   (hiddenFrom) and can be brought back with ♻️ Restore.
+═══════════════════════════════════════════════════════════════════════════ */
+var FIN_DOC={
+  invoice:{lbl:'🧾 Invoice only / ใบแจ้งหนี้เท่านั้น', accept:'image/*,.pdf', link:false},
+  docs:   {lbl:'📊 Excel · PDF · Sheet-link / ไฟล์เอกสาร', accept:'.xlsx,.xls,.xlsm,.csv,.pdf,.ods,.numbers', link:true},
+  all:    {lbl:'📎 All files / ทุกไฟล์', accept:'', link:true},
+  none:   {lbl:'🚫 No files / ไม่ใช้ไฟล์', accept:'', link:false}
+};
+function finDocMode(c){ return (c && FIN_DOC[c.docMode]) ? c.docMode : 'all'; }
+function finMKey(d){ if(!d) return ''; var x=new Date(d+'T00:00:00'); return isNaN(x)?'':x.getFullYear()+'-'+(x.getMonth()+1<10?'0':'')+(x.getMonth()+1); }
+function _finMonthKey(){ var m=document.getElementById('fin-filter-month'); return (m&&m.value)||_nowMonthKey(); }
+function finSyncSections(){ if(window.fbDB) window.fbDB.ref('finSections').set(finSections); }
+function finSyncCats(){ if(window.fbDB) window.fbDB.ref('finCats').set(finCats); }
+function _finAudit(action,section,label,detail){
+  try{
+    var who=((typeof staffList!=='undefined'?staffList:[]).find(function(x){return x.id===currentStaffId;})||{}).name
+      || (typeof currentStaffName!=='undefined'&&currentStaffName) || 'Office';
+    auditAdd({ type:'finance', action:action, orderId:'Finance: '+(label||''), detail:(section?'['+section+'] ':'')+(detail||''), by:who });
+  }catch(e){}
+}
+function _finBy(){ return (typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office'; }
+
+// ── Main categories ────────────────────────────────────────────────────────
+function finSecs(){
+  var out=(finSections||[]).filter(function(s){ return s&&s.id; }).map(function(s,i){
+    return {id:s.id,label:s.label||s.id,hiddenFrom:s.hiddenFrom||'',order:(typeof s.order==='number'?s.order:i)};
+  });
+  out.sort(function(a,b){ return a.order-b.order; });
+  return out;
+}
+// A closed main category is gone from that month on — unless it still holds payments there.
+function finSecsFor(mk){
+  return finSecs().filter(function(s){
+    if(!s.hiddenFrom || String(mk)<String(s.hiddenFrom)) return true;
+    return (finPays||[]).some(function(p){ return p.section===s.id && finMKey(p.date)===mk; });
+  });
+}
+function finSecLabel(id){ var s=finSecs().find(function(x){return x.id===id;}); return s?s.label:(id||'—'); }
+function _finSecRec(id){
+  var r=(finSections||[]).find(function(x){ return x&&x.id===id; });
+  if(!r){ r={id:id,label:id}; finSections.push(r); }
+  return r;
+}
+function finSecAdd(){
+  var nm=prompt('New main category / ชื่อหมวดหลักใหม่:\n(e.g. "🚢 Container / ตู้คอนเทนเนอร์", "🏛 Tax / ภาษี", "💳 Installments / ผ่อนชำระ")','');
+  if(nm===null) return; nm=nm.trim(); if(!nm) return;
+  var id='fs'+Date.now()+Math.floor(Math.random()*1000);
+  finSections.push({id:id,label:nm,order:finSecs().length});
+  finSyncSections(); _finAudit('main category added','',nm,''); finRender();
+}
+function finSecSetLabel(id,val){
+  val=String(val||'').trim(); if(!val) return;
+  var r=_finSecRec(id), old=r.label; r.label=val;
+  finSyncSections(); if(old!==val) _finAudit('main category renamed','',val,'was: '+(old||'—'));
+  _finEdit={}; finRender();
+}
+function finSecMove(id,dir){
+  var list=finSecs();
+  var i=list.findIndex(function(s){ return s.id===id; }); if(i<0) return;
+  var j=i+(dir<0?-1:1); if(j<0||j>=list.length) return;
+  var t=list[i]; list[i]=list[j]; list[j]=t;
+  list.forEach(function(s,k){ var r=_finSecRec(s.id); r.label=s.label; r.order=k; });
+  var key='sec|'+id, typed=null;
+  try{ var el=document.querySelector('[data-fineditkey="'+key+'"]'); if(el) typed=el.value; }catch(e){}
+  finSyncSections(); finRender();
+  if(typed!==null){ try{ var e2=document.querySelector('[data-fineditkey="'+key+'"]'); if(e2) e2.value=typed; }catch(e){} }
+}
+// Empty → really deleted. Holds payments → closed from the month on screen, so no
+// earlier month ever loses money (that is exactly what went wrong in Bills once).
+function finSecRemove(id){
+  var s=finSecs().find(function(x){return x.id===id;}); if(!s) return;
+  var linked=(finPays||[]).filter(function(p){ return p.section===id; });
+  var sum=linked.reduce(function(a,p){ return a+(parseFloat(p.amount)||0); },0);
+  var mk=_finMonthKey();
+  if(!linked.length){
+    if(!confirm('Delete main category "'+(s.label||'')+'"? / ลบหมวดหลักนี้?\n\nNo payment uses it. / ไม่มีรายการใช้หมวดนี้')) return;
+    finSections=(finSections||[]).filter(function(x){ return !x||x.id!==id; });
+    delete finCats[id];
+    finSyncSections(); finSyncCats(); _finAudit('main category deleted','',s.label,'empty'); finRender(); return;
+  }
+  if(!confirm('Close main category "'+(s.label||'')+'" from '+mk+' on? / ปิดหมวดหลักนี้ตั้งแต่ '+mk+'?\n\n'
+    +'✓ '+linked.length+' payment(s), '+sum.toLocaleString()+' ฿ stay where they are / รายการยังอยู่เหมือนเดิม\n'
+    +'✓ Earlier months keep it / เดือนก่อนหน้าไม่เปลี่ยน\n'
+    +'✓ Undo: ♻️ Restore / ยกเลิกได้ที่ กู้คืน')) return;
+  _finSecRec(id).hiddenFrom=mk; finSyncSections();
+  _finAudit('main category closed','',s.label,'from '+mk+' · '+linked.length+' payments / '+sum.toLocaleString()+' ฿ kept');
+  finRender();
+}
+function finSecReopen(id){
+  var r=(finSections||[]).find(function(x){ return x&&x.id===id; }); if(!r) return;
+  delete r.hiddenFrom; finSyncSections();
+  _finAudit('main category reopened','',finSecLabel(id),''); finRender(); finRestoreRender();
+}
+
+// ── Categories inside a main category ──────────────────────────────────────
+function finCatsOf(sec){ return finCats[sec]||[]; }
+function finCatRec(sec,id){ return finCatsOf(sec).find(function(c){ return c&&c.id===id; })||null; }
+function finCatHiddenIn(c,mk){ return !!(c && c.hiddenFrom && String(mk||'')>=String(c.hiddenFrom)); }
+function finCatsFor(sec,mk){
+  return finCatsOf(sec).filter(function(c){
+    if(!finCatHiddenIn(c,mk)) return true;
+    return (finPays||[]).some(function(p){ return p.section===sec && p.catId===c.id && finMKey(p.date)===mk; });
+  });
+}
+function finCatAdd(sec){
+  var nm=prompt('New category / ชื่อหมวดใหม่:',''); if(nm===null) return;
+  nm=nm.trim(); if(!nm) return;
+  if(!finCats[sec]) finCats[sec]=[];
+  finCats[sec].push({id:'fk'+Date.now()+Math.floor(Math.random()*1000),label:nm,docMode:'all'});
+  finSyncCats(); _finAudit('category added',sec,nm,''); finRender();
+}
+// Renaming rewrites the label copy on the payments too — otherwise the list keeps
+// showing the old name for everything already booked.
+function finCatSetLabel(sec,id,val){
+  val=String(val||'').trim(); if(!val) return;
+  var c=finCatRec(sec,id); if(!c) return;
+  var old=c.label; c.label=val; finSyncCats();
+  if(old!==val){
+    (finPays||[]).forEach(function(p){
+      if(p.section===sec && p.catId===id && p.catLabel!==val){
+        p.catLabel=val;
+        if(window.fbDB) window.fbDB.ref('finPays/'+p.id+'/catLabel').set(val);
+      }
+    });
+    _finAudit('category renamed',sec,val,'was: '+(old||'—'));
+  }
+  _finEdit={}; finRender();
+}
+function finCatSetDoc(sec,id,mode){
+  var c=finCatRec(sec,id); if(!c) return;
+  if(!FIN_DOC[mode]) mode='all';
+  c.docMode=mode; finSyncCats();
+  _finAudit('category file type',sec,c.label,FIN_DOC[mode].lbl);
+  finRender();
+}
+function finCatMove(sec,id,dir){
+  var arr=finCats[sec]||[];
+  var i=arr.findIndex(function(c){ return c.id===id; }); if(i<0) return;
+  var j=i+(dir<0?-1:1); if(j<0||j>=arr.length) return;
+  var t=arr[i]; arr[i]=arr[j]; arr[j]=t;
+  var key='cat|'+sec+'|'+id, typed=null;
+  try{ var el=document.querySelector('[data-fineditkey="'+key+'"]'); if(el) typed=el.value; }catch(e){}
+  finSyncCats(); finRender();
+  if(typed!==null){ try{ var e2=document.querySelector('[data-fineditkey="'+key+'"]'); if(e2) e2.value=typed; }catch(e){} }
+}
+function finCatRemove(sec,id){
+  var c=finCatRec(sec,id); if(!c) return;
+  var linked=(finPays||[]).filter(function(p){ return p.section===sec && p.catId===id; });
+  var sum=linked.reduce(function(a,p){ return a+(parseFloat(p.amount)||0); },0);
+  var mk=_finMonthKey();
+  if(!linked.length){
+    if(!confirm('Delete category "'+(c.label||'')+'"? / ลบหมวดนี้?\n\nNo payment uses it. / ไม่มีรายการใช้หมวดนี้')) return;
+    finCats[sec]=finCatsOf(sec).filter(function(x){ return x.id!==id; });
+    finSyncCats(); _finAudit('category deleted',sec,c.label,'empty'); finRender(); return;
+  }
+  if(!confirm('Close category "'+(c.label||'')+'" from '+mk+' on? / ปิดหมวดนี้ตั้งแต่ '+mk+'?\n\n'
+    +'✓ '+linked.length+' payment(s), '+sum.toLocaleString()+' ฿ stay where they are / รายการยังอยู่เหมือนเดิม\n'
+    +'✓ Earlier months keep it / เดือนก่อนหน้าไม่เปลี่ยน\n'
+    +'✓ Undo: ♻️ Restore / ยกเลิกได้ที่ กู้คืน')) return;
+  c.hiddenFrom=mk; finSyncCats();
+  _finAudit('category closed',sec,c.label,'from '+mk+' · '+linked.length+' payments / '+sum.toLocaleString()+' ฿ kept');
+  finRender();
+}
+function finCatReopen(sec,id){
+  var c=finCatRec(sec,id); if(!c) return;
+  delete c.hiddenFrom; finSyncCats();
+  _finAudit('category reopened',sec,c.label,''); finRender(); finRestoreRender();
+}
+// Into another main category — the payments carry p.section themselves, so they move along.
+var _finMoveFrom='', _finMoveId='';
+function finCatMoveOpen(sec,id){
+  var c=finCatRec(sec,id); if(!c) return;
+  _finMoveFrom=sec; _finMoveId=id;
+  var el=document.getElementById('fin-move-body'); if(!el) return;
+  var n=(finPays||[]).filter(function(p){ return p.section===sec && p.catId===id; }).length;
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +'<span style="font-size:16px;font-weight:700">⇄ Move category / ย้ายหมวด</span>'
+      +'<button type="button" onclick="finCatMoveClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="font-size:13px;font-weight:700;padding:9px 10px;background:var(--bg2);border-radius:var(--rs);margin-bottom:4px">'+_esc(c.label)+'</div>'
+    +'<div style="font-size:11px;color:var(--text2);margin-bottom:10px">'+(n?n+' payment(s) move along / รายการ '+n+' รายการย้ายตามไปด้วย':'No payments yet / ยังไม่มีรายการ')+'</div>'
+    +finSecs().map(function(s){
+        var cur=s.id===sec;
+        return '<div'+(cur?'':' onclick="finCatMoveTo(\''+_esc(s.id)+'\')"')+' style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid '+(cur?'var(--blue)':'var(--border)')+';border-radius:var(--rs);margin-bottom:6px;'+(cur?'opacity:.6':'cursor:pointer')+'">'
+          +'<span style="font-size:13px;font-weight:600">'+_esc(s.label)+'</span>'
+          +(cur?'<span style="font-size:11px;color:var(--blue);font-weight:700;white-space:nowrap">current / ปัจจุบัน</span>':'<i class="ti ti-chevron-right" style="color:var(--text3)"></i>')+'</div>';
+      }).join('');
+  document.getElementById('fin-move-modal').classList.add('open');
+}
+function finCatMoveClose(){ document.getElementById('fin-move-modal').classList.remove('open'); }
+function finCatMoveTo(to){
+  var from=_finMoveFrom, id=_finMoveId;
+  if(!from||!id||from===to){ finCatMoveClose(); return; }
+  var arr=finCats[from]||[], i=arr.findIndex(function(c){ return c.id===id; });
+  if(i<0){ finCatMoveClose(); return; }
+  var c=arr.splice(i,1)[0];
+  if(!finCats[to]) finCats[to]=[];
+  finCats[to].push(c);
+  (finPays||[]).forEach(function(p){
+    if(p.section===from && p.catId===id){
+      p.section=to;
+      if(window.fbDB) window.fbDB.ref('finPays/'+p.id+'/section').set(to);
+    }
+  });
+  finSyncCats(); _finAudit('category moved',to,c.label,'from '+finSecLabel(from));
+  finCatMoveClose(); finRender();
+}
+
+// ── Inline rename + fold state ─────────────────────────────────────────────
+var _finEdit={}, _finOpen={}, _finRowEdit={};
+function finEditOn(key){ _finEdit={}; _finEdit[key]=1; finRender();
+  try{ var i=document.querySelector('[data-fineditkey="'+key+'"]'); if(i){ i.focus(); i.select(); } }catch(e){} }
+function finEditOff(){ _finEdit={}; finRender(); }
+function finSaveEdit(key){
+  var el=document.querySelector('[data-fineditkey="'+key+'"]'); if(!el) return;
+  var v=el.value, p=key.split('|');
+  if(p[0]==='sec') finSecSetLabel(p[1],v); else finCatSetLabel(p[1],p[2],v);
+}
+function finToggle(sec,id){ var k=sec+'|'+id; _finOpen[k]=!_finOpen[k]; finRender(); }
+function finRowEdit(id){ _finRowEdit[id]=!_finRowEdit[id]; finRender(); }
+function _finEditRow(key,label){
+  return '<input type="text" data-fineditkey="'+key+'" value="'+_esc(label)+'" onclick="event.stopPropagation()" onkeydown="event.stopPropagation();if(event.key===\'Enter\'){finSaveEdit(\''+key+'\')}if(event.key===\'Escape\'){finEditOff()}" style="flex:1;min-width:0;padding:5px 8px;border:1.5px solid var(--blue);border-radius:var(--rs);font-size:13px;font-weight:600;background:var(--bg);color:var(--text)">'+
+    '<button type="button" onclick="event.stopPropagation();finSaveEdit(\''+key+'\')" title="Save / บันทึก" style="border:1px solid #bbf7d0;background:#dcfce7;color:#16a34a;border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✓</button>'+
+    '<button type="button" onclick="event.stopPropagation();finEditOff()" title="Cancel / ยกเลิก" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer">✕</button>';
+}
+
+// ── Files ──────────────────────────────────────────────────────────────────
+// Storage first. A picture can still fall back into the database as a compressed
+// JPEG; a spreadsheet cannot — then it says so instead of writing a broken record.
+function finFileKind(name,url){
+  var s=String(name||url||'').toLowerCase().split('?')[0];
+  if(/docs\.google\.com|drive\.google\.com|sheet/.test(String(url||''))) return 'sheet';
+  if(/\.(jpe?g|png|gif|webp|heic)$/.test(s)||/^data:image\//.test(String(url||''))) return 'img';
+  if(/\.pdf$/.test(s)) return 'pdf';
+  if(/\.(xlsx?|xlsm|ods|csv|numbers)$/.test(s)) return 'sheet';
+  if(/^https?:/.test(String(url||''))&&!/\./.test(s)) return 'link';
+  return 'file';
+}
+function finFileIcon(k){ return k==='img'?'🖼':k==='pdf'?'📕':k==='sheet'?'📊':k==='link'?'🔗':'📎'; }
+function finFiles(p){
+  if(!p) return [];
+  var f=p.files;
+  if(Array.isArray(f)) return f.filter(Boolean);
+  if(f&&typeof f==='object') return Object.keys(f).map(function(k){return f[k];}).filter(Boolean);
+  return [];
+}
+function _finUpload(f,cb){
+  if(window.fbStorage){
+    window.fbStorage.ref('finance/'+Date.now()+'_'+f.name).put(f)
+      .then(function(s){ return s.ref.getDownloadURL(); }).then(cb)
+      .catch(function(){ _finUploadFallback(f,cb); });
+  } else _finUploadFallback(f,cb);
+}
+function _finUploadFallback(f,cb){
+  if(/^image\//.test(f.type||'')){ try{ compressPhotoFile(f,cb); return; }catch(e){} }
+  alert('Upload failed — file storage not reachable. / อัปโหลดไม่สำเร็จ ลองใหม่อีกครั้ง');
+  cb('');
+}
+function finPayRec(id){ return (finPays||[]).find(function(p){ return p&&p.id===id; })||null; }
+function finPushFile(id,rec){
+  var p=finPayRec(id); if(!p||!rec||!rec.url) return;
+  var cur=finFiles(p); cur.push(rec); p.files=cur;
+  if(window.fbDB) window.fbDB.ref('finPays/'+id+'/files').set(cur);
+  _finAudit('file added',p.section,p.catLabel||p.what||id,rec.name||'');
+  finRender();
+}
+function finAddFile(id,inp){
+  var f=inp&&inp.files&&inp.files[0]; if(!f) return;
+  if(f.size>25*1024*1024){ alert('File too big (max 25 MB) / ไฟล์ใหญ่เกินไป'); inp.value=''; return; }
+  var st=document.getElementById('finup-'+id); if(st){ st.textContent='⏳ Uploading… / กำลังอัปโหลด…'; st.style.display=''; }
+  _finUpload(f,function(url){
+    if(st) st.style.display='none';
+    inp.value='';
+    if(!url) return;
+    finPushFile(id,{name:f.name,url:url,kind:finFileKind(f.name,url),ts:Date.now(),by:_finBy()});
+  });
+}
+function finAddLink(id){
+  var u=prompt('Paste the link (Google Sheets, Drive, …) / วางลิงก์:',''); if(u===null) return;
+  u=u.trim(); if(!u) return;
+  if(!/^https?:\/\//i.test(u)){ alert('Link must start with http:// or https:// / ลิงก์ต้องขึ้นต้นด้วย http'); return; }
+  var nm=prompt('Name for this link / ชื่อลิงก์:','Sheet'); if(nm===null) return;
+  finPushFile(id,{name:(nm.trim()||'Link'),url:u,kind:'link',ts:Date.now(),by:_finBy()});
+}
+// By index, not by URL — a base64 fallback picture would otherwise sit in the
+// onclick attribute as a multi-kilobyte string.
+function finDelFile(id,i){
+  var p=finPayRec(id); if(!p) return;
+  var cur=finFiles(p); i=parseInt(i,10);
+  if(isNaN(i)||i<0||i>=cur.length) return;
+  if(!confirm('Remove "'+(cur[i].name||'file')+'"? / ลบไฟล์นี้?')) return;
+  var gone=cur[i].name||'';
+  cur.splice(i,1); p.files=cur;
+  if(window.fbDB) window.fbDB.ref('finPays/'+id+'/files').set(cur);
+  _finAudit('file removed',p.section,p.catLabel||p.what||id,gone);
+  finRender();
+}
+function finOpenFile(url,kind){
+  if(kind==='img'){ try{ openPhotoLightbox(url); return; }catch(e){} }
+  try{ window.open(url,'_blank','noopener'); }catch(e){ location.href=url; }
+}
+
+// ── Payments ───────────────────────────────────────────────────────────────
+function finSet(id,field,val){
+  var p=finPayRec(id); if(!p) return;
+  if(field==='amount') val=parseFloat(val)||0;
+  if(field==='what') val=String(val||'').trim();
+  if(p[field]===val) return;
+  var old=p[field]; p[field]=val;
+  if(window.fbDB) window.fbDB.ref('finPays/'+id+'/'+field).set(val);
+  _finAudit('payment edited',p.section,p.catLabel||p.what||id,field+': '+(old==null?'—':old)+' → '+val);
+  finRender();
+}
+function finStatusToggle(id){
+  var p=finPayRec(id); if(!p) return;
+  finSet(id,'status',p.status==='open'?'paid':'open');
+}
+// Deleting money needs the office user's OWN PIN — same rule as a Bills receipt.
+function finDelete(id){
+  var p=finPayRec(id); if(!p) return;
+  var me=(typeof staffList!=='undefined'&&typeof currentStaffId!=='undefined') ? staffList.find(function(s){return s.id===currentStaffId;}) : null;
+  if(!me||!me.pin){ alert('Log in with your office PIN to delete. / เข้าสู่ระบบด้วย PIN'); return; }
+  var entered=prompt('Enter YOUR office PIN to delete this payment / ใส่ PIN ของคุณเพื่อลบ:'); if(entered===null) return;
+  if(String(entered).trim()!==String(me.pin)){ alert('Wrong PIN / PIN ไม่ถูกต้อง'); return; }
+  if(window.fbDB) window.fbDB.ref('finPays/'+id).remove();
+  _finAudit('payment deleted',p.section,p.catLabel||p.what||id,(parseFloat(p.amount)||0).toLocaleString()+' ฿ · '+(p.date||''));
+  finRender();
+}
+
+// ── Entry form ─────────────────────────────────────────────────────────────
+function finEntryRender(){
+  var el=document.getElementById('fin-entry'); if(!el) return;
+  var inp='padding:9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)';
+  el.innerHTML='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px">'
+    +'<div style="font-size:13px;font-weight:700;margin-bottom:8px">➕ Add payment / เพิ่มรายการจ่าย</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:8px">'
+      +'<select id="fin-e-section" onchange="finFillCats()" style="flex:1;min-width:0;'+inp+'"></select>'
+      +'<select id="fin-e-cat" onchange="finFillCats(1)" style="flex:1;min-width:0;'+inp+'"></select>'
+    +'</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:8px">'
+      +'<input type="number" id="fin-e-amount" placeholder="Amount ฿ / จำนวน" style="flex:1;min-width:0;'+inp+';font-weight:700;text-align:right">'
+      +'<input type="date" id="fin-e-date" lang="en-GB" onchange="finFillCats()" style="flex:1;min-width:0;'+inp+'">'
+    +'</div>'
+    +'<input type="text" id="fin-e-what" placeholder="What for / รายละเอียด (เช่น ตู้ 23, ภาษี ก.ค.)" style="width:100%;margin-bottom:8px;box-sizing:border-box;'+inp+'">'
+    +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">'
+      +'<label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text2);cursor:pointer">'
+        +'<input type="checkbox" id="fin-e-open" style="width:16px;height:16px;cursor:pointer"> Not paid yet / ยังไม่ได้จ่าย</label>'
+    +'</div>'
+    +'<div id="fin-e-filerow" style="margin-bottom:8px"></div>'
+    +'<button type="button" onclick="finEntrySubmit()" style="width:100%;padding:10px;border:none;border-radius:var(--rs);background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer"><i class="ti ti-plus"></i> Save payment / บันทึก</button>'
+    +'</div>';
+  try{ document.getElementById('fin-e-date').valueAsDate=new Date(); }catch(e){}
+  finFillCats();
+}
+// Rebuilds both dropdowns; the file row follows the CATEGORY's document type.
+function finFillCats(keepSec){
+  var sel=document.getElementById('fin-e-section'), sub=document.getElementById('fin-e-cat');
+  if(!sel||!sub) return;
+  var dEl=document.getElementById('fin-e-date');
+  var dmk=(dEl&&dEl.value)?finMKey(dEl.value):_nowMonthKey();
+  var secs=finSecsFor(dmk), keep=sel.value;
+  sel.innerHTML=secs.length
+    ? secs.map(function(s){ return '<option value="'+_esc(s.id)+'">'+_esc(s.label)+'</option>'; }).join('')
+    : '<option value="">— add a main category first / เพิ่มหมวดหลักก่อน —</option>';
+  if(keep && secs.some(function(s){return s.id===keep;})) sel.value=keep;
+  var sec=sel.value, prev=sub.value;
+  var cats=finCatsFor(sec,dmk).filter(function(c){ return !finCatHiddenIn(c,dmk); });
+  sub.innerHTML=cats.length
+    ? cats.map(function(c){ return '<option value="'+_esc(c.id)+'">'+_esc(c.label)+'</option>'; }).join('')
+    : '<option value="">— add a category / เพิ่มหมวด —</option>';
+  if(prev && cats.some(function(c){return c.id===prev;})) sub.value=prev;
+  var row=document.getElementById('fin-e-filerow'); if(!row) return;
+  var c=finCatRec(sec,sub.value), mode=finDocMode(c), d=FIN_DOC[mode];
+  if(mode==='none'||!c){ row.innerHTML=''; return; }
+  row.innerHTML='<div style="font-size:11px;color:var(--text2);margin-bottom:4px">'+d.lbl+'</div>'
+    +'<input type="file" id="fin-e-file"'+(d.accept?' accept="'+d.accept+'"':'')+' style="font-size:13px;display:block;width:100%">'
+    +(d.link?'<div style="font-size:11px;color:var(--text2);margin-top:4px">Sheets/Drive links can be added to the payment after saving 🔗 / เพิ่มลิงก์ได้หลังบันทึก</div>':'');
+}
+function finEntrySubmit(){
+  var sec=(document.getElementById('fin-e-section')||{}).value||'';
+  var catId=(document.getElementById('fin-e-cat')||{}).value||'';
+  if(!sec){ alert('Add a main category first / เพิ่มหมวดหลักก่อน'); return; }
+  if(!catId){ alert('Add a category in that main category first / เพิ่มหมวดก่อน'); return; }
+  var c=finCatRec(sec,catId)||{};
+  var amt=parseFloat((document.getElementById('fin-e-amount')||{}).value)||0;
+  if(amt<=0){ alert('Enter an amount / ใส่จำนวนเงิน'); return; }
+  var date=(document.getElementById('fin-e-date')||{}).value || new Date().toISOString().slice(0,10);
+  var what=((document.getElementById('fin-e-what')||{}).value||'').trim();
+  var open=!!(document.getElementById('fin-e-open')||{}).checked;
+  var fEl=document.getElementById('fin-e-file');
+  var file=fEl&&fEl.files&&fEl.files[0];
+  function persist(fileRec){
+    var id='fin-'+Date.now()+Math.floor(Math.random()*1000);
+    var rec={id:id,section:sec,catId:catId,catLabel:c.label||'',what:what,amount:amt,date:date,
+             status:open?'open':'paid',ts:Date.now(),by:_finBy(),files:fileRec?[fileRec]:[]};
+    if(window.fbDB) window.fbDB.ref('finPays/'+id).set(rec);
+    _finAudit('payment added',sec,c.label||catId,amt.toLocaleString()+' ฿ · '+date+(open?' · not paid yet':''));
+    var a=document.getElementById('fin-e-amount'); if(a)a.value='';
+    var w=document.getElementById('fin-e-what'); if(w)w.value='';
+    var o=document.getElementById('fin-e-open'); if(o)o.checked=false;
+    if(fEl) fEl.value='';
+    finRender();
+  }
+  if(file){
+    var btn=document.getElementById('fin-e-file');
+    if(btn) btn.disabled=true;
+    _finUpload(file,function(url){
+      if(btn) btn.disabled=false;
+      persist(url?{name:file.name,url:url,kind:finFileKind(file.name,url),ts:Date.now(),by:_finBy()}:null);
+    });
+  } else persist(null);
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────
+function _finIn(mk){ return (finPays||[]).filter(function(p){ return p && finMKey(p.date)===mk; }); }
+function _finSum(arr){ return arr.reduce(function(a,p){ return a+(parseFloat(p.amount)||0); },0); }
+function _finPayRow(p){
+  var files=finFiles(p), open=p.status==='open', ed=!!_finRowEdit[p.id];
+  var inp='padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text)';
+  var h='<div style="background:var(--bg2);border:1px solid '+(open?'#fcd34d':'var(--border)')+';border-radius:var(--rs);padding:7px 9px;margin-top:6px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
+      +'<span style="min-width:0;flex:1">'
+        +'<span style="font-size:12.5px;font-weight:600">'+_esc(p.what||p.catLabel||'—')+'</span>'
+        +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'+fmtD(p.date)+(p.by?' · 👤 '+_esc(p.by):'')
+          +(open?' · <span style="color:#92400e;font-weight:700">⏳ not paid / ยังไม่จ่าย</span>':'')+'</div>'
+      +'</span>'
+      +'<span style="font-size:13px;font-weight:800;white-space:nowrap">'+(parseFloat(p.amount)||0).toLocaleString()+' ฿</span>'
+      +'<button type="button" onclick="finRowEdit(\''+p.id+'\')" title="Edit / แก้ไข" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:28px;height:28px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
+    +'</div>';
+  if(files.length){
+    h+='<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">'+files.map(function(f,i){
+      var k=f.kind||finFileKind(f.name,f.url);
+      return '<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:3px 4px 3px 8px;font-size:11px;max-width:100%">'
+        +'<span onclick="finOpenFile(\''+_esc(f.url).replace(/'/g,"\\'")+'\',\''+k+'\')" title="'+_esc(f.name||'')+'" style="cursor:pointer;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+finFileIcon(k)+' '+_esc(f.name||'file')+'</span>'
+        +'<button type="button" onclick="finDelFile(\''+p.id+'\','+i+')" title="Remove / ลบ" style="border:none;background:none;color:#dc2626;font-size:12px;cursor:pointer;padding:0 2px;line-height:1">×</button>'
+      +'</span>';
+    }).join('')+'</div>';
+  }
+  if(ed){
+    var c=finCatRec(p.section,p.catId), mode=finDocMode(c), d=FIN_DOC[mode];
+    h+='<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">'
+      +'<div style="display:flex;gap:5px;margin-bottom:6px">'
+        +'<input type="text" value="'+_esc(p.what||'')+'" placeholder="What for / รายละเอียด" onchange="finSet(\''+p.id+'\',\'what\',this.value)" style="flex:1;min-width:0;'+inp+'">'
+        +'<input type="number" value="'+(parseFloat(p.amount)||0)+'" onchange="finSet(\''+p.id+'\',\'amount\',this.value)" style="width:100px;flex-shrink:0;text-align:right;font-weight:700;'+inp+'">'
+      +'</div>'
+      +'<div style="display:flex;gap:5px;margin-bottom:6px">'
+        +'<input type="date" lang="en-GB" value="'+_esc(p.date||'')+'" onchange="finSet(\''+p.id+'\',\'date\',this.value)" style="flex:1;min-width:0;'+inp+'">'
+        +'<button type="button" onclick="finStatusToggle(\''+p.id+'\')" style="flex:1;min-width:0;border:1px solid '+(open?'#fcd34d':'#bbf7d0')+';background:'+(open?'#fffbeb':'#dcfce7')+';color:'+(open?'#92400e':'#16a34a')+';border-radius:var(--rs);font-size:12px;font-weight:700;cursor:pointer;padding:6px">'+(open?'⏳ not paid / ยังไม่จ่าย':'✓ paid / จ่ายแล้ว')+'</button>'
+      +'</div>'
+      +'<div style="display:flex;gap:5px;align-items:center">'
+        +(mode==='none'?'<span style="flex:1;font-size:11px;color:var(--text2)">No files in this category / หมวดนี้ไม่ใช้ไฟล์</span>'
+          :'<input type="file" id="finfi-'+p.id+'"'+(d.accept?' accept="'+d.accept+'"':'')+' style="display:none" onchange="finAddFile(\''+p.id+'\',this)">'
+           +'<button type="button" onclick="document.getElementById(\'finfi-'+p.id+'\').click()" style="flex:1;border:1px dashed var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);font-size:12px;font-weight:600;cursor:pointer;padding:6px">📎 Add file / แนบไฟล์</button>'
+           +(d.link?'<button type="button" onclick="finAddLink(\''+p.id+'\')" style="flex:1;border:1px dashed var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);font-size:12px;font-weight:600;cursor:pointer;padding:6px">🔗 Add link / เพิ่มลิงก์</button>':''))
+        +'<button type="button" onclick="finDelete(\''+p.id+'\')" title="Delete / ลบ" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:30px;flex-shrink:0;cursor:pointer">✕</button>'
+      +'</div>'
+      +'<div id="finup-'+p.id+'" style="display:none;font-size:11px;color:var(--text2);margin-top:5px"></div>'
+    +'</div>';
+  }
+  return h+'</div>';
+}
+function finRender(){
+  try{ if(!document.getElementById('fin-e-section')) finEntryRender(); }catch(e){}
+  var tree=document.getElementById('fin-tree'); if(!tree) return;
+  // Month list: last 6 months + every month that actually holds a payment.
+  var msel=document.getElementById('fin-filter-month');
+  var months={}, now=new Date();
+  for(var i=0;i<6;i++){ var d2=new Date(now.getFullYear(),now.getMonth()-i,1); months[d2.getFullYear()+'-'+(d2.getMonth()+1<10?'0':'')+(d2.getMonth()+1)]=1; }
+  (finPays||[]).forEach(function(p){ if(p.date) months[finMKey(p.date)]=1; });
+  var mArr=Object.keys(months).filter(Boolean).sort().reverse();
+  if(msel){
+    var cur=msel.value;
+    msel.innerHTML=mArr.map(function(m){ return '<option value="'+m+'">'+kpMLabel(m)+'</option>'; }).join('');
+    if(cur && mArr.indexOf(cur)>=0) msel.value=cur;
+  }
+  var mk=_finMonthKey(), inMonth=_finIn(mk);
+  var totEl=document.getElementById('fin-total');
+  if(totEl){
+    var openArr=inMonth.filter(function(p){ return p.status==='open'; });
+    totEl.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px">'
+      +'<span style="font-size:12.5px;font-weight:700">💰 Total '+kpMLabel(mk)+' / รวม</span>'
+      +'<span style="font-size:16px;font-weight:800;color:var(--blue);white-space:nowrap">'+_finSum(inMonth).toLocaleString()+' ฿</span></div>'
+      +(openArr.length?'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:8px 12px;margin-top:6px">'
+        +'<span style="font-size:12px;font-weight:700;color:#92400e">⏳ Not paid yet / ยังไม่จ่าย ('+openArr.length+')</span>'
+        +'<span style="font-size:13px;font-weight:800;color:#92400e;white-space:nowrap">'+_finSum(openArr).toLocaleString()+' ฿</span></div>':'');
+  }
+  var html='', secs=finSecsFor(mk);
+  var box=function(inner){ return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+inner+'</div>'; };
+  secs.forEach(function(s,si){
+    var secPays=inMonth.filter(function(p){ return p.section===s.id; });
+    var eKey='sec|'+s.id, editing=!!_finEdit[eKey];
+    var inner;
+    if(editing){
+      inner='<div style="margin-bottom:8px">'
+        +'<div style="display:flex;gap:5px;align-items:center">'+_finEditRow(eKey,s.label)+'</div>'
+        +'<div style="display:flex;gap:5px;align-items:center;margin-top:6px">'
+          +_ordBtn('finSecMove(\''+s.id+'\',-1)','▲','Move up / เลื่อนขึ้น',si<=0)
+          +_ordBtn('finSecMove(\''+s.id+'\',1)','▼','Move down / เลื่อนลง',si>=secs.length-1)
+          +'<button type="button" onclick="finSecRemove(\''+s.id+'\')" style="flex:1;padding:6px 8px;border:1px solid #fecaca;border-radius:var(--rs);background:#fee2e2;color:#dc2626;font-size:12px;font-weight:600;cursor:pointer">✕ Remove / ลบหมวดหลัก</button>'
+          +'<span style="font-size:13px;font-weight:800;color:var(--blue);white-space:nowrap">'+_finSum(secPays).toLocaleString()+' ฿</span>'
+        +'</div></div>';
+    } else {
+      inner='<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:8px">'
+        +'<span style="flex:1;min-width:0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(s.label)+(s.hiddenFrom?' <span style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 5px">closed / ปิด</span>':'')+'</span>'
+        +'<span style="font-size:14px;font-weight:800;color:var(--blue);white-space:nowrap">'+_finSum(secPays).toLocaleString()+' ฿</span>'
+        +'<button type="button" onclick="finEditOn(\''+eKey+'\')" title="Rename, order, remove / เปลี่ยนชื่อ-ย้าย-ลบ" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
+      +'</div>';
+    }
+    var cats=finCatsFor(s.id,mk);
+    if(!cats.length) inner+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">No categories yet — add one below / ยังไม่มีหมวด</div>';
+    cats.forEach(function(c,ci){
+      var catPays=secPays.filter(function(p){ return p.catId===c.id; }).sort(function(a,b){ return (b.date||'').localeCompare(a.date||'')||(b.ts||0)-(a.ts||0); });
+      var ck=s.id+'|'+c.id, open=!!_finOpen[ck], cKey='cat|'+s.id+'|'+c.id, cEdit=!!_finEdit[cKey];
+      var mode=finDocMode(c);
+      inner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
+        +(cEdit
+          ? '<div style="padding:6px 9px">'
+              +'<div style="display:flex;gap:5px;align-items:center">'+_finEditRow(cKey,c.label)+'</div>'
+              +'<div style="display:flex;gap:5px;align-items:center;margin-top:6px">'
+                +_ordBtn('finCatMove(\''+s.id+'\',\''+c.id+'\',-1)','▲','Move up / เลื่อนขึ้น',ci<=0)
+                +_ordBtn('finCatMove(\''+s.id+'\',\''+c.id+'\',1)','▼','Move down / เลื่อนลง',ci>=cats.length-1)
+                +'<button type="button" onclick="event.stopPropagation();finCatMoveOpen(\''+s.id+'\',\''+c.id+'\')" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer">⇄ Move to… / ย้าย</button>'
+                +'<button type="button" onclick="event.stopPropagation();finCatRemove(\''+s.id+'\',\''+c.id+'\')" title="Remove / ลบ" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:30px;flex-shrink:0;cursor:pointer">✕</button>'
+              +'</div>'
+              // What may be attached to a payment of THIS category.
+              +'<div style="display:flex;gap:6px;align-items:center;margin-top:6px">'
+                +'<span style="font-size:11px;color:var(--text2);font-weight:600;white-space:nowrap">📄 Files / ไฟล์</span>'
+                +'<select onchange="finCatSetDoc(\''+s.id+'\',\''+c.id+'\',this.value)" onclick="event.stopPropagation()" style="flex:1;min-width:0;padding:6px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text)">'
+                  +Object.keys(FIN_DOC).map(function(k){ return '<option value="'+k+'"'+(k===mode?' selected':'')+'>'+FIN_DOC[k].lbl+'</option>'; }).join('')
+                +'</select>'
+              +'</div>'
+            +'</div>'
+          : '<div onclick="finToggle(\''+s.id+'\',\''+c.id+'\')" style="display:flex;gap:5px;align-items:center;padding:6px 9px;cursor:pointer">'
+              +'<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)
+                +' <span style="font-size:11px" title="'+FIN_DOC[mode].lbl+'">'+FIN_DOC[mode].lbl.split(' ')[0]+'</span>'
+                +(catPays.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+catPays.length+')</span>':'')
+                +(c.hiddenFrom?' <span style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 5px">closed / ปิด</span>':'')+'</span>'
+              +'<span style="font-size:13px;font-weight:800;white-space:nowrap">'+_finSum(catPays).toLocaleString()+' ฿</span>'
+              +'<button type="button" onclick="event.stopPropagation();finEditOn(\''+cKey+'\')" title="Rename, files, move / เปลี่ยนชื่อ-ไฟล์-ย้าย" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
+            +'</div>')
+        +(open?'<div style="padding:0 9px 8px">'+(catPays.length?catPays.map(_finPayRow).join('')
+            :'<div style="font-size:11px;color:var(--text2);padding-top:5px">No payments this month / ยังไม่มีรายการเดือนนี้</div>')+'</div>':'')
+      +'</div>';
+    });
+    // Payments whose category was deleted — money that would otherwise vanish from view.
+    var known={}; finCatsOf(s.id).forEach(function(c){ known[c.id]=1; });
+    var orph=secPays.filter(function(p){ return !known[p.catId]; });
+    if(orph.length){
+      var oOpen=!!_finOpen[s.id+'|__orphan'];
+      inner+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
+        +'<div onclick="finToggle(\''+s.id+'\',\'__orphan\')" style="display:flex;gap:6px;align-items:center;padding:6px 9px;cursor:pointer">'
+          +'<span style="flex:1;min-width:0;font-size:12px;font-weight:600;color:#92400e"><i class="ti ti-chevron-'+(oOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> ⚠️ Not assigned / ไม่มีหมวด ('+orph.length+')</span>'
+          +'<span style="font-size:13px;font-weight:800;color:#92400e;white-space:nowrap">'+_finSum(orph).toLocaleString()+' ฿</span>'
+        +'</div>'
+        +(oOpen?'<div style="padding:0 9px 8px">'+orph.map(_finPayRow).join('')+'</div>':'')
+      +'</div>';
+    }
+    html+=box(inner+'<button type="button" onclick="finCatAdd(\''+s.id+'\')" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add category / เพิ่มหมวด</button>');
+  });
+  // Payments of a main category that no longer exists at all.
+  var secKnown={}; finSecs().forEach(function(s){ secKnown[s.id]=1; });
+  var lost=inMonth.filter(function(p){ return !secKnown[p.section]; });
+  if(lost.length){
+    var lOpen=!!_finOpen['__lost|'];
+    html+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'
+      +'<div onclick="finToggle(\'__lost\',\'\')" style="display:flex;justify-content:space-between;align-items:center;gap:6px;cursor:pointer">'
+        +'<span style="flex:1;min-width:0;font-size:13px;font-weight:700;color:#92400e"><i class="ti ti-chevron-'+(lOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> ⚠️ Unknown main category / หมวดหลักหาย ('+lost.length+')</span>'
+        +'<span style="font-size:14px;font-weight:800;color:#92400e;white-space:nowrap">'+_finSum(lost).toLocaleString()+' ฿</span>'
+      +'</div>'
+      +(lOpen?'<div style="margin-top:6px">'+lost.map(_finPayRow).join('')+'</div>':'')
+    +'</div>';
+  }
+  if(!secs.length){
+    html+='<div class="empty" style="padding:18px;font-size:12.5px;line-height:1.7">'
+      +'<i class="ti ti-briefcase" style="font-size:30px;display:block;margin-bottom:6px"></i>'
+      +'Nothing here yet — build it yourself. / ยังว่าง สร้างเองได้เลย<br>'
+      +'<span style="color:var(--text2)">e.g. 🚢 Container · 🏛 Tax / ภาษี · 👷 Extra wages / ค่าแรงพิเศษ · 💳 Installments / ผ่อนชำระ</span></div>';
+  }
+  html+='<button type="button" onclick="finSecAdd()" style="width:100%;margin-bottom:12px;background:var(--bg2);border:1.5px dashed var(--blue);color:var(--blue);border-radius:var(--rs);padding:9px;font-size:12.5px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add main category / เพิ่มหมวดหลัก</button>';
+  tree.innerHTML=html;
+  try{ finFillCats(); }catch(e){}
+}
+
+// ── Restore ────────────────────────────────────────────────────────────────
+// Everything that was closed off, with the money it still holds, over every month.
+function finRestoreOpen(){ finRestoreRender(); document.getElementById('fin-restore-modal').classList.add('open'); }
+function finRestoreClose(){ document.getElementById('fin-restore-modal').classList.remove('open'); }
+function finRestoreRender(){
+  var el=document.getElementById('fin-restore-body'); if(!el) return;
+  var rows='';
+  finSecs().forEach(function(s){
+    if(s.hiddenFrom){
+      var n=(finPays||[]).filter(function(p){ return p.section===s.id; });
+      rows+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px">'
+        +'<span style="min-width:0;flex:1"><span style="font-size:13px;font-weight:700">'+_esc(s.label)+'</span>'
+          +'<div style="font-size:11px;color:var(--text2)">main category · closed from '+s.hiddenFrom+' · '+n.length+' payments / '+_finSum(n).toLocaleString()+' ฿</div></span>'
+        +'<button type="button" onclick="finSecReopen(\''+s.id+'\')" style="border:1px solid #bbf7d0;background:#dcfce7;color:#16a34a;border-radius:var(--rs);padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0">♻️ Reopen</button></div>';
+    }
+    finCatsOf(s.id).forEach(function(c){
+      if(!c.hiddenFrom) return;
+      var n=(finPays||[]).filter(function(p){ return p.section===s.id && p.catId===c.id; });
+      rows+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px">'
+        +'<span style="min-width:0;flex:1"><span style="font-size:13px;font-weight:700">'+_esc(c.label)+'</span>'
+          +'<div style="font-size:11px;color:var(--text2)">'+_esc(s.label)+' · closed from '+c.hiddenFrom+' · '+n.length+' payments / '+_finSum(n).toLocaleString()+' ฿</div></span>'
+        +'<button type="button" onclick="finCatReopen(\''+s.id+'\',\''+c.id+'\')" style="border:1px solid #bbf7d0;background:#dcfce7;color:#16a34a;border-radius:var(--rs);padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0">♻️ Reopen</button></div>';
+    });
+  });
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:16px;font-weight:700">♻️ Restore / กู้คืน</span>'
+      +'<button type="button" onclick="finRestoreClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +(rows||'<div class="empty" style="padding:14px;font-size:12.5px">Nothing closed / ไม่มีหมวดที่ปิดไว้</div>');
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    ACCOUNTING / OWNER DASHBOARD
