@@ -2267,8 +2267,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         <button type="button" onclick="pgRowDur('inf')" data-v="inf">♾ Forever / ตลอดไป</button>
       </div>
       <div id="pgw-nwrap" style="display:none;margin-top:8px">
-        <input type="number" id="pgw-months" min="2" placeholder="3" style="width:100%;box-sizing:border-box">
+        <input type="number" id="pgw-months" min="2" placeholder="3" oninput="pgRowSeqPrev()" style="width:100%;box-sizing:border-box">
         <div style="font-size:10.5px;color:var(--text2);margin-top:4px">Number of months counted from this month / จำนวนเดือน นับจากเดือนนี้</div>
+        <label class="fl" style="margin-top:10px">🔢 เดือนนี้คืองวดที่ / This month = instalment no.</label>
+        <input type="number" id="pgw-startno" min="1" placeholder="1" oninput="pgRowSeqPrev()" style="width:100%;box-sizing:border-box">
+        <div style="font-size:10.5px;color:var(--text2);margin-top:4px">ผ่อนบ้านจ่ายไปแล้ว 15 งวด เหลือ 9 → ใส่ 9 เดือน และงวดที่ 16 / already paid 15 of 24 with 9 left → 9 months, instalment no. 16</div>
+        <div id="pgw-seqprev" style="font-size:12px;font-weight:700;color:var(--blue);margin-top:8px"></div>
       </div>
 
       <div style="display:flex;gap:8px;margin-top:16px">
@@ -6604,7 +6608,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260804008;
+var KP_BUILD = 20260804009;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -22393,13 +22397,28 @@ function pgRowActive(d, mk){
   var a=String(from).split('-'), b=String(mk).split('-');
   return ((+b[0]-+a[0])*12 + (+b[1]-+a[1])) < m;
 }
+// "ผ่อนบ้าน 16/24" — which instalment of how many this month is. A house instalment
+// usually did not start in the app: startNo says which number the FIRST booked month
+// carries (15 already paid outside → startNo 16), so the total is startNo-1+months.
+// Without startNo it counts plainly 1/3, 2/3, 3/3.
+function pgRowSeq(d, mk){
+  if(!d) return null;
+  var m=parseInt(d.months)||0; if(m<2) return null;      // one-off / forever have no count
+  var from=d.fromMK||mk;
+  var a=String(from).split('-'), b=String(mk).split('-');
+  var diff=(+b[0]-+a[0])*12 + (+b[1]-+a[1]);
+  if(diff<0 || diff>=m) return null;
+  var start=Math.max(1, parseInt(d.startNo)||1);
+  return { no:start+diff, total:start-1+m };
+}
 function pgRows(sid, mk){
   var out=PG_FIX.map(function(r){ var c={}; for(var k in r) c[k]=r[k]; c.key=r.k; c.custom=false; return c; });
   var defs=(payRowsDef||{})[sid]||{};
   Object.keys(defs).forEach(function(id){
     var d=defs[id]; if(!d || !pgRowActive(d,mk)) return;
     var sign=(+d.sign<0)?-1:1;
-    out.push({ k:'x'+id, key:'x'+id, id:id, ic:(sign<0?'➖':'➕'), en:(d.label||'Extra'), th:'',
+    var _sq=pgRowSeq(d,mk);
+    out.push({ k:'x'+id, key:'x'+id, id:id, ic:(sign<0?'➖':'➕'), en:(d.label||'Extra')+(_sq?' '+_sq.no+'/'+_sq.total:''), th:'',
                type:(d.mode==='daily'?'int':'once'), sign:sign, custom:true,
                amount:parseFloat(d.amount)||0, mode:(d.mode==='daily'?'daily':'total') });
   });
@@ -22858,6 +22877,25 @@ function pgRowMode(v){
 function pgRowDur(v){
   _pgRowDur=v; pgSeg('pgw-dur',v);
   var w=document.getElementById('pgw-nwrap'); if(w) w.style.display=(v==='n'?'':'none');
+  pgRowSeqPrev();
+}
+// Live line under the two fields, so nobody has to work out in their head what
+// "9 months, no. 16" turns into: "Aug 2026 = งวด 16/24 · last: Apr 2027".
+function pgRowSeqPrev(){
+  var el=document.getElementById('pgw-seqprev'); if(!el) return;
+  var m=parseInt((document.getElementById('pgw-months')||{}).value)||0;
+  var s=Math.max(1, parseInt((document.getElementById('pgw-startno')||{}).value)||1);
+  if(_pgRowDur!=='n' || m<2){ el.textContent=''; return; }
+  var mk=pgMonth();
+  // Editing an existing row: it keeps its original start month, so the number shown
+  // for the month on screen is startNo + how many months have passed since then.
+  var old=_pgRowId?(((payRowsDef||{})[_pgRowSid]||{})[_pgRowId]||null):null;
+  var from=(old&&old.fromMK)||mk;
+  var a=String(from).split('-'), b=String(mk).split('-');
+  var diff=Math.max(0,(+b[0]-+a[0])*12 + (+b[1]-+a[1]));
+  var lastD=new Date(+a[0], (+a[1]-1)+(m-1), 1);
+  var lastMK=lastD.getFullYear()+'-'+String(lastD.getMonth()+1).padStart(2,'0');
+  el.textContent='📅 '+kpMLabel(mk)+' = งวด / instalment '+(s+diff)+'/'+(s-1+m)+' · งวดสุดท้าย / last: '+kpMLabel(lastMK);
 }
 function pgRowTitle(){
   var t=document.getElementById('pgrow-title');
@@ -22873,6 +22911,7 @@ function pgRowOpen(sid, rowId, sign){
   document.getElementById('pgw-label').value = d?(d.label||''):'';
   document.getElementById('pgw-amount').value = d?(d.amount||''):'';
   document.getElementById('pgw-months').value = (months>1?months:'');
+  document.getElementById('pgw-startno').value = (d&&(parseInt(d.startNo)||1)>1)?d.startNo:'';
   document.getElementById('pgw-del').style.display = _pgRowId?'inline-flex':'none';
   pgRowSign(_pgRowSign); pgRowMode(_pgRowMode); pgRowDur(_pgRowDur); pgRowTitle();
   document.getElementById('pgrow-modal').classList.add('open');
@@ -22888,14 +22927,16 @@ function pgRowSave(){
   var mk=pgMonth();
   var old=_pgRowId?((payRowsDef[sid]||{})[_pgRowId]||null):null;
   var id=_pgRowId||('r'+Date.now());
+  // Instalment counter: only meaningful for a row that runs a fixed number of months.
+  var startNo = months>1 ? Math.max(1, parseInt(document.getElementById('pgw-startno').value)||1) : 1;
   var rec={ id:id, label:label, sign:_pgRowSign, mode:_pgRowMode, amount:amount,
-            fromMK:(old&&old.fromMK)||mk, months:months, ts:(old&&old.ts)||Date.now() };
+            fromMK:(old&&old.fromMK)||mk, months:months, startNo:startNo, ts:(old&&old.ts)||Date.now() };
   payRowsDef[sid]=payRowsDef[sid]||{}; payRowsDef[sid][id]=rec;
   if(window.fbDB) window.fbDB.ref('payRows/'+sid+'/'+id).set(rec);
   try{ auditAdd({ type:'payroll', area:'payroll', orderId:'💰 '+pgStaffName(sid),
     detail:(old?'✏️ Row changed · ':'➕ Row added · ')+_esc(label)+' · '+(_pgRowSign<0?'−':'+')+pgN(amount)+' ฿ · '
       +(_pgRowMode==='daily'?'per day / รายวัน':'whole month / ทั้งเดือน')+' · '
-      +(months===0?'forever':(months===1?'this month only':months+' months'))
+      +(months===0?'forever':(months===1?'this month only':months+' months'+(startNo>1?' · งวด/instalment '+startNo+'/'+(startNo-1+months):'')))
       +(old&&((parseFloat(old.amount)||0)!==amount||(old.label||'')!==label)?' (was '+_esc(old.label||'')+' '+pgN(old.amount)+' ฿)':''),
     by:pgWho() }); }catch(e){}
   pgRowClose(); pgRenderEmp(sid); pgRenderTotal();
