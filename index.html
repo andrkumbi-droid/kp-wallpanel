@@ -6598,7 +6598,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260804001;
+var KP_BUILD = 20260804002;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -24615,15 +24615,18 @@ function finFiles(p){
   if(f&&typeof f==='object') return Object.keys(f).map(function(k){return f[k];}).filter(Boolean);
   return [];
 }
-function _finUpload(f,cb){
+// strict = never fall back to an inline base64 picture. Used for CATEGORY files:
+// finSyncCats() writes the whole category tree on every change, so a raw photo in
+// there would be re-uploaded with every rename.
+function _finUpload(f,cb,strict){
   if(window.fbStorage){
     window.fbStorage.ref('finance/'+Date.now()+'_'+f.name).put(f)
       .then(function(s){ return s.ref.getDownloadURL(); }).then(cb)
-      .catch(function(){ _finUploadFallback(f,cb); });
-  } else _finUploadFallback(f,cb);
+      .catch(function(){ _finUploadFallback(f,cb,strict); });
+  } else _finUploadFallback(f,cb,strict);
 }
-function _finUploadFallback(f,cb){
-  if(/^image\//.test(f.type||'')){ try{ compressPhotoFile(f,cb); return; }catch(e){} }
+function _finUploadFallback(f,cb,strict){
+  if(!strict && /^image\//.test(f.type||'')){ try{ compressPhotoFile(f,cb); return; }catch(e){} }
   alert('Upload failed — file storage not reachable. / อัปโหลดไม่สำเร็จ ลองใหม่อีกครั้ง');
   cb('');
 }
@@ -24669,6 +24672,84 @@ function finDelFile(id,i){
 function finOpenFile(url,kind){
   if(kind==='img'){ try{ openPhotoLightbox(url); return; }catch(e){} }
   try{ window.open(url,'_blank','noopener'); }catch(e){ location.href=url; }
+}
+// One attachment, drawn the same way everywhere: a picture as a thumbnail, anything
+// else as a chip with its name. `delFn` is the call that removes exactly this one.
+function _finFileChip(f,delFn){
+  var k=f.kind||finFileKind(f.name,f.url);
+  var u=_esc(f.url).replace(/'/g,"\\'");
+  if(k==='img'){
+    return '<div style="position:relative;display:inline-block">'
+      +'<img src="'+_esc(f.url)+'" onclick="finOpenFile(\''+u+'\',\'img\')" title="'+_esc(f.name||'')+'" style="width:52px;height:52px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:zoom-in;display:block">'
+      +'<button type="button" onclick="'+delFn+'" title="Remove / ลบ" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:11px;cursor:pointer;line-height:1">×</button></div>';
+  }
+  return '<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:3px 4px 3px 8px;font-size:11px;max-width:100%">'
+    +'<span onclick="finOpenFile(\''+u+'\',\''+k+'\')" title="'+_esc(f.name||'')+'" style="cursor:pointer;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+finFileIcon(k)+' '+_esc(f.name||'file')+'</span>'
+    +'<button type="button" onclick="'+delFn+'" title="Remove / ลบ" style="border:none;background:none;color:#dc2626;font-size:12px;cursor:pointer;padding:0 2px;line-height:1">×</button></span>';
+}
+
+// ── Files on the CATEGORY itself ───────────────────────────────────────────
+// A category is a folder: the contract, the packing list, the Excel the office keeps
+// for it — papers that belong to the whole category, not to one single payment.
+// Which of them may be uploaded is the category's own docMode (invoice / docs / all).
+function finCatFiles(c){
+  if(!c) return [];
+  var f=c.files;
+  if(Array.isArray(f)) return f.filter(Boolean);
+  if(f&&typeof f==='object') return Object.keys(f).map(function(k){return f[k];}).filter(Boolean);
+  return [];
+}
+function _finCatPushFile(sec,id,rec){
+  var c=finCatRec(sec,id); if(!c||!rec||!rec.url) return;
+  var cur=finCatFiles(c); cur.push(rec); c.files=cur;
+  finSyncCats(); _finAudit('category file added',sec,c.label,rec.name||'');
+  finRender();
+}
+function finCatAddFile(sec,id,inp){
+  var c=finCatRec(sec,id), f=inp&&inp.files&&inp.files[0]; if(!c||!f) return;
+  if(f.size>25*1024*1024){ alert('File too big (max 25 MB) / ไฟล์ใหญ่เกินไป'); inp.value=''; return; }
+  var st=document.getElementById('fincup-'+id); if(st){ st.textContent='⏳ Uploading… / กำลังอัปโหลด…'; st.style.display=''; }
+  _finUpload(f,function(url){
+    if(st) st.style.display='none';
+    inp.value='';
+    if(!url) return;
+    _finCatPushFile(sec,id,{name:f.name,url:url,kind:finFileKind(f.name,url),ts:Date.now(),by:_finBy()});
+  },true);
+}
+function finCatAddLink(sec,id){
+  var u=prompt('Paste the link (Google Sheets, Drive, …) / วางลิงก์:',''); if(u===null) return;
+  u=u.trim(); if(!u) return;
+  if(!/^https?:\/\//i.test(u)){ alert('Link must start with http:// or https:// / ลิงก์ต้องขึ้นต้นด้วย http'); return; }
+  var nm=prompt('Name for this link / ชื่อลิงก์:','Sheet'); if(nm===null) return;
+  _finCatPushFile(sec,id,{name:(nm.trim()||'Link'),url:u,kind:'link',ts:Date.now(),by:_finBy()});
+}
+function finCatDelFile(sec,id,i){
+  var c=finCatRec(sec,id); if(!c) return;
+  var cur=finCatFiles(c); i=parseInt(i,10);
+  if(isNaN(i)||i<0||i>=cur.length) return;
+  if(!confirm('Remove "'+(cur[i].name||'file')+'"? / ลบไฟล์นี้?')) return;
+  var gone=cur[i].name||'';
+  cur.splice(i,1); c.files=cur;
+  finSyncCats(); _finAudit('category file removed',sec,c.label,gone);
+  finRender();
+}
+// The folder strip at the top of an open category.
+function _finCatFilePanel(sec,c,mode){
+  var files=finCatFiles(c), d=FIN_DOC[mode];
+  if(mode==='none' && !files.length) return '';
+  var btn='border:1px dashed var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);font-size:12px;font-weight:600;cursor:pointer;padding:6px';
+  var h='<div style="background:var(--bg2);border:1px dashed var(--border);border-radius:var(--rs);padding:7px 8px;margin-top:6px">'
+    +'<div title="'+d.lbl+'" style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:5px">📂 Files / ไฟล์ของหมวดนี้'+(files.length?' ('+files.length+')':'')+'</div>';
+  if(files.length) h+='<div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-bottom:6px">'
+    +files.map(function(f,i){ return _finFileChip(f,'finCatDelFile(\''+sec+'\',\''+c.id+'\','+i+')'); }).join('')+'</div>';
+  if(mode!=='none'){
+    h+='<div style="display:flex;gap:5px">'
+      +'<input type="file" id="fincf-'+c.id+'"'+(d.accept?' accept="'+d.accept+'"':'')+' style="display:none" onchange="finCatAddFile(\''+sec+'\',\''+c.id+'\',this)">'
+      +'<button type="button" title="'+d.lbl+'" onclick="document.getElementById(\'fincf-'+c.id+'\').click()" style="flex:1;'+btn+'">📎 Add file / แนบไฟล์</button>'
+      +(d.link?'<button type="button" onclick="finCatAddLink(\''+sec+'\',\''+c.id+'\')" style="flex:1;'+btn+'">🔗 Add link / เพิ่มลิงก์</button>':'')
+    +'</div><div id="fincup-'+c.id+'" style="display:none;font-size:11px;color:var(--text2);margin-top:5px"></div>';
+  }
+  return h+'</div>';
 }
 
 // ── Payments ───────────────────────────────────────────────────────────────
@@ -24799,13 +24880,8 @@ function _finPayRow(p){
       +'<button type="button" onclick="finRowEdit(\''+p.id+'\')" title="Edit / แก้ไข" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:28px;height:28px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
     +'</div>';
   if(files.length){
-    h+='<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">'+files.map(function(f,i){
-      var k=f.kind||finFileKind(f.name,f.url);
-      return '<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:3px 4px 3px 8px;font-size:11px;max-width:100%">'
-        +'<span onclick="finOpenFile(\''+_esc(f.url).replace(/'/g,"\\'")+'\',\''+k+'\')" title="'+_esc(f.name||'')+'" style="cursor:pointer;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+finFileIcon(k)+' '+_esc(f.name||'file')+'</span>'
-        +'<button type="button" onclick="finDelFile(\''+p.id+'\','+i+')" title="Remove / ลบ" style="border:none;background:none;color:#dc2626;font-size:12px;cursor:pointer;padding:0 2px;line-height:1">×</button>'
-      +'</span>';
-    }).join('')+'</div>';
+    h+='<div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-top:6px">'
+      +files.map(function(f,i){ return _finFileChip(f,'finDelFile(\''+p.id+'\','+i+')'); }).join('')+'</div>';
   }
   if(ed){
     var c=finCatRec(p.section,p.catId), mode=finDocMode(c), d=FIN_DOC[mode];
@@ -24882,7 +24958,7 @@ function finRender(){
     cats.forEach(function(c,ci){
       var catPays=secPays.filter(function(p){ return p.catId===c.id; }).sort(function(a,b){ return (b.date||'').localeCompare(a.date||'')||(b.ts||0)-(a.ts||0); });
       var ck=s.id+'|'+c.id, open=!!_finOpen[ck], cKey='cat|'+s.id+'|'+c.id, cEdit=!!_finEdit[cKey];
-      var mode=finDocMode(c);
+      var mode=finDocMode(c), nFiles=finCatFiles(c).length;
       inner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
         +(cEdit
           ? '<div style="padding:6px 9px">'
@@ -24904,13 +24980,16 @@ function finRender(){
           : '<div onclick="finToggle(\''+s.id+'\',\''+c.id+'\')" style="display:flex;gap:5px;align-items:center;padding:6px 9px;cursor:pointer">'
               +'<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)
                 +' <span style="font-size:11px" title="'+FIN_DOC[mode].lbl+'">'+FIN_DOC[mode].lbl.split(' ')[0]+'</span>'
+                +(nFiles?' <span title="Files in this category / ไฟล์ของหมวดนี้" style="font-size:11px;font-weight:700;color:var(--blue);background:#eff6ff;border-radius:8px;padding:1px 6px">📂 '+nFiles+'</span>':'')
                 +(catPays.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+catPays.length+')</span>':'')
                 +(c.hiddenFrom?' <span style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 5px">closed / ปิด</span>':'')+'</span>'
               +'<span style="font-size:13px;font-weight:800;white-space:nowrap">'+_finSum(catPays).toLocaleString()+' ฿</span>'
               +'<button type="button" onclick="event.stopPropagation();finEditOn(\''+cKey+'\')" title="Rename, files, move / เปลี่ยนชื่อ-ไฟล์-ย้าย" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
             +'</div>')
-        +(open?'<div style="padding:0 9px 8px">'+(catPays.length?catPays.map(_finPayRow).join('')
-            :'<div style="font-size:11px;color:var(--text2);padding-top:5px">No payments this month / ยังไม่มีรายการเดือนนี้</div>')+'</div>':'')
+        +(open?'<div style="padding:0 9px 8px">'
+            +_finCatFilePanel(s.id,c,mode)
+            +(catPays.length?catPays.map(_finPayRow).join('')
+            :'<div style="font-size:11px;color:var(--text2);padding-top:8px">No payments this month / ยังไม่มีรายการเดือนนี้</div>')+'</div>':'')
       +'</div>';
     });
     // Payments whose category was deleted — money that would otherwise vanish from view.
