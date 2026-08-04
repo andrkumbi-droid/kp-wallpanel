@@ -773,6 +773,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         staffList = snap.val() ? Object.values(snap.val()) : [];
         try{ fbSeedSnap('staffList', snap.val()); }catch(e){}
         rebuildDrivers(); // drivers are derived from staffList (single source of truth)
+        // The staff record only exists now, so this is where a reloaded page gets
+        // its logged-in user back (4h session) and the hub draws the right tiles.
+        try{ if(typeof kpSessionRestore==='function') kpSessionRestore(); }catch(e){}
+        try{ if(typeof kpRenderMenu==='function') kpRenderMenu(); }catch(e){}
         try{if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active'))mgRenderStaff();}catch(e){}
         try{if(document.getElementById('s-office-login').classList.contains('active'))ofLoginRender();}catch(e){}
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
@@ -1075,21 +1079,32 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 </div>
 
 <div class="screen active" id="s-menu">
-  <div class="menu-header" style="display:flex;align-items:center;justify-content:space-between"><div><div class="menu-logo">KP Wallpanel</div><div class="menu-sub">Select your team / เลือกทีม</div></div><div style="display:flex;align-items:center;gap:8px"><span id="menu-user" onclick="kpLogoutAll()" title="Logout / ออกจากระบบ" style="cursor:pointer;font-size:12px;font-weight:600;color:var(--text2);display:none"></span><button type="button" id="dark-toggle" onclick="toggleDark()" style="background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:6px 12px;cursor:pointer;font-size:18px;line-height:1">🌙</button></div></div>
-  <div class="menu-grid">
-    <button type="button" class="menu-btn" onclick="goArea('manager')" style="background:linear-gradient(135deg,rgba(124,58,237,0.15),var(--bg2));border:1.5px solid #7c3aed"><i class="ti ti-layout-dashboard mi" style="color:#7c3aed"></i><span class="mn" style="color:#7c3aed">Management</span><span class="mt">ผู้จัดการ</span></button>
-    <button type="button" class="menu-btn" onclick="goArea('office')" style="background:linear-gradient(135deg,rgba(22,163,74,0.15),var(--bg2));border:1.5px solid #16a34a;position:relative"><i class="ti ti-headset mi" style="color:#16a34a"></i><span class="mn" style="color:#16a34a">Office / Sales</span><span class="mt">ฝ่ายขาย</span><span id="menu-office-alert" class="alert-dot menu-dot" title="Packing problem / แพ็คไม่ได้"></span></button>
-    <button type="button" class="menu-btn" onclick="goArea('warehouse')" style="background:linear-gradient(135deg,rgba(234,88,12,0.15),var(--bg2));border:1.5px solid #ea580c"><i class="ti ti-package mi" style="color:#ea580c"></i><span class="mn" style="color:#ea580c">Warehouse</span><span class="mt">คลังสินค้า</span></button>
-    <button type="button" class="menu-btn" onclick="go('driver')" style="background:linear-gradient(135deg,rgba(2,132,199,0.15),var(--bg2));border:1.5px solid #0284c7"><i class="ti ti-truck mi" style="color:#0284c7"></i><span class="mn" style="color:#0284c7">Driver</span><span class="mt">คนขับ</span></button>
-    <button type="button" class="menu-btn" onclick="go('calc')" style="background:linear-gradient(135deg,rgba(37,99,235,0.15),var(--bg2));border:1.5px solid var(--blue)"><i class="ti ti-ruler-2 mi" style="color:var(--blue)"></i><span class="mn" style="color:var(--blue)">Calculator</span><span class="mt">คำนวณแผ่นพาเนล</span></button>
-    <button type="button" class="menu-btn" onclick="go('quote')" style="background:linear-gradient(135deg,rgba(245,158,11,0.15),var(--bg2));border:1.5px solid #f59e0b"><i class="ti ti-file-invoice mi" style="color:#f59e0b"></i><span class="mn" style="color:#f59e0b">Quotation</span><span class="mt">ใบเสนอราคา</span></button>
-    <button type="button" class="menu-btn" onclick="go('count')" style="background:linear-gradient(135deg,rgba(220,38,38,0.13),var(--bg2));border:1.5px solid #dc2626"><i class="ti ti-list-numbers mi" style="color:#dc2626"></i><span class="mn" style="color:#dc2626">Counting</span><span class="mt">นับจำนวน</span></button>
-    <button type="button" class="menu-btn" onclick="openPayInfo()" style="background:linear-gradient(135deg,rgba(109,40,217,0.15),var(--bg2));border:1.5px solid #6d28d9"><i class="ti ti-building-bank mi" style="color:#6d28d9"></i><span class="mn" style="color:#6d28d9">Payment</span><span class="mt">ช่องทางโอนเงิน</span></button>
-    <button type="button" class="menu-btn" onclick="goArea('acct')" style="background:linear-gradient(135deg,rgba(13,148,136,0.15),var(--bg2));border:1.5px solid #0d9488"><i class="ti ti-chart-pie mi" style="color:#0d9488"></i><span class="mn" style="color:#0d9488">Accounting</span><span class="mt">บัญชี / ผู้บริหาร</span></button>
-  </div>
+  <div class="menu-header" style="display:flex;align-items:center;justify-content:space-between"><div><div class="menu-logo">KP Wallpanel</div><div class="menu-sub" id="menu-sub-txt">Select your team / เลือกทีม</div></div><div style="display:flex;align-items:center;gap:8px"><span id="menu-user" style="font-size:12px;font-weight:600;color:var(--text2);display:none;align-items:center;gap:10px"></span><button type="button" id="dark-toggle" onclick="toggleDark()" style="background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:6px 12px;cursor:pointer;font-size:18px;line-height:1">🌙</button></div></div>
+  <!-- Tiles are rendered by kpRenderMenu(): logged out it is the login door
+       (Office / Warehouse / Driver), logged in it shows every space that person
+       is allowed into. -->
+  <div class="menu-grid" id="menu-grid"></div>
   <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:18px">
     <a href="https://www.kp-wallpanel.com" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text2);text-decoration:none;background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:7px 14px"><i class="ti ti-world" style="font-size:15px;color:var(--blue)"></i> Website</a>
     <a href="https://andrkumbi-droid.github.io/kp-wallpanel/warehouse-display.html" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text2);text-decoration:none;background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:7px 14px"><i class="ti ti-device-tv" style="font-size:15px;color:#ea580c"></i> Warehouse Display / จอคลัง</a>
+  </div>
+</div>
+
+<!-- CHANGE MY OWN PIN — reachable from the hub once logged in. Twice the new PIN,
+     no old one: the device is already unlocked and Management can read/reset it. -->
+<div id="kp-pinchg" onclick="if(event.target===this)kpClosePinChange()" style="display:none;position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.55);align-items:center;justify-content:center;padding:16px">
+  <div style="width:100%;max-width:340px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:18px">
+    <div style="font-size:16px;font-weight:800;margin-bottom:2px">🔑 Change PIN / เปลี่ยนรหัส</div>
+    <div id="kp-pinchg-who" style="font-size:12px;color:var(--text2);margin-bottom:14px"></div>
+    <label class="fl" style="margin-top:0">New PIN (min 4 digits) / รหัสใหม่</label>
+    <input type="number" id="kp-pinchg-new" inputmode="numeric" autocomplete="off" placeholder="••••" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:16px">
+    <label class="fl">Repeat new PIN / ใส่รหัสใหม่อีกครั้ง</label>
+    <input type="number" id="kp-pinchg-rep" inputmode="numeric" autocomplete="off" placeholder="••••" onkeydown="if(event.key==='Enter')kpSavePinChange()" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:16px">
+    <div id="kp-pinchg-msg" style="display:none;font-size:12px;font-weight:600;margin-top:10px"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button type="button" class="btn" style="flex:1" onclick="kpClosePinChange()">Cancel / ยกเลิก</button>
+      <button type="button" class="btn btng" style="flex:1" onclick="kpSavePinChange()"><i class="ti ti-lock"></i> Save / บันทึก</button>
+    </div>
   </div>
 </div>
 
@@ -2486,8 +2501,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div style="flex:1"><div class="h-title">Warehouse / คลังสินค้า</div><div class="h-sub">KP Wallpanel</div></div></div>
   <div id="wh-login-step1">
     <div class="pin-screen">
-      <div class="pin-title">Who are you? / คุณคือใคร?</div>
-      <div class="pin-sub">Select your name to continue</div>
+      <div class="pin-title" id="wh-login-title">Who are you? / คุณคือใคร?</div>
+      <div class="pin-sub" id="wh-login-sub">Select your name to continue</div>
       <div class="staff-grid" id="wh-staff-grid"></div>
     </div>
   </div>
@@ -2523,7 +2538,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 
 <!-- WAREHOUSE -->
 <div class="screen" id="s-warehouse"><div class="pb">
-  <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div><div class="h-title">Warehouse / คลังสินค้า</div><div class="h-sub">KP Wallpanel</div></div></div>
+  <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div style="flex:1"><div class="h-title">Warehouse / คลังสินค้า</div><div class="h-sub" id="wh-logged-in-name">KP Wallpanel</div></div><button type="button" id="wh-viewas-btn" onclick="go('warehouse-login')" title="Open as a colleague / เข้าแทนเพื่อนร่วมงาน" style="display:none;background:none;border:0.5px solid var(--border);border-radius:var(--rs);padding:6px 10px;font-size:12px;font-weight:500;cursor:pointer;color:var(--text2);flex-shrink:0">👁</button></div>
+  <!-- Shown only while an office user works inside a colleague's warehouse view. -->
+  <div id="wh-actas" style="display:none;background:#fef3c7;color:#92400e;border-bottom:1px solid #fcd34d;padding:8px 12px;font-size:12px;font-weight:700"></div>
   <div class="tabs t3">
     <button type="button" class="tab active" onclick="wht('topack')" id="wht-topack"><span data-k="tab_topack">To Pack / แพ็คสินค้า</span> <span class="tc tcw" id="wh-tp">0</span></button>
     <button type="button" class="tab" onclick="wht('packing')" id="wht-packing"><span data-k="tab_packing">Packing</span> <span class="tc" style="background:#dbeafe;color:#1d4ed8" id="wh-pkgcnt">0</span></button>
@@ -2604,6 +2621,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 <!-- DRIVER TOUR -->
 <div class="screen" id="s-driver-tour"><div class="pb">
   <div class="header"><button type="button" class="back-btn" onclick="drBack()"><i class="ti ti-arrow-left"></i></button><div><div class="h-title" id="dt-title">My Tour</div><div class="h-sub">KP Wallpanel</div></div><button type="button" onclick="drLogout()" title="Logout / switch driver / ออกจากระบบ" style="margin-left:auto;background:transparent;border:1.5px solid var(--border);border-radius:var(--rs);padding:6px 10px;font-size:12px;font-weight:700;color:var(--text2);cursor:pointer;display:flex;align-items:center;gap:5px"><i class="ti ti-logout"></i> ออก</button></div>
+  <!-- Shown only while office/management works inside a driver's view. -->
+  <div id="dt-actas" style="display:none;background:#fef3c7;color:#92400e;border-bottom:1px solid #fcd34d;padding:8px 12px;font-size:12px;font-weight:700"></div>
   <!-- Depart / Back banner -->
   <div id="dr-status-bar" style="padding:10px 16px 4px"></div>
   <!-- Tour switcher (only when the driver has more than one planned tour) -->
@@ -2986,6 +3005,164 @@ var mgrPinEntry = "";
 var currentStaffId = null;
 var currentStaffName = '';
 var kpUser = null; // SSO: the logged-in staff for this session (cleared on Logout)
+
+// ── LOGIN / SESSION ─────────────────────────────────────────────────────────
+// One login per person on their own phone: name → PIN → the hub shows exactly the
+// spaces that person is allowed into. The session is kept in localStorage for 4h,
+// so a reload does not log anyone out; several devices at once are fine because
+// each one simply holds its own copy. After 4h the PIN is required again.
+var KP_SESSION_MS = 4*60*60*1000;
+var kpActingAs = null;   // set while an office user works inside a colleague's view
+function kpSessionSave(s){
+  try{ localStorage.setItem('kp-session', JSON.stringify({id:s.id, ts:Date.now()})); }catch(e){}
+}
+function kpSessionClear(){ try{ localStorage.removeItem('kp-session'); }catch(e){} }
+// The stored session, or null if there is none / it is older than 4h. Deliberately
+// NOT sliding: 4h from the login, not from the last tap.
+function kpSessionRead(){
+  try{
+    var r=JSON.parse(localStorage.getItem('kp-session')||'null');
+    if(!r || !r.id || !r.ts) return null;
+    if(Date.now()-r.ts >= KP_SESSION_MS){ kpSessionClear(); return null; }
+    return r;
+  }catch(e){ return null; }
+}
+// Called once staffList has arrived from Firebase — the staff record only exists
+// then, so this is where a reload silently gets its user back.
+function kpSessionRestore(){
+  if(kpUser) return;
+  var r=kpSessionRead(); if(!r) return;
+  var s=(staffList||[]).find(function(x){ return x && x.id===r.id; });
+  if(!s){ kpSessionClear(); return; }   // staff deleted meanwhile → stay logged out
+  kpUser=s; currentStaffId=s.id; try{ currentStaffName=s.name||''; }catch(e){}
+  try{ kpUpdMenuUser(); }catch(e){}
+  try{ kpRenderMenu(); }catch(e){}
+}
+// Expiry watchdog: on a timer and whenever the app comes back to the foreground,
+// so a tab left open overnight is not still logged in the next morning.
+function kpSessionWatch(){
+  if(!kpUser) return;
+  if(kpSessionRead()) return;
+  kpUser=null; kpActingAs=null; currentStaffId=null; try{ currentStaffName=''; }catch(e){}
+  kpSessionClear();
+  try{ localStorage.removeItem('kp-driver-session'); }catch(e){}
+  try{ currentDriverId=null; }catch(e){}
+  try{ kpUpdMenuUser(); kpRenderMenu(); }catch(e){}
+  try{ kpcSyncFab(); }catch(e){}
+  document.querySelectorAll('.screen').forEach(function(x){ x.classList.remove('active'); });
+  var m=document.getElementById('s-menu'); if(m) m.classList.add('active');
+  window.scrollTo(0,0);
+  alert('Logged out after 4 hours — please log in again / ออกจากระบบอัตโนมัติหลัง 4 ชั่วโมง กรุณาเข้าสู่ระบบใหม่');
+}
+setInterval(kpSessionWatch, 60000);
+document.addEventListener('visibilitychange', function(){ if(!document.hidden) kpSessionWatch(); });
+
+// The spaces this person owns. Office access defaults to yes for old records that
+// never had the flag — same rule the office login list uses.
+function kpMySpaces(u){
+  var a=[];
+  if(!u) return a;
+  if(u.officeAccess!==false) a.push('office');
+  if(u.warehouseAccess) a.push('warehouse');
+  if(u.isDriver) a.push('driver');
+  if(u.acctAccess) a.push('acct');
+  return a;
+}
+// Office staff may step into a colleague's Warehouse/Driver view ("an deren
+// Stelle") — e.g. to explain on the phone what the driver has to do next.
+function kpCanImpersonate(){ return !!kpUser && kpUser.officeAccess!==false; }
+function kpMyDriverId(){ return (kpUser && kpUser.isDriver) ? (kpUser.driverId||kpUser.id) : null; }
+// Step into someone else's view. kpUser (the real person) is untouched, so the
+// session and the header still belong to them; the audit log records who did it.
+function kpEnterAs(s, area){
+  if(!s) return;
+  kpActingAs = s;
+  try{ auditAdd({type:'login', action:'view-as', orderId:'👁 '+(s.name||''),
+        by:(kpUser&&kpUser.name)||'Office', detail:'Opened the '+area+' view as '+(s.name||'')}); }catch(e){}
+  if(area==='warehouse') _enterWarehouse(s);
+}
+
+var KP_TILES = {
+  office:   {c:'#16a34a',     bg:'rgba(22,163,74,0.15)',  ic:'ti-headset',          n:'Office / Sales', t:'ฝ่ายขาย',            fn:"goArea('office')"},
+  warehouse:{c:'#ea580c',     bg:'rgba(234,88,12,0.15)',  ic:'ti-package',          n:'Warehouse',      t:'คลังสินค้า',          fn:"goArea('warehouse')"},
+  driver:   {c:'#0284c7',     bg:'rgba(2,132,199,0.15)',  ic:'ti-truck',            n:'Driver',         t:'คนขับ',              fn:"goArea('driver')"},
+  manager:  {c:'#7c3aed',     bg:'rgba(124,58,237,0.15)', ic:'ti-layout-dashboard', n:'Management',     t:'ผู้จัดการ',           fn:"goArea('manager')"},
+  acct:     {c:'#0d9488',     bg:'rgba(13,148,136,0.15)', ic:'ti-chart-pie',        n:'Accounting',     t:'บัญชี / ผู้บริหาร',  fn:"goArea('acct')"},
+  calc:     {c:'var(--blue)', bg:'rgba(37,99,235,0.15)',  ic:'ti-ruler-2',          n:'Calculator',     t:'คำนวณแผ่นพาเนล',    fn:"go('calc')"},
+  quote:    {c:'#f59e0b',     bg:'rgba(245,158,11,0.15)', ic:'ti-file-invoice',     n:'Quotation',      t:'ใบเสนอราคา',         fn:"go('quote')"},
+  count:    {c:'#dc2626',     bg:'rgba(220,38,38,0.13)',  ic:'ti-list-numbers',     n:'Counting',       t:'นับจำนวน',           fn:"go('count')"},
+  pay:      {c:'#6d28d9',     bg:'rgba(109,40,217,0.15)', ic:'ti-building-bank',    n:'Payment',        t:'ช่องทางโอนเงิน',     fn:"openPayInfo()"}
+};
+function kpTile(k, opt){
+  var d=KP_TILES[k]; if(!d) return ''; opt=opt||{};
+  return '<button type="button" class="menu-btn" onclick="'+d.fn+'" style="background:linear-gradient(135deg,'+d.bg+',var(--bg2));border:1.5px solid '+d.c+';position:relative">'
+    +'<i class="ti '+d.ic+' mi" style="color:'+d.c+'"></i>'
+    +'<span class="mn" style="color:'+d.c+'">'+d.n+'</span>'
+    +'<span class="mt">'+d.t+'</span>'
+    +(opt.eye?'<span style="position:absolute;top:6px;right:8px;font-size:12px;opacity:.7" title="Open as a colleague / เข้าแทนเพื่อนร่วมงาน">👁</span>':'')
+    +(opt.badge||'')+'</button>';
+}
+// The hub. Logged out it is the login door (Office / Warehouse / Driver); logged
+// in it lists every space that person may open, plus the shared tools.
+function kpRenderMenu(){
+  var g=document.getElementById('menu-grid'); if(!g) return;
+  var u=kpUser, sub=document.getElementById('menu-sub-txt'), h='';
+  var dot='<span id="menu-office-alert" class="alert-dot menu-dot" title="Packing problem / แพ็คไม่ได้"></span>';
+  if(!u){
+    h = kpTile('office',{badge:dot}) + kpTile('warehouse') + kpTile('driver');
+    if(sub) sub.textContent='Select your team / เลือกทีม';
+  } else {
+    var mine=kpMySpaces(u), can=kpCanImpersonate();
+    if(mine.indexOf('office')>=0) h+=kpTile('office',{badge:dot});
+    if(mine.indexOf('warehouse')>=0) h+=kpTile('warehouse');
+    else if(can) h+=kpTile('warehouse',{eye:1});
+    if(mine.indexOf('driver')>=0) h+=kpTile('driver');
+    else if(can) h+=kpTile('driver',{eye:1});
+    if(mine.indexOf('acct')>=0) h+=kpTile('acct');
+    h += kpTile('manager')+kpTile('calc')+kpTile('quote')+kpTile('count')+kpTile('pay');
+    if(sub) sub.textContent='Hello '+(u.name||'')+' / สวัสดี';
+  }
+  g.innerHTML=h;
+  try{ updatePackingAlert(); }catch(e){}   // the office tile's red dot is rebuilt too
+}
+
+// Change my own PIN: the new one twice, no old one. Writes ONLY staffList/<id>/pin
+// instead of the whole list, so two people changing their PIN at the same time
+// cannot overwrite each other (and nothing else in the record is touched).
+function kpOpenPinChange(){
+  if(!kpUser){ alert('Please log in first / กรุณาเข้าสู่ระบบก่อน'); return; }
+  var w=document.getElementById('kp-pinchg'); if(!w) return;
+  var who=document.getElementById('kp-pinchg-who');
+  if(who) who.textContent=(kpUser.name||'')+(kpUser.role?' · '+kpUser.role:'');
+  document.getElementById('kp-pinchg-new').value='';
+  document.getElementById('kp-pinchg-rep').value='';
+  var m=document.getElementById('kp-pinchg-msg'); if(m){ m.style.display='none'; m.textContent=''; }
+  w.style.display='flex';
+  setTimeout(function(){ try{ document.getElementById('kp-pinchg-new').focus(); }catch(e){} },50);
+}
+function kpClosePinChange(){ var w=document.getElementById('kp-pinchg'); if(w) w.style.display='none'; }
+// First paint: the hub must show the three login doors before Firebase answers.
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ try{ kpRenderMenu(); kpUpdMenuUser(); }catch(e){} });
+else { try{ kpRenderMenu(); kpUpdMenuUser(); }catch(e){} }
+function kpSavePinChange(){
+  if(!kpUser) return;
+  var a=(document.getElementById('kp-pinchg-new').value||'').trim();
+  var b=(document.getElementById('kp-pinchg-rep').value||'').trim();
+  var m=document.getElementById('kp-pinchg-msg');
+  function say(t,col){ if(!m) return; m.style.display='block'; m.style.color=col; m.textContent=t; }
+  if(!/^[0-9]{4,}$/.test(a)) return say('PIN must be at least 4 digits / รหัสต้องมีอย่างน้อย 4 หลัก','var(--red)');
+  if(a!==b) return say('The two PINs do not match / รหัสไม่ตรงกัน','var(--red)');
+  if(!window.fbDB) return say('No connection — try again / ไม่มีสัญญาณ ลองใหม่','var(--red)');
+  var uid=kpUser.id, nm=kpUser.name||'';
+  window.fbDB.ref('staffList/'+uid+'/pin').set(a).then(function(){
+    if(kpUser && kpUser.id===uid) kpUser.pin=a;
+    var s=(staffList||[]).find(function(x){ return x && x.id===uid; }); if(s) s.pin=a;
+    try{ rebuildDrivers(); }catch(e){}   // driver login reads the pin from here
+    try{ auditAdd({type:'pin', action:'change', orderId:'🔑 '+nm, by:nm, detail:'Staff changed their own PIN'}); }catch(e){}
+    say('PIN changed / เปลี่ยนรหัสแล้ว','var(--green)');
+    setTimeout(kpClosePinChange, 1200);
+  }).catch(function(e){ say('Save failed / บันทึกไม่สำเร็จ','var(--red)'); });
+}
 var staffList = [];
 var pinEntry = "";
 var pinTargetStaffId = null;
@@ -3107,6 +3284,13 @@ function checkPin() {
   currentStaffId = s.id;
   try{ currentStaffName = s.name; }catch(e){}
   kpUser = s; // SSO session — lets the user switch areas without re-entering PIN
+  kpActingAs = null;
+  kpSessionSave(s);   // 4h on this device
+  pinEntry = '';
+  try{ kpUpdMenuUser(); kpRenderMenu(); }catch(e){}
+  // More than one space released → back to the hub so the person can choose;
+  // exactly one → straight in, no pointless extra tap.
+  if(kpMySpaces(s).length>1){ back(); return; }
   if(pinMode==='warehouse'){ _enterWarehouse(s); return; }
   if(pinMode==='acct'){ _enterAcct(s); return; }
   _enterOffice(s);
@@ -3116,6 +3300,17 @@ function _enterWarehouse(s){
   if(!s) return;
   currentStaffId=s.id; try{ currentStaffName=s.name; }catch(e){}
   try{ WH_LANG = s.lang || 'th'; }catch(e){}
+  var _hs=document.getElementById('wh-logged-in-name');
+  if(_hs) _hs.textContent = (s.name||'KP Wallpanel');
+  var _aa=document.getElementById('wh-actas');
+  if(_aa){
+    if(kpActingAs && kpUser && kpActingAs.id!==kpUser.id){
+      _aa.style.display='block';
+      _aa.textContent='👁 You are working as '+(s.name||'')+' — logged in: '+(kpUser.name||'');
+    } else _aa.style.display='none';
+  }
+  var _va=document.getElementById('wh-viewas-btn');
+  if(_va) _va.style.display = kpCanImpersonate() ? '' : 'none';
   document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
   document.getElementById('s-warehouse').classList.add('active');
   window.scrollTo(0,0);
@@ -3224,7 +3419,17 @@ function _enterOffice(s){
 function goArea(area){
   try{ setTimeout(kpGoalWatch,100); }catch(e){}
   if(area==='manager'){ go('manager-login'); return; }
+  // Driver: a driver goes straight to their own tour, office/management get the
+  // picker and may open anybody (see drLoginBtn).
+  if(area==='driver'){
+    if(kpUser){
+      var mineId=kpMyDriverId();
+      if(mineId){ kpActingAs=null; drLogin(mineId); return; }
+    }
+    go('driver'); return;
+  }
   if(!kpUser){ go(area+'-login'); return; }
+  kpActingAs=null;
   if(area==='acct'){
     if(!kpUser.acctAccess){ alert('No Accounting access / ไม่มีสิทธิ์เข้าบัญชี'); return; }
     _enterAcct(kpUser); return;
@@ -3233,8 +3438,11 @@ function goArea(area){
     if(kpUser.officeAccess===false){ alert('No Office access / ไม่มีสิทธิ์เข้า Office'); return; }
     _enterOffice(kpUser);
   } else if(area==='warehouse'){
-    if(!kpUser.warehouseAccess){ alert('No Warehouse access / ไม่มีสิทธิ์เข้า Warehouse'); return; }
-    _enterWarehouse(kpUser);
+    if(kpUser.warehouseAccess){ _enterWarehouse(kpUser); return; }
+    // No warehouse account of their own, but office rights → pick the colleague
+    // whose view to open (no PIN needed, they already proved who they are).
+    if(kpCanImpersonate()){ go('warehouse-login'); return; }
+    alert('No Warehouse access / ไม่มีสิทธิ์เข้า Warehouse');
   }
 }
 
@@ -3671,7 +3879,7 @@ function go(s){
   if(s==='count')cntInit();
   if(s==='sketch')skInit();
 }
-function back(){quoteReturn='menu';document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));document.getElementById('s-menu').classList.add('active');window.scrollTo(0,0);try{kpcSyncFab();}catch(e){}try{kpUpdMenuUser();}catch(e){}}
+function back(){quoteReturn='menu';kpActingAs=null;document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));document.getElementById('s-menu').classList.add('active');window.scrollTo(0,0);try{kpcSyncFab();}catch(e){}try{kpUpdMenuUser();}catch(e){}try{kpRenderMenu();}catch(e){}}
 // Quotation opened from the Office tab should return to Office (not the menu).
 // quoteReturn is reset to 'menu' whenever we land on the menu, so a menu-opened
 // quotation still backs out to the menu.
@@ -4694,21 +4902,36 @@ function skPrint(){
 // SSO menu: show who's logged in + a one-tap full logout from the hub.
 function kpUpdMenuUser(){
   var el=document.getElementById('menu-user'); if(!el) return;
-  if(kpUser){ el.style.display=''; el.innerHTML='👤 '+(kpUser.name||'')+' · <span style="color:#dc2626">Logout</span>'; }
+  if(kpUser){
+    el.style.display='flex';
+    el.innerHTML='<span>👤 '+(kpUser.name||'')+'</span>'
+      +'<span onclick="kpOpenPinChange()" title="Change my PIN / เปลี่ยนรหัส" style="cursor:pointer;color:var(--blue)"><i class="ti ti-key"></i> PIN</span>'
+      +'<span onclick="kpLogoutAll()" title="Logout / ออกจากระบบ" style="cursor:pointer;color:#dc2626">Logout</span>';
+  }
   else { el.style.display='none'; el.innerHTML=''; }
 }
 function kpLogoutAll(){
   if(!kpUser) return;
   if(!confirm('Logout '+(kpUser.name||'')+'? / ออกจากระบบ?')) return;
-  kpUser=null; currentStaffId=null; try{currentStaffName='';}catch(e){}
+  kpUser=null; kpActingAs=null; currentStaffId=null; try{currentStaffName='';}catch(e){}
+  kpSessionClear();
+  // A logout is a logout: the sticky driver session on this device goes too.
+  try{ localStorage.removeItem('kp-driver-session'); }catch(e){}
+  try{ currentDriverId=null; }catch(e){}
   try{ kpcSyncFab(); }catch(e){}
   kpUpdMenuUser();
+  try{ kpRenderMenu(); }catch(e){}
 }
 // Entering the Driver hub: sticky login — if a driver session is remembered, go
 // straight to that driver's tour (no picker, no re-PIN). Otherwise show the picker.
 function drEnter(){
-  // Office/management (SSO) always sees the picker so they can open ANY driver.
-  if(kpUser){ document.getElementById('s-driver').classList.add('active'); drLoginRender(); return; }
+  if(kpUser){
+    // A driver who is logged in goes straight to their own tour; office/management
+    // (no driver record of their own) always sees the picker and may open ANY driver.
+    var mineId=kpMyDriverId();
+    if(mineId){ kpActingAs=null; drLogin(mineId); return; }
+    document.getElementById('s-driver').classList.add('active'); drLoginRender(); return;
+  }
   var id=null; try{ id=localStorage.getItem('kp-driver-session'); }catch(e){}
   var d = id && (drivers||[]).find(function(x){return x.id===id;});
   if(d){ drLogin(id); } else { document.getElementById('s-driver').classList.add('active'); drLoginRender(); }
@@ -4716,13 +4939,21 @@ function drEnter(){
 // ← from the tour. Office/management → back to the driver picker (switch freely, as
 // before). A real driver → back to the main hub, KEEPING their sticky session.
 function drBack(){
-  if(kpUser){ document.querySelectorAll('.screen').forEach(function(x){x.classList.remove('active');}); document.getElementById('s-driver').classList.add('active'); window.scrollTo(0,0); drLoginRender(); }
+  // Office/management looking at somebody else's tour → back to the picker. Their
+  // own tour (or no session at all) → back to the hub.
+  if(kpUser && !kpMyDriverId()){ document.querySelectorAll('.screen').forEach(function(x){x.classList.remove('active');}); document.getElementById('s-driver').classList.add('active'); window.scrollTo(0,0); drLoginRender(); }
   else { back(); }
 }
 // Explicit logout / switch driver: clear the session and show the picker again.
 function drLogout(){
   if(!confirm('ออกจากระบบ / เปลี่ยนคนขับ? / Logout / switch driver?')) return;
   try{ localStorage.removeItem('kp-driver-session'); }catch(e){}
+  // A driver logging out of their own tour ends their staff session too.
+  if(kpUser && kpMyDriverId()){
+    kpUser=null; kpActingAs=null; currentStaffId=null; try{currentStaffName='';}catch(e){}
+    kpSessionClear();
+    try{ kpUpdMenuUser(); kpRenderMenu(); kpcSyncFab(); }catch(e){}
+  }
   currentDriverId=null;
   document.querySelectorAll('.screen').forEach(function(x){x.classList.remove('active');});
   document.getElementById('s-driver').classList.add('active');
@@ -7721,7 +7952,10 @@ function tsNow() {
 
 function ofLogout(){
   currentStaffId = null;
-  kpUser = null; // full logout ends the SSO session
+  kpUser = null; kpActingAs = null; // full logout ends the SSO session
+  kpSessionClear();
+  try{ localStorage.removeItem('kp-driver-session'); }catch(e){}
+  try{ kpUpdMenuUser(); kpRenderMenu(); }catch(e){}
   // Go back to office login
   document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
   document.getElementById('s-office-login').classList.add('active');
@@ -13261,6 +13495,13 @@ function drLogin(id){
   // Load saved checklist state (works offline)
   try{ drLoadChecks(); }catch(e){}
   document.getElementById('dt-title').textContent=d.name+"'s Tour";
+  var _da=document.getElementById('dt-actas');
+  if(_da){
+    if(kpUser && kpMyDriverId()!==id){
+      _da.style.display='block';
+      _da.textContent='👁 You are working as '+(d.name||'')+' — logged in: '+(kpUser.name||'');
+    } else _da.style.display='none';
+  }
   try{ kpcInit(); }catch(e){}
 
   // Pick the driver's current working tour (first one unless already chosen).
@@ -16913,14 +17154,29 @@ function whLoginRender() {
   grid.innerHTML = list.length
     ? staffCardsHTML(list,'whSelectStaff')
     : '<div class="empty" style="grid-column:1/-1;padding:1rem;font-size:13px">No warehouse staff — ask Management to grant access</div>';
+  // Same picker, two meanings: logging in yourself, or (office) choosing whose
+  // warehouse view to open.
+  var _t=document.getElementById('wh-login-title'), _s=document.getElementById('wh-login-sub');
+  if(kpUser && kpCanImpersonate()){
+    if(_t) _t.textContent='Open as / เข้าแทน';
+    if(_s) _s.textContent='Pick the colleague whose view you want to open';
+  } else {
+    if(_t) _t.textContent='Who are you? / คุณคือใคร?';
+    if(_s) _s.textContent='Select your name to continue';
+  }
   document.getElementById('wh-login-step1').style.display = 'block';
   document.getElementById('wh-login-step2').style.display = 'none';
   pinEntry = '';
 }
 function whSelectStaff(id){
+  var s = staffList.find(function(x){ return x.id===id; });
+  // Already logged in and picking yourself → straight in, no second PIN.
+  if(kpUser && id===kpUser.id){ kpActingAs=null; _enterWarehouse(kpUser); return; }
+  // Office/management already proved who they are, so they may step into a
+  // colleague's warehouse view without that person's PIN — same rule as Driver.
+  if(kpUser && kpCanImpersonate()){ kpEnterAs(s,'warehouse'); return; }
   pinMode = 'warehouse';
   pinTargetStaffId = id;
-  var s = staffList.find(function(x){ return x.id===id; });
   document.getElementById('wh-pin-name').textContent = 'Hello ' + (s?s.name:'') + ' / สวัสดี ' + (s?s.name:'');
   document.getElementById('wh-login-step1').style.display = 'none';
   document.getElementById('wh-login-step2').style.display = 'block';
@@ -17266,7 +17522,16 @@ function whUnpackBtn(btn){whUnpack(btn.getAttribute('data-id'));}
 function drLoginBtn(btn){
   var id=btn.getAttribute('data-id');
   // Office/management (SSO session, kpUser) may open ANY driver freely — no PIN, straight in.
-  if(kpUser){ drLogin(id); return; }
+  if(kpUser){
+    if(kpMyDriverId()===id){ kpActingAs=null; }
+    else {
+      kpActingAs=(staffList||[]).find(function(s){ return s.isDriver && ((s.driverId||s.id)===id); })||null;
+      try{ auditAdd({type:'login', action:'view-as',
+            orderId:'👁 '+((((drivers||[]).find(function(d){return d.id===id;}))||{}).name||''),
+            by:(kpUser.name||'Office'), detail:'Opened the driver view'}); }catch(e){}
+    }
+    drLogin(id); return;
+  }
   // Real driver → office-style PIN keypad screen.
   drSelectStaff(id);
 }
@@ -17298,6 +17563,16 @@ function drCheckPin(){
   document.getElementById('dr-login-step1').style.display='block';
   document.getElementById('dr-login-step2').style.display='none';
   pinEntry='';
+  // A driver who typed their own PIN gets the same 4h session as everyone else,
+  // so the hub can offer any other space their staff record allows.
+  try{
+    var st=(staffList||[]).find(function(s){ return s.isDriver && ((s.driverId||s.id)===pinTargetDriverId); });
+    if(st){
+      kpUser=st; kpActingAs=null; currentStaffId=st.id; try{ currentStaffName=st.name||''; }catch(e){}
+      kpSessionSave(st);
+      kpUpdMenuUser(); kpRenderMenu();
+    }
+  }catch(e){}
   drLogin(pinTargetDriverId);
 }
 // Back from the driver PIN keypad to the name picker.
@@ -23749,7 +24024,7 @@ function _enterAcct(s){
   acFillMonths();
   acRender();
 }
-function acLogout(){ kpUser=null; currentStaffId=null; back(); }
+function acLogout(){ kpUser=null; kpActingAs=null; currentStaffId=null; kpSessionClear(); try{ kpUpdMenuUser(); }catch(e){} back(); }
 function act(t){
   _acTab=t;
   document.querySelectorAll('#s-acct .tab').forEach(function(b){ b.classList.remove('active'); });
