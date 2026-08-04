@@ -22192,6 +22192,7 @@ function pgEmpHtml(sid, mk){
 
   return '<div class="pg-hd">'
       +'<button type="button" class="pg-nm" onclick="pgRateOpen(\''+sid+'\')" title="Rates / อัตรา">'+_esc(st.name||'—')+' <i class="ti ti-settings" style="font-size:15px;color:var(--text2)"></i></button>'
+      +'<button type="button" class="pg-xbtn" onclick="pgPrint(\''+sid+'\')" title="Print payslip / พิมพ์สลิปเงินเดือน">🖨</button>'
       +'<span class="pg-rate">'+rateTxt+'</span>'
       +'<span style="flex:1 1 auto"></span>'
       +'<button type="button" class="pg-xbtn" onclick="pgRowOpen(\''+sid+'\',\'\',1)">➕ Extra</button>'
@@ -22211,6 +22212,92 @@ function pgEmpHtml(sid, mk){
       +'<div class="pg-ftr"><span style="color:var(--text2)">➖ Deductions / รวมหัก</span><b style="color:#dc2626">−'+pgN(c.ded)+' ฿</b></div>'
       +'<div class="pg-pay"><span>💵 PAYOUT / จ่ายจริง</span><span>'+pgN(c.net)+' ฿</span></div>'
     +'</div>';
+}
+
+// ── one employee, one sheet ──────────────────────────────────────────
+// Built from the same pgCalc() as the grid, so a printout can never disagree
+// with the screen. Prints the month currently selected above, not today's.
+// The day list must show exactly the days pgRowCalc counted — a ✗ in Work Days
+// means "did not work", so it belongs in the Absent row, not next to the wage.
+function pgPrintDays(sid, mk, row){
+  var cells=(((payGridData[mk]||{})[sid]||{})[row.key])||{}, out=[];
+  Object.keys(cells).forEach(function(k){
+    var v=parseFloat(cells[k])||0; if(!v) return;
+    var d=parseInt(String(k).replace(/^d/,''),10); if(!d) return;
+    if(row.k==='work' && v!==1) return;    // 1 = present, anything else = off
+    out.push({d:d, v:v});
+  });
+  out.sort(function(a,b){ return a.d-b.d; });
+  var plain=(row.k==='work'||row.k==='abs');
+  return out.map(function(e){ return (plain||e.v===1) ? String(e.d) : (e.d+' ('+pgN(e.v)+')'); }).join(', ');
+}
+function pgPrint(sid){
+  var mk=pgMonth();
+  var st=(staffList||[]).find(function(x){return x.id===sid;})||{name:'—'};
+  var c=pgCalc(sid,mk), R=c.R;
+  function esc(s){ return _esc(String(s==null?'':s)); }
+  var lines='';
+  c.rows.forEach(function(r){
+    var a=r._c?r._c.amt:0, cnt=r._c?r._c.cnt:0;
+    if(!a && !cnt) return;
+    var det=esc(r._c.expl||'');
+    var dl = r.k==='tour'
+      ? Object.keys(pgTourByDay(sid,mk)).sort(function(x,y){return x-y;}).join(', ')
+      : pgPrintDays(sid,mk,r);
+    if(dl) det+='<div class="dl">'+esc(dl)+'</div>';
+    lines+='<tr><td>'+esc(r.en)+(r.th?' / '+esc(r.th):'')+'</td><td>'+det+'</td>'
+      +'<td class="am'+(r.sign<0?' neg':'')+'">'+(r.sign<0?'−':'+')+pgN(Math.abs(a))+'</td></tr>';
+  });
+  if(R.monthly>0) lines+='<tr><td>Monthly base / เงินเดือน</td><td>whole month / ทั้งเดือน</td><td class="am">+'+pgN(R.monthly)+'</td></tr>';
+  c.extras.forEach(function(e){
+    var m=payCatMeta(e.cat), neg=m.sign<0, a=Math.abs(parseFloat(e.amount)||0);
+    lines+='<tr><td>'+esc(m.label||'')+'</td><td>'+esc(e.date||'')+(e.note?' · '+esc(e.note):'')+'</td>'
+      +'<td class="am'+(neg?' neg':'')+'">'+(neg?'−':'+')+pgN(a)+'</td></tr>';
+  });
+  if(!lines) lines='<tr><td colspan="3" style="text-align:center;color:#666;padding:16px">— nothing this month / ไม่มีรายการ —</td></tr>';
+
+  var rate = R.day>0
+    ? pgN(R.day)+' ฿/day · OT '+pgN(R.ot)+' ฿/h · 📦 '+pgN(R.cont1||R.contEach)+'/'+pgN(R.cont2||(R.cont1||R.contEach)*2)+(R.monthly>0?' · 💰 '+pgN(R.monthly):'')
+    : '—';
+  var w=window.open('','_blank','width=760,height=900');
+  if(!w){ alert('Popup blocked / เปิดหน้าต่างไม่ได้ — please allow popups'); return; }
+  var html='<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip '+esc(st.name||'')+' — '+esc(kpMLabel(mk))+'</title>'
+    +'<style>*{box-sizing:border-box}html,body{margin:0;padding:0}'
+    +'body{font-family:\'Prompt\',\'Sarabun\',\'Segoe UI\',sans-serif;background:#fff;color:#000;padding:22px}'
+    +'.wrap{max-width:640px;margin:0 auto}'
+    +'h1{font-size:19px;margin:0 0 2px}.sub{font-size:12px;color:#555;margin-bottom:16px}'
+    +'.who{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:4px}'
+    +'.nm{font-size:22px;font-weight:800}.ro{font-size:12px;color:#555}'
+    +'.mo{font-size:15px;font-weight:700;white-space:nowrap}'
+    +'.rate{font-size:11.5px;color:#555;margin:8px 0 14px}'
+    +'table{width:100%;border-collapse:collapse;font-size:13px}'
+    +'th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#555;border-bottom:1px solid #999;padding:0 6px 5px}'
+    +'td{padding:7px 6px;border-bottom:1px solid #e2e2e2;vertical-align:top}'
+    +'td:nth-child(2){color:#555;font-size:11.5px}'
+    +'.dl{font-size:10.5px;color:#777;margin-top:2px}'
+    +'.am{text-align:right;white-space:nowrap;font-weight:700;font-variant-numeric:tabular-nums}'
+    +'.neg{color:#b91c1c}'
+    +'.sum{margin-top:12px;font-size:13px}'
+    +'.sum div{display:flex;justify-content:space-between;padding:3px 6px}'
+    +'.pay{display:flex;justify-content:space-between;margin-top:8px;padding:11px 12px;border:2px solid #000;font-size:17px;font-weight:800}'
+    +'.sig{display:flex;gap:40px;margin-top:46px;font-size:11.5px;color:#555}'
+    +'.sig div{flex:1;border-top:1px solid #000;padding-top:5px;text-align:center}'
+    +'@page{margin:14mm}@media print{body{padding:0}}'
+    +'</style></head><body><div class="wrap">'
+    +'<h1>KP Wallpanel</h1><div class="sub">Payslip / สลิปเงินเดือน</div>'
+    +'<div class="who"><div><div class="nm">'+esc(st.name||'—')+'</div><div class="ro">'+esc(st.role||'')+'</div></div>'
+      +'<div class="mo">'+esc(kpMLabel(mk))+'</div></div>'
+    +'<div class="rate">'+esc(rate)+'</div>'
+    +'<table><tr><th>Item / รายการ</th><th>Detail / รายละเอียด</th><th class="am">฿</th></tr>'+lines+'</table>'
+    +'<div class="sum">'
+      +'<div><span>Income / รวมรายได้</span><b>+'+pgN(c.inc)+' ฿</b></div>'
+      +'<div><span>Deductions / รวมหัก</span><b class="neg">−'+pgN(c.ded)+' ฿</b></div></div>'
+    +'<div class="pay"><span>PAYOUT / จ่ายจริง</span><span>'+pgN(c.net)+' ฿</span></div>'
+    +'<div class="sig"><div>Received / ผู้รับเงิน</div><div>Paid by / ผู้จ่าย</div><div>Date / วันที่</div></div>'
+    +'</div></body></html>';
+  w.document.open(); w.document.write(html); w.document.close();
+  w.focus();
+  setTimeout(function(){ try{ w.print(); }catch(e){} }, 350);
 }
 
 function pgRowHtml(sid, mk, row, dim, todayD, isCur, isPast){
