@@ -6604,7 +6604,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260804004;
+var KP_BUILD = 20260804005;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -8565,7 +8565,7 @@ function quickStatus(btn) {
   try{ sheetsSyncOrder(o); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
   ofRenderOrders();mgRender();
   try{payUpdateBadge();}catch(e){}
-  try{auditAdd({type:'status',orderId:id,from:old,to:newStatus,by:byName});}catch(e){}
+  try{auditAdd({type:'status',orderId:id,from:old,to:newStatus,by:byName,detail:(newStatus==='cancelled'?_cancelWorkNote(o):'')});}catch(e){}
   try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}
 }
 
@@ -13422,7 +13422,7 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   // Already-delivered order whose total changed (e.g. a discount added at payment):
   // keep the recorded revenue in sync so Sales/Pay reflect the discounted amount.
   if(o.status==='delivered'){ var _nt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0; var _r=revOrders.find(function(x){return x.id===o.id;}); if(_r && _r.amt!==_nt){ _r.amt=_nt; try{ syncRevOrders(); }catch(e){} } }
-  try{ deductOrderStock(o); }catch(e){}if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}try{sheetsUpdateMaster(o);}catch(e){console.error('Master update failed (non-blocking):',e);}try{ if(o.status!==old) auditStatus(o.id,old,o.status,o.editedBy); else auditAdd({type:'edit',orderId:o.id,by:o.editedBy}); }catch(e){}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
+  try{ deductOrderStock(o); }catch(e){}if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}try{sheetsUpdateMaster(o);}catch(e){console.error('Master update failed (non-blocking):',e);}try{ if(o.status!==old) auditStatus(o.id,old,o.status,o.editedBy,(o.status==='cancelled'?_cancelWorkNote(o):'')); else auditAdd({type:'edit',orderId:o.id,by:o.editedBy}); }catch(e){}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
 
 // CHANGE ORDER (customer adds/removes items; warehouse confirms)
 var coId=null;
@@ -13899,10 +13899,15 @@ function whCancelCard(o, mode){
     '<div class="pkrow"><span class="pklbl">'+wtx('lbl_clips')+'</span><span class="pkval">'+clips.toLocaleString()+'</span></div>'+
     '</div>'+ btn +'</div>';
 }
-// Warehouse accepts a cancelled+packed order → move it to Packing to be unpacked
+// Warehouse accepts a cancelled+packed order → move it to Packing to be unpacked.
+// Who took it now goes into the Audit Log: until here a cancellation left no trace of
+// whether anybody in the warehouse ever saw it, let alone who.
 function whCancelAccept(btn){
   var id=btn.getAttribute('data-id'); var o=orders.find(function(x){return x.id===id;}); if(!o) return;
-  o.whCancelStage='unpack';
+  var by=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Warehouse';
+  o.whCancelStage='unpack'; o.whCancelAcceptBy=by; o.whCancelAcceptAt=Date.now();
+  try{ auditAdd({type:'cancel',orderId:id,by:by,detail:'🏭 คลังรับเรื่องยกเลิก — กำลังแกะของ / warehouse took the cancellation, unpacking'}); }catch(e){}
+  try{addLog('Cancelled order '+id+' taken by '+by,'~');}catch(e){}
   try{whRender();}catch(e){} try{whRenderPacking();}catch(e){} syncOrders();
 }
 // Warehouse confirms a cancelled order handled (unpacked or just seen) → clears it
@@ -13910,6 +13915,9 @@ function whCancelDone(btn){
   var id=btn.getAttribute('data-id'); var o=orders.find(function(x){return x.id===id;}); if(!o) return;
   o.whCancelAck=true; o.whCancelStage='done';
   o.whCancelAckBy=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Warehouse'; o.whCancelAckAt=Date.now();
+  try{ auditAdd({type:'cancel',orderId:id,by:o.whCancelAckBy,
+    detail:(o.cancelWasPacked?'📦 แกะของแล้ว / unpacked and put back':'✔️ รับทราบการยกเลิก / cancellation acknowledged')
+      +(o.packedBy&&o.packedBy!==o.whCancelAckBy?' · แพ็คโดย / packed by '+o.packedBy:'')}); }catch(e){}
   try{addLog('Cancelled order '+id+' acknowledged in warehouse','~');}catch(e){}
   try{whRender();}catch(e){} try{whRenderPacking();}catch(e){} syncOrders();
 }
@@ -21693,7 +21701,21 @@ function auditAdd(entry) {
 
 // Log a status change to the audit log (skips no-op changes). Used by every path that
 // mutates an order's status so the Audit Log is complete, not just the office buttons.
-function auditStatus(id, from, to, by){ if(!id || from===to) return; try{ auditAdd({type:'status',orderId:id,from:from,to:to,by:by||'—'}); }catch(e){} }
+function auditStatus(id, from, to, by, detail){ if(!id || from===to) return; try{ auditAdd({type:'status',orderId:id,from:from,to:to,by:by||'—',detail:detail||''}); }catch(e){} }
+// Whose work is thrown away when an order is cancelled. The Audit Log only shows the
+// last 200 entries, so by the time a cancellation happens the accept/pack lines of that
+// order are long out of the window — this puts them onto the cancel line itself.
+function _cancelWorkNote(o){
+  if(!o) return '';
+  var bits=[];
+  if(o.acceptedBy) bits.push('รับงาน / accepted: '+o.acceptedBy);
+  if(o.packedBy){
+    var ps=(o.packers||[]).filter(function(n){ return n && n!==o.packedBy; });
+    bits.push('แพ็ค / packed: '+o.packedBy+(ps.length?' + '+ps.join(', '):''));
+  }
+  if(!bits.length) return '';
+  return (o.cancelWasPacked||o.status==='ready'||o.status==='loaded'?'⚠️ แพ็คแล้ว / already packed · ':'')+bits.join(' · ');
+}
 // Log a tour-planning event (create/add/remove/move/end). `by` optional → current staff.
 function auditTour(action, label, detail, by){
   try{
@@ -22098,7 +22120,7 @@ function _auditRenderNow() {
   if(!list) return;
   var filtered = auditLog.filter(function(e) {
     if(_auditFilt === 'all') {}
-    else if(_auditFilt === 'status') { if(!(e.type === 'status' || e.type === 'create' || e.type === 'edit')) return false; }
+    else if(_auditFilt === 'status') { if(!(e.type === 'status' || e.type === 'create' || e.type === 'edit' || e.type === 'cancel')) return false; }
     else if(_auditFilt === 'payment') { if(e.type !== 'payment') return false; }
     // Payroll: everything the Payroll tab did. A payroll line that was DELETED or
     // moved to another day is booked under its own type (delete/payment) so it also
@@ -22122,16 +22144,17 @@ function _auditRenderNow() {
       + (_auditSearch ? 'No entries for "'+_esc(_auditSearch)+'" / ไม่พบ' : 'No entries yet') + '</div>';
     return;
   }
-  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', edit:'<i class="ti ti-pencil" style="color:var(--blue)"></i>', tour:'<i class="ti ti-map-route" style="color:#7c3aed"></i>', preorder:'<i class="ti ti-bookmark" style="color:#0891b2"></i>', 'change-request':'<i class="ti ti-edit" style="color:var(--orange)"></i>', 'change-confirmed':'<i class="ti ti-check" style="color:var(--green)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>', food:'🍜', payroll:'<i class="ti ti-coin" style="color:#0d9488"></i>'};
-  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', edit:'var(--blue-l)', tour:'#f3e8ff', preorder:'#cffafe', 'change-request':'var(--orange-l)', 'change-confirmed':'var(--green-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2', food:'#fef3c7', payroll:'#ccfbf1'};
-  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', edit:'var(--blue-t)', tour:'#7c3aed', preorder:'#0e7490', 'change-request':'var(--orange-t)', 'change-confirmed':'var(--green-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b', food:'#92400e', payroll:'#0f766e'};
+  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', edit:'<i class="ti ti-pencil" style="color:var(--blue)"></i>', tour:'<i class="ti ti-map-route" style="color:#7c3aed"></i>', preorder:'<i class="ti ti-bookmark" style="color:#0891b2"></i>', 'change-request':'<i class="ti ti-edit" style="color:var(--orange)"></i>', 'change-confirmed':'<i class="ti ti-check" style="color:var(--green)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>', food:'🍜', payroll:'<i class="ti ti-coin" style="color:#0d9488"></i>', cancel:'<i class="ti ti-ban" style="color:var(--red)"></i>'};
+  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', edit:'var(--blue-l)', tour:'#f3e8ff', preorder:'#cffafe', 'change-request':'var(--orange-l)', 'change-confirmed':'var(--green-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2', food:'#fef3c7', payroll:'#ccfbf1', cancel:'var(--red-l)'};
+  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', edit:'var(--blue-t)', tour:'#7c3aed', preorder:'#0e7490', 'change-request':'var(--orange-t)', 'change-confirmed':'var(--green-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b', food:'#92400e', payroll:'#0f766e', cancel:'var(--red-t)'};
   list.innerHTML = filtered.map(function(e) {
     var icon = typeIcon[e.type] || '<i class="ti ti-info-circle"></i>';
     var bg = typeBg[e.type] || 'var(--bg2)';
     var tc = typeText[e.type] || 'var(--text2)';
     var detail = '';
     if(e.type === 'create') detail = 'New order created';
-    else if(e.type === 'status') detail = (e.from||'?') + ' → ' + (e.to||'?');
+    else if(e.type === 'status') detail = (e.from||'?') + ' → ' + (e.to||'?') + (e.detail?'<div style="color:var(--text2);margin-top:2px">'+e.detail+'</div>':'');
+    else if(e.type === 'cancel') detail = e.detail || 'Cancelled';
     else if(e.type === 'edit') detail = 'Order edited';
     else if(e.type === 'tour') detail = e.detail || 'Tour';
     else if(e.type === 'preorder') detail = e.detail || 'Pre-order';
