@@ -3751,7 +3751,7 @@ function kpRestoreOpen(ids){
 function kpToursSig(){
   try{
     return (activeTours||[]).map(function(t){
-      return [t.id,(t.orders||[]).join(','),JSON.stringify(t.status||{}),t.driving?1:0,t.departedAt||'',
+      return [t.id,(t.orders||[]).join(','),JSON.stringify(t.status||{}),t.driving?1:0,t.departedAt||'',t.backAt||'',
         t.driverPay,t.driverAdvance,t.payMethodTour||'',(t.carPhotos||[]).length,(t.carFeeSlips||[]).length,
         t.kmMode?1:0,t.kmRate,(t.kmLog?(Array.isArray(t.kmLog)?t.kmLog.length:Object.keys(t.kmLog).length):0),
         t.lalaDriver||'',t.plate||''].join('|');
@@ -9731,7 +9731,7 @@ function ofRenderTour(){
       (!ro && slipOrds.length>0?'<button type="button" onclick="event.stopPropagation();ofReviewTourSlips(\''+t.id+'\')" title="Check online-payment slips / ตรวจสลิปโอน" style="font-size:11px;padding:3px 8px;border:none;background:'+slipBtnBg+';color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🧾 Slips '+slipDone+'/'+slipOrds.length+(slipFlag>0?' ⚠':'')+'</button>':'')+
       (ro?'':'<button type="button" onclick="event.stopPropagation();ofToggleKmMode(\''+t.id+'\')" title="คิดค่าจ้างตามกิโลเมตร — กำหนดลำดับส่ง + คนขับถ่ายรูปเลขไมล์ / Pay this tour per kilometre" style="font-size:11px;padding:3px 8px;border:none;background:'+(_kmOn?'#1d4ed8':'#94a3b8')+';color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🛣️ KM '+(_kmOn?'ON':'OFF')+'</button>')+
       (ro?'':'<button type="button" onclick="event.stopPropagation();ofAddOrderToTour(\''+t.id+'\')" title="Add a ready order to this tour / เพิ่มออเดอร์เข้าทัวร์" style="font-size:11px;padding:3px 8px;border:none;background:#0ea5e9;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">➕ Add</button>')+
-      (!t.driving?'<button type="button" onclick="event.stopPropagation();ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 ออกรถ / Departed</button>':'<span style="font-size:11px;color:var(--green);font-weight:600">🚚 กำลังส่ง / Driving '+(t.departedDate?fmtD(t.departedDate)+' ':'')+t.departedAt+'</span>')+
+      ((!t.driving && !t.departedAt)?'<button type="button" onclick="event.stopPropagation();ofSetDeparted('+ti+')" style="font-size:11px;padding:3px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚀 ออกรถ / Departed</button>':tourWhenHtml(t))+
       '<span class="badge bactive">'+t.orders.length+' orders</span>'+
       '</div>'+
       '</div>'+
@@ -9900,12 +9900,26 @@ function ofSelOrd(btn){var id=btn.getAttribute("data-oid");if(!ofSelOrders.inclu
 function ofDeselOrd(id){ofSelOrders=ofSelOrders.filter(function(x){return x!==id;});ofRenderTour();}
 function ofDeselOrdBtn(btn){ofDeselOrd(btn.getAttribute("data-oid"));}
 
+// What the office sees in place of the "Departed" button once the truck has
+// left: when it went out, and after Back & Free when it came back. The button
+// belongs only on a tour that has never departed — offering it again after the
+// driver returned is how the departure time used to get overwritten.
+function tourWhenHtml(t){
+  var dep=((t.departedDate?fmtD(t.departedDate)+' ':'')+(t.departedAt||'')).trim();
+  // Same day out and back is the normal case — printing the date twice only
+  // makes the line harder to read.
+  var bak=(((t.backDate&&t.backDate!==t.departedDate)?fmtD(t.backDate)+' ':'')+(t.backAt||'')).trim();
+  if(t.driving) return '<span style="font-size:11px;color:var(--green);font-weight:600">🚚 กำลังส่ง / Driving · 🚀 '+dep+'</span>';
+  if(!dep) return '';
+  return '<span style="font-size:11px;color:var(--text2);font-weight:600">🚀 ออก / Out '+dep+(bak?' · 🏁 กลับ / Back '+bak:'')+'</span>';
+}
 function ofSetDeparted(ti){
   var t=activeTours[ti];if(!t)return;
-  var now=new Date();
+  var now=new Date(), hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   t.driving=true;
-  t.departedAt=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  if(!t.departedAt) t.departedAt=hhmm;   // first departure dates the tour — keep it
   if(!t.departedDate) t.departedDate=now.toISOString().slice(0,10);
+  if(t.backAt||t.backDate){ t.backAt=null; t.backDate=null; }
   // Departure is the moment the goods leave the yard — who pressed it, and when, goes on record.
   try{ var _dn=(t.orders||[]).length;
     auditTour('depart','🚚 '+(t.driverName||''),'🚀 ออกรถ / departed '+t.departedAt+' · '+_dn+' order'+(_dn!==1?'s':'')+(_dn?': '+t.orders.join(', '):'')); }catch(e){}
@@ -9973,11 +9987,15 @@ function ofRenderLala(){
         +'<button type="button" onclick="ofLalaDelFeeSlip('+ti+','+pi+')" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:12px;cursor:pointer;line-height:1">×</button>'
         +'</div>';
     }).join('');
-    var departed=!!t.driving;
+    // A tour that came back is still "departed" — it left the yard once, and the
+    // button must not come back with it.
+    var departed=!!t.driving || !!t.departedAt;
+    var depTxt=esc(((t.departedDate?fmtD(t.departedDate)+' ':'')+(t.departedAt||'')).trim());
+    var bakTxt=esc((((t.backDate&&t.backDate!==t.departedDate)?fmtD(t.backDate)+' ':'')+(t.backAt||'')).trim());
     return '<div class="tmgmt" style="margin-bottom:14px">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
         +'<div style="font-size:15px;font-weight:700"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+esc(t.driverName)+'</div>'
-        +'<span class="badge '+(departed?'bactive':'')+'" style="'+(departed?'':'background:#e0f2fe;color:#0369a1')+'">'+(departed?'🚀 '+esc(((t.departedDate?fmtD(t.departedDate)+' ':'')+(t.departedAt||'')).trim()||'Departed'):ords.length+' orders')+'</span>'
+        +'<span class="badge '+(departed?'bactive':'')+'" style="'+(departed?'':'background:#e0f2fe;color:#0369a1')+'">'+(departed?('🚀 '+(depTxt||'Departed')+(bakTxt?' · 🏁 '+bakTxt:'')):ords.length+' orders')+'</span>'
       +'</div>'
       +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">'
         +'<div style="flex:1;min-width:140px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">👤 Driver / คนขับ</label>'
@@ -10323,10 +10341,10 @@ function archiveTour(t){
   });
   // The tour ID (T001…) is burnt now: the number stays in the registry as "ended".
   try{ if(tidOk(t.tid)) tourRegMark(t.tid,'ended',{ tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
-    departedDate:t.departedDate||'', departedAt:t.departedAt||'',
+    departedDate:t.departedDate||'', departedAt:t.departedAt||'', backDate:t.backDate||'', backAt:t.backAt||'',
     orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length, driverPay:parseFloat(t.driverPay)||0 }); }catch(e){}
   var rec={ tid:t.tid||'', tourNo:existing+1, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
-    created:t.created||'', tourDay:t.tourDay||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
+    created:t.created||'', tourDay:t.tourDay||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'', backDate:t.backDate||'', backAt:t.backAt||'',
     endedDate:now.toISOString().slice(0,10), endedAt:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0, driverPayNet:tourNetPay(t),
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
@@ -10990,7 +11008,7 @@ function tourRegUpsert(t){
     createdDate:(/^\d{4}-\d{2}-\d{2}$/.test(t.tourDay||'')?t.tourDay:(old.createdDate||kpTodayStr())),
     createdAt:old.createdAt||t.created||tourTimeStr(),
     // The day the vehicle actually left — what everything is counted on (tourCountDate).
-    departedDate:t.departedDate||old.departedDate||'', departedAt:t.departedAt||old.departedAt||'',
+    departedDate:t.departedDate||old.departedDate||'', departedAt:t.departedAt||old.departedAt||'', backDate:t.backDate||old.backDate||'', backAt:t.backAt||old.backAt||'',
     endedDate:old.endedDate||'', endedAt:old.endedAt||'',
     state:(old.state==='deleted'?'deleted':(old.state==='ended'?'ended':'active')),
     orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length,
@@ -11753,7 +11771,7 @@ function ofActiveTourRec(t){
       clips:parseInt(o.clips)||0, shipper:o.shipper||'', location:o.location||'' };
   });
   return { tourNo:null, tid:t.tid||'', tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
-    created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'',
+    created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'', backDate:t.backDate||'', backAt:t.backAt||'',
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0,
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
@@ -13875,10 +13893,14 @@ function drDepart(){
     try{ drKmOpen(''); }catch(e){}
     return;
   }
-  var now=new Date();
+  var now=new Date(), hhmm=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   tour.driving=true;
-  tour.departedAt=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  // The first departure is the one the whole app dates the tour by (reports,
+  // tour day, payroll) \u2014 a second run after Back & Free must not move it.
+  if(!tour.departedAt) tour.departedAt=hhmm;
   if(!tour.departedDate) tour.departedDate=now.toISOString().slice(0,10);
+  if(tour.backAt||tour.backDate){ tour.backAt=null; tour.backDate=null; }  // on the road again
+  try{ auditTour('depart','\ud83d\ude9a '+(tour.driverName||''),'\ud83d\ude80 \u0e2d\u0e2d\u0e01\u0e23\u0e16 / departed '+hhmm+' (driver)'); }catch(e){}
   drt('tour');
   syncTours();
 }
@@ -13887,9 +13909,13 @@ function drBackFree(){
   if(!confirm('Back at warehouse? / \u0e01\u0e25\u0e31\u0e1a\u0e16\u0e36\u0e07\u0e42\u0e01\u0e14\u0e31\u0e07\u0e41\u0e25\u0e49\u0e27?'))return;
   var tour=drGetTour();
   if(!tour)return;
+  var now=new Date();
   tour.driving=false;
-  tour.departedAt=null;
-  tour.departedDate=null;
+  // Departure time STAYS. Wiping it used to hand the office a tour that looked
+  // as if it had never left \u2014 including the "Departed" button all over again.
+  tour.backAt=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  tour.backDate=now.toISOString().slice(0,10);
+  try{ auditTour('back','\ud83d\ude9a '+(tour.driverName||''),'\ud83c\udfc1 \u0e01\u0e25\u0e31\u0e1a\u0e16\u0e36\u0e07\u0e42\u0e01\u0e14\u0e31\u0e07 / back at warehouse '+tour.backAt); }catch(e){}
   drRenderStatusBar();
   syncTours();
 }
@@ -14299,9 +14325,11 @@ function drArrDepart(){
     if(o && o.status==='ready'){ o.status='loaded'; dStatus[id]='loaded'; tour.status=tour.status||{}; tour.status[id]='loaded'; try{ addStatusLog(o,'loaded',drWho()); auditStatus(id,'ready','loaded',drWho()); }catch(e){} }
   });
   tour.driving=true;
-  var now=new Date();
-  tour.departedAt=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  var now=new Date(), hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  if(!tour.departedAt) tour.departedAt=hhmm;   // first departure dates the tour — keep it
   if(!tour.departedDate) tour.departedDate=now.toISOString().slice(0,10);
+  if(tour.backAt||tour.backDate){ tour.backAt=null; tour.backDate=null; }
+  try{ auditTour('depart','🚚 '+(tour.driverName||''),'🚀 ออกรถ / departed '+hhmm+' (driver)'); }catch(e){}
   try{ drPersistArrange(); }catch(e){}
   try{ syncOrders(); }catch(e){}
   try{ syncTours(); }catch(e){}
