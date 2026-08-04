@@ -3128,7 +3128,12 @@ function kpRenderMenu(){
     else if(can) h+=kpTile('driver',{eye:1});
     if(mine.indexOf('acct')>=0) h+=kpTile('acct');
     if(kpCanManage()) h+=kpTile('manager');
-    h += kpTile('calc')+kpTile('quote')+kpTile('count')+kpTile('pay');
+    // Tools: released per person in Management → Staff. No flag = on, so nobody
+    // loses a tool they had before the switches existed.
+    if(u.calcAccess!==false)  h+=kpTile('calc');
+    if(u.quoteAccess!==false) h+=kpTile('quote');
+    if(u.countAccess!==false) h+=kpTile('count');
+    if(u.payAccess!==false)   h+=kpTile('pay');
     if(sub) sub.textContent='Hello '+(u.name||'')+' / สวัสดี';
   }
   g.innerHTML=h;
@@ -3414,6 +3419,10 @@ function _enterOffice(s){
     if(s.foodAccess) _shopShow['oft-food']=1;   // a shop account that also buys food keeps it
     document.querySelectorAll('#s-office .tabs .tab').forEach(function(t){ t.style.display = _shopShow[t.id] ? '' : 'none'; });
   }
+  // Quotation is a hub tool with an office tab — one switch governs both. Applied
+  // last so the Shop layout above cannot hand the tab back.
+  var _qt=document.getElementById('oft-quote');
+  if(_qt && s.quoteAccess===false) _qt.style.display='none';
   try{ pushRequestPermission('office', s.id, function(granted){
     if(granted) showInAppNotif('🔔 Notifications on', 'You\'ll be notified of new orders & deliveries');
   }); }catch(e){}
@@ -16987,6 +16996,11 @@ function openStaffM(id) {
     document.getElementById('staffm-stock').checked = !!s.stockEdit;
     document.getElementById('staffm-payroll').checked = !!s.payrollOn;
     document.getElementById('staffm-driver').checked = !!s.isDriver;
+    // Hub tools: no flag on an old record means "on" (backward-compat).
+    document.getElementById('staffm-calc').checked = s.calcAccess!==false;
+    document.getElementById('staffm-quote').checked = s.quoteAccess!==false;
+    document.getElementById('staffm-count').checked = s.countAccess!==false;
+    document.getElementById('staffm-pay').checked = s.payAccess!==false;
     document.getElementById('staffm-phone').value = s.phone||'';
     document.getElementById('staffm-vehicle').value = s.vehicle||'';
     document.getElementById('staffm-lang').value = s.lang || 'th';
@@ -17008,6 +17022,7 @@ function openStaffM(id) {
     document.getElementById('staffm-stock').checked = false;
     document.getElementById('staffm-payroll').checked = false;
     document.getElementById('staffm-driver').checked = false;
+    ['staffm-calc','staffm-quote','staffm-count','staffm-pay'].forEach(function(id){ document.getElementById(id).checked = true; });
     document.getElementById('staffm-phone').value = '';
     document.getElementById('staffm-vehicle').value = '';
     document.getElementById('staffm-lang').value = 'th';
@@ -17037,15 +17052,19 @@ function saveStaffM() {
   const stockEdit = document.getElementById('staffm-stock').checked;
   const payrollOn = document.getElementById('staffm-payroll').checked;
   const isDriver = document.getElementById('staffm-driver').checked;
+  const calcAccess = document.getElementById('staffm-calc').checked;
+  const quoteAccess = document.getElementById('staffm-quote').checked;
+  const countAccess = document.getElementById('staffm-count').checked;
+  const payAccess = document.getElementById('staffm-pay').checked;
   const phone = document.getElementById('staffm-phone').value.trim();
   const vehicle = document.getElementById('staffm-vehicle').value.trim();
   const lang = document.getElementById('staffm-lang').value || 'th';
   if(editStaffId) {
     const s = staffList.find(x => x.id === editStaffId);
-    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.foodAccess = foodAccess; s.stockEdit = stockEdit; s.payrollOn = payrollOn; s.isDriver = isDriver; s.phone = phone; s.vehicle = vehicle; s.lang = lang;
+    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.foodAccess = foodAccess; s.stockEdit = stockEdit; s.payrollOn = payrollOn; s.isDriver = isDriver; s.calcAccess = calcAccess; s.quoteAccess = quoteAccess; s.countAccess = countAccess; s.payAccess = payAccess; s.phone = phone; s.vehicle = vehicle; s.lang = lang;
     if(isDriver && !s.driverId) s.driverId = 'd' + Date.now();
   } else {
-    var ns = { id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, acctAccess, officeAccess, warehouseAccess, logisticsMode, preorderAccess, billsAccess, foodAccess, stockEdit, payrollOn, isDriver, phone, vehicle, lang };
+    var ns = { id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, acctAccess, officeAccess, warehouseAccess, logisticsMode, preorderAccess, billsAccess, foodAccess, stockEdit, payrollOn, isDriver, calcAccess, quoteAccess, countAccess, payAccess, phone, vehicle, lang };
     if(isDriver) ns.driverId = 'd' + Date.now();
     staffList.push(ns);
   }
@@ -19772,6 +19791,37 @@ function calcViz() {
     <div>
       <div style="font-size:13px;font-weight:600">🚫 Blocklist access / รายชื่อบล็อก</div>
       <div style="font-size:11px;color:var(--text2)">Can view & manage blocked numbers</div>
+    </div>
+  </div>
+  <!-- Hub tools: the small tiles on the start screen. On for everybody unless
+       switched off here (old staff records have no flag = on). -->
+  <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-top:14px">Hub tools / เครื่องมือหน้าแรก</div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:6px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
+    <input type="checkbox" id="staffm-calc" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">📐 Calculator / คำนวณแผ่นพาเนล</div>
+      <div style="font-size:11px;color:var(--text2)">Panel calculator tile on the start screen</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
+    <input type="checkbox" id="staffm-quote" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">🧾 Quotation / ใบเสนอราคา</div>
+      <div style="font-size:11px;color:var(--text2)">Start-screen tile <b>and</b> the Quotation tab inside Office</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
+    <input type="checkbox" id="staffm-count" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">🔢 Counting / นับจำนวน</div>
+      <div style="font-size:11px;color:var(--text2)">Counting tile on the start screen</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
+    <input type="checkbox" id="staffm-pay" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">🏦 Payment info / ช่องทางโอนเงิน</div>
+      <div style="font-size:11px;color:var(--text2)">The bank-transfer card staff show the customer</div>
     </div>
   </div>
   <button type="button" class="btn btng" style="margin-top:14px" onclick="saveStaffM()"><i class="ti ti-check"></i> Save</button>
