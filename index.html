@@ -5484,7 +5484,7 @@ function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filte
 // Management view "End tour". It never archived the tour, so a tour ended here was
 // missing from the Drivers tab entirely — archiveTour is idempotent, so calling it
 // from both end paths is safe.
-function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndOpenWarn(t)+tourEndShipWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;var _oids=(t.orders||[]).slice();activeTours.splice(i,1);fbRemoveTour(_rid);try{var _ch=false;_oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; });if(_ch) syncOrders();}catch(e){}mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!tourEndOpenGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndShipWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;var _oids=(t.orders||[]).slice();activeTours.splice(i,1);fbRemoveTour(_rid);try{var _ch=false;_oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; });if(_ch) syncOrders();}catch(e){}mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').valueAsDate=new Date();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -6604,7 +6604,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260804007;
+var KP_BUILD = 20260804008;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -7978,7 +7978,8 @@ function ofEndTourFromDetail() {
   if(currentTourDetailIdx === null) return;
   const t = activeTours[currentTourDetailIdx];
   if(!lalaInfoGuard(t)) return;
-  if(!confirm('End ' + t.driverName + "'s tour?"+tourEndPaySummary(t)+tourEndOpenWarn(t)+tourEndShipWarn(t))) return;
+  if(!tourEndOpenGuard(t)) return;
+  if(!confirm('End ' + t.driverName + "'s tour?"+tourEndPaySummary(t)+tourEndShipWarn(t))) return;
   if(!ofSlipGuard(t)) return;
   var _pinBy = requireStaffPin('End tour / จบทัวร์ · ' + t.driverName);
   if(!_pinBy) return;
@@ -11972,17 +11973,30 @@ function tourNetPay(t){ return Math.max(0, (parseFloat(t.driverPay)||0) - (parse
 // carrier nor cancelled goes back into the free pool when the tour ends — it can then be
 // put on a NEW tour, which is how one order ends up on two tours (and the driver is paid
 // twice). Say so before the tour is closed, not after.
-function tourEndOpenWarn(t){
-  if(!t || !t.orders || !t.orders.length) return '';
+// A tour can only be ended once EVERY order on it is settled: delivered, handed to the
+// carrier, or cancelled. Anything else has to be taken off the tour first. Until this
+// was a hard stop it was only a warning you could click past — and the goods then kept
+// travelling on paper: the order stayed "loaded" for ever with no tour behind it
+// (order 4-119 sat like that from 27.07 to 04.08 and showed up in the zone overview
+// as a phantom stop). Returns false → do not end.
+function tourEndOpenGuard(t){
+  if(!t || !t.orders || !t.orders.length) return true;
   var open=t.orders.filter(function(id){
+    // An order that no longer exists cannot be delivered — it must not lock the tour.
+    var o=(typeof orders!=='undefined')?orders.find(function(x){ return String(x.id)===String(id); }):null;
+    if(!o) return false;
     var st=tourEffStatus(t,id);
     return st!=='delivered' && st!=='shipped' && st!=='cancelled';
   });
-  if(!open.length) return '';
-  return '\n\n⚠ ยังไม่จบ '+open.length+' ออเดอร์ / '+open.length+' order'+(open.length!==1?'s':'')+' NOT finished:\n'
-    +open.slice(0,10).join(', ')+(open.length>10?' …':'')
-    +'\nThey go back to the free pool and can be put on another tour.\n'
-    +'ออเดอร์เหล่านี้จะกลับเข้ากองรอส่ง และอาจถูกใส่ทัวร์ใหม่';
+  if(!open.length) return true;
+  alert('❌ ยังจบทัวร์ไม่ได้ / Cannot end this tour yet\n\n'
+    +'ยังไม่จบ '+open.length+' ออเดอร์ / '+open.length+' order'+(open.length!==1?'s':'')+' still open:\n'
+    +open.slice(0,12).join(', ')+(open.length>12?' …':'')+'\n\n'
+    +'ทำอย่างใดอย่างหนึ่งก่อน / do one of these first:\n'
+    +'✅ ส่งแล้ว / Delivered\n'
+    +'🚚 ส่งขนส่งแล้ว / At shipper\n'
+    +'✕ หรือเอาออกจากทัวร์ (ปุ่ม ✕ ลบ) / or take it off the tour (✕ button)');
+  return false;
 }
 // Carrier orders of this tour with no shipping cost typed in yet. Ending is still
 // allowed — the office just needs to know the bill now lands in Bills → Shipper.
