@@ -99,6 +99,14 @@
   @keyframes changeBlink { 0%,100%{box-shadow:0 0 0 0 #ea580c00; outline-color:#ea580c} 50%{box-shadow:0 0 30px 9px #ea580ccc; outline-color:#ffd700} }
   .change-banner { background: #ea580c; color: #fff; font-size: 18px; font-weight: 900; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; line-height: 1.5; }
 
+  /* Cancelled order waiting for the warehouse to acknowledge it. Deliberately calmer
+     than a new order or a change: a slow pulse, no full-screen alert box — the box is
+     usually just standing there packed, it is not an emergency. */
+  .card.cancel { background: #241a1d; border-color: #ef4444; animation: cancelPulse 2.4s infinite; }
+  @keyframes cancelPulse { 0%,100%{box-shadow:0 0 0 0 #ef444400} 50%{box-shadow:0 0 18px 4px #ef444455} }
+  .cancel-banner { background: #ef4444; color: #fff; font-size: 18px; font-weight: 900; padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; letter-spacing: 0.04em; }
+  .cancel-what { background: #0f1117; color: #fca5a5; font-size: 15px; font-weight: 700; padding: 7px 10px; border-radius: 6px; margin: 6px 0; line-height: 1.4; }
+
   .card.prio { outline: 3px solid #ffd700; outline-offset: 2px; }
   .prio-badge { display: inline-block; background: #ffd700; color: #1a1d27; font-size: 14px; font-weight: 900; padding: 3px 10px; border-radius: 6px; margin-bottom: 8px; letter-spacing: 0.04em; }
   /* Claim / exchange orders ("<orig>-C") — the goods go back out to a customer who
@@ -227,7 +235,7 @@ function tick() {
 }
 setInterval(tick,1000); tick();
 
-function beep(f,t,d,type){var ctx=getAudioCtx();var o=ctx.createOscillator(),g=ctx.createGain();o.type=type||'sine';o.connect(g);g.connect(ctx.destination);o.frequency.value=f;g.gain.setValueAtTime(0.4,ctx.currentTime+t);g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+t+d);o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+d+0.05);}
+function beep(f,t,d,type,vol){var ctx=getAudioCtx();var o=ctx.createOscillator(),g=ctx.createGain();o.type=type||'sine';o.connect(g);g.connect(ctx.destination);o.frequency.value=f;g.gain.setValueAtTime(vol||0.4,ctx.currentTime+t);g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+t+d);o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+d+0.05);}
 function playSound() {
   try {
     var b=beep;
@@ -241,6 +249,17 @@ function playChangeSound() {
     var b=beep;
     b(330,0,0.18,'square');b(494,0.22,0.18,'square');b(330,0.44,0.18,'square');b(494,0.66,0.5,'square');
     b(330,1.4,0.18,'square');b(494,1.62,0.18,'square');b(330,1.84,0.18,'square');b(494,2.06,0.5,'square');
+  } catch(e){}
+}
+
+// Cancellation: NOT an alarm. A soft descending chime at well under half the volume
+// of the new-order sound — enough to make someone look up, not enough to make the
+// whole hall stop. Repeated every 3 minutes while a cancellation stays unacknowledged,
+// because a packed box that nobody unpacks otherwise just stands there for days.
+function playCancelSound() {
+  try {
+    var b=beep;
+    b(784,0,0.5,'sine',0.16); b(659,0.28,0.5,'sine',0.16); b(523,0.56,0.9,'sine',0.14);
   } catch(e){}
 }
 
@@ -323,18 +342,42 @@ function buildItems(o, cls) {
   return html;
 }
 
-var knownNew=null, knownChange=null;
+var knownNew=null, knownChange=null, knownCancel=null, cancelTimer=null;
+
+// A cancelled order the warehouse has not acknowledged yet. Same rule as the app:
+// stage 'new' → it sits with the To-Pack work, stage 'unpack' → with the packing work
+// (the goods are already in a box and have to come out again). Cancellations from
+// before this flow existed carry no stage and are left alone.
+function cancelCard(o){
+  var packed=!!o.cancelWasPacked;
+  return '<div class="card cancel">'
+    +'<div class="cancel-banner">❌ ยกเลิก / CANCELLED</div>'
+    +'<div class="order-id">'+o.id+'</div>'
+    +(o.zone?'<div class="order-zone">📍 '+o.zone+'</div>':'')
+    +'<div class="cancel-what">'+(packed
+        ? '📦 แกะของออก คืนสต็อก / unpack, goods back to stock'
+        : '✋ ไม่ต้องแพ็ค / do not pack')+'</div>'
+    +buildItems(o,'new')
+    +'<div class="phone-hint">📱 กดรับทราบผ่านมือถือ / acknowledge on phone</div>'
+    +'</div>';
+}
 
 function render(orders) {
-  var nw=[], pk=[], rd=[], changeOrders=[];
-  var newSet=new Set(), changeSet=new Set();
+  var nw=[], pk=[], rd=[], changeOrders=[], cancels=[];
+  var newSet=new Set(), changeSet=new Set(), cancelSet=new Set();
   Object.values(orders||{}).forEach(function(o) {
     if(!o||!o.id) return;
+    if(o.status==='cancelled'){
+      if(o.whCancelStage && o.whCancelStage!=='done' && !o.whCancelAck){ cancels.push(o); cancelSet.add(o.id); }
+      return;
+    }
     if(o.changeReq && o.changeReq.status==='pending') { changeSet.add(o.id); changeOrders.push(o); return; }
     if(o.status==='new') { nw.push(o); newSet.add(o.id); }
     else if(o.status==='packing') pk.push(o);
     else if(o.status==='ready') rd.push(o);
   });
+  var cancelNew=cancels.filter(function(o){ return o.whCancelStage!=='unpack'; });
+  var cancelUnpack=cancels.filter(function(o){ return o.whCancelStage==='unpack'; });
   // Pin change-requests to the TOP of the NEW column so they can't be missed
   nw = changeOrders.concat(nw);
 
@@ -352,13 +395,25 @@ function render(orders) {
     stopAlert();
   }
 
-  document.getElementById('cnt-new').textContent=nw.length;
-  document.getElementById('cnt-packing').textContent=pk.length;
+  // Cancellations get their own soft chime — they must not be dressed up as an alarm,
+  // but they must not disappear silently either (two packed boxes sat unnoticed once).
+  var hasNewCancel=false;
+  if(knownCancel!==null) cancelSet.forEach(function(id){ if(!knownCancel.has(id)) hasNewCancel=true; });
+  knownCancel=cancelSet;
+  if(cancelSet.size>0){
+    if(hasNewCancel) playCancelSound();
+    if(!cancelTimer) cancelTimer=setInterval(function(){
+      if(knownCancel && knownCancel.size>0) playCancelSound(); else { clearInterval(cancelTimer); cancelTimer=null; }
+    }, 180000);
+  } else if(cancelTimer){ clearInterval(cancelTimer); cancelTimer=null; }
+
+  document.getElementById('cnt-new').textContent=nw.length+cancelNew.length;
+  document.getElementById('cnt-packing').textContent=pk.length+cancelUnpack.length;
   document.getElementById('cnt-ready').textContent=rd.length;
 
-  // NEW column - no buttons, just info + hint
-  document.getElementById('col-new').innerHTML = nw.length===0
-    ? '<div class="empty"><div class="empty-icon">😴</div>ไม่มีออเดอร์ใหม่</div>'
+  // NEW column - no buttons, just info + hint (cancellations pinned above everything)
+  document.getElementById('col-new').innerHTML = cancelNew.map(cancelCard).join('') + (nw.length===0
+    ? (cancelNew.length?'':'<div class="empty"><div class="empty-icon">😴</div>ไม่มีออเดอร์ใหม่</div>')
     : nw.map(function(o){
         return '<div class="card new'+(o.priority?' prio':'')+ccls(o)+'">'+
           (o.priority?'<div class="prio-badge">⭐ ด่วน / PRIORITY</div>':'')+
@@ -369,11 +424,11 @@ function render(orders) {
           '<div class="phone-hint">📱 รับผ่านมือถือ</div>'+
           '<div class="order-time">'+(o.date||'')+'</div>'+
           '</div>';
-      }).join('');
+      }).join(''));
 
-  // PACKING column - no buttons
-  document.getElementById('col-packing').innerHTML = pk.length===0
-    ? '<div class="empty"><div class="empty-icon">💤</div>ไม่มีออเดอร์</div>'
+  // PACKING column - no buttons (a cancelled order being unpacked sits on top)
+  document.getElementById('col-packing').innerHTML = cancelUnpack.map(cancelCard).join('') + (pk.length===0
+    ? (cancelUnpack.length?'':'<div class="empty"><div class="empty-icon">💤</div>ไม่มีออเดอร์</div>')
     : pk.map(function(o){
         return '<div class="card packing'+(o.priority?' prio':'')+ccls(o)+'">'+
           (o.priority?'<div class="prio-badge">⭐ ด่วน / PRIORITY</div>':'')+
@@ -383,7 +438,7 @@ function render(orders) {
           buildItems(o,'packing')+
           '<div class="order-time">'+(o.date||'')+'</div>'+
           '</div>';
-      }).join('');
+      }).join(''));
 
   // READY column - show zone
   document.getElementById('col-ready').innerHTML = rd.length===0
@@ -404,7 +459,19 @@ function render(orders) {
 // The DB rules require `auth != null` — sign in anonymously BEFORE listening,
 // otherwise the listener is rejected once and never retried.
 firebase.auth().signInAnonymously()
-  .then(function(){ db.ref('orders').on('value', function(snap){ render(snap.val()||{}); }); })
+  .then(function(){
+    db.ref('orders').on('value', function(snap){ render(snap.val()||{}); });
+    // Nobody ever touches the wall display, so without this it keeps running the code
+    // it was loaded with for weeks. Same appVersion node the app uses (every device
+    // that opens a newer index.html raises `build`, Management → "Reload all devices"
+    // raises `force`) → the screen reloads itself a moment later.
+    var _tvVer=null;
+    db.ref('appVersion').on('value', function(snap){
+      var v=snap.val()||{}, key=(parseInt(v.build,10)||0)+'|'+(parseInt(v.force,10)||0);
+      if(_tvVer===null){ _tvVer=key; return; }
+      if(key!==_tvVer){ _tvVer=key; setTimeout(function(){ try{ location.reload(true); }catch(e){ location.reload(); } }, 1500); }
+    });
+  })
   .catch(function(e){
     window.__tvShowErr && window.__tvShowErr('Firebase login failed ('+(e&&e.code)+') — the display cannot show live orders.');
   });
