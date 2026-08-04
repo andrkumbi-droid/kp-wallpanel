@@ -22706,6 +22706,48 @@ function fixedAdd(){ var mk=_costMonthKey(); _fixedArr(mk).push({id:'f'+Date.now
 function fixedRemove(id){ var mk=_costMonthKey(); costFixed[mk]=_fixedArr(mk).filter(function(r){return r.id!==id;}); syncCostFixed(); costsRender(); }
 function fixedSet(id,field,val){ var mk=_costMonthKey(); var r=_fixedArr(mk).find(function(x){return x.id===id;}); if(!r)return; if(field==='amount'){r.amount=(val===''?'':(parseFloat(val)||0));}else{r[field]=val;} syncCostFixed(); if(field==='amount')costsRender(); }
 
+// Rent, insurance and the like arrive as a paper invoice every month. There is no
+// receipt record to hang it on — a fixed cost is just a line — so the picture
+// lives on the row itself, per month. The carryover into a new month copies only
+// label and amount, so January's invoice never follows into February.
+function _fixedRec(id){ return _fixedArr(_costMonthKey()).find(function(x){ return x.id===id; })||null; }
+function fixedPhotos(r){
+  if(!r) return [];
+  if(Array.isArray(r.photos)) return r.photos.filter(Boolean);
+  if(r.photos && typeof r.photos==='object') return Object.keys(r.photos).map(function(k){return r.photos[k];}).filter(Boolean);
+  return [];
+}
+function fixedAddPhoto(id, inp){
+  var r=_fixedRec(id), f=inp&&inp.files&&inp.files[0]; if(!r||!f) return;
+  function add(url){
+    if(!url){ alert('Could not read the picture / อ่านรูปไม่ได้'); return; }
+    var cur=fixedPhotos(r); cur.push(url); r.photos=cur;
+    syncCostFixed();
+    if(inp) inp.value='';
+    _billAudit('fixed cost invoice added','', r.label||'—', kpMLabel(_costMonthKey()));
+    costsRender();
+  }
+  // syncCostFixed() writes the WHOLE costFixed tree on every change, so a raw photo
+  // must never end up in it: Storage first, and if that fails a compressed JPEG.
+  if(window.fbStorage){
+    window.fbStorage.ref('bills/fixed_'+Date.now()+'_'+f.name).put(f)
+      .then(function(s){ return s.ref.getDownloadURL(); }).then(add)
+      .catch(function(){ compressPhotoFile(f, add); });
+  } else compressPhotoFile(f, add);
+}
+// By index, not by URL — a compressed fallback photo would otherwise sit in the
+// onclick attribute as a multi-kilobyte string.
+function fixedDelPhoto(id, i){
+  var r=_fixedRec(id); if(!r) return;
+  var cur=fixedPhotos(r); i=parseInt(i,10);
+  if(isNaN(i) || i<0 || i>=cur.length) return;
+  if(!confirm('Remove this invoice? / ลบใบแจ้งหนี้นี้?')) return;
+  cur.splice(i,1); r.photos=cur;
+  syncCostFixed();
+  _billAudit('fixed cost invoice removed','', r.label||'—', kpMLabel(_costMonthKey()));
+  costsRender();
+}
+
 // Sub-categories of a section — office adds/removes/renames them.
 function catAdd(section){ var nm=prompt('New category / ชื่อหมวดใหม่:',''); if(nm===null)return; nm=nm.trim(); if(!nm)return; if(!costCats[section])costCats[section]=[]; costCats[section].push({id:'k'+Date.now()+Math.floor(Math.random()*1000),label:nm}); syncCostCats(); costsRender(); }
 function catRec(section,id){ return (costCats[section]||[]).find(function(c){ return c.id===id; })||null; }
@@ -23146,10 +23188,21 @@ function costsRender(){
     if(blk.kind==='fixed'){
       var inner=head(blk.label,blk.total);
       blk.rows.forEach(function(r){
-        inner+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'+
-          '<input type="text" value="'+_esc(r.label)+'" placeholder="Rent, car, insurance…" onchange="fixedSet(\''+r.id+'\',\'label\',this.value)" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'+
-          '<input type="number" value="'+(r.amount!=null&&r.amount!==''?r.amount:'')+'" placeholder="0" onchange="fixedSet(\''+r.id+'\',\'amount\',this.value)" style="width:96px;flex-shrink:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
-          '<button type="button" onclick="fixedRemove(\''+r.id+'\')" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:32px;flex-shrink:0;cursor:pointer">✕</button>'+
+        var fph=fixedPhotos(r);
+        inner+='<div style="margin-bottom:6px">'+
+          '<div style="display:flex;gap:6px;align-items:center">'+
+            '<input type="text" value="'+_esc(r.label)+'" placeholder="Rent, car, insurance…" onchange="fixedSet(\''+r.id+'\',\'label\',this.value)" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'+
+            '<input type="number" value="'+(r.amount!=null&&r.amount!==''?r.amount:'')+'" placeholder="0" onchange="fixedSet(\''+r.id+'\',\'amount\',this.value)" style="width:96px;flex-shrink:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
+            '<input type="file" accept="image/*" id="fxph-'+r.id+'" style="display:none" onchange="fixedAddPhoto(\''+r.id+'\',this)">'+
+            '<button type="button" onclick="document.getElementById(\'fxph-'+r.id+'\').click()" title="Attach invoice / แนบใบแจ้งหนี้" style="border:1px solid '+(fph.length?'#bfdbfe':'var(--border)')+';background:'+(fph.length?'#eff6ff':'var(--bg)')+';color:'+(fph.length?'#1d4ed8':'var(--text2)')+';border-radius:var(--rs);min-width:32px;height:32px;padding:0 7px;flex-shrink:0;cursor:pointer;font-size:12px;font-weight:700">🧾'+(fph.length?' '+fph.length:'')+'</button>'+
+            '<button type="button" onclick="fixedRemove(\''+r.id+'\')" title="Remove" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:32px;flex-shrink:0;cursor:pointer">✕</button>'+
+          '</div>'+
+          (fph.length?'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">'+fph.map(function(src,pi){
+            return '<div style="position:relative;display:inline-block">'+
+              '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" title="Show invoice / ดูใบแจ้งหนี้" style="width:52px;height:52px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:zoom-in">'+
+              '<button type="button" onclick="fixedDelPhoto(\''+r.id+'\','+pi+')" title="Remove picture / ลบรูป" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:11px;cursor:pointer;line-height:1">×</button>'+
+            '</div>';
+          }).join('')+'</div>':'')+
         '</div>';
       });
       html+=box(inner+addBtn('fixedAdd()','Add / เพิ่ม'));
