@@ -6604,7 +6604,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260804003;
+var KP_BUILD = 20260804004;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -7653,15 +7653,17 @@ var RECEIPT_PRINT_CSS = '@page{margin:0}'
   +'.rcpt-sign{text-align:center}'
   +'.rcpt-sign-line{border-bottom:1px dotted #666;width:40mm;margin:0 auto 1mm}'
   +'.rcpt-sign-label{font-size:7pt;color:#666;text-transform:uppercase;font-weight:600}';
-function printReceiptDoc(bodyHTML){
+// cssOverride + w/h let a second kind of page (the carton label) reuse the very same
+// print path — that iframe trick is the only one that prints reliably on mobile.
+function printReceiptDoc(bodyHTML, cssOverride, w, h){
   var old=document.getElementById('kp-print-iframe'); if(old&&old.parentNode) old.parentNode.removeChild(old);
   var f=document.createElement('iframe'); f.id='kp-print-iframe';
   // Off-screen (not display:none / visibility:hidden — those can print blank on mobile).
-  f.style.cssText='position:fixed;left:-9999px;top:0;width:145mm;height:200mm;border:0';
+  f.style.cssText='position:fixed;left:-9999px;top:0;width:'+(w||'145mm')+';height:'+(h||'200mm')+';border:0';
   document.body.appendChild(f);
   var doc=f.contentWindow.document;
   doc.open();
-  doc.write('<!DOCTYPE html><html><head><meta charset="utf-8"><style>'+RECEIPT_PRINT_CSS+'</style></head><body>'+bodyHTML+'</body></html>');
+  doc.write('<!DOCTYPE html><html><head><meta charset="utf-8"><style>'+(cssOverride||RECEIPT_PRINT_CSS)+'</style></head><body>'+bodyHTML+'</body></html>');
   doc.close();
   var done=false;
   function fire(){
@@ -7677,6 +7679,71 @@ function printReceiptDoc(bodyHTML){
   // Give the iframe a beat to lay out (fonts/tables) before printing.
   if(doc.readyState==='complete') setTimeout(fire,350);
   else f.onload=function(){ setTimeout(fire,350); };
+}
+
+/* ══ CARTON LABEL 🏷️ ═══════════════════════════════════════════════════════
+   Printed from the order sheet, cut out and glued onto the carton: the name big
+   enough to read from across the yard, the full address, the phone number.
+   20 × 14 cm, landscape on A4 — and 200 mm still fits a portrait page, so a
+   printer that ignores the landscape request crops nothing. Several cartons →
+   one label per carton, numbered กล่อง 1/2.
+════════════════════════════════════════════════════════════════════════════ */
+var LABEL_PRINT_CSS = '@page{size:A4 landscape;margin:0}'
+  +'*{box-sizing:border-box}'
+  +"html,body{margin:0;padding:0;font-family:'Sarabun',Arial,sans-serif;color:#000;background:#fff}"
+  +'.lbl{width:200mm;height:140mm;margin:6mm auto;padding:7mm 9mm;border:2px dashed #000;'
+    +'display:flex;flex-direction:column;overflow:hidden;page-break-after:always}'
+  +'.lbl:last-child{page-break-after:auto}'
+  +'.lbl-top{display:flex;justify-content:space-between;align-items:baseline;gap:6mm;'
+    +'font-size:13pt;font-weight:700;border-bottom:1.5pt solid #000;padding-bottom:3mm;margin-bottom:5mm}'
+  +'.lbl-name{font-weight:900;line-height:1.12;word-break:break-word}'
+  +'.lbl-addr{line-height:1.35;margin-top:4mm;word-break:break-word;flex:1;overflow:hidden}'
+  +'.lbl-tel{display:flex;justify-content:space-between;align-items:flex-end;gap:6mm;'
+    +'border-top:1.5pt solid #000;padding-top:4mm;margin-top:3mm}'
+  +'.lbl-num{font-size:32pt;font-weight:900;letter-spacing:1px;line-height:1;white-space:nowrap}'
+  +'.lbl-from{font-size:9pt;text-align:right;line-height:1.35;color:#000;flex-shrink:0}'
+  +'.lbl-from b{font-size:10pt;font-weight:800}';
+// 0819797748 → 081 979 7748. Anything that is not a plain Thai number stays as typed.
+function _lblPhone(p){
+  var d=String(p||'').replace(/[^0-9]/g,'');
+  if(d.length===10) return d.slice(0,3)+' '+d.slice(3,6)+' '+d.slice(6);
+  if(d.length===9)  return d.slice(0,2)+' '+d.slice(2,5)+' '+d.slice(5);
+  return String(p||'').trim();
+}
+// Font sizes follow the text length — a short Thai name gets the full 46pt, a long
+// one shrinks instead of spilling off a label nobody can re-cut.
+function _labelPageHTML(o, name, addr, tel, idx, total){
+  var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var nl=name.length, ns=nl<=18?46:(nl<=26?40:(nl<=36?34:(nl<=52?28:(nl<=80?22:18))));
+  var al=addr.length, as=al<=55?28:(al<=100?22:(al<=170?17:14));
+  var head=[o.id, o.zone||'', o.province||''].filter(Boolean).map(esc).join(' · ');
+  return '<div class="lbl">'
+    +'<div class="lbl-top"><span>'+head+'</span>'
+      +'<span>'+(total>1?'📦 กล่อง / Carton '+idx+' / '+total:(o.ctn?'📦 '+esc(o.ctn)+' CTN':''))+'</span></div>'
+    +'<div class="lbl-name" style="font-size:'+ns+'pt">'+esc(name||'—')+'</div>'
+    +(addr?'<div class="lbl-addr" style="font-size:'+as+'pt">'+esc(addr)+'</div>':'<div class="lbl-addr"></div>')
+    +'<div class="lbl-tel">'
+      +'<span><span style="font-size:13pt;font-weight:700">โทร. / Tel</span><br><span class="lbl-num">'+(tel?esc(tel):'—')+'</span></span>'
+      +'<span class="lbl-from">ผู้ส่ง / From<br><b>KP Wallpanel</b> ไม้เทียมเกรดพรีเมี่ยม<br>โทร. 063-749-8655</span>'
+    +'</div>'
+  +'</div>';
+}
+function printOrderLabel(orderId){
+  var o=(orders||[]).find(function(x){return x.id===orderId;});
+  if(!o){ alert('Order not found / ไม่พบออเดอร์'); return; }
+  var name=String(o.customer||'').trim();
+  var addr=String(o.address||'').trim(); if(addr==='—') addr='';
+  var tel=_lblPhone((o.phone&&o.phone!=='—')?o.phone:'');
+  if(!name && !addr){ alert('ออเดอร์นี้ไม่มีชื่อและที่อยู่ / no name or address on this order'); return; }
+  var ctn=parseInt(o.ctn,10)||0, n=1;
+  if(ctn>1){
+    n = confirm('ออเดอร์นี้มี '+ctn+' กล่อง — พิมพ์ '+ctn+' ใบ (ใบละกล่อง)?\n'
+      +'This order has '+ctn+' cartons — print '+ctn+' labels, one per carton?\n\n'
+      +'ยกเลิก = พิมพ์ใบเดียว / Cancel = one label') ? ctn : 1;
+  }
+  var pages='';
+  for(var i=1;i<=n;i++) pages+=_labelPageHTML(o, name, addr, tel, i, n);
+  printReceiptDoc(pages, LABEL_PRINT_CSS, '297mm', '210mm');
 }
 
 // ── SALES-BY-ZONE DONUT CHARTS ──────────────────────────────────────
@@ -7868,7 +7935,11 @@ function ofOrderInfo(orderId){
     +'<div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">🚚 ค่าส่ง / Shipping</div>'
     + shipCtrlHtml(o) + shipInfo
     +'</div>';
-  var body = shipSection +
+  // Carton label: name / address / phone, 20 × 14 cm, cut out and glued on the box.
+  var labelBtn = '<button type="button" onclick="printOrderLabel(\''+String(o.id).replace(/['\\]/g,'')+'\')" '
+    +'style="width:100%;margin-bottom:10px;padding:11px;border:none;border-radius:var(--rs);background:#1d4ed8;color:#fff;font-size:13px;font-weight:700;cursor:pointer">'
+    +'🏷️ พิมพ์ป้ายติดกล่อง / Print carton label</button>';
+  var body = labelBtn + shipSection +
     '<div style="margin-bottom:6px">'+
       row('👤','ชื่อ / Name', esc(o.customer||''))+
       row('📞','เบอร์ / Phone', (o.phone&&o.phone!=='—')?esc(o.phone):'')+
