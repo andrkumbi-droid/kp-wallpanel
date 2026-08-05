@@ -2460,14 +2460,19 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     </div>
     <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Payments outside Bills &amp; Payroll — container, tax, installments, extra wages / การจ่ายเงินนอกบิลและนอกเงินเดือน</div>
     <!-- Entry form (top) -->
-    <div id="fin-entry" style="margin-bottom:14px"></div>
+    <div id="fin-entry" style="margin-bottom:10px"></div>
+    <!-- Build the tree from right here, next to the form that fills it -->
+    <div id="fin-addmain"></div>
     <!-- Month selector -->
     <div style="display:flex;gap:6px;margin-bottom:12px;align-items:center">
       <span style="font-size:12px;color:var(--text2);font-weight:700;white-space:nowrap">📅 Month / เดือน</span>
       <select id="fin-filter-month" onchange="finRender()" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px"></select>
     </div>
-    <div id="fin-total" style="margin-bottom:10px"></div>
+    <!-- Sales of the month, the two expense totals, and what is left of each -->
+    <div id="fin-summary" style="margin-bottom:12px"></div>
     <div id="fin-tree"></div>
+    <!-- The two totals sit under the last main category, where the counting ends -->
+    <div id="fin-total" style="margin-bottom:10px"></div>
     <!-- Office salaries — same grid as the Payroll tab, but its own set of people
          (Management → Staff → 👔 Office salary) and one fold-out per person. -->
     <div id="fin-payroll"></div>
@@ -6628,7 +6633,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805019;
+var KP_BUILD = 20260805020;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -24426,7 +24431,7 @@ function costsRender(){
         }
         var ck=sec+'|'+c.id, open=!!_billCatOpen[ck], cKey='cat|'+sec+'|'+c.id, cEdit=!!_billEdit[cKey];
         var ci=(costCats[sec]||[]).findIndex(function(x){ return x.id===c.id; }), clen=(costCats[sec]||[]).length;
-        inner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
+        body+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
           (cEdit
             // Edit mode: rename on the first line, order + move on the second.
             ? '<div style="padding:6px 9px">'
@@ -25608,6 +25613,19 @@ function finDocMode(c){ return (c && FIN_DOC[c.docMode]) ? c.docMode : 'all'; }
    a payment somebody else refunds). The flag sits on the CATEGORY, so a whole kind
    of payment switches at once; every amount underneath follows its colour.
    Blue total = blue only · grey total = blue + grey. */
+// Sales of a month — the same figure the Sales tab shows as its big MONTH number:
+// every non-cancelled order dated in that month, paid or not. `paid` is the share
+// that has actually been settled.
+function finSalesOfMonth(mk){
+  var all=0, paid=0;
+  (orders||[]).forEach(function(o){
+    if(!o || o.status==='cancelled' || !String(o.date||'').indexOf) return;
+    if(String(o.date||'').indexOf(mk)!==0) return;
+    var amt=parseInt(String(o.total||'0').replace(/[^0-9]/g,''),10)||0;
+    all+=amt; if(o.payMethod) paid+=amt;
+  });
+  return {all:all, paid:paid};
+}
 function finCatIsGrey(c){ return !!(c && c.grey); }
 function finPayIsGrey(p){
   if(!p) return false;
@@ -25819,7 +25837,8 @@ function finCatMoveTo(to){
 }
 
 // ── Inline rename + fold state ─────────────────────────────────────────────
-var _finEdit={}, _finOpen={}, _finRowEdit={};
+var _finEdit={}, _finOpen={}, _finRowEdit={}, _finSecOpen={};
+function finSecToggle(id){ _finSecOpen[id]=(_finSecOpen[id]===false); finRender(); }
 function finEditOn(key){ _finEdit={}; _finEdit[key]=1; finRender();
   try{ var i=document.querySelector('[data-fineditkey="'+key+'"]'); if(i){ i.focus(); i.select(); } }catch(e){} }
 function finEditOff(){ _finEdit={}; finRender(); }
@@ -26178,6 +26197,24 @@ function finRender(){
         +'<span style="font-size:12px;font-weight:700;color:#92400e">⏳ Not paid yet / ยังไม่จ่าย ('+openArr.length+')</span>'
         +'<span style="font-size:13px;font-weight:800;color:#92400e;white-space:nowrap">'+_finSum(openArr).toLocaleString()+' ฿</span></div>':'');
   }
+  // ── Head of the tab: what came in, what went out, what is left ────────────
+  var sumEl=document.getElementById('fin-summary');
+  if(sumEl){
+    var sale=finSalesOfMonth(mk);
+    var expB=_finSum(inMonth.filter(function(p){ return !finPayIsGrey(p); }));
+    var expA=_finSum(inMonth);
+    var row=function(lbl,val,col,bg,big){
+      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:'+bg+';border:1px solid var(--border);border-radius:var(--rs);padding:'+(big?'12px 14px':'9px 12px')+';margin-bottom:6px">'
+        +'<span style="font-size:12.5px;font-weight:700;color:'+(col==='var(--text3)'?'var(--text2)':'var(--text)')+'">'+lbl+'</span>'
+        +'<span style="font-size:'+(big?18:15)+'px;font-weight:900;color:'+col+';white-space:nowrap">'+Math.round(val).toLocaleString()+' ฿</span></div>';
+    };
+    sumEl.innerHTML =
+        row('📈 ยอดขาย / Sales '+kpMLabel(mk),sale.all,'#00897b','#e0f2f1',true)
+      + row('➖ รายจ่าย / Expenses',expB,'var(--blue)','var(--bg2)')
+      + (expA!==expB ? row('➖ รายจ่ายทั้งหมด / Expenses incl.',expA,'var(--text3)','var(--bg2)') : '')
+      + row('= คงเหลือ / Result',sale.all-expB,(sale.all-expB)<0?'#dc2626':'var(--blue)','#eff6ff',true)
+      + (expA!==expB ? row('= คงเหลือทั้งหมด / Result incl.',sale.all-expA,(sale.all-expA)<0?'#dc2626':'var(--text3)','var(--bg2)',true) : '');
+  }
   var html='', secs=finSecsFor(mk);
   var box=function(inner){ return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+inner+'</div>'; };
   secs.forEach(function(s,si){
@@ -26191,6 +26228,7 @@ function finRender(){
         +(secGrey?'<span title="รวมทั้งหมด (น้ำเงิน + เทา) / total incl. grey" style="font-size:'+(px-1)+'px;font-weight:800;color:var(--text3);white-space:nowrap;margin-left:6px">'+(secBlue+secGrey).toLocaleString()+' ฿</span>':'');
     };
     var eKey='sec|'+s.id, editing=!!_finEdit[eKey];
+    var secOpen=(_finSecOpen[s.id]!==false);   // open until somebody folds it
     var inner;
     if(editing){
       inner='<div style="margin-bottom:8px">'
@@ -26202,14 +26240,17 @@ function finRender(){
           +secAmt(13)
         +'</div></div>';
     } else {
-      inner='<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:8px">'
-        +'<span style="flex:1;min-width:0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(s.label)+(s.hiddenFrom?' <span style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 5px">closed / ปิด</span>':'')+'</span>'
+      // The whole main category folds away — with ten of them the tab is otherwise
+      // one endless scroll. Closed by nobody's surprise: it starts open.
+      inner='<div onclick="finSecToggle(\''+s.id+'\')" style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:'+(secOpen?'8px':'0')+';cursor:pointer">'
+        +'<span style="flex:1;min-width:0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(secOpen?'down':'right')+'" style="font-size:14px;vertical-align:-2px;color:var(--text2)"></i> '+_esc(s.label)+(s.hiddenFrom?' <span style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 5px">closed / ปิด</span>':'')+'</span>'
         +secAmt(14)
-        +'<button type="button" onclick="finEditOn(\''+eKey+'\')" title="Rename, order, remove / เปลี่ยนชื่อ-ย้าย-ลบ" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
+        +'<button type="button" onclick="event.stopPropagation();finEditOn(\''+eKey+'\')" title="Rename, order, remove / เปลี่ยนชื่อ-ย้าย-ลบ" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
       +'</div>';
     }
     var cats=finCatsFor(s.id,mk);
-    if(!cats.length) inner+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">No categories yet — add one below / ยังไม่มีหมวด</div>';
+    var body='';
+    if(!cats.length) body+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">No categories yet — add one below / ยังไม่มีหมวด</div>';
     cats.forEach(function(c,ci){
       var catPays=secPays.filter(function(p){ return p.catId===c.id; }).sort(function(a,b){ return (b.date||'').localeCompare(a.date||'')||(b.ts||0)-(a.ts||0); });
       var ck=s.id+'|'+c.id, open=!!_finOpen[ck], cKey='cat|'+s.id+'|'+c.id, cEdit=!!_finEdit[cKey];
@@ -26255,7 +26296,7 @@ function finRender(){
     var orph=secPays.filter(function(p){ return !known[p.catId]; });
     if(orph.length){
       var oOpen=!!_finOpen[s.id+'|__orphan'];
-      inner+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
+      body+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
         +'<div onclick="finToggle(\''+s.id+'\',\'__orphan\')" style="display:flex;gap:6px;align-items:center;padding:6px 9px;cursor:pointer">'
           +'<span style="flex:1;min-width:0;font-size:12px;font-weight:600;color:#92400e"><i class="ti ti-chevron-'+(oOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> ⚠️ Not assigned / ไม่มีหมวด ('+orph.length+')</span>'
           +'<span style="font-size:13px;font-weight:800;color:#92400e;white-space:nowrap">'+_finSum(orph).toLocaleString()+' ฿</span>'
@@ -26263,7 +26304,8 @@ function finRender(){
         +(oOpen?'<div style="padding:0 9px 8px">'+orph.map(_finPayRow).join('')+'</div>':'')
       +'</div>';
     }
-    html+=box(inner+'<button type="button" onclick="finCatAdd(\''+s.id+'\')" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add category / เพิ่มหมวด</button>');
+    html+=box(inner+'<div style="'+(secOpen?'':'display:none')+'">'+body
+      +'<button type="button" onclick="finCatAdd(\''+s.id+'\')" style="margin-top:2px;width:100%;background:none;border:1px dashed var(--border);color:var(--text2);border-radius:var(--rs);padding:7px;font-size:12px;font-weight:600;cursor:pointer"><i class="ti ti-plus"></i> Add category / เพิ่มหมวด</button></div>');
   });
   // Payments of a main category that no longer exists at all.
   var secKnown={}; finSecs().forEach(function(s){ secKnown[s.id]=1; });
@@ -26284,7 +26326,10 @@ function finRender(){
       +'Nothing here yet — build it yourself. / ยังว่าง สร้างเองได้เลย<br>'
       +'<span style="color:var(--text2)">e.g. 🚢 Container · 🏛 Tax / ภาษี · 👷 Extra wages / ค่าแรงพิเศษ · 💳 Installments / ผ่อนชำระ</span></div>';
   }
-  html+='<button type="button" onclick="finSecAdd()" style="width:100%;margin-bottom:12px;background:var(--bg2);border:1.5px dashed var(--blue);color:var(--blue);border-radius:var(--rs);padding:9px;font-size:12.5px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add main category / เพิ่มหมวดหลัก</button>';
+  // "Add main category" now sits under the entry form, where the tree is built —
+  // not at the bottom behind everything that already exists.
+  var addEl=document.getElementById('fin-addmain');
+  if(addEl) addEl.innerHTML='<button type="button" onclick="finSecAdd()" style="width:100%;margin-bottom:12px;background:var(--bg2);border:1.5px dashed var(--blue);color:var(--blue);border-radius:var(--rs);padding:9px;font-size:12.5px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add main category / เพิ่มหมวดหลัก</button>';
   tree.innerHTML=html;
   try{ finFillCats(); }catch(e){}
   try{ finPayRender(); }catch(e){}
