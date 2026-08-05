@@ -24432,7 +24432,7 @@ function costsRender(){
         }
         var ck=sec+'|'+c.id, open=!!_billCatOpen[ck], cKey='cat|'+sec+'|'+c.id, cEdit=!!_billEdit[cKey];
         var ci=(costCats[sec]||[]).findIndex(function(x){ return x.id===c.id; }), clen=(costCats[sec]||[]).length;
-        body+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
+        inner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
           (cEdit
             // Edit mode: rename on the first line, order + move on the second.
             ? '<div style="padding:6px 9px">'
@@ -24586,7 +24586,9 @@ function costsRender(){
 
 function billsRender(){
   try{ if(!document.getElementById('bills-e-section')) billsEntryRender(); }catch(e){}
-  try{ costsRender(); }catch(e){}
+  // Never swallow this one silently — a throw in here empties the whole cost
+  // dashboard and the tab just looks "gone" (06.08.2026).
+  try{ costsRender(); }catch(e){ console.error('costsRender failed:',e); }
   var listEl = document.getElementById('bills-list');
   var msel   = document.getElementById('bills-filter-month');
   if(!listEl) return;
@@ -26168,11 +26170,10 @@ function _finPayRow(p){
   return h+'</div>';
 }
 /* ── Overview at the head of the tab ────────────────────────────────────────
-   Expenses here means EVERY baht the office really pays in that month, not just
-   the payments of this tree:
+   Expenses = everything THIS tab shows, nothing else:
      💼 payments of the Finance tree      (fin-tree)
      👔 office salaries                   (fin-payroll, bottom of this very tab)
-     🧾 receipts of the Bills tab         (they were missing until 06.08.2026)
+   Bills stay out on purpose — that tab has its own dashboard and its own totals.
    Blue = what counts; grey = the ones parked as "counted separately"
    (grey category / grey person), so grey is always blue + grey. */
 function finMonthTotals(mk){
@@ -26186,15 +26187,11 @@ function finMonthTotals(mk){
       if(s.grey) salG+=net; else salB+=net;
     });
   }catch(e){}
-  var bill=0;
-  try{ (typeof bills!=='undefined'?bills:[]).forEach(function(b){
-    if(b && billsMKey(b.date)===mk) bill+=parseFloat(b.amount)||0;
-  }); }catch(e){}
-  // Round the three parts once, here — otherwise every row rounds for itself and
-  // the breakdown misses the total by a baht.
-  var R=Math.round; payB=R(payB); payG=R(payG); salB=R(salB); salG=R(salG); bill=R(bill);
-  return { pay:payB, payGrey:payG, sal:salB, salGrey:salG, bills:bill,
-           blue:payB+salB+bill, all:payB+payG+salB+salG+bill };
+  // Round the parts once, here — otherwise every row rounds for itself and the
+  // breakdown misses the total by a baht.
+  var R=Math.round; payB=R(payB); payG=R(payG); salB=R(salB); salG=R(salG);
+  return { pay:payB, payGrey:payG, sal:salB, salGrey:salG,
+           blue:payB+salB, all:payB+payG+salB+salG };
 }
 // The whole block folds — it sits above the entry form now, so it must be able
 // to get out of the way. The state survives a reload.
@@ -26232,7 +26229,6 @@ function finSumRender(){
     + row('📈 ยอดขาย / Sales '+kpMLabel(mk),sale.all,'#00897b','#e0f2f1',true)
     + sub('💼 รายการจ่าย / Finance payments',t.pay,t.payGrey)
     + sub('👔 เงินเดือนออฟฟิศ / Office salaries',t.sal,t.salGrey)
-    + sub('🧾 บิล / Bills',t.bills,0)
     + row('➖ รายจ่าย / Expenses',t.blue,'var(--blue)','var(--bg2)')
     + (dual ? row('➖ รายจ่ายทั้งหมด / Expenses incl.',t.all,'var(--text3)','var(--bg2)') : '')
     + row('= คงเหลือ / Result',resB,resB<0?'#dc2626':'var(--blue)','#eff6ff',true)
@@ -26305,13 +26301,15 @@ function finRender(){
       +'</div>';
     }
     var cats=finCatsFor(s.id,mk);
+    // `inner` is the header row, `body` everything that folds away underneath it —
+    // the categories belong in `body`, or a folded main category keeps showing them.
     var body='';
     if(!cats.length) body+='<div style="font-size:11px;color:var(--text2);margin-bottom:6px">No categories yet — add one below / ยังไม่มีหมวด</div>';
     cats.forEach(function(c,ci){
       var catPays=secPays.filter(function(p){ return p.catId===c.id; }).sort(function(a,b){ return (b.date||'').localeCompare(a.date||'')||(b.ts||0)-(a.ts||0); });
       var ck=s.id+'|'+c.id, open=!!_finOpen[ck], cKey='cat|'+s.id+'|'+c.id, cEdit=!!_finEdit[cKey];
       var mode=finDocMode(c), nFiles=finCatFiles(c).length;
-      inner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
+      body+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
         +(cEdit
           ? '<div style="padding:6px 9px">'
               +'<div style="display:flex;gap:5px;align-items:center">'+_finEditRow(cKey,c.label)+'</div>'
