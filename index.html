@@ -6616,7 +6616,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805008;
+var KP_BUILD = 20260805009;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -10048,6 +10048,15 @@ function ofRenderTour(){
         '<div style="font-size:12px;color:var(--text2);margin-top:1px">👤 '+(o.customer||'—')+'</div>'+
         (o.phone&&o.phone!=='—'?'<div style="font-size:12px;color:var(--text2)">📞 '+o.phone+'</div>':'')+
         (o.address&&o.address!=='—'?'<div style="font-size:12px;color:var(--text2)">📍 '+o.address+'</div>':'')+
+        // Cartons + bundles as soon as the warehouse has counted them — that is what
+        // decides whether the load still fits on the truck, so it belongs on the card
+        // you pick from, not two screens later.
+        (function(){
+          var bits=[];
+          if(parseInt(o.ctn,10)>0)    bits.push('<span style="color:var(--green);font-weight:700">📦 '+parseInt(o.ctn,10)+' CTN</span>');
+          if(parseInt(o.bundle,10)>0) bits.push('<span style="color:#ea580c;font-weight:700">🧶 '+parseInt(o.bundle,10)+' มัด</span>');
+          return bits.length?'<div style="font-size:12px;margin-top:1px">'+bits.join(' · ')+'</div>':'';
+        })()+
         '<div style="font-size:12px;font-weight:700;color:#111;margin-top:2px">💰 '+(ofCanonTotal(o)!=null?ofCanonTotal(o).toLocaleString()+' ฿':(o.total||'—'))+'</div>'+
         (function(){var _n=[(o.reqNote||'').trim(),(o.notes||'').trim()].filter(Boolean).join(' · ');return _n?'<div style="font-size:12px;color:#b45309;margin-top:1px">📝 '+_n+'</div>':'';})()+
       '</div>'+
@@ -11234,14 +11243,36 @@ function ofRenderUnpaid(){
 }
 
 // ── the pay-out dialog ─────────────────────────────────────────────────────
-var _tpayIds=[], _tpaySum=0, _tpayDrv='', _tpayDrvId='', _tpayMethod='transfer', _tpaySlips=[];
+var _tpayIds=[], _tpaySum=0, _tpayDrv='', _tpayDrvId='', _tpayMethod='transfer', _tpaySlips=[], _tpayExtras=[];
+// Money the driver laid out and gets back with the same transfer — a 700 ฿ delivery
+// fee he paid the carrier out of his own pocket, a ferry ticket, a repair. It is part
+// of what leaves the bank, so it belongs in the total. It is deliberately NOT booked
+// into payroll: the cost itself is already recorded where it belongs (the shipping
+// cost of the order, a bill), and this is only the driver getting his money back.
+function tpayExtrasSum(){ return _tpayExtras.reduce(function(a,e){ return a+(parseFloat(e.amount)||0); },0); }
+function tpayTotal(){ return _tpaySum + tpayExtrasSum(); }
+function tpayExtraAdd(){ _tpayExtras.push({label:'',amount:''}); tpayRender();
+  try{ var els=document.querySelectorAll('#tpay-body input[data-xl]'); if(els.length) els[els.length-1].focus(); }catch(e){} }
+function tpayExtraDel(i){ i=parseInt(i,10); if(i>=0&&i<_tpayExtras.length){ _tpayExtras.splice(i,1); tpayRender(); } }
+// Typing must not rebuild the dialog — that would throw the cursor out of the field.
+function tpayExtraSet(i, field, val){
+  var e=_tpayExtras[parseInt(i,10)]; if(!e) return;
+  e[field]=(field==='amount')?(val===''?'':(parseFloat(val)||0)):val;
+  try{
+    var t=document.getElementById('tpay-total'); if(t) t.textContent=tpayTotal().toLocaleString()+' ฿';
+    var b=document.getElementById('tpay-breakdown');
+    if(b){ var x=tpayExtrasSum();
+      b.innerHTML = x ? 'ทัวร์ / tours '+_tpaySum.toLocaleString()+' ฿ + เพิ่มเติม / extras '+x.toLocaleString()+' ฿' : ''; }
+    var c=document.getElementById('tpay-confirm'); if(c) c.textContent='✓ ยืนยันการจ่าย / Confirm '+tpayTotal().toLocaleString()+' ฿';
+  }catch(err){}
+}
 function tpayOpen(){
   var groups=ofUnpaidGroups().filter(function(g){ return !!_tpSel[g.key]; });
   if(!groups.length){ alert('เลือกทัวร์ก่อน / tick at least one tour'); return; }
   _tpayIds=[]; groups.forEach(function(g){ _tpayIds=_tpayIds.concat(g.ids); });
   _tpaySum=groups.reduce(function(a,g){ return a+g.pay; },0);
   _tpayDrv=groups[0].driverName; _tpayDrvId=groups[0].driverId||'';
-  _tpayMethod='transfer'; _tpaySlips=[];
+  _tpayMethod='transfer'; _tpaySlips=[]; _tpayExtras=[];
   tpayRender();
   document.getElementById('tpay-modal').classList.add('open');
 }
@@ -11280,9 +11311,25 @@ function tpayRender(){
       +'<span style="font-size:16px;font-weight:800">💸 จ่ายคนขับ / Pay driver</span>'
       +'<button type="button" onclick="tpayClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
     +'<div style="font-size:13px;font-weight:800;margin-bottom:6px">🚚 '+_esc(_tpayDrv)+' <span style="font-weight:600;color:var(--text2)">· '+_tpayIds.length+' ทัวร์ / tours</span></div>'
-    +'<div style="max-height:34vh;overflow:auto;margin-bottom:8px">'+lines+'</div>'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);background:var(--blue);color:#fff;font-weight:900;font-size:16px;margin-bottom:10px">'
-      +'<span>รวม / Total</span><span>'+_tpaySum.toLocaleString()+' ฿</span></div>'
+    +'<div style="max-height:30vh;overflow:auto;margin-bottom:8px">'+lines+'</div>'
+    // Free lines for money the driver laid out and gets back with the same payment.
+    +'<div style="border-top:1px dashed var(--border);padding-top:8px;margin-bottom:8px">'
+      +'<div style="font-size:11px;font-weight:800;color:var(--text2);margin-bottom:5px">➕ เพิ่มเติม / Extras <span style="font-weight:500">— ที่คนขับสำรองจ่าย เช่น ค่าส่งขนส่ง / laid out by the driver, e.g. a carrier fee</span></div>'
+      +_tpayExtras.map(function(e,i){
+        return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'
+          +'<input type="text" data-xl="1" value="'+_esc(e.label)+'" placeholder="เช่น ค่าส่ง เอสพี / e.g. shipper fee" oninput="tpayExtraSet('+i+',\'label\',this.value)" style="flex:1;min-width:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text)">'
+          +'<input type="number" value="'+(e.amount===''||e.amount==null?'':e.amount)+'" placeholder="0" oninput="tpayExtraSet('+i+',\'amount\',this.value)" style="width:86px;flex-shrink:0;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;font-weight:800;text-align:right;background:var(--bg);color:var(--text)">'
+          +'<button type="button" onclick="tpayExtraDel('+i+')" title="ลบ / remove" style="flex-shrink:0;width:30px;height:30px;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);cursor:pointer">✕</button>'
+        +'</div>';
+      }).join('')
+      +'<button type="button" onclick="tpayExtraAdd()" style="width:100%;padding:7px;border:1px dashed var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);font-size:12px;font-weight:700;cursor:pointer">+ เพิ่มบรรทัด / add a line</button>'
+    +'</div>'
+    +'<div style="padding:10px 12px;border-radius:var(--rs);background:var(--blue);color:#fff;margin-bottom:10px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:900;font-size:16px">'
+        +'<span>รวม / Total</span><span id="tpay-total">'+tpayTotal().toLocaleString()+' ฿</span></div>'
+      +'<div id="tpay-breakdown" style="font-size:11px;font-weight:600;opacity:.9;margin-top:2px">'
+        +(tpayExtrasSum()?'ทัวร์ / tours '+_tpaySum.toLocaleString()+' ฿ + เพิ่มเติม / extras '+tpayExtrasSum().toLocaleString()+' ฿':'')+'</div>'
+    +'</div>'
     +'<div style="display:flex;gap:8px;margin-bottom:10px">'
       +'<button type="button" onclick="tpayMethod(\'transfer\')" style="'+btn+';border:1.5px solid '+(_tpayMethod==='transfer'?'#1d4ed8':'var(--border)')+';background:'+(_tpayMethod==='transfer'?'#dbeafe':'var(--bg)')+';color:'+(_tpayMethod==='transfer'?'#1d4ed8':'var(--text2)')+'">🏦 โอน / Transfer</button>'
       +'<button type="button" onclick="tpayMethod(\'cash\')" style="'+btn+';border:1.5px solid '+(_tpayMethod==='cash'?'#16a34a':'var(--border)')+';background:'+(_tpayMethod==='cash'?'#dcfce7':'var(--bg)')+';color:'+(_tpayMethod==='cash'?'#166534':'var(--text2)')+'">💵 เงินสด / Cash</button>'
@@ -11301,7 +11348,7 @@ function tpayRender(){
           :'<div style="font-size:11px;color:#92400e;margin-bottom:8px">⚠️ ยังไม่มีสลิป / no slip yet</div>')
         +'<div id="tpay-up" style="display:none;font-size:11px;color:var(--text2);margin-bottom:6px"></div>'
       : '')
-    +'<button type="button" onclick="tpayConfirm()" style="width:100%;padding:12px;border:none;border-radius:var(--rs);background:#16a34a;color:#fff;font-size:14px;font-weight:900;cursor:pointer">✓ ยืนยันการจ่าย / Confirm '+_tpaySum.toLocaleString()+' ฿</button>';
+    +'<button type="button" id="tpay-confirm" onclick="tpayConfirm()" style="width:100%;padding:12px;border:none;border-radius:var(--rs);background:#16a34a;color:#fff;font-size:14px;font-weight:900;cursor:pointer">✓ ยืนยันการจ่าย / Confirm '+tpayTotal().toLocaleString()+' ฿</button>';
 }
 function tpayConfirm(){
   if(!_tpayIds.length){ tpayClose(); return; }
@@ -11309,7 +11356,13 @@ function tpayConfirm(){
     if(!confirm('ยังไม่มีสลิป — จ่ายเลยไหม? / No slip attached — confirm anyway?\nแนบทีหลังได้ที่การ์ดทัวร์ / you can attach it later on the tour card')) return;
   }
   var by=ofWho(), at=Date.now();
-  var po={ id:'po-'+at+Math.floor(Math.random()*1000), tourIds:_tpayIds.slice(), amount:_tpaySum,
+  // Only lines that carry something — an empty row the office added and left blank
+  // must not end up in the record.
+  var extras=_tpayExtras.filter(function(e){ return (String(e.label||'').trim() || (parseFloat(e.amount)||0)); })
+    .map(function(e){ return { label:String(e.label||'').trim()||'เพิ่มเติม / extra', amount:parseFloat(e.amount)||0 }; });
+  var xSum=extras.reduce(function(a,e){ return a+e.amount; },0);
+  var po={ id:'po-'+at+Math.floor(Math.random()*1000), tourIds:_tpayIds.slice(),
+           amount:_tpaySum+xSum, tourSum:_tpaySum, extras:extras,
            method:_tpayMethod, slips:_tpaySlips.slice(), driverName:_tpayDrv, driverId:_tpayDrvId,
            date:kpTodayStr(), by:by, at:at };
   tourPayoutSave(po);
@@ -11321,9 +11374,10 @@ function tpayConfirm(){
   });
   try{ _tourPayoutStampPayLog(po); }catch(e){}
   try{ auditTour('pay','🆔 '+_tpayIds.join(', '),
-    '💸 จ่ายรวม / paid together '+_tpaySum.toLocaleString()+' ฿ · '+(_tpayMethod==='cash'?'💵 เงินสด / cash':'🏦 โอน / transfer')
+    '💸 จ่ายรวม / paid together '+po.amount.toLocaleString()+' ฿ · '+(_tpayMethod==='cash'?'💵 เงินสด / cash':'🏦 โอน / transfer')
+    +(extras.length?' · ค่าทัวร์ / tours '+_tpaySum.toLocaleString()+' + '+extras.map(function(e){ return e.label+' '+e.amount.toLocaleString(); }).join(' + '):'')
     +(po.slips.length?' · 🧾 '+po.slips.length:'')+' · 🚚 '+_tpayDrv, by); }catch(e){}
-  _tpSel={}; _tpDriver=''; _tpaySlips=[];
+  _tpSel={}; _tpDriver=''; _tpaySlips=[]; _tpayExtras=[];
   tpayClose();
   try{ ofRenderTourIds(); }catch(e){}
   try{ ofRenderTour(); }catch(e){}
@@ -11344,6 +11398,9 @@ function tourPayoutBarHTML(ids, sum){
         +(n?'🧾 สลิปโอน / Transfer slip ('+n+')':'⚠️ ยังไม่มีสลิป / no slip yet')
         +(amt?' · <b>'+amt.toLocaleString()+' ฿</b>':'')
         +(multi?' <span style="font-weight:400">('+ids.length+' ทัวร์ โอนครั้งเดียว / one transfer)</span>':'')+'</span>'
+      // What the transfer contained on top of the tour pay — the driver's outlay.
+      +((po.extras&&po.extras.length)?'<span style="width:100%;font-size:10.5px;color:var(--text2);font-weight:600">ค่าทัวร์ / tours '+(Number(po.tourSum)||0).toLocaleString()+' ฿ + '
+        +tidArr(po.extras).map(function(e){ return _esc(e.label)+' '+(Number(e.amount)||0).toLocaleString()+' ฿'; }).join(' + ')+'</span>':'')
       +'<button type="button" onclick="event.stopPropagation();document.getElementById(\'poslip-'+po.id+'\').click()" title="ถ่ายรูปสลิป / take a photo" style="'+btn+'">📷</button>'
       +'<button type="button" onclick="event.stopPropagation();document.getElementById(\'poslipg-'+po.id+'\').click()" title="อัปโหลด / upload" style="'+btn+'">🖼️</button>'
     +'</div>'
