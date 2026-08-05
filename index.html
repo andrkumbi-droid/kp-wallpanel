@@ -6612,7 +6612,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805005;
+var KP_BUILD = 20260805006;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -11427,6 +11427,21 @@ function ofTourIdPhotos(id){
 // One tick box pays a whole day: the tours a driver drove on the same day are paid
 // out together (500 + 200 + 800 = 1,500 ฿, one transfer), so the flag is set on
 // every ID of that group at once.
+// Is this driver-day settled through the monthly payroll? endTourPayroll() books the
+// tour pay into payLog the moment a tour ends, and the Payroll grid shows it in the
+// "🚚 Tour Pay (auto)" row — but only for staff who are actually in the payroll.
+// Everyone else (outside drivers, Lalamove) is handed the money per tour, which is
+// what the paid-tick and its slip are for.
+function tourDriverOnPayroll(g){
+  try{
+    if(!g || !g.tours) return false;
+    var did=(g.tours.find(function(r){ return r && r.driverId; })||{}).driverId||'';
+    var nm=String(g.driverName||'').trim().toLowerCase();
+    var s=(did?(staffList||[]).find(function(x){ return x && x.driverId===did; }):null)
+       || (nm?(staffList||[]).find(function(x){ return x && String(x.name||'').trim().toLowerCase()===nm; }):null);
+    return !!(s && s.payrollOn);
+  }catch(e){ return false; }
+}
 function tourRegTogglePaidGroup(idsCsv){
   var ids=String(idsCsv||'').split(',').filter(tidOk); if(!ids.length) return;
   var allPaid=ids.every(function(id){ return !!(tourRegRec(id)||{}).paid; });
@@ -11573,6 +11588,19 @@ function ofRenderTourIds(){
     var payTxt=allPaid
       ? '✅ จ่ายคนขับแล้ว / driver paid'+(g.tours[0].paidBy?' · '+g.tours[0].paidBy:'')+(g.tours[0].paidAt?' · '+fmtD(new Date(g.tours[0].paidAt).toISOString().slice(0,10)):'')
       : '⬜ ยังไม่จ่ายคนขับ / not paid yet';
+    // A driver who is on the payroll (Amy, Aung Lay …) has the tour pay booked into
+    // the payroll grid the moment the tour ends — "Tour Pay (auto)". Nobody hands
+    // them money per tour, so the tick would only ever be noise. It still shows if
+    // the group was ticked at some point, so an old mark stays visible and undoable.
+    var onPayroll=tourDriverOnPayroll(g);
+    var payCtrl=function(idsCsv, pad){
+      if(onPayroll && !allPaid){
+        return '<span onclick="event.stopPropagation()" title="ค่าทัวร์เข้าเงินเดือนอัตโนมัติ / the tour pay is booked into the monthly payroll" style="display:inline-flex;align-items:center;gap:6px;padding:'+pad+';border:1px solid #bfdbfe;border-radius:var(--rs);background:#eff6ff;font-size:11px;font-weight:700;color:#1d4ed8">💰 เข้าเงินเดือนอัตโนมัติ / in payroll'+(g.pay>0?' · '+g.pay.toLocaleString()+' ฿':'')+'</span>';
+      }
+      return '<label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:6px;padding:'+pad+';border:1px solid '+(allPaid?'#86efac':'var(--border)')+';border-radius:var(--rs);background:'+(allPaid?'#f0fdf4':'var(--bg)')+';font-size:11px;font-weight:700;color:'+(allPaid?'#166534':'var(--text2)')+';cursor:pointer">'
+        +'<input type="checkbox" '+(allPaid?'checked ':'')+'onchange="event.stopPropagation();tourRegTogglePaidGroup(\''+idsCsv+'\')" style="width:16px;height:16px;cursor:pointer">'+payTxt
+      +'</label>';
+    };
     // One block per tour of that day
     var toursHTML=g.tours.map(function(r){
       var no=r.id, bid='tid_'+no, deleted=r.state==='deleted', ended=r.state==='ended';
@@ -11626,9 +11654,7 @@ function ofRenderTourIds(){
           +'<div style="display:flex;gap:6px;flex-wrap:wrap;padding:2px 0 6px">'
             +'<button type="button" onclick="event.stopPropagation();ofTourIdPhotos(\''+no0+'\')" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:700;cursor:pointer">🖼️ รูป / Photos + สลิป</button>'
             +'<button type="button" onclick="event.stopPropagation();ofTourIdSetDay(\''+no0+'\')" title="เปลี่ยนวันออกทัวร์ — รหัสจะเปลี่ยนตามวัน / change the tour day, the ID follows" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:700;cursor:pointer">📅 เปลี่ยนวัน / Day</button>'
-            +'<label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid '+(allPaid?'#86efac':'var(--border)')+';border-radius:var(--rs);background:'+(allPaid?'#f0fdf4':'var(--bg)')+';font-size:11px;font-weight:700;color:'+(allPaid?'#166534':'var(--text2)')+';cursor:pointer">'
-              +'<input type="checkbox" '+(allPaid?'checked ':'')+'onchange="event.stopPropagation();tourRegTogglePaidGroup(\''+no0+'\')" style="width:16px;height:16px;cursor:pointer">'+payTxt
-            +'</label>'
+            +payCtrl(no0,'6px 10px')
           +'</div>'
           +(allPaid?tourPayoutBarHTML([no0], g.pay):'')
           +'<div id="tidph_'+no0+'" style="display:none"></div>'
@@ -11652,9 +11678,7 @@ function ofRenderTourIds(){
         +'<span style="width:100%;font-size:10.5px;color:var(--text2)">🗓 '+(dayLbl?fmtD(dayLbl):'—')+' · '+payLine+'</span>'
       +'</div>'
       +'<div id="'+gid+'" style="display:none;padding:0 11px 10px">'
-        +'<label onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid '+(allPaid?'#86efac':'var(--border)')+';border-radius:var(--rs);background:'+(allPaid?'#f0fdf4':'var(--bg)')+';font-size:11px;font-weight:700;color:'+(allPaid?'#166534':'var(--text2)')+';cursor:pointer">'
-          +'<input type="checkbox" '+(allPaid?'checked ':'')+'onchange="event.stopPropagation();tourRegTogglePaidGroup(\''+ids.join(',')+'\')" style="width:16px;height:16px;cursor:pointer">'+payTxt
-        +'</label>'
+        +payCtrl(ids.join(','),'7px 10px')
         +(allPaid?tourPayoutBarHTML(ids, g.pay):'')
         +toursHTML
       +'</div>'
@@ -11677,7 +11701,9 @@ function ofRenderTourIds(){
   var doneOrders=0, donePay=0, doneUnticked=0;
   doneKeys.forEach(function(gk){
     var g=groups[gk]; donePay+=g.pay;
-    if(!g.tours.every(function(r){ return !!r.paid; })) doneUnticked++;
+    // Payroll drivers are never ticked — counting them here would leave a permanent
+    // "not ticked" warning for money that is already in their wage.
+    if(!g.tours.every(function(r){ return !!r.paid; }) && !tourDriverOnPayroll(g)) doneUnticked++;
     g.tours.forEach(function(r){ doneOrders+=tidArr(r.orders).length; });
   });
   var doneHTML=doneKeys.length
