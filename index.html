@@ -2491,6 +2491,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="modal-overlay" id="fin-restore-modal"><div class="modal" id="fin-restore-body"></div></div>
   <!-- FINANCE: move a category into another main category -->
   <div class="modal-overlay" id="fin-move-modal"><div class="modal" id="fin-move-body"></div></div>
+  <!-- FINANCE: close or really delete something that still holds payments -->
+  <div class="modal-overlay" id="fin-del-modal"><div class="modal" id="fin-del-body"></div></div>
 
   <!-- BILLS ADD/EDIT MODAL -->
   <div class="modal-overlay" id="bills-modal">
@@ -25757,13 +25759,7 @@ function finSecRemove(id){
     delete finCats[id];
     finSyncSections(); finSyncCats(); _finAudit('main category deleted','',s.label,'empty'); finRender(); return;
   }
-  if(!confirm('Close main category "'+(s.label||'')+'" from '+mk+' on? / ปิดหมวดหลักนี้ตั้งแต่ '+mk+'?\n\n'
-    +'✓ '+linked.length+' payment(s), '+sum.toLocaleString()+' ฿ stay where they are / รายการยังอยู่เหมือนเดิม\n'
-    +'✓ Earlier months keep it / เดือนก่อนหน้าไม่เปลี่ยน\n'
-    +'✓ Undo: ♻️ Restore / ยกเลิกได้ที่ กู้คืน')) return;
-  _finSecRec(id).hiddenFrom=mk; finSyncSections();
-  _finAudit('main category closed','',s.label,'from '+mk+' · '+linked.length+' payments / '+sum.toLocaleString()+' ฿ kept');
-  finRender();
+  finDelOpen('sec','',id);
 }
 function finSecReopen(id){
   var r=(finSections||[]).find(function(x){ return x&&x.id===id; }); if(!r) return;
@@ -25832,13 +25828,84 @@ function finCatRemove(sec,id){
     finCats[sec]=finCatsOf(sec).filter(function(x){ return x.id!==id; });
     finSyncCats(); _finAudit('category deleted',sec,c.label,'empty'); finRender(); return;
   }
-  if(!confirm('Close category "'+(c.label||'')+'" from '+mk+' on? / ปิดหมวดนี้ตั้งแต่ '+mk+'?\n\n'
-    +'✓ '+linked.length+' payment(s), '+sum.toLocaleString()+' ฿ stay where they are / รายการยังอยู่เหมือนเดิม\n'
-    +'✓ Earlier months keep it / เดือนก่อนหน้าไม่เปลี่ยน\n'
-    +'✓ Undo: ♻️ Restore / ยกเลิกได้ที่ กู้คืน')) return;
-  c.hiddenFrom=mk; finSyncCats();
-  _finAudit('category closed',sec,c.label,'from '+mk+' · '+linked.length+' payments / '+sum.toLocaleString()+' ฿ kept');
-  finRender();
+  finDelOpen('cat',sec,id);
+}
+/* ── Close or really delete ─────────────────────────────────────────────────
+   Anything that still holds payments used to be CLOSED and nothing else — the
+   money must survive (the lesson from Bills, 03.08.2026). But a category that
+   holds nothing but a couple of test payments could then never be got rid of:
+   closing leaves it standing in every month that holds one of them. So the
+   office picks: 🔒 close (money stays, ♻️ Restore brings it back) or 🗑️ delete
+   with all its payments — same PIN as deleting a single payment. */
+var _finDelCtx=null;
+function finDelOpen(kind,sec,id){
+  _finDelCtx={kind:kind,sec:sec,id:id};
+  finDelRender();
+  var m=document.getElementById('fin-del-modal'); if(m) m.classList.add('open');
+}
+function finDelClose(){
+  var m=document.getElementById('fin-del-modal'); if(m) m.classList.remove('open');
+  _finDelCtx=null;
+}
+function _finDelInfo(){
+  var c=_finDelCtx; if(!c) return null;
+  var isSec=(c.kind==='sec');
+  var rec=isSec?null:finCatRec(c.sec,c.id);
+  if(!isSec && !rec) return null;
+  var linked=(finPays||[]).filter(function(p){
+    return isSec ? p.section===c.id : (p.section===c.sec && p.catId===c.id);
+  });
+  return { isSec:isSec, label:(isSec?finSecLabel(c.id):(rec.label||'')), rec:rec, linked:linked,
+           sum:linked.reduce(function(a,p){ return a+(parseFloat(p.amount)||0); },0) };
+}
+function finDelRender(){
+  var el=document.getElementById('fin-del-body'), d=_finDelInfo(); if(!el||!d) return;
+  var mk=_finMonthKey(), what=d.isSec?'หมวดหลัก / main category':'หมวด / category';
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +'<span style="font-size:15px;font-weight:800">'+_esc(d.label||'—')+'</span>'
+      +'<button type="button" onclick="finDelClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.6">'+what+'<br>'
+      +'<b>'+d.linked.length+'</b> payment(s) · <b>'+d.sum.toLocaleString()+' ฿</b> / รายการที่ผูกอยู่</div>'
+    +'<button type="button" onclick="finDelSoft()" style="width:100%;margin-bottom:8px;padding:11px;border:1.5px solid var(--blue);border-radius:var(--rs);background:#eff6ff;color:var(--blue);font-size:13px;font-weight:800;cursor:pointer">'
+      +'🔒 Close from '+kpMLabel(mk)+' / ปิดตั้งแต่เดือนนี้</button>'
+    +'<div style="font-size:11px;color:var(--text2);margin-bottom:14px;line-height:1.5">รายการยังอยู่ / the payments stay where they are · เดือนก่อนหน้าไม่เปลี่ยน / earlier months keep it · ♻️ Restore ยกเลิกได้</div>'
+    +'<button type="button" onclick="finDelHard()" style="width:100%;margin-bottom:8px;padding:11px;border:1.5px solid #fecaca;border-radius:var(--rs);background:#fee2e2;color:#dc2626;font-size:13px;font-weight:800;cursor:pointer">'
+      +'🗑️ Delete with all '+d.linked.length+' payment(s) / ลบพร้อมรายการ</button>'
+    +'<div style="font-size:11px;color:#dc2626;margin-bottom:14px;line-height:1.5">ลบถาวร ย้อนกลับไม่ได้ / gone for good, in every month — asks for your PIN</div>'
+    +'<button type="button" onclick="finDelClose()" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text2);font-size:13px;font-weight:700;cursor:pointer">Cancel / ยกเลิก</button>';
+}
+function finDelSoft(){
+  var d=_finDelInfo(); if(!d) return;
+  var mk=_finMonthKey(), c=_finDelCtx;
+  if(d.isSec){
+    _finSecRec(c.id).hiddenFrom=mk; finSyncSections();
+    _finAudit('main category closed','',d.label,'from '+mk+' · '+d.linked.length+' payments / '+d.sum.toLocaleString()+' ฿ kept');
+  } else {
+    d.rec.hiddenFrom=mk; finSyncCats();
+    _finAudit('category closed',c.sec,d.label,'from '+mk+' · '+d.linked.length+' payments / '+d.sum.toLocaleString()+' ฿ kept');
+  }
+  finDelClose(); finRender();
+}
+function finDelHard(){
+  var d=_finDelInfo(); if(!d) return;
+  var c=_finDelCtx;
+  var me=(typeof staffList!=='undefined'&&typeof currentStaffId!=='undefined') ? staffList.find(function(s){return s.id===currentStaffId;}) : null;
+  if(!me||!me.pin){ alert('Log in with your office PIN to delete. / เข้าสู่ระบบด้วย PIN'); return; }
+  var entered=prompt('Enter YOUR office PIN to delete "'+(d.label||'')+'" and its '+d.linked.length+' payment(s) / ใส่ PIN ของคุณเพื่อลบ:');
+  if(entered===null) return;
+  if(String(entered).trim()!==String(me.pin)){ alert('Wrong PIN / PIN ไม่ถูกต้อง'); return; }
+  d.linked.forEach(function(p){ if(window.fbDB) window.fbDB.ref('finPays/'+p.id).remove(); });
+  if(d.isSec){
+    finSections=(finSections||[]).filter(function(x){ return !x||x.id!==c.id; });
+    delete finCats[c.id];
+    finSyncSections(); finSyncCats();
+    _finAudit('main category deleted','',d.label,'with '+d.linked.length+' payments / '+d.sum.toLocaleString()+' ฿');
+  } else {
+    finCats[c.sec]=finCatsOf(c.sec).filter(function(x){ return x.id!==c.id; });
+    finSyncCats();
+    _finAudit('category deleted',c.sec,d.label,'with '+d.linked.length+' payments / '+d.sum.toLocaleString()+' ฿');
+  }
+  finDelClose(); finRender();
 }
 function finCatReopen(sec,id){
   var c=finCatRec(sec,id); if(!c) return;
