@@ -1074,6 +1074,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         finPays = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}) : [];
         try{ if(document.getElementById('ofv-fin')&&document.getElementById('ofv-fin').classList.contains('active')) finRender(); }catch(e){}
       });
+      // Blue/grey per mirrored Bills category — the ONLY thing Finance writes about
+      // the Bills tree; the tree itself stays owned by the Bills tab.
+      db.ref('finBillGrey').on('value', function(snap) {
+        finBillGrey = snap.val() || {};
+        try{ if(document.getElementById('ofv-fin')&&document.getElementById('ofv-fin').classList.contains('active')) finRender(); }catch(e){}
+      });
       // Lightweight photo index (counts/metadata only, NOT the image data) so the
       // Pictures tab can list orders without downloading every photo on startup.
       db.ref('photoIndex').on('value', function(snap) {
@@ -2477,6 +2483,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <!-- Office salaries — same grid as the Payroll tab, but its own set of people
          (Management → Staff → 👔 Office salary) and one fold-out per person. -->
     <div id="fin-payroll"></div>
+    <!-- Mirror of the Bills tree: same categories, read-only, but each one can be
+         set blue (counts) or grey (counted separately) for the Finance totals. -->
+    <div id="fin-bills"></div>
   </div></div>
   <!-- FINANCE: reopen closed main categories / categories -->
   <div class="modal-overlay" id="fin-restore-modal"><div class="modal" id="fin-restore-body"></div></div>
@@ -4027,6 +4036,7 @@ var costCats={utilities:[],food:[],other:[]}; // Bills: sub-category defs per se
 // completely separate set of nodes: no built-in sections, the office builds it all.
 var finSections=[];                   // Finance: main categories [{id,label,order,hiddenFrom}]
 var finCats={};                       // Finance: {sectionId:[{id,label,docMode,hiddenFrom}]}
+var finBillGrey={};                   // Finance: {mirrorKey:1} — Bills categories parked in grey
 var finPays=[];                       // Finance: payment records (Firebase 'finPays')
 var costSections=[];                  // Bills: top-level sections [{id,label}] — label overrides for the 3 built-ins + office-made ones (Firebase 'costSections')
 let dAllOrders=[],dStatus={},dTour=[],dDone=[],dChecks={};
@@ -26204,13 +26214,145 @@ function _finPayRow(p){
   }
   return h+'</div>';
 }
+/* ── Mirror of the Bills tree ───────────────────────────────────────────────
+   The Finance tab shows the whole Bills dashboard a second time: same main
+   categories, same categories, same fold-outs — read-only, because the Bills tab
+   owns that tree. The ONE thing that can be set here is the colour square per
+   category: 🔵 counts in the Finance expenses, 🩶 only in the grey total.
+   Stored in finBillGrey (Firebase), keyed per category; blue is the default, so
+   an untouched category simply counts.
+   Keys are sanitised — carrier names like "บี.เอส." carry dots and Firebase
+   refuses those in a key. */
+function _finBillSafe(k){ return String(k||'').replace(/[.#$\/\[\]]/g,'_').slice(0,120); }
+function _finBillKey(blk,c){
+  if(blk.kind==='fixed')   return 'fixed';
+  if(blk.kind==='lost')    return 'lost';
+  if(blk.kind==='staff')   return 'staff|'+_finBillSafe(blk.group);
+  if(blk.kind==='shipper') return 'ship|'+_finBillSafe(c?c.id:'');
+  return 'cat|'+_finBillSafe(blk.section)+'|'+_finBillSafe(c?c.id:'');
+}
+function finBillIsGrey(k){ return !!finBillGrey[k]; }
+// Only the blocks that really have categories get a square per row; Fixed costs,
+// the staff groups and the lost bucket switch as a whole.
+function finBillMirror(mk){
+  var res={blue:0,grey:0,blocks:[]};
+  var data=null; try{ data=billsCostData(mk); }catch(e){ return res; }
+  (data&&data.blocks||[]).forEach(function(blk){
+    var kids=blk.children||[];
+    if(!kids.length && !blk.total) return;              // empty group: not worth a line
+    var perCat=(blk.kind==='section'||blk.kind==='shipper');
+    var bkey=_finBillKey(blk,null), blue=0, grey=0;
+    var rows=kids.map(function(c){
+      var key=perCat?_finBillKey(blk,c):bkey, amt=parseFloat(c.total)||0;
+      if(finBillIsGrey(key)) grey+=amt; else blue+=amt;
+      return { key:key, label:c.label||'—', total:amt,
+               items:c.items||null, lines:c.lines||null, ships:c.rows||null };
+    });
+    res.blue+=blue; res.grey+=grey;
+    res.blocks.push({ kind:blk.kind, label:blk.label, key:bkey, perCat:perCat,
+                      rows:rows, blue:blue, grey:grey });
+  });
+  return res;
+}
+var _finBillOpen={};
+var _finBillSecOpen=(function(){ try{ return localStorage.getItem('kpFinBillSecOpen')==='1'; }catch(e){ return false; } })();
+function finBillSecToggle(){
+  _finBillSecOpen=!_finBillSecOpen;
+  try{ localStorage.setItem('kpFinBillSecOpen',_finBillSecOpen?'1':'0'); }catch(e){}
+  finBillsRender();
+}
+// Labels carry Thai text, dots and quotes, so nothing is pasted into an onclick
+// string — the handlers get an index into this list instead.
+var _finBillRefs=[];
+function finBillToggle(i){ var k=_finBillRefs[i]; if(!k) return; _finBillOpen[k]=!_finBillOpen[k]; finBillsRender(); }
+function finBillSetGrey(i){
+  var k=_finBillRefs[i]; if(!k) return;
+  if(finBillGrey[k]) delete finBillGrey[k]; else finBillGrey[k]=1;
+  if(window.fbDB) window.fbDB.ref('finBillGrey').set(finBillGrey);
+  _finAudit('bills colour','bills',k,finBillGrey[k]?'🩶 grey — counted separately':'🔵 blue — counts in the total');
+  finRender();
+}
+function _finBillRef(k){ _finBillRefs.push(k); return _finBillRefs.length-1; }
+function _finBillSq(key){
+  var g=finBillIsGrey(key), i=_finBillRef(key);
+  return '<button type="button" onclick="event.stopPropagation();finBillSetGrey('+i+')" title="สีของยอด / colour — 🔵 counts in Expenses · 🩶 counted separately" style="border:1.5px solid '+(g?'var(--text3)':'var(--blue)')+';background:'+(g?'var(--text3)':'var(--blue)')+';border-radius:5px;width:26px;height:26px;flex-shrink:0;cursor:pointer"></button>';
+}
+function _finBillAmt(blue,grey,px){
+  return '<span style="font-size:'+px+'px;font-weight:800;color:var(--blue);white-space:nowrap">'+Math.round(blue).toLocaleString()+' ฿</span>'
+    +(grey?'<span title="รวมทั้งหมด (น้ำเงิน + เทา) / total incl. grey" style="font-size:'+(px-1)+'px;font-weight:800;color:var(--text3);white-space:nowrap;margin-left:6px">'+Math.round(blue+grey).toLocaleString()+' ฿</span>':'');
+}
+function finBillsRender(){
+  var host=document.getElementById('fin-bills'); if(!host) return;
+  _finBillRefs=[];
+  var mk=_finMonthKey(), m=finBillMirror(mk);
+  var head='<div style="margin:18px 0 8px;padding-top:14px;border-top:2px dashed var(--border)">'
+    +'<div onclick="finBillSecToggle()" style="display:flex;align-items:center;gap:8px;cursor:pointer">'
+      +'<i class="ti ti-chevron-'+(_finBillSecOpen?'down':'right')+'" style="font-size:16px;color:var(--text2)"></i>'
+      +'<div class="stit" style="margin-bottom:0;flex:1;min-width:0">🧾 บิล / Bills · '+kpMLabel(mk)+'</div>'
+      +_finBillAmt(m.blue,m.grey,15)
+    +'</div>'
+    +(_finBillSecOpen?'<div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.5">มาจากแท็บ Bills — แก้ไขที่นั่น / mirrored from the Bills tab, edit it there.<br>🔵 counts in Expenses · 🩶 counted separately / นับแยก</div>':'')
+  +'</div>';
+  if(!_finBillSecOpen){ host.innerHTML=head; return; }
+  if(!m.blocks.length){
+    host.innerHTML=head+'<div class="empty" style="padding:16px;font-size:12.5px">ไม่มีบิลเดือนนี้ / No bills this month</div>';
+    return;
+  }
+  var html='';
+  m.blocks.forEach(function(b){
+    var bOpen=!!_finBillOpen[b.key+'|__blk'], bi=_finBillRef(b.key+'|__blk');
+    html+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'
+      +'<div onclick="finBillToggle('+bi+')" style="display:flex;align-items:center;gap:6px;margin-bottom:'+(bOpen?'8px':'0')+';cursor:pointer">'
+        +'<span style="flex:1;min-width:0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(bOpen?'down':'right')+'" style="font-size:14px;vertical-align:-2px;color:var(--text2)"></i> '+_esc(b.label)+'</span>'
+        +_finBillAmt(b.blue,b.grey,14)
+        +(b.perCat?'':_finBillSq(b.key))
+      +'</div>';
+    if(bOpen){
+      b.rows.forEach(function(r,ri){
+        var rk=b.key+'|'+ri, rOpen=!!_finBillOpen[rk], ri2=_finBillRef(rk);
+        var leaves=r.items||r.lines||r.ships||null;
+        html+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'
+          +'<div'+(leaves&&leaves.length?' onclick="finBillToggle('+ri2+')"':'')+' style="display:flex;gap:5px;align-items:center;padding:6px 9px;'+(leaves&&leaves.length?'cursor:pointer':'')+'">'
+            +'<span style="flex:1;min-width:0;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+              +(leaves&&leaves.length?'<i class="ti ti-chevron-'+(rOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px;color:var(--text2)"></i> ':'')
+              +_esc(r.label)+(leaves&&leaves.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+leaves.length+')</span>':'')+'</span>'
+            +'<span style="font-size:13px;font-weight:800;white-space:nowrap;color:'+(finBillIsGrey(r.key)?'var(--text3)':'var(--blue)')+'">'+Math.round(r.total).toLocaleString()+' ฿</span>'
+            +(b.perCat?_finBillSq(r.key):'')
+          +'</div>';
+        if(rOpen&&leaves&&leaves.length){
+          html+='<div style="padding:0 9px 8px">';
+          if(r.items) html+=r.items.map(_billItemRow).join('');
+          else if(r.lines) html+=r.lines.map(function(l){
+            return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:5px 8px;background:var(--bg2);border-radius:var(--rs);margin-top:5px">'
+              +'<span style="min-width:0">'+_esc(l.cat||'—')+'<span style="color:var(--text2)"> · '+_esc(l.date||'')+'</span></span>'
+              +'<span style="font-weight:700;white-space:nowrap">'+(parseFloat(l.amount)||0).toLocaleString()+' ฿</span></div>';
+          }).join('');
+          else if(r.ships) html+=r.ships.map(function(s){
+            var o=s.o||{};
+            return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:5px 8px;background:var(--bg2);border-radius:var(--rs);margin-top:5px">'
+              +'<span style="min-width:0">'+_esc(o.id||'—')+'<span style="color:var(--text2)"> · '+_esc(o.name||o.customer||'')+'</span></span>'
+              +'<span style="font-weight:700;white-space:nowrap">'+(parseFloat(o.shipCost)||0).toLocaleString()+' ฿</span></div>';
+          }).join('');
+          html+='</div>';
+        }
+        html+='</div>';
+      });
+    }
+    html+='</div>';
+  });
+  html+='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 15px;border-radius:var(--r);background:var(--bg2);border:1.5px solid var(--border);font-weight:900;font-size:14px;margin-bottom:12px">'
+    +'<span>รวมบิล / Bills total · '+kpMLabel(mk)+'</span>'+_finBillAmt(m.blue,m.grey,15)+'</div>';
+  host.innerHTML=head+html;
+}
+
 /* ── Overview at the head of the tab ────────────────────────────────────────
    Expenses = everything THIS tab shows, nothing else:
      💼 payments of the Finance tree      (fin-tree)
-     👔 office salaries                   (fin-payroll, bottom of this very tab)
-   Bills stay out on purpose — that tab has its own dashboard and its own totals.
+     👔 office salaries                   (fin-payroll)
+     🧾 the mirrored Bills tree           (fin-bills)
    Blue = what counts; grey = the ones parked as "counted separately"
-   (grey category / grey person), so grey is always blue + grey. */
+   (grey category / grey person / grey Bills category), so grey is always
+   blue + grey. */
 function finMonthTotals(mk){
   var inMonth=_finIn(mk);
   var payB=_finSum(inMonth.filter(function(p){ return !finPayIsGrey(p); }));
@@ -26222,11 +26364,13 @@ function finMonthTotals(mk){
       if(s.grey) salG+=net; else salB+=net;
     });
   }catch(e){}
+  var mir=finBillMirror(mk);
   // Round the parts once, here — otherwise every row rounds for itself and the
   // breakdown misses the total by a baht.
   var R=Math.round; payB=R(payB); payG=R(payG); salB=R(salB); salG=R(salG);
-  return { pay:payB, payGrey:payG, sal:salB, salGrey:salG,
-           blue:payB+salB, all:payB+payG+salB+salG };
+  var bilB=R(mir.blue), bilG=R(mir.grey);
+  return { pay:payB, payGrey:payG, sal:salB, salGrey:salG, bill:bilB, billGrey:bilG,
+           blue:payB+salB+bilB, all:payB+payG+salB+salG+bilB+bilG };
 }
 // The whole block folds — it sits above the entry form now, so it must be able
 // to get out of the way. The state survives a reload.
@@ -26414,6 +26558,7 @@ function finRender(){
   tree.innerHTML=html;
   try{ finFillCats(); }catch(e){}
   try{ finPayRender(); }catch(e){}
+  try{ finBillsRender(); }catch(e){}
 }
 
 // ── Restore ────────────────────────────────────────────────────────────────
