@@ -26224,32 +26224,34 @@ function _finPayRow(p){
    Keys are sanitised — carrier names like "บี.เอส." carry dots and Firebase
    refuses those in a key. */
 function _finBillSafe(k){ return String(k||'').replace(/[.#$\/\[\]]/g,'_').slice(0,120); }
+// Every single row carries its own square — one category, one carrier, one fixed
+// cost line, one person. Fixed costs are keyed by their LABEL: the carryover
+// gives them a fresh id every month, an id key would forget the colour each 1st.
 function _finBillKey(blk,c){
-  if(blk.kind==='fixed')   return 'fixed';
-  if(blk.kind==='lost')    return 'lost';
-  if(blk.kind==='staff')   return 'staff|'+_finBillSafe(blk.group);
-  if(blk.kind==='shipper') return 'ship|'+_finBillSafe(c?c.id:'');
-  return 'cat|'+_finBillSafe(blk.section)+'|'+_finBillSafe(c?c.id:'');
+  var id=_finBillSafe(c&&c.id!=null?c.id:'');
+  if(blk.kind==='fixed')   return 'fix|'+_finBillSafe(c&&c.label);
+  if(blk.kind==='lost')    return 'lost|'+id;
+  if(blk.kind==='staff')   return 'stf|'+_finBillSafe(blk.group)+'|'+id;
+  if(blk.kind==='shipper') return 'ship|'+id;
+  return 'cat|'+_finBillSafe(blk.section)+'|'+id;
 }
 function finBillIsGrey(k){ return !!finBillGrey[k]; }
-// Only the blocks that really have categories get a square per row; Fixed costs,
-// the staff groups and the lost bucket switch as a whole.
 function finBillMirror(mk){
   var res={blue:0,grey:0,blocks:[]};
   var data=null; try{ data=billsCostData(mk); }catch(e){ return res; }
   (data&&data.blocks||[]).forEach(function(blk){
     var kids=blk.children||[];
     if(!kids.length && !blk.total) return;              // empty group: not worth a line
-    var perCat=(blk.kind==='section'||blk.kind==='shipper');
-    var bkey=_finBillKey(blk,null), blue=0, grey=0;
+    var blue=0, grey=0;
     var rows=kids.map(function(c){
-      var key=perCat?_finBillKey(blk,c):bkey, amt=parseFloat(c.total)||0;
+      var key=_finBillKey(blk,c), amt=parseFloat(c.total)||0;
       if(finBillIsGrey(key)) grey+=amt; else blue+=amt;
       return { key:key, label:c.label||'—', total:amt,
                items:c.items||null, lines:c.lines||null, ships:c.rows||null };
     });
     res.blue+=blue; res.grey+=grey;
-    res.blocks.push({ kind:blk.kind, label:blk.label, key:bkey, perCat:perCat,
+    res.blocks.push({ kind:blk.kind, label:blk.label,
+                      key:(blk.kind==='staff'?'stf|'+_finBillSafe(blk.group):blk.kind+'|'+_finBillSafe(blk.section||blk.label)),
                       rows:rows, blue:blue, grey:grey });
   });
   return res;
@@ -26305,7 +26307,6 @@ function finBillsRender(){
       +'<div onclick="finBillToggle('+bi+')" style="display:flex;align-items:center;gap:6px;margin-bottom:'+(bOpen?'8px':'0')+';cursor:pointer">'
         +'<span style="flex:1;min-width:0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(bOpen?'down':'right')+'" style="font-size:14px;vertical-align:-2px;color:var(--text2)"></i> '+_esc(b.label)+'</span>'
         +_finBillAmt(b.blue,b.grey,14)
-        +(b.perCat?'':_finBillSq(b.key))
       +'</div>';
     if(bOpen){
       b.rows.forEach(function(r,ri){
@@ -26317,7 +26318,7 @@ function finBillsRender(){
               +(leaves&&leaves.length?'<i class="ti ti-chevron-'+(rOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px;color:var(--text2)"></i> ':'')
               +_esc(r.label)+(leaves&&leaves.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+leaves.length+')</span>':'')+'</span>'
             +'<span style="font-size:13px;font-weight:800;white-space:nowrap;color:'+(finBillIsGrey(r.key)?'var(--text3)':'var(--blue)')+'">'+Math.round(r.total).toLocaleString()+' ฿</span>'
-            +(b.perCat?_finBillSq(r.key):'')
+            +_finBillSq(r.key)
           +'</div>';
         if(rOpen&&leaves&&leaves.length){
           html+='<div style="padding:0 9px 8px">';
