@@ -264,8 +264,8 @@ textarea{resize:none}
 #order-info-modal{align-items:center;padding:16px}
 #order-info-modal .modal{border-radius:16px;max-height:86vh}
 /* Delivery + odometer popups: centered too, not glued to the bottom edge. */
-#delivery-modal,#km-modal{align-items:center;padding:16px}
-#delivery-modal .modal,#km-modal .modal{border-radius:16px;max-height:88vh}
+#delivery-modal,#km-modal,#tpay-modal{align-items:center;padding:16px}
+#delivery-modal .modal,#km-modal .modal,#tpay-modal .modal{border-radius:16px;max-height:88vh}
 .mhdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
 .mtit{font-size:16px;font-weight:600;color:var(--text)}
 .mclose{background:none;border:none;cursor:pointer;font-size:22px;color:var(--text2);padding:2px}
@@ -6616,7 +6616,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805007;
+var KP_BUILD = 20260805008;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -11166,11 +11166,40 @@ function tpSelectDay(day){
   list.forEach(function(g){ if((g.driverId||g.driverName)===_tpDriver) _tpSel[g.key]=1; });
   ofRenderUnpaid();
 }
+// Transfers that were confirmed before the slip existed ("I'll send it in a minute").
+// Without a place to add it later the receipt would simply never arrive.
+function ofPayoutsNoSlip(){
+  return tourPayoutArr()
+    .filter(function(p){ return p && p.method!=='cash' && !tourPayoutSlips(p).length && tidArr(p.tourIds).length; })
+    .sort(function(a,b){ return (b.at||0)-(a.at||0); });
+}
+function ofNoSlipHTML(){
+  var miss=ofPayoutsNoSlip(); if(!miss.length) return '';
+  var btn='flex-shrink:0;padding:5px 9px;border:1px solid #bbf7d0;background:var(--bg);color:#16a34a;border-radius:var(--rs);cursor:pointer;font-size:13px';
+  return '<div style="border:1.5px solid #fde68a;background:#fffbeb;border-radius:var(--r);padding:10px 12px;margin-bottom:10px">'
+    +'<div style="font-size:12.5px;font-weight:800;color:#92400e;margin-bottom:6px">🧾 จ่ายแล้ว ยังไม่มีสลิป / Paid, slip missing ('+miss.length+')</div>'
+    +miss.map(function(p){
+      var ids=tidArr(p.tourIds);
+      return '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);margin-bottom:6px">'
+        +'<input type="file" accept="image/*" capture="environment" id="poslip-'+p.id+'" style="display:none" onchange="tourPayoutAddSlip(this,\''+p.id+'\')">'
+        +'<input type="file" accept="image/*" multiple id="poslipg-'+p.id+'" style="display:none" onchange="tourPayoutAddSlip(this,\''+p.id+'\')">'
+        +'<span style="flex:1;min-width:0">'
+          +'<span style="font-size:12.5px;font-weight:800">🚚 '+_esc(p.driverName||'—')+'</span>'
+          +'<span style="font-size:13px;font-weight:900;color:var(--green);margin-left:6px">'+(Number(p.amount)||0).toLocaleString()+' ฿</span>'
+          +'<div style="font-size:10.5px;color:var(--text2);margin-top:1px">'+(p.date?fmtD(p.date):'')+' · '+ids.slice(0,4).join(', ')+(ids.length>4?' +'+(ids.length-4):'')+'</div>'
+        +'</span>'
+        +'<button type="button" onclick="document.getElementById(\'poslip-'+p.id+'\').click()" title="ถ่ายสลิป / take a photo" style="'+btn+'">📷</button>'
+        +'<button type="button" onclick="document.getElementById(\'poslipg-'+p.id+'\').click()" title="อัปโหลด / upload" style="'+btn+'">🖼️</button>'
+        +'<div id="poup-'+p.id+'" style="display:none;width:100%;font-size:11px;color:var(--text2)"></div>'
+      +'</div>';
+    }).join('')
+  +'</div>';
+}
 function ofRenderUnpaid(){
   var host=document.getElementById('of-unpaid-wrap'); if(!host) return;
   if(window.ofReadOnly){ host.innerHTML=''; return; }
   var list=ofUnpaidGroups();
-  if(!list.length){ host.innerHTML=''; _tpSel={}; _tpDriver=''; return; }
+  if(!list.length){ host.innerHTML=ofNoSlipHTML(); _tpSel={}; _tpDriver=''; return; }
   var total=list.reduce(function(a,g){ return a+g.pay; },0);
   var sel=list.filter(function(g){ return !!_tpSel[g.key]; });
   var selSum=sel.reduce(function(a,g){ return a+g.pay; },0);
@@ -11189,7 +11218,8 @@ function ofRenderUnpaid(){
       +'<span style="font-size:13px;font-weight:900;color:'+(g.pay>0?'var(--green)':'#c2410c')+';white-space:nowrap">'+(g.pay>0?g.pay.toLocaleString()+' ฿':'⚠ ไม่มีค่าทัวร์')+'</span>'
     +'</label>';
   }).join('');
-  host.innerHTML='<div style="border:1.5px solid #fed7aa;background:#fff7ed;border-radius:var(--r);padding:10px 12px;margin-bottom:10px">'
+  host.innerHTML=ofNoSlipHTML()
+    +'<div style="border:1.5px solid #fed7aa;background:#fff7ed;border-radius:var(--r);padding:10px 12px;margin-bottom:10px">'
     +'<div onclick="ofToggleMore(\'of-unpaid-body\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer">'
       +'<span style="font-size:13px;font-weight:800;color:#c2410c">💸 ยังไม่จ่ายคนขับ / Unpaid tours ('+list.length+')</span>'
       +'<span style="font-size:13px;font-weight:900;color:#c2410c;white-space:nowrap">'+total.toLocaleString()+' ฿ ▾</span>'
