@@ -6625,7 +6625,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805017;
+var KP_BUILD = 20260805018;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -25576,6 +25576,23 @@ var FIN_DOC={
   none:   {lbl:'🚫 No files / ไม่ใช้ไฟล์', accept:'', link:false}
 };
 function finDocMode(c){ return (c && FIN_DOC[c.docMode]) ? c.docMode : 'all'; }
+/* Blue or grey — two counts side by side. Blue is the number that matters, grey is
+   money that belongs in this tab but not in that number (a private car instalment,
+   a payment somebody else refunds). The flag sits on the CATEGORY, so a whole kind
+   of payment switches at once; every amount underneath follows its colour.
+   Blue total = blue only · grey total = blue + grey. */
+function finCatIsGrey(c){ return !!(c && c.grey); }
+function finPayIsGrey(p){
+  if(!p) return false;
+  var c=finCatRec(p.section,p.catId);
+  return finCatIsGrey(c);
+}
+function finCatToggleGrey(sec,id){
+  var c=finCatRec(sec,id); if(!c) return;
+  c.grey=!c.grey; finSyncCats();
+  _finAudit('category colour',sec,c.label,c.grey?'🩶 grey — counted separately':'🔵 blue — counted in the total');
+  finRender();
+}
 function finMKey(d){ if(!d) return ''; var x=new Date(d+'T00:00:00'); return isNaN(x)?'':x.getFullYear()+'-'+(x.getMonth()+1<10?'0':'')+(x.getMonth()+1); }
 function _finMonthKey(){ var m=document.getElementById('fin-filter-month'); return (m&&m.value)||_nowMonthKey(); }
 function finSyncSections(){ if(window.fbDB) window.fbDB.ref('finSections').set(finSections); }
@@ -26073,7 +26090,7 @@ function _finPayRow(p){
         +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'+fmtD(p.date)+(p.by?' · 👤 '+_esc(p.by):'')
           +(open?' · <span style="color:#92400e;font-weight:700">⏳ not paid / ยังไม่จ่าย</span>':'')+'</div>'
       +'</span>'
-      +'<span style="font-size:13px;font-weight:800;white-space:nowrap">'+(parseFloat(p.amount)||0).toLocaleString()+' ฿</span>'
+      +'<span style="font-size:13px;font-weight:800;white-space:nowrap;color:'+(finPayIsGrey(p)?'var(--text3)':'var(--text)')+'">'+(parseFloat(p.amount)||0).toLocaleString()+' ฿</span>'
       +'<button type="button" onclick="finRowEdit(\''+p.id+'\')" title="Edit / แก้ไข" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:28px;height:28px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
     +'</div>';
   if(files.length){
@@ -26121,9 +26138,15 @@ function finRender(){
   var totEl=document.getElementById('fin-total');
   if(totEl){
     var openArr=inMonth.filter(function(p){ return p.status==='open'; });
+    var _blue=_finSum(inMonth.filter(function(p){ return !finPayIsGrey(p); }));
+    var _grey=_finSum(inMonth)-_blue;
     totEl.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px">'
       +'<span style="font-size:12.5px;font-weight:700">💰 Total '+kpMLabel(mk)+' / รวม</span>'
-      +'<span style="font-size:16px;font-weight:800;color:var(--blue);white-space:nowrap">'+_finSum(inMonth).toLocaleString()+' ฿</span></div>'
+      +'<span style="font-size:16px;font-weight:800;color:var(--blue);white-space:nowrap">'+_blue.toLocaleString()+' ฿</span></div>'
+      // Second bar: blue + grey. Only there when something is actually grey.
+      +(_grey?'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-top:6px">'
+        +'<span style="font-size:12.5px;font-weight:700;color:var(--text2)">💰 Total incl. / รวมทั้งหมด '+kpMLabel(mk)+'</span>'
+        +'<span style="font-size:16px;font-weight:800;color:var(--text3);white-space:nowrap">'+(_blue+_grey).toLocaleString()+' ฿</span></div>':'')
       +(openArr.length?'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:8px 12px;margin-top:6px">'
         +'<span style="font-size:12px;font-weight:700;color:#92400e">⏳ Not paid yet / ยังไม่จ่าย ('+openArr.length+')</span>'
         +'<span style="font-size:13px;font-weight:800;color:#92400e;white-space:nowrap">'+_finSum(openArr).toLocaleString()+' ฿</span></div>':'');
@@ -26132,6 +26155,14 @@ function finRender(){
   var box=function(inner){ return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+inner+'</div>'; };
   secs.forEach(function(s,si){
     var secPays=inMonth.filter(function(p){ return p.section===s.id; });
+    // Blue is the section's real number; whatever sits in grey categories is added
+    // behind it in small grey, so the section header never hides money either.
+    var secBlue=_finSum(secPays.filter(function(p){ return !finPayIsGrey(p); }));
+    var secGrey=_finSum(secPays)-secBlue;
+    var secAmt=function(px){
+      return '<span style="font-size:'+px+'px;font-weight:800;color:var(--blue);white-space:nowrap">'+secBlue.toLocaleString()+' ฿</span>'
+        +(secGrey?'<span title="เทา / grey" style="font-size:'+(px-2)+'px;font-weight:800;color:var(--text3);white-space:nowrap;margin-left:5px">+'+secGrey.toLocaleString()+'</span>':'');
+    };
     var eKey='sec|'+s.id, editing=!!_finEdit[eKey];
     var inner;
     if(editing){
@@ -26141,12 +26172,12 @@ function finRender(){
           +_ordBtn('finSecMove(\''+s.id+'\',-1)','▲','Move up / เลื่อนขึ้น',si<=0)
           +_ordBtn('finSecMove(\''+s.id+'\',1)','▼','Move down / เลื่อนลง',si>=secs.length-1)
           +'<button type="button" onclick="finSecRemove(\''+s.id+'\')" style="flex:1;padding:6px 8px;border:1px solid #fecaca;border-radius:var(--rs);background:#fee2e2;color:#dc2626;font-size:12px;font-weight:600;cursor:pointer">✕ Remove / ลบหมวดหลัก</button>'
-          +'<span style="font-size:13px;font-weight:800;color:var(--blue);white-space:nowrap">'+_finSum(secPays).toLocaleString()+' ฿</span>'
+          +secAmt(13)
         +'</div></div>';
     } else {
       inner='<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:8px">'
         +'<span style="flex:1;min-width:0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(s.label)+(s.hiddenFrom?' <span style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 5px">closed / ปิด</span>':'')+'</span>'
-        +'<span style="font-size:14px;font-weight:800;color:var(--blue);white-space:nowrap">'+_finSum(secPays).toLocaleString()+' ฿</span>'
+        +secAmt(14)
         +'<button type="button" onclick="finEditOn(\''+eKey+'\')" title="Rename, order, remove / เปลี่ยนชื่อ-ย้าย-ลบ" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
       +'</div>';
     }
@@ -26164,6 +26195,9 @@ function finRender(){
                 +_ordBtn('finCatMove(\''+s.id+'\',\''+c.id+'\',-1)','▲','Move up / เลื่อนขึ้น',ci<=0)
                 +_ordBtn('finCatMove(\''+s.id+'\',\''+c.id+'\',1)','▼','Move down / เลื่อนลง',ci>=cats.length-1)
                 +'<button type="button" onclick="event.stopPropagation();finCatMoveOpen(\''+s.id+'\',\''+c.id+'\')" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer">⇄ Move to… / ย้าย</button>'
+                // The colour square: blue = counted in the blue total, grey = only in
+                // the grey one. Tap to switch; every amount of this category follows.
+                +'<button type="button" onclick="event.stopPropagation();finCatToggleGrey(\''+s.id+'\',\''+c.id+'\')" title="สีของยอด / colour of the amounts — blue counts in the blue total, grey only in the grey one" style="border:1.5px solid '+(finCatIsGrey(c)?'var(--text3)':'var(--blue)')+';background:'+(finCatIsGrey(c)?'var(--text3)':'var(--blue)')+';border-radius:5px;width:30px;height:30px;flex-shrink:0;cursor:pointer"></button>'
                 +'<button type="button" onclick="event.stopPropagation();finCatRemove(\''+s.id+'\',\''+c.id+'\')" title="Remove / ลบ" style="border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);width:32px;height:30px;flex-shrink:0;cursor:pointer">✕</button>'
               +'</div>'
               // What may be attached to a payment of THIS category.
@@ -26180,7 +26214,7 @@ function finRender(){
                 +(nFiles?' <span title="Files in this category / ไฟล์ของหมวดนี้" style="font-size:11px;font-weight:700;color:var(--blue);background:#eff6ff;border-radius:8px;padding:1px 6px">📂 '+nFiles+'</span>':'')
                 +(catPays.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+catPays.length+')</span>':'')
                 +(c.hiddenFrom?' <span style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 5px">closed / ปิด</span>':'')+'</span>'
-              +'<span style="font-size:13px;font-weight:800;white-space:nowrap">'+_finSum(catPays).toLocaleString()+' ฿</span>'
+              +'<span style="font-size:13px;font-weight:800;white-space:nowrap;color:'+(finCatIsGrey(c)?'var(--text3)':'var(--blue)')+'">'+_finSum(catPays).toLocaleString()+' ฿</span>'
               +'<button type="button" onclick="event.stopPropagation();finEditOn(\''+cKey+'\')" title="Rename, files, move / เปลี่ยนชื่อ-ไฟล์-ย้าย" style="border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);width:30px;height:30px;flex-shrink:0;cursor:pointer"><i class="ti ti-pencil"></i></button>'
             +'</div>')
         +(open?'<div style="padding:0 9px 8px">'
