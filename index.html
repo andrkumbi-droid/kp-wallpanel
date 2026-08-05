@@ -2226,7 +2226,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="pgr-row"><label>📦 Container · 2<small>ลงตู้ 2 ตู้ (฿ รวม)</small></label><input type="number" id="pgr-c2" placeholder="700"></div>
       <div class="pgr-row"><label>📦 Each further container<small>ตู้ถัดไป (฿ ต่อตู้)</small></label><input type="number" id="pgr-ce" placeholder="400"></div>
       <div class="pgr-row"><label>🚫 Unexcused absent day<small>ขาดงาน = × ค่าแรงต่อวัน</small></label><input type="number" id="pgr-absmult" step="0.5" placeholder="2"></div>
-      <div class="pgr-row" style="border-bottom:none"><label>💰 Monthly base <span style="font-weight:600;color:var(--text2)">(optional)</span><small>เงินเดือนประจำ (฿) — 0 = ไม่ใช้</small></label><input type="number" id="pgr-monthly" placeholder="0"></div>
+      <div class="pgr-row"><label>💰 Monthly base <span style="font-weight:600;color:var(--text2)">(optional)</span><small>เงินเดือนประจำ (฿) — 0 = ไม่ใช้</small></label><input type="number" id="pgr-monthly" placeholder="0"></div>
+      <div class="pgr-row" style="border-bottom:none"><label>💹 Commission ฿/panel <span style="font-weight:600;color:var(--text2)">(optional)</span><small>คอมมิชชั่นต่อแผ่นที่ขายได้ — 0 = ไม่ใช้</small></label><input type="number" id="pgr-comm" step="0.05" placeholder="0"></div>
 
       <div style="font-size:10.5px;color:var(--text2);margin-top:10px;line-height:1.45">
         Container: 1 → the “1” amount, 2 → the “2” amount, from the 3rd on “2” + each further.<br>
@@ -6623,7 +6624,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805014;
+var KP_BUILD = 20260805015;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -22770,6 +22771,9 @@ var PG_FIX=[
   {k:'ot',   ic:'⏱', en:'Overtime',    th:'โอที (ชม.)',     type:'half', sign:1},
   {k:'cont', ic:'📦', en:'Container',   th:'ลงตู้',          type:'int',  sign:1},
   {k:'tour', ic:'🚚', en:'Tour Pay',    th:'ค่าทัวร์ (auto)', type:'auto', sign:1},
+  // Sales commission: panels sold this month × the person's ฿/panel. Only shows
+  // for whoever has a rate — the warehouse never sees this row.
+  {k:'comm', ic:'💹', en:'Commission',  th:'คอมมิชชั่น (auto)', type:'auto', sign:1},
   {k:'adv',  ic:'💵', en:'Advance',     th:'เบิกล่วงหน้า',    type:'amt',  sign:-1},
   {k:'dmg',  ic:'💥', en:'Damage',      th:'ค่าเสียหาย',      type:'amt',  sign:-1},
   {k:'abs',  ic:'🚫', en:'Absent day',  th:'ขาดงาน',         type:'day',  sign:-1}
@@ -22850,7 +22854,32 @@ function pgRate(sid){
   var r=(payRates||{})[sid]||{};
   function n(v,dflt){ v=parseFloat(v); return isNaN(v)?dflt:v; }
   return { day:n(r.day,0), ot:n(r.ot,0), cont1:n(r.cont1,0), cont2:n(r.cont2,0),
-           contEach:n(r.contEach,0), absMult:n(r.absMult,2), monthly:n(r.monthly,0) };
+           contEach:n(r.contEach,0), absMult:n(r.absMult,2), monthly:n(r.monthly,0),
+           comm:n(r.comm,0) };
+}
+/* Panels sold in a month — the same number the Sales tab shows as
+   "Total Panels / แผ่นรวม": every non-cancelled order dated in that month, panel
+   codes parsed out of o.panels ("KP009 × 50 · KP027 × 100"), CL* (clips) skipped.
+   Cached per month because the commission row asks for it once per person. */
+var _pgPanelCache={};
+function pgPanelsOfMonth(mk){
+  var sig=(orders||[]).length+'|'+mk;
+  if(_pgPanelCache[mk] && _pgPanelCache[mk].sig===sig) return _pgPanelCache[mk].n;
+  var total=0;
+  (orders||[]).forEach(function(o){
+    if(!o || o.status==='cancelled' || !o.date) return;
+    var d=new Date((o.date||'')+'T00:00:00'); if(isNaN(d)) return;
+    if(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')!==mk) return;
+    if(!o.panels || o.panels==='—') return;
+    String(o.panels).split('·').forEach(function(p){
+      var m=p.trim().match(/^([A-Z0-9\-]+)\s*[×x]\s*(\d+)/i);
+      if(!m) return;
+      if(/^CL/i.test(m[1])) return;
+      total+=parseInt(m[2],10)||0;
+    });
+  });
+  _pgPanelCache[mk]={sig:sig,n:total};
+  return total;
 }
 // 1 container = the "1" price, 2 = the "2" price, from the 3rd on: "2" + each further.
 function pgContAmt(n, R){
@@ -22926,7 +22955,11 @@ function pgRowSeq(d, mk){
   return { no:start+diff, total:start-1+m };
 }
 function pgRows(sid, mk){
-  var out=PG_FIX.map(function(r){ var c={}; for(var k in r) c[k]=r[k]; c.key=r.k; c.custom=false; return c; });
+  var _R=pgRate(sid);
+  // The commission row only exists for whoever has a ฿/panel rate — nobody else
+  // needs an extra line that can only ever say 0.
+  var out=PG_FIX.filter(function(r){ return r.k!=='comm' || _R.comm>0; })
+    .map(function(r){ var c={}; for(var k in r) c[k]=r[k]; c.key=r.k; c.custom=false; return c; });
   var defs=(payRowsDef||{})[sid]||{};
   Object.keys(defs).forEach(function(id){
     var d=defs[id]; if(!d || !pgRowActive(d,mk)) return;
@@ -22958,6 +22991,10 @@ function pgRowCalc(sid, mk, row){
   } else if(row.k==='tour'){
     pgTourEntries(sid,mk).forEach(function(e){ amt+=Math.abs(parseFloat(e.amount)||0); cnt++; });
     expl='Tours('+cnt+')';
+  } else if(row.k==='comm'){
+    cnt=pgPanelsOfMonth(mk);
+    amt=cnt*R.comm;
+    expl='Panels('+pgN(cnt)+') × '+pgN(R.comm);
   } else if(row.k==='abs'){
     each(function(v){ if(v>0) cnt++; });
     amt=cnt*R.day*R.absMult; expl='Days('+cnt+') × '+pgN(R.day*R.absMult);
@@ -23258,7 +23295,13 @@ function pgRowHtml(sid, mk, row, dim, todayD, isCur, isPast){
     : '<div class="pg-lbl"><span>'+lblInner+'</span></div>';
 
   var cells;
-  if(row.custom && row.mode==='total'){
+  if(row.k==='comm'){
+    // Nothing to tap: the number comes from the month's sales, the rate from the
+    // name dialog. One read-only pill instead of 31 dead boxes.
+    var _R2=pgRate(sid);
+    cells='<div class="pg-cells"><button type="button" class="pg-c pg-auto" disabled style="width:auto;flex:0 0 auto;padding:0 12px;font-size:11px;opacity:1">'
+      +pgN(c.cnt)+' แผ่น / panels × '+pgN(_R2.comm)+' ฿</button></div>';
+  } else if(row.custom && row.mode==='total'){
     cells='<div class="pg-cells"><button type="button" class="pg-c '+(row.sign<0?'pg-neg':'pg-pos')+'" style="width:auto;flex:0 0 auto;padding:0 12px;font-size:11px" '
       +'onclick="pgRowOpen(\''+sid+'\',\''+row.id+'\')">'+(row.sign<0?'−':'+')+pgN(row.amount)+' ฿ · whole month / ทั้งเดือน</button></div>';
   } else {
@@ -23374,6 +23417,7 @@ function pgRateOpen(sid){
   function set(id,v){ var e=document.getElementById(id); if(e) e.value=(v?v:''); }
   set('pgr-day',R.day); set('pgr-ot',R.ot); set('pgr-c1',R.cont1); set('pgr-c2',R.cont2);
   set('pgr-ce',R.contEach); set('pgr-absmult',R.absMult); set('pgr-monthly',R.monthly);
+  set('pgr-comm',R.comm);
   document.getElementById('pgrate-modal').classList.add('open');
 }
 function pgRateClose(){ document.getElementById('pgrate-modal').classList.remove('open'); _pgRateSid=''; }
@@ -23383,13 +23427,15 @@ function pgRateSave(){
   var am=parseFloat((document.getElementById('pgr-absmult')||{}).value);
   var was=pgRate(sid);
   var r={ day:num('pgr-day'), ot:num('pgr-ot'), cont1:num('pgr-c1'), cont2:num('pgr-c2'),
-          contEach:num('pgr-ce'), absMult:(isNaN(am)?2:am), monthly:num('pgr-monthly') };
+          contEach:num('pgr-ce'), absMult:(isNaN(am)?2:am), monthly:num('pgr-monthly'),
+          comm:num('pgr-comm') };
   payRates[sid]=r;
   if(window.fbDB) window.fbDB.ref('payRates/'+sid).set(r);
   // Only what actually moved goes into the audit log — a rate change silently
   // rewrites the whole month, so it has to be readable at a glance later.
   var LB={day:'💵 Daily wage', ot:'⏱ OT ฿/h', cont1:'📦 Container 1', cont2:'📦 Container 2',
-          contEach:'📦 Each further', absMult:'🚫 Absent ×', monthly:'💰 Monthly base'};
+          contEach:'📦 Each further', absMult:'🚫 Absent ×', monthly:'💰 Monthly base',
+          comm:'💹 Commission ฿/panel'};
   var diff=Object.keys(LB).filter(function(k){ return was[k]!==r[k]; })
     .map(function(k){ return LB[k]+' '+pgN(was[k])+' → '+pgN(r[k]); });
   if(diff.length){
