@@ -11,13 +11,17 @@
  * pre-order twice updates its row instead of adding a second one.
  *
  * INSTALL (once):
- *   1. Apps Script editor → add this file (or paste it at the end of Code.gs).
- *   2. In doPost(), right after the `readMirror` line, add:
+ *   1. Apps Script editor → add this as a new file.
+ *   2. In doPost(), the line has to sit DIRECTLY AFTER the token check and
+ *      BEFORE `var order = body.order || {};` — the next line rejects anything
+ *      without a tab/orderNo, and a pre-order has neither:
  *
- *        if (body.action === 'preorder') return _json(kpPreUpsert_(body.pre || []));
+ *        if (body.token !== TOKEN) return _json({ error: 'unauthorized' });
+ *        if (body.action === 'preorder') return _json(kpPreUpsert_(body.pre || []));   // ← new
+ *        var order = body.order || {};
  *
- *   3. Deploy → Manage deployments → edit the existing Web app → Deploy.
- *      The /exec URL stays the same, so nothing has to change in the app.
+ *   3. Deploy → Manage deployments → edit the existing Web app → new version →
+ *      Deploy. The /exec URL stays the same, so nothing changes in the app.
  *
  * Until that is done the app's calls simply fail (silently, non-blocking) and
  * the KP menu → "Build / Update master" still fills the tab from Firebase.
@@ -30,7 +34,9 @@ var KP_PRE_HEAD = ['Pre-ID', 'Status', 'Zone / โซน', 'Customer / ลูก
                    'Converted to', 'Cancel reason'];
 
 function kpPreSheet_() {
-  var ss = SpreadsheetApp.openById(SHEET_ID);
+  // The script is bound to the master spreadsheet (like order-sync.gs and
+  // master-build.gs) — getActiveSpreadsheet() works without a SHEET_ID constant.
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(KP_PRE_TAB) || ss.insertSheet(KP_PRE_TAB);
   // Header only if the sheet is still empty — never overwrite a formatted header.
   if (sh.getLastRow() === 0) {
