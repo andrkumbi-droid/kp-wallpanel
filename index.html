@@ -1888,6 +1888,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" id="of-tour-mappins-btn" onclick="ofBackfillPins(this)" title="Resolve all customer map-links into saved pins (one time)" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:600">📍 Map-Links → Pins</button>
     </div>
     <div id="of-active-tours"><div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div></div>
+    <!-- Everything still owed to a driver, ticked and paid out in one transfer -->
+    <div id="of-unpaid-wrap"></div>
+    <!-- Pay-out dialog for the ticked tours -->
+    <div class="modal-overlay" id="tpay-modal"><div class="modal" id="tpay-body"></div></div>
     <div id="of-tourid-wrap">
     <div class="stit" style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;gap:8px">
       <span>🆔 Tour IDs / รหัสทัวร์ <span id="of-tourid-cnt" style="font-weight:500;color:var(--text2);font-size:12px"></span></span>
@@ -6612,7 +6616,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805006;
+var KP_BUILD = 20260805007;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -10998,9 +11002,14 @@ function tourPayBadgeHTML(t){
   var st=tourPayState(t); if(!st.paid) return '';
   var d=st.at?new Date(st.at):null;
   var when=d?(String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')):'';
-  var shared=(st.po && tidArr(st.po.tourIds).length>1)
-    ? ' · '+tidArr(st.po.tourIds).length+' ทัวร์ สลิปเดียวกัน / one slip'
-    : '';
+  // Naming the other tours is the whole point of a joint transfer: on this tour's row
+  // you can see that the 1,204 ฿ on the slip belong to 260805-1 + 260804-3 as well.
+  var shared='';
+  if(st.po && tidArr(st.po.tourIds).length>1){
+    var all=tidArr(st.po.tourIds);
+    shared=' · 🧾 โอนรวม / paid together'+(st.po.amount?' '+Number(st.po.amount).toLocaleString()+' ฿':'')
+      +' ('+all.slice(0,4).join(', ')+(all.length>4?' +'+(all.length-4):'')+')';
+  }
   return '<span style="font-size:11px;font-weight:700;color:#166534;background:#dcfce7;border-radius:8px;padding:2px 7px;white-space:nowrap">✅ จ่ายแล้ว / paid '
     +(st.how==='cash'?'💵 เงินสด':'🏦 โอน (สลิป)')+(st.by?' · '+st.by:'')+(when?' · '+when:'')+shared+'</span>';
 }
@@ -11110,6 +11119,186 @@ function tourPayoutDelSlip(poId, i){
   try{ ofRenderTourIds(); }catch(e){}
   try{ ofRenderTour(); }catch(e){}
 }
+/* ══ UNPAID TOURS 💸 → one transfer for several days ═══════════════════════
+   Everything a driver is still owed, in one list. Tick the days that go into the
+   same transfer (several days, several tours), press Pay → one dialog adds them
+   up, takes the slip, and writes ONE payout that covers all of them. From then on
+   every one of those tours says "🧾 โอนรวม / paid together 1,204 ฿ (260805-1,
+   260804-3)" wherever it shows up.
+   One driver at a time — a bank transfer goes to one person.
+   Payroll drivers are not in this list at all; their tour pay is in the wage.
+════════════════════════════════════════════════════════════════════════════ */
+var _tpSel={}, _tpDriver='';
+function ofUnpaidGroups(){
+  var by={}, out=[];
+  Object.keys(tourReg||{}).filter(tidOk).forEach(function(k){
+    var r=tourReg[k]||{}; r.id=k;
+    if(r.state!=='ended' || r.paid) return;      // still driving → not due yet
+    var gk=(r.driverId||r.driverName||'?')+'|'+tidDay(k);
+    if(!by[gk]){ by[gk]={key:gk, driverId:r.driverId||'', driverName:r.driverName||'—', day:tidDay(k), tours:[], pay:0, orders:0}; out.push(by[gk]); }
+    by[gk].tours.push(r); by[gk].pay+=Number(r.driverPay)||0; by[gk].orders+=tidArr(r.orders).length;
+    if(!by[gk].driverName || by[gk].driverName==='—') by[gk].driverName=r.driverName||'—';
+  });
+  out=out.filter(function(g){ return !tourDriverOnPayroll(g); });
+  out.forEach(function(g){
+    g.tours.sort(function(a,b){ return tidSeq(a.id)-tidSeq(b.id); });
+    g.ids=g.tours.map(function(r){ return r.id; });
+  });
+  out.sort(function(a,b){ return String(b.day).localeCompare(String(a.day)) || String(a.driverName).localeCompare(String(b.driverName)); });
+  return out;
+}
+function tpToggle(key){
+  var g=ofUnpaidGroups().find(function(x){ return x.key===key; }); if(!g) return;
+  var who=g.driverId||g.driverName;
+  if(_tpSel[key]) delete _tpSel[key];
+  else {
+    // A transfer goes to ONE person — picking another driver starts a fresh selection.
+    if(_tpDriver && _tpDriver!==who) _tpSel={};
+    _tpDriver=who; _tpSel[key]=1;
+  }
+  if(!Object.keys(_tpSel).length) _tpDriver='';
+  ofRenderUnpaid();
+}
+function tpSelectDay(day){
+  var list=ofUnpaidGroups().filter(function(g){ return g.day===day; });
+  if(!list.length) return;
+  _tpSel={}; _tpDriver=list[0].driverId||list[0].driverName;
+  list.forEach(function(g){ if((g.driverId||g.driverName)===_tpDriver) _tpSel[g.key]=1; });
+  ofRenderUnpaid();
+}
+function ofRenderUnpaid(){
+  var host=document.getElementById('of-unpaid-wrap'); if(!host) return;
+  if(window.ofReadOnly){ host.innerHTML=''; return; }
+  var list=ofUnpaidGroups();
+  if(!list.length){ host.innerHTML=''; _tpSel={}; _tpDriver=''; return; }
+  var total=list.reduce(function(a,g){ return a+g.pay; },0);
+  var sel=list.filter(function(g){ return !!_tpSel[g.key]; });
+  var selSum=sel.reduce(function(a,g){ return a+g.pay; },0);
+  var selTours=sel.reduce(function(a,g){ return a+g.ids.length; },0);
+  var open=true; try{ var b=document.getElementById('of-unpaid-body'); if(b) open=(b.style.display!=='none'); }catch(e){}
+  var rows=list.map(function(g){
+    var on=!!_tpSel[g.key], dim=(_tpDriver && (g.driverId||g.driverName)!==_tpDriver);
+    var lbl=g.ids.length>1 ? (g.ids[0]+' … -'+tidSeq(g.ids[g.ids.length-1])) : g.ids[0];
+    var dayLbl=g.day?fmtD('20'+g.day.slice(0,2)+'-'+g.day.slice(2,4)+'-'+g.day.slice(4,6)):'';
+    return '<label style="display:flex;gap:9px;align-items:center;padding:8px 9px;border:1px solid '+(on?'#86efac':'var(--border)')+';border-radius:var(--rs);margin-bottom:6px;background:'+(on?'#f0fdf4':'var(--bg)')+';cursor:pointer'+(dim?';opacity:.45':'')+'">'
+      +'<input type="checkbox" '+(on?'checked ':'')+'onchange="tpToggle(\''+g.key+'\')" style="width:17px;height:17px;flex-shrink:0;cursor:pointer">'
+      +'<span style="flex:1;min-width:0">'
+        +'<span style="font-size:12.5px;font-weight:800">'+lbl+'</span> <span style="font-size:11.5px;font-weight:700;color:var(--text2)">🚚 '+_esc(g.driverName)+'</span>'
+        +'<div style="font-size:10.5px;color:var(--text2);margin-top:1px">🗓 '+dayLbl+' · '+g.ids.length+' ทัวร์ · '+g.orders+' orders</div>'
+      +'</span>'
+      +'<span style="font-size:13px;font-weight:900;color:'+(g.pay>0?'var(--green)':'#c2410c')+';white-space:nowrap">'+(g.pay>0?g.pay.toLocaleString()+' ฿':'⚠ ไม่มีค่าทัวร์')+'</span>'
+    +'</label>';
+  }).join('');
+  host.innerHTML='<div style="border:1.5px solid #fed7aa;background:#fff7ed;border-radius:var(--r);padding:10px 12px;margin-bottom:10px">'
+    +'<div onclick="ofToggleMore(\'of-unpaid-body\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer">'
+      +'<span style="font-size:13px;font-weight:800;color:#c2410c">💸 ยังไม่จ่ายคนขับ / Unpaid tours ('+list.length+')</span>'
+      +'<span style="font-size:13px;font-weight:900;color:#c2410c;white-space:nowrap">'+total.toLocaleString()+' ฿ ▾</span>'
+    +'</div>'
+    +'<div id="of-unpaid-body" style="'+(open?'':'display:none;')+'margin-top:8px">'
+      +'<div style="font-size:10.5px;color:#92400e;margin-bottom:6px">ติ๊กหลายวันของคนขับคนเดียวกัน แล้วกดจ่ายครั้งเดียว / tick several days of ONE driver and pay them in one transfer</div>'
+      +rows
+      +'<button type="button" onclick="tpayOpen()"'+(sel.length?'':' disabled')+' style="width:100%;margin-top:4px;padding:11px;border:none;border-radius:var(--rs);background:'+(sel.length?'#16a34a':'var(--bg2)')+';color:'+(sel.length?'#fff':'var(--text3)')+';font-size:13.5px;font-weight:800;cursor:'+(sel.length?'pointer':'default')+'">'
+        +(sel.length?'💸 จ่าย / Pay '+selTours+' ทัวร์ · '+selSum.toLocaleString()+' ฿':'เลือกทัวร์ที่จะจ่าย / tick the tours to pay')+'</button>'
+    +'</div>'
+  +'</div>';
+}
+
+// ── the pay-out dialog ─────────────────────────────────────────────────────
+var _tpayIds=[], _tpaySum=0, _tpayDrv='', _tpayDrvId='', _tpayMethod='transfer', _tpaySlips=[];
+function tpayOpen(){
+  var groups=ofUnpaidGroups().filter(function(g){ return !!_tpSel[g.key]; });
+  if(!groups.length){ alert('เลือกทัวร์ก่อน / tick at least one tour'); return; }
+  _tpayIds=[]; groups.forEach(function(g){ _tpayIds=_tpayIds.concat(g.ids); });
+  _tpaySum=groups.reduce(function(a,g){ return a+g.pay; },0);
+  _tpayDrv=groups[0].driverName; _tpayDrvId=groups[0].driverId||'';
+  _tpayMethod='transfer'; _tpaySlips=[];
+  tpayRender();
+  document.getElementById('tpay-modal').classList.add('open');
+}
+function tpayClose(){ document.getElementById('tpay-modal').classList.remove('open'); }
+function tpayMethod(m){ _tpayMethod=m; tpayRender(); }
+function tpayAddSlip(input){
+  var files=input&&input.files?Array.prototype.slice.call(input.files):[]; if(!files.length) return;
+  var st=document.getElementById('tpay-up'); if(st){ st.textContent='⏳ กำลังอัปโหลด / uploading…'; st.style.display=''; }
+  var done=0;
+  files.forEach(function(f){
+    compressPhotoFile(f, function(dataUrl){
+      var fin=function(url){ if(url) _tpaySlips.push(url); if(++done===files.length){ if(st) st.style.display='none'; tpayRender(); } };
+      if(!dataUrl){ fin(''); return; }
+      if(window.fbStorage){
+        window.fbStorage.ref('tourpay/sel_'+Date.now()+'.jpg').putString(dataUrl,'data_url')
+          .then(function(s){ return s.ref.getDownloadURL(); }).then(fin).catch(function(){ fin(dataUrl); });
+      } else fin(dataUrl);
+    });
+  });
+  input.value='';
+}
+function tpayDelSlip(i){ i=parseInt(i,10); if(i>=0&&i<_tpaySlips.length){ _tpaySlips.splice(i,1); tpayRender(); } }
+function tpayRender(){
+  var el=document.getElementById('tpay-body'); if(!el) return;
+  var lines=_tpayIds.map(function(id){
+    var r=tourRegRec(id)||{};
+    // The day the ID stands for — a tour closed the next morning must not read as
+    // if it had driven that day.
+    var dy=tidDay(id), dLbl=dy?fmtD('20'+dy.slice(0,2)+'-'+dy.slice(2,4)+'-'+dy.slice(4,6)):'';
+    return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">'
+      +'<span><b>'+id+'</b> <span style="color:var(--text2)">· '+dLbl+' · '+tidArr(r.orders).length+' orders</span></span>'
+      +'<span style="font-weight:800;white-space:nowrap">'+(Number(r.driverPay)||0).toLocaleString()+' ฿</span></div>';
+  }).join('');
+  var btn='flex:1;padding:9px;border-radius:var(--rs);font-size:12.5px;font-weight:800;cursor:pointer';
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +'<span style="font-size:16px;font-weight:800">💸 จ่ายคนขับ / Pay driver</span>'
+      +'<button type="button" onclick="tpayClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="font-size:13px;font-weight:800;margin-bottom:6px">🚚 '+_esc(_tpayDrv)+' <span style="font-weight:600;color:var(--text2)">· '+_tpayIds.length+' ทัวร์ / tours</span></div>'
+    +'<div style="max-height:34vh;overflow:auto;margin-bottom:8px">'+lines+'</div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--rs);background:var(--blue);color:#fff;font-weight:900;font-size:16px;margin-bottom:10px">'
+      +'<span>รวม / Total</span><span>'+_tpaySum.toLocaleString()+' ฿</span></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px">'
+      +'<button type="button" onclick="tpayMethod(\'transfer\')" style="'+btn+';border:1.5px solid '+(_tpayMethod==='transfer'?'#1d4ed8':'var(--border)')+';background:'+(_tpayMethod==='transfer'?'#dbeafe':'var(--bg)')+';color:'+(_tpayMethod==='transfer'?'#1d4ed8':'var(--text2)')+'">🏦 โอน / Transfer</button>'
+      +'<button type="button" onclick="tpayMethod(\'cash\')" style="'+btn+';border:1.5px solid '+(_tpayMethod==='cash'?'#16a34a':'var(--border)')+';background:'+(_tpayMethod==='cash'?'#dcfce7':'var(--bg)')+';color:'+(_tpayMethod==='cash'?'#166534':'var(--text2)')+'">💵 เงินสด / Cash</button>'
+    +'</div>'
+    +(_tpayMethod==='transfer'
+      ? '<input type="file" accept="image/*" capture="environment" id="tpay-slip" style="display:none" onchange="tpayAddSlip(this)">'
+        +'<input type="file" accept="image/*" multiple id="tpay-slipg" style="display:none" onchange="tpayAddSlip(this)">'
+        +'<div style="display:flex;gap:8px;margin-bottom:8px">'
+          +'<button type="button" onclick="document.getElementById(\'tpay-slip\').click()" style="'+btn+';border:1px dashed #86efac;background:#f0fdf4;color:#166534">📷 ถ่ายสลิป / Photo</button>'
+          +'<button type="button" onclick="document.getElementById(\'tpay-slipg\').click()" style="'+btn+';border:1px dashed #86efac;background:#f0fdf4;color:#166534">🖼️ อัปโหลด / Upload</button>'
+        +'</div>'
+        +(_tpaySlips.length?'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">'+_tpaySlips.map(function(src,i){
+            return '<div style="position:relative;display:inline-block"><img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:56px;height:56px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:zoom-in">'
+              +'<button type="button" onclick="tpayDelSlip('+i+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#dc2626;color:#fff;font-size:11px;cursor:pointer;line-height:1">×</button></div>';
+          }).join('')+'</div>'
+          :'<div style="font-size:11px;color:#92400e;margin-bottom:8px">⚠️ ยังไม่มีสลิป / no slip yet</div>')
+        +'<div id="tpay-up" style="display:none;font-size:11px;color:var(--text2);margin-bottom:6px"></div>'
+      : '')
+    +'<button type="button" onclick="tpayConfirm()" style="width:100%;padding:12px;border:none;border-radius:var(--rs);background:#16a34a;color:#fff;font-size:14px;font-weight:900;cursor:pointer">✓ ยืนยันการจ่าย / Confirm '+_tpaySum.toLocaleString()+' ฿</button>';
+}
+function tpayConfirm(){
+  if(!_tpayIds.length){ tpayClose(); return; }
+  if(_tpayMethod==='transfer' && !_tpaySlips.length){
+    if(!confirm('ยังไม่มีสลิป — จ่ายเลยไหม? / No slip attached — confirm anyway?\nแนบทีหลังได้ที่การ์ดทัวร์ / you can attach it later on the tour card')) return;
+  }
+  var by=ofWho(), at=Date.now();
+  var po={ id:'po-'+at+Math.floor(Math.random()*1000), tourIds:_tpayIds.slice(), amount:_tpaySum,
+           method:_tpayMethod, slips:_tpaySlips.slice(), driverName:_tpayDrv, driverId:_tpayDrvId,
+           date:kpTodayStr(), by:by, at:at };
+  tourPayoutSave(po);
+  _tpayIds.forEach(function(id){
+    var rec=tourRegRec(id); if(!rec) return;
+    rec.paid=true; rec.paidBy=by; rec.paidAt=at;
+    tourReg[id]=rec;
+    try{ if(window.fbDB) window.fbDB.ref('tourReg/'+id).set(rec); }catch(e){}
+  });
+  try{ _tourPayoutStampPayLog(po); }catch(e){}
+  try{ auditTour('pay','🆔 '+_tpayIds.join(', '),
+    '💸 จ่ายรวม / paid together '+_tpaySum.toLocaleString()+' ฿ · '+(_tpayMethod==='cash'?'💵 เงินสด / cash':'🏦 โอน / transfer')
+    +(po.slips.length?' · 🧾 '+po.slips.length:'')+' · 🚚 '+_tpayDrv, by); }catch(e){}
+  _tpSel={}; _tpDriver=''; _tpaySlips=[];
+  tpayClose();
+  try{ ofRenderTourIds(); }catch(e){}
+  try{ ofRenderTour(); }catch(e){}
+}
+
 // The slip row under the "driver paid" tick — the one place where the transfer is
 // documented, whether the day held one tour or five.
 function tourPayoutBarHTML(ids, sum){
@@ -11449,9 +11638,22 @@ function tourRegTogglePaidGroup(idsCsv){
   // Undoing takes the payout with it — the slip is the proof of exactly this
   // transfer, so it must not stay behind on a day that counts as unpaid again.
   if(!mkPaid){
-    var po0=tourPayoutFor(ids[0]), nS=tourPayoutSlips(po0).length;
-    if(nS && !confirm('ยกเลิกการจ่าย? สลิป '+nS+' รูปจะถูกลบด้วย\nUndo the payout? Its '+nS+' slip(s) are removed too.')) return;
-    if(po0) tourPayoutRemove(po0.id);
+    var po0=tourPayoutFor(ids[0]);
+    if(po0){
+      // The same transfer may also cover OTHER days (paid from the unpaid list).
+      // Then only these ids leave it — deleting the record would take the slip away
+      // from days that really were paid.
+      var rest=tidArr(po0.tourIds).filter(function(x){ return ids.indexOf(x)<0; });
+      if(rest.length){
+        po0.tourIds=rest;
+        po0.amount=rest.reduce(function(a,x){ return a+(Number((tourRegRec(x)||{}).driverPay)||0); },0);
+        tourPayoutSave(po0);
+      } else {
+        var nS=tourPayoutSlips(po0).length;
+        if(nS && !confirm('ยกเลิกการจ่าย? สลิป '+nS+' รูปจะถูกลบด้วย\nUndo the payout? Its '+nS+' slip(s) are removed too.')) return;
+        tourPayoutRemove(po0.id);
+      }
+    }
   }
   var by=mkPaid?((((typeof staffList!=='undefined'?staffList:[])||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office'):'';
   var at=mkPaid?Date.now():0, sum=0, drv='';
@@ -11722,6 +11924,7 @@ function ofRenderTourIds(){
     : '<div class="empty" style="padding:1rem;font-size:13px">ไม่มีทัวร์ที่กำลังดำเนินอยู่ / no tours running</div>';
   el.innerHTML=dupBar+liveHTML+doneHTML;
   kpRestoreOpen(_open);
+  try{ ofRenderUnpaid(); }catch(e){}
 }
 // ── TOUR DAY PICKER — asked before the tour goes to the driver ───────────────
 // Tours built late in the day are usually tomorrow's work, so after 17:00 the
