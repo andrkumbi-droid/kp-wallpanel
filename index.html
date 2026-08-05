@@ -2228,7 +2228,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="pgr-row"><label>📦 Each further container<small>ตู้ถัดไป (฿ ต่อตู้)</small></label><input type="number" id="pgr-ce" placeholder="400"></div>
       <div class="pgr-row"><label>🚫 Unexcused absent day<small>ขาดงาน = × ค่าแรงต่อวัน</small></label><input type="number" id="pgr-absmult" step="0.5" placeholder="2"></div>
       <div class="pgr-row"><label>💰 Monthly base <span style="font-weight:600;color:var(--text2)">(optional)</span><small>เงินเดือนประจำ (฿) — 0 = ไม่ใช้</small></label><input type="number" id="pgr-monthly" placeholder="0"></div>
-      <div class="pgr-row" style="border-bottom:none"><label>💹 Commission ฿/panel <span style="font-weight:600;color:var(--text2)">(optional)</span><small>คอมมิชชั่นต่อแผ่นที่ขายได้ — 0 = ไม่ใช้</small></label><input type="number" id="pgr-comm" step="0.05" placeholder="0"></div>
+      <div class="pgr-row"><label>💹 Commission ฿/panel <span style="font-weight:600;color:var(--text2)">(optional)</span><small>คอมมิชชั่นต่อแผ่นที่ขายได้ — 0 = ไม่ใช้</small></label><input type="number" id="pgr-comm" step="0.05" placeholder="0"></div>
+      <!-- Only for people in the office-salary list: which of the two totals they land in -->
+      <div class="pgr-row" id="pgr-grey-row" style="border-bottom:none;display:none"><label>🎨 สีของยอด / Colour<small>น้ำเงิน = รวมในยอดออฟฟิศ · เทา = นับแยก / blue counts in the office total, grey is counted separately</small></label>
+        <button type="button" id="pgr-grey-btn" onclick="pgRateGreyToggle()" title="แตะเพื่อสลับ / tap to switch" style="width:44px;height:34px;border-radius:6px;border:1.5px solid var(--blue);background:var(--blue);cursor:pointer"></button></div>
 
       <div style="font-size:10.5px;color:var(--text2);margin-top:10px;line-height:1.45">
         Container: 1 → the “1” amount, 2 → the “2” amount, from the 3rd on “2” + each further.<br>
@@ -6625,7 +6628,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805018;
+var KP_BUILD = 20260805019;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -23576,9 +23579,22 @@ function pgRateOpen(sid){
   set('pgr-day',R.day); set('pgr-ot',R.ot); set('pgr-c1',R.cont1); set('pgr-c2',R.cont2);
   set('pgr-ce',R.contEach); set('pgr-absmult',R.absMult); set('pgr-monthly',R.monthly);
   set('pgr-comm',R.comm);
+  // The colour square belongs to the office-salary list, so it only shows for
+  // someone who is actually in it.
+  _pgRateGrey=!!st.finPayGrey;
+  var _gr=document.getElementById('pgr-grey-row');
+  if(_gr) _gr.style.display = st.finPayrollOn ? '' : 'none';
+  pgRateGreyPaint();
   document.getElementById('pgrate-modal').classList.add('open');
 }
 function pgRateClose(){ document.getElementById('pgrate-modal').classList.remove('open'); _pgRateSid=''; }
+var _pgRateGrey=false;
+function pgRateGreyPaint(){
+  var b=document.getElementById('pgr-grey-btn'); if(!b) return;
+  var col=_pgRateGrey?'var(--text3)':'var(--blue)';
+  b.style.background=col; b.style.borderColor=col;
+}
+function pgRateGreyToggle(){ _pgRateGrey=!_pgRateGrey; pgRateGreyPaint(); }
 function pgRateSave(){
   var sid=_pgRateSid; if(!sid) return;
   function num(id){ var v=parseFloat((document.getElementById(id)||{}).value); return isNaN(v)?0:v; }
@@ -23600,7 +23616,18 @@ function pgRateSave(){
     try{ auditAdd({ type:'payroll', area:'payroll', orderId:'💰 '+pgStaffName(sid),
       detail:'⚙️ Rates · '+diff.join(' · '), by:pgWho() }); }catch(e){}
   }
+  // Which of the two office totals this person lands in (the colour square).
+  try{
+    var _st=(staffList||[]).find(function(x){return x.id===sid;});
+    if(_st && _st.finPayrollOn && !!_st.finPayGrey!==_pgRateGrey){
+      _st.finPayGrey=_pgRateGrey;
+      syncStaff();
+      auditAdd({ type:'payroll', area:'payroll', orderId:'💰 '+pgStaffName(sid),
+        detail:'🎨 '+(_pgRateGrey?'เทา — นับแยก / grey, counted separately':'น้ำเงิน — รวมในยอดออฟฟิศ / blue, in the office total'), by:pgWho() });
+    }
+  }catch(e){}
   pgRateClose(); pgRenderEmp(sid); pgRenderTotal();
+  try{ finPayRender(); }catch(e){}
 }
 
 // ── extra income / deduction row modal ───────────────────────────────
@@ -26155,13 +26182,13 @@ function finRender(){
   var box=function(inner){ return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+inner+'</div>'; };
   secs.forEach(function(s,si){
     var secPays=inMonth.filter(function(p){ return p.section===s.id; });
-    // Blue is the section's real number; whatever sits in grey categories is added
-    // behind it in small grey, so the section header never hides money either.
+    // Blue is the section's own number; the grey one behind it is the TOTAL —
+    // blue plus grey — the same pair as the two bars at the top of the tab.
     var secBlue=_finSum(secPays.filter(function(p){ return !finPayIsGrey(p); }));
     var secGrey=_finSum(secPays)-secBlue;
     var secAmt=function(px){
       return '<span style="font-size:'+px+'px;font-weight:800;color:var(--blue);white-space:nowrap">'+secBlue.toLocaleString()+' ฿</span>'
-        +(secGrey?'<span title="เทา / grey" style="font-size:'+(px-2)+'px;font-weight:800;color:var(--text3);white-space:nowrap;margin-left:5px">+'+secGrey.toLocaleString()+'</span>':'');
+        +(secGrey?'<span title="รวมทั้งหมด (น้ำเงิน + เทา) / total incl. grey" style="font-size:'+(px-1)+'px;font-weight:800;color:var(--text3);white-space:nowrap;margin-left:6px">'+(secBlue+secGrey).toLocaleString()+' ฿</span>':'');
     };
     var eKey='sec|'+s.id, editing=!!_finEdit[eKey];
     var inner;
