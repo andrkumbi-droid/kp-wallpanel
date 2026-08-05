@@ -6623,7 +6623,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805013;
+var KP_BUILD = 20260805014;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -23046,21 +23046,28 @@ function pgMirror(mk, sid){
 
 // ── render ───────────────────────────────────────────────────────────
 function ofAttRender(){ pgRender(); }
+// Every tap writes to Firebase, the listener fires, and this rebuilds the whole
+// body — which threw the page back to the top after each box. The vertical
+// position is captured and put back, the same way the day strip already keeps its
+// horizontal scroll.
 function pgRender(){
   var host=document.getElementById('pg-body'); if(!host) return;
+  var _sy=window.pageYOffset||document.documentElement.scrollTop||0;
+  var _back=function(){ if(_sy) try{ window.scrollTo(0,_sy); }catch(e){} };
   pgFillMonths();
-  try{ finPayRender(); }catch(e){}   // office salaries in the Finance tab share this data
+  try{ finPayRender(true); }catch(e){}   // office salaries in the Finance tab share this data
   var st=pgStaff();
   if(!st.length){
     host.innerHTML='<div class="empty" style="padding:20px;font-size:13px;line-height:1.6">No employee is in the payroll yet.<br>ยังไม่มีพนักงานในระบบเงินเดือน'
       +'<div style="font-size:11.5px;color:var(--text2);margin-top:6px">Management → Staff → 💰 In payroll</div></div>';
     var g0=document.getElementById('pg-grand'); if(g0) g0.innerHTML='';
-    return;
+    _back(); return;
   }
   _pgNet={}; pgCaptureScroll();
   host.innerHTML=st.map(function(s){ return '<div class="pg-emp" id="pgE-'+s.id+'"></div>'; }).join('');
   st.forEach(function(s){ pgRenderEmp(s.id); });
   pgRenderTotal();
+  _back();
 }
 function pgTodayOffset(mk){
   if(mk!==kpNowMK()) return 0;
@@ -23284,8 +23291,12 @@ function pgRowHtml(sid, mk, row, dim, todayD, isCur, isPast){
     cells='<div class="pg-cells">'+h+'</div>';
   }
   var col=row.sign<0?'#dc2626':'#16a34a';
-  var sum='<div class="pg-sum"><div class="pg-ex">'+_esc(c.expl)+'</div>'
-    +'<div class="pg-am" style="color:'+(c.amt?col:'var(--text2)')+'">'+(c.amt?(row.sign<0?'−':'+'):'')+pgN(c.amt)+' ฿</div></div>';
+  // Boxes ticked but nothing comes out — that is always a missing rate, and it used
+  // to look like the app had swallowed the entry. Say it where the money should be.
+  var noRate = (c.cnt>0 && !c.amt && ['work','ot','abs','cont'].indexOf(row.k)>=0);
+  var sum='<div class="pg-sum"><div class="pg-ex"'+(noRate?' style="color:#c2410c;font-weight:700"':'')+'>'+_esc(c.expl)
+      +(noRate?'<br><span style="font-size:10px">⚠ ยังไม่ตั้งอัตรา — กดที่ชื่อ / no rate yet, tap the name</span>':'')+'</div>'
+    +'<div class="pg-am" style="color:'+(noRate?'#c2410c':(c.amt?col:'var(--text2)'))+'">'+(c.amt?(row.sign<0?'−':'+'):'')+pgN(c.amt)+' ฿</div></div>';
   return '<div class="pg-row">'+lbl+cells+sum+'</div>';
 }
 
@@ -25273,8 +25284,12 @@ function finPayFillMonths(){
   sel.innerHTML=pgMonths().map(function(m){ return '<option value="'+m+'"'+(m===mk?' selected':'')+'>'+kpMLabel(m)+'</option>'; }).join('');
   sel.value=mk;
 }
-function finPayRender(){
+// keepScroll: pgRender already restores the page position around the whole render,
+// so it passes true and this one must not fight it.
+function finPayRender(keepScroll){
   var host=document.getElementById('fin-payroll'); if(!host) return;
+  var _sy=keepScroll?0:(window.pageYOffset||document.documentElement.scrollTop||0);
+  var _back=function(){ if(_sy) try{ window.scrollTo(0,_sy); }catch(e){} };
   var list=finPayNames(), mk=pgMonth();
   var anyOpen=list.some(function(s){ return !!_finPayOpen[s.id]; });
   var head='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 8px;padding-top:14px;border-top:2px dashed var(--border)">'
@@ -25285,7 +25300,7 @@ function finPayRender(){
   if(!list.length){
     host.innerHTML=head+'<div class="empty" style="padding:16px;font-size:12.5px;line-height:1.6">ยังไม่มีพนักงานออฟฟิศ / No office staff yet'
       +'<div style="font-size:11.5px;color:var(--text2);margin-top:6px">Management → Staff → 👔 เงินเดือนออฟฟิศ / Office salary</div></div>';
-    finPayFillMonths(); return;
+    finPayFillMonths(); _back(); return;
   }
   var total=0, _lastRole=null;
   var body=list.map(function(s){
@@ -25316,6 +25331,7 @@ function finPayRender(){
   finPayFillMonths();
   // Only the open ones are actually built — a closed person costs nothing to draw.
   list.forEach(function(s){ if(_finPayOpen[s.id]){ try{ pgRenderEmp(s.id); }catch(e){} } });
+  _back();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
