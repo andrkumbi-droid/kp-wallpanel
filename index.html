@@ -2459,17 +2459,18 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" class="btnsm" onclick="finRestoreOpen()" title="Restore closed categories / กู้คืนหมวดที่ปิดไว้"><i class="ti ti-history"></i> ♻️ Restore</button>
     </div>
     <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Payments outside Bills &amp; Payroll — container, tax, installments, extra wages / การจ่ายเงินนอกบิลและนอกเงินเดือน</div>
-    <!-- Entry form (top) -->
-    <div id="fin-entry" style="margin-bottom:10px"></div>
-    <!-- Build the tree from right here, next to the form that fills it -->
-    <div id="fin-addmain"></div>
-    <!-- Month selector -->
-    <div style="display:flex;gap:6px;margin-bottom:12px;align-items:center">
+    <!-- Month selector — it steers the overview AND everything below it -->
+    <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">
       <span style="font-size:12px;color:var(--text2);font-weight:700;white-space:nowrap">📅 Month / เดือน</span>
       <select id="fin-filter-month" onchange="finRender()" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px"></select>
     </div>
-    <!-- Sales of the month, the two expense totals, and what is left of each -->
+    <!-- Overview fold-out at the very top: sales of the month, every expense the
+         office actually pays (payments + office salaries + bills), what is left. -->
     <div id="fin-summary" style="margin-bottom:12px"></div>
+    <!-- Entry form -->
+    <div id="fin-entry" style="margin-bottom:10px"></div>
+    <!-- Build the tree from right here, next to the form that fills it -->
+    <div id="fin-addmain"></div>
     <div id="fin-tree"></div>
     <!-- The two totals sit under the last main category, where the counting ends -->
     <div id="fin-total" style="margin-bottom:10px"></div>
@@ -26166,6 +26167,77 @@ function _finPayRow(p){
   }
   return h+'</div>';
 }
+/* ── Overview at the head of the tab ────────────────────────────────────────
+   Expenses here means EVERY baht the office really pays in that month, not just
+   the payments of this tree:
+     💼 payments of the Finance tree      (fin-tree)
+     👔 office salaries                   (fin-payroll, bottom of this very tab)
+     🧾 receipts of the Bills tab         (they were missing until 06.08.2026)
+   Blue = what counts; grey = the ones parked as "counted separately"
+   (grey category / grey person), so grey is always blue + grey. */
+function finMonthTotals(mk){
+  var inMonth=_finIn(mk);
+  var payB=_finSum(inMonth.filter(function(p){ return !finPayIsGrey(p); }));
+  var payG=_finSum(inMonth)-payB;
+  var salB=0, salG=0;
+  try{
+    finPayNames().forEach(function(s){
+      var net=0; try{ net=pgCalc(s.id,mk).net||0; }catch(e){}
+      if(s.grey) salG+=net; else salB+=net;
+    });
+  }catch(e){}
+  var bill=0;
+  try{ (typeof bills!=='undefined'?bills:[]).forEach(function(b){
+    if(b && billsMKey(b.date)===mk) bill+=parseFloat(b.amount)||0;
+  }); }catch(e){}
+  // Round the three parts once, here — otherwise every row rounds for itself and
+  // the breakdown misses the total by a baht.
+  var R=Math.round; payB=R(payB); payG=R(payG); salB=R(salB); salG=R(salG); bill=R(bill);
+  return { pay:payB, payGrey:payG, sal:salB, salGrey:salG, bills:bill,
+           blue:payB+salB+bill, all:payB+payG+salB+salG+bill };
+}
+// The whole block folds — it sits above the entry form now, so it must be able
+// to get out of the way. The state survives a reload.
+var _finSumOpen=(function(){ try{ return localStorage.getItem('kpFinSumOpen')!=='0'; }catch(e){ return true; } })();
+function finSumToggle(){
+  _finSumOpen=!_finSumOpen;
+  try{ localStorage.setItem('kpFinSumOpen',_finSumOpen?'1':'0'); }catch(e){}
+  finSumRender();
+}
+function finSumRender(){
+  var sumEl=document.getElementById('fin-summary'); if(!sumEl) return;
+  var mk=_finMonthKey(), sale=finSalesOfMonth(mk), t=finMonthTotals(mk);
+  var resB=sale.all-t.blue, resA=sale.all-t.all, dual=(t.all!==t.blue);
+  var n=function(v){ return Math.round(v).toLocaleString()+' ฿'; };
+  var row=function(lbl,val,col,bg,big){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:'+bg+';border:1px solid var(--border);border-radius:var(--rs);padding:'+(big?'12px 14px':'9px 12px')+';margin-bottom:6px">'
+      +'<span style="font-size:12.5px;font-weight:700;color:'+(col==='var(--text3)'?'var(--text2)':'var(--text)')+'">'+lbl+'</span>'
+      +'<span style="font-size:'+(big?18:15)+'px;font-weight:900;color:'+col+';white-space:nowrap">'+n(val)+'</span></div>';
+  };
+  // The three parts that make up the expenses — quiet, indented, no box, so they
+  // read as the breakdown of the ➖ line underneath and not as totals of their own.
+  var sub=function(lbl,val,grey){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 12px 4px 22px">'
+      +'<span style="font-size:11.5px;color:var(--text2);font-weight:600">'+lbl+'</span>'
+      +'<span style="font-size:12.5px;font-weight:700;color:var(--text2);white-space:nowrap">'+n(val)
+        +(grey?' <span style="color:var(--text3);font-weight:700">+ '+n(grey)+'</span>':'')+'</span></div>';
+  };
+  var head='<div onclick="finSumToggle()" style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:#eff6ff;border:1px solid var(--border);border-radius:var(--rs);padding:11px 13px;margin-bottom:'+(_finSumOpen?'8px':'0')+';cursor:pointer">'
+    +'<span style="font-size:12.5px;font-weight:800;color:var(--text);min-width:0">'
+      +'<i class="ti ti-chevron-'+(_finSumOpen?'down':'right')+'" style="font-size:14px;vertical-align:-2px;color:var(--text2)"></i> '
+      +'📊 ภาพรวม / Overview · '+kpMLabel(mk)+'</span>'
+    +'<span style="font-size:16px;font-weight:900;white-space:nowrap;color:'+(resB<0?'#dc2626':'var(--blue)')+'">'+n(resB)+'</span></div>';
+  if(!_finSumOpen){ sumEl.innerHTML=head; return; }
+  sumEl.innerHTML = head
+    + row('📈 ยอดขาย / Sales '+kpMLabel(mk),sale.all,'#00897b','#e0f2f1',true)
+    + sub('💼 รายการจ่าย / Finance payments',t.pay,t.payGrey)
+    + sub('👔 เงินเดือนออฟฟิศ / Office salaries',t.sal,t.salGrey)
+    + sub('🧾 บิล / Bills',t.bills,0)
+    + row('➖ รายจ่าย / Expenses',t.blue,'var(--blue)','var(--bg2)')
+    + (dual ? row('➖ รายจ่ายทั้งหมด / Expenses incl.',t.all,'var(--text3)','var(--bg2)') : '')
+    + row('= คงเหลือ / Result',resB,resB<0?'#dc2626':'var(--blue)','#eff6ff',true)
+    + (dual ? row('= คงเหลือทั้งหมด / Result incl.',resA,resA<0?'#dc2626':'var(--text3)','var(--bg2)',true) : '');
+}
 function finRender(){
   try{ if(!document.getElementById('fin-e-section')) finEntryRender(); }catch(e){}
   var tree=document.getElementById('fin-tree'); if(!tree) return;
@@ -26198,23 +26270,7 @@ function finRender(){
         +'<span style="font-size:13px;font-weight:800;color:#92400e;white-space:nowrap">'+_finSum(openArr).toLocaleString()+' ฿</span></div>':'');
   }
   // ── Head of the tab: what came in, what went out, what is left ────────────
-  var sumEl=document.getElementById('fin-summary');
-  if(sumEl){
-    var sale=finSalesOfMonth(mk);
-    var expB=_finSum(inMonth.filter(function(p){ return !finPayIsGrey(p); }));
-    var expA=_finSum(inMonth);
-    var row=function(lbl,val,col,bg,big){
-      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:'+bg+';border:1px solid var(--border);border-radius:var(--rs);padding:'+(big?'12px 14px':'9px 12px')+';margin-bottom:6px">'
-        +'<span style="font-size:12.5px;font-weight:700;color:'+(col==='var(--text3)'?'var(--text2)':'var(--text)')+'">'+lbl+'</span>'
-        +'<span style="font-size:'+(big?18:15)+'px;font-weight:900;color:'+col+';white-space:nowrap">'+Math.round(val).toLocaleString()+' ฿</span></div>';
-    };
-    sumEl.innerHTML =
-        row('📈 ยอดขาย / Sales '+kpMLabel(mk),sale.all,'#00897b','#e0f2f1',true)
-      + row('➖ รายจ่าย / Expenses',expB,'var(--blue)','var(--bg2)')
-      + (expA!==expB ? row('➖ รายจ่ายทั้งหมด / Expenses incl.',expA,'var(--text3)','var(--bg2)') : '')
-      + row('= คงเหลือ / Result',sale.all-expB,(sale.all-expB)<0?'#dc2626':'var(--blue)','#eff6ff',true)
-      + (expA!==expB ? row('= คงเหลือทั้งหมด / Result incl.',sale.all-expA,(sale.all-expA)<0?'#dc2626':'var(--text3)','var(--bg2)',true) : '');
-  }
+  finSumRender();
   var html='', secs=finSecsFor(mk);
   var box=function(inner){ return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+inner+'</div>'; };
   secs.forEach(function(s,si){
