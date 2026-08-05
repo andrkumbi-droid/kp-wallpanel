@@ -479,22 +479,38 @@ function kpBuildPreOrders_(ss) {
            'Notes / โน้ต', 'Created by / โดย', 'Created / สร้างเมื่อ', 'Converted to', 'Cancel reason'];
   kpHeader_(sh, H);
   var po = kpFetchFb_('preOrders');
+  // Zone as the single character the order number starts with: # 1 2 3 4 5.
+  var ZD = {bangkok:'#', northern:'1', northeastern:'2', eastern:'3', southern:'4', instore:'5'};
   var rows = Object.keys(po).map(function(id){
     var p = po[id] || {};
-    return [p.id || id, p.status || '', p.zone || '', p.customer || '', p.phone || '',
+    var no = parseInt(p.poNo, 10);
+    return [no > 0 ? ('P-' + no) : (p.id || id), p.status || '',
+            ZD[String(p.zone || '').toLowerCase()] || '',
+            p.customer || '', p.phone || '',
             p.contact || '', p.address || '', p.location || '', kpLiStr_(p.lineItems),
             p.notes || '', p.createdBy || '', p.createdAt ? new Date(p.createdAt) : '',
             p.convertedId || '', p.cancelReason || ''];
   });
-  rows.sort(function(a, b){ return (b[11] ? b[11].getTime() : 0) - (a[11] ? a[11].getTime() : 0); });
+  // By pre-order number, so P-2 never sits under P-10.
+  rows.sort(function(a, b){
+    return (parseInt(String(a[0]).replace(/[^0-9]/g, ''), 10) || 0)
+         - (parseInt(String(b[0]).replace(/[^0-9]/g, ''), 10) || 0);
+  });
   kpFill_(sh, rows, H.length);
   sh.getRange('L2:L').setNumberFormat('yyyy-mm-dd hh:mm');
   sh.setColumnWidth(4, 160); sh.setColumnWidth(7, 220); sh.setColumnWidth(9, 220);
-  // red tint for cancelled pre-orders
-  var rule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$B2="cancelled"').setBackground('#fde7e9')
-    .setRanges([sh.getRange('A2:N2000')]).build();
-  sh.setConditionalFormatRules([rule]);
+  // Same three colours as the app's cards: waiting = yellow, converted = green,
+  // cancelled = red.
+  var range = sh.getRange('A2:N2000');
+  var mk = function(formula, bg){
+    return SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(formula).setBackground(bg).setRanges([range]).build();
+  };
+  sh.setConditionalFormatRules([
+    mk('=$B2="converted"', '#e8f5e9'),
+    mk('=$B2="cancelled"', '#fde7e9'),
+    mk('=$B2="open"',      '#fff8e1')
+  ]);
 }
 
 // Customers tab + Blocklist tab — snapshot of customerMeta (pulled from Firebase).

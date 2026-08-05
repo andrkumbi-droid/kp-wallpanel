@@ -264,8 +264,8 @@ textarea{resize:none}
 #order-info-modal{align-items:center;padding:16px}
 #order-info-modal .modal{border-radius:16px;max-height:86vh}
 /* Delivery + odometer popups: centered too, not glued to the bottom edge. */
-#delivery-modal,#km-modal,#tpay-modal{align-items:center;padding:16px}
-#delivery-modal .modal,#km-modal .modal,#tpay-modal .modal{border-radius:16px;max-height:88vh}
+#delivery-modal,#km-modal,#tpay-modal,#pocancel-modal{align-items:center;padding:16px}
+#delivery-modal .modal,#km-modal .modal,#tpay-modal .modal,#pocancel-modal .modal{border-radius:16px;max-height:88vh}
 .mhdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
 .mtit{font-size:16px;font-weight:600;color:var(--text)}
 .mclose{background:none;border:none;cursor:pointer;font-size:22px;color:var(--text2);padding:2px}
@@ -2395,9 +2395,14 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" id="po-cancel-edit" onclick="poResetForm()" style="display:none;width:100%;margin-top:6px;padding:7px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text2);font-size:13px;cursor:pointer">Cancel edit / ยกเลิกแก้ไข</button>
       <div id="po-cres" style="display:none;border-radius:var(--rs);padding:8px 12px;margin-top:8px;font-size:13px"></div>
     </div>
-    <div class="stit" style="font-size:13px">Pre-Orders</div>
+    <div class="stit" style="font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span>Pre-Orders</span>
+      <button type="button" class="btnsm" style="font-size:11px" onclick="resyncPreOrdersToSheet()" title="ส่งพรีออเดอร์ทั้งหมดเข้าชีต / push every pre-order into the sheet"><i class="ti ti-table"></i> → Sheet</button>
+    </div>
     <div id="po-list"></div>
   </div></div>
+  <!-- Cancel a pre-order: reason is required, it is the only trace of a lost sale -->
+  <div class="modal-overlay" id="pocancel-modal"><div class="modal" id="pocancel-body"></div></div>
 
   <!-- LALAMOVE VIEW -->
   <div class="view" id="ofv-lala"><div class="sec">
@@ -6616,7 +6621,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805009;
+var KP_BUILD = 20260805010;
 var _kpReloading = false;
 
 function kpVersionCheck(v){
@@ -16729,6 +16734,7 @@ function poCreate(){
     }
   } else {
     data.id='po'+Date.now(); data.status='open'; data.createdBy=(typeof currentStaffName!=='undefined'?currentStaffName:'')||'Office'; data.createdAt=Date.now();
+    data.poNo=poMaxNo()+1;
     preOrders.push(data);
     // Slips picked before the pre-order had an id can be written now.
     if(_poSlipPending.length){
@@ -16741,6 +16747,7 @@ function poCreate(){
   syncPreOrders();
   // Save the customer in the CRM from the start (phone-based).
   try{ var pk=normPhone(data.phone); if(pk){ customerMeta[pk]=customerMeta[pk]||{}; if(!customerMeta[pk].name)customerMeta[pk].name=data.customer; if(!customerMeta[pk].address&&data.address)customerMeta[pk].address=data.address; if(!customerMeta[pk].loc&&data.location)customerMeta[pk].loc=data.location; if(window.fbDB)window.fbDB.ref('customerMeta/'+pk).set(customerMeta[pk]); } }catch(e){}
+  try{ sheetsSyncPreOrders([poEditId?preOrders.find(function(x){return x.id===poEditId;}):data]); }catch(e){}
   var wasEdit=!!poEditId;
   poResetForm();
   res.style.background=GL;res.style.color=GT;res.textContent=wasEdit?'✓ Pre-Order updated / อัปเดตแล้ว':'✓ Pre-Order saved / บันทึกแล้ว';
@@ -16748,8 +16755,45 @@ function poCreate(){
   setTimeout(function(){res.style.display='none';},2500);
   poRender();
 }
+/* ══ PRE-ORDER NUMBERS  P-1, P-2, … ════════════════════════════════════════
+   Every pre-order carries a number of its own, so the office can name one on
+   the phone ("P-14") without reading out a customer name. The old ones get
+   theirs by age: oldest = P-1. The assignment is deterministic (sort by
+   createdAt, then by id), so two devices doing the backfill at the same moment
+   arrive at exactly the same numbers instead of fighting over them.
+════════════════════════════════════════════════════════════════════════════ */
+function poLabel(p){ var n=parseInt(p&&p.poNo,10); return n>0?('P-'+n):'P-?'; }
+function poMaxNo(){
+  return (preOrders||[]).reduce(function(m,p){ var n=parseInt(p&&p.poNo,10)||0; return n>m?n:m; },0);
+}
+function poBackfillNos(){
+  var missing=(preOrders||[]).filter(function(p){ return p && !(parseInt(p.poNo,10)>0); });
+  if(!missing.length) return;
+  var all=(preOrders||[]).slice().sort(function(a,b){
+    return ((a.createdAt||0)-(b.createdAt||0)) || String(a.id||'').localeCompare(String(b.id||''));
+  });
+  var used={}; all.forEach(function(p){ var n=parseInt(p.poNo,10)||0; if(n>0) used[n]=1; });
+  var next=1, changed=[];
+  all.forEach(function(p){
+    if(parseInt(p.poNo,10)>0) return;
+    while(used[next]) next++;
+    p.poNo=next; used[next]=1; changed.push(p);
+  });
+  if(!changed.length) return;
+  changed.forEach(function(p){
+    try{ if(window.fbDB) window.fbDB.ref('preOrders/'+p.id+'/poNo').set(p.poNo); }catch(e){}
+  });
+  try{ sheetsSyncPreOrders(changed); }catch(e){}
+}
+// The one character the sheet wants for the zone — the same one the order number
+// starts with: # 1 2 3 4 5.
+function poZoneDigit(z){
+  var m={bangkok:'#',northern:'1',northeastern:'2',eastern:'3',southern:'4',instore:'5'};
+  return m[String(z||'').toLowerCase()]||'';
+}
 function poRender(){
   var list=document.getElementById('po-list'); if(!list) return;
+  try{ poBackfillNos(); }catch(e){}
   if(!document.querySelector('#po-products .pline')) poAddP();
   try{ poCalc(); }catch(e){}
   var open=preOrders.filter(function(p){return p.status==='open';}).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
@@ -16777,9 +16821,17 @@ function poRender(){
         +'<button type="button" onclick="poDelete(\''+p.id+'\')" class="btnsm" style="background:#fee2e2;color:#dc2626;border-color:#fecaca"><i class="ti ti-trash"></i> Delete</button>'
         +'</div>';
     }
-    return '<div class="card" style="margin-bottom:8px'+(p.status==='cancelled'?';opacity:0.7':'')+(p.priority?';border-left:5px solid #7c3aed':'')+'">'
+    // The card colour says the state from across the room: yellow = still waiting,
+    // green = it became a real order, red = the customer walked away.
+    var skin = p.status==='converted' ? {bg:'#f0fdf4',bd:'#86efac'}
+             : p.status==='cancelled' ? {bg:'#fef2f2',bd:'#fecaca'}
+             : {bg:'#fffbeb',bd:'#fde68a'};
+    return '<div class="card" style="margin-bottom:8px;background:'+skin.bg+';border:1.5px solid '+skin.bd
+        +(p.status==='cancelled'?';opacity:0.75':'')+(p.priority?';border-left:5px solid #7c3aed':'')+'">'
       +(p.priority?'<div style="background:#f3e8ff;color:#7c3aed;border-radius:var(--rs);padding:4px 8px;font-size:11px;font-weight:800;margin-bottom:5px">⭐ PRIORITY'+(p.priorityReason?' — <span style="font-weight:600">'+p.priorityReason+'</span>':'')+'</div>':'')
-      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:14px;font-weight:700">'+(p.priority?'⭐ ':'')+(p.customer||'—')+zoneBadge(p.zone)+'</span>'+badge+'</div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:14px;font-weight:700;min-width:0">'
+        +'<span title="Pre-order no. / เลขพรีออเดอร์" style="font-size:11px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px;margin-right:6px;vertical-align:1px">'+poLabel(p)+'</span>'
+        +(p.priority?'⭐ ':'')+(p.customer||'—')+zoneBadge(p.zone)+'</span>'+badge+'</div>'
       +'<div style="font-size:12px;color:var(--text2)">'+(p.phone?'📞 '+p.phone+'  ':'')+(p.contact?'💬 '+p.contact:'')+'</div>'
       +(p.address?'<div style="font-size:12px;color:var(--text2)">📍 '+p.address+'</div>':'')
       +'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:3px"><span style="font-size:13px">'+prodStr(p)+'</span><b style="font-size:14px;white-space:nowrap;margin-left:8px">'+poTotal(p).toLocaleString()+' ฿</b></div>'
@@ -16813,11 +16865,39 @@ function poDelete(id){
   try{ var _by=((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||(typeof currentStaffName!=='undefined'&&currentStaffName)||'Office'; auditAdd({type:'preorder', action:'delete', orderId:'📝 '+((_p&&_p.customer)||id), by:_by, detail:'Pre-order deleted'}); }catch(e){}
   poRender();
 }
+// Cancelling asks for the reason in a real note window, not a one-line prompt —
+// "customer found it cheaper elsewhere" is worth a sentence, and it is the only
+// thing that ever explains a lost pre-order later.
+var _poCancelId=null;
 function poCancel(id){
   var p=preOrders.find(function(x){return x.id===id;}); if(!p) return;
-  var reason=prompt('Cancel reason / เหตุผลที่ยกเลิก:'); if(reason===null) return;
-  p.status='cancelled'; p.cancelReason=reason||'(no reason)'; p.cancelledAt=Date.now();
-  syncPreOrders(); poRender();
+  _poCancelId=id;
+  var el=document.getElementById('pocancel-body'); if(!el) return;
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +'<span style="font-size:16px;font-weight:800;color:#dc2626">✗ ยกเลิกพรีออเดอร์ / Cancel pre-order</span>'
+      +'<button type="button" onclick="poCancelClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="font-size:13px;font-weight:700;margin-bottom:2px">'+poLabel(p)+' · '+_esc(p.customer||'—')+'</div>'
+    +'<div style="font-size:11.5px;color:var(--text2);margin-bottom:10px">'+_esc(p.phone||'')+(p.zone?' · '+_esc(p.zone):'')+'</div>'
+    +'<label class="fl" style="margin-top:0">เหตุผล / Reason *</label>'
+    +'<textarea id="pocancel-reason" rows="3" placeholder="เช่น ลูกค้าเปลี่ยนใจ / ไปซื้อที่อื่น / รอของนานเกินไป — e.g. customer changed their mind, bought elsewhere, waited too long" style="width:100%;box-sizing:border-box"></textarea>'
+    +'<div style="display:flex;gap:8px;margin-top:12px">'
+      +'<button type="button" onclick="poCancelClose()" style="flex:1;padding:11px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text2);font-size:13px;font-weight:700;cursor:pointer">กลับ / Back</button>'
+      +'<button type="button" onclick="poCancelConfirm()" style="flex:1;padding:11px;border:none;border-radius:var(--rs);background:#dc2626;color:#fff;font-size:13px;font-weight:800;cursor:pointer">✗ ยกเลิก / Cancel it</button>'
+    +'</div>';
+  document.getElementById('pocancel-modal').classList.add('open');
+  try{ setTimeout(function(){ var t=document.getElementById('pocancel-reason'); if(t) t.focus(); },80); }catch(e){}
+}
+function poCancelClose(){ document.getElementById('pocancel-modal').classList.remove('open'); _poCancelId=null; }
+function poCancelConfirm(){
+  var p=preOrders.find(function(x){return x.id===_poCancelId;}); if(!p){ poCancelClose(); return; }
+  var reason=((document.getElementById('pocancel-reason')||{}).value||'').trim();
+  if(!reason){ alert('ใส่เหตุผลก่อน / please type a reason'); return; }
+  var by=ofWho();
+  p.status='cancelled'; p.cancelReason=reason; p.cancelledAt=Date.now(); p.cancelledBy=by;
+  syncPreOrders();
+  try{ auditAdd({type:'preorder', action:'cancel', orderId:'📝 '+poLabel(p)+' '+(p.customer||''), by:by, detail:'Pre-order cancelled · '+reason}); }catch(e){}
+  try{ sheetsSyncPreOrders([p]); }catch(e){}
+  poCancelClose(); poRender();
 }
 function poConvert(id){
   var p=preOrders.find(function(x){return x.id===id;}); if(!p||p.status!=='open') return;
@@ -16875,6 +16955,7 @@ function poConvert(id){
   li.forEach(function(x){ if(['panel','lcorner','tedge','uedge','ttrim','utrim'].indexOf(x.type)>=0){ var st=stockItems.find(function(s){return s.code===x.code;}); if(st){ st.qty=Math.max(0,st.qty-(parseInt(x.qty)||0)); addLog(x.code+' -'+x.qty+' pcs (order '+no+')','-'); } } });
   // mark pre-order converted (kept for history)
   p.status='converted'; p.convertedId=no; p.convertedAt=Date.now();
+  try{ sheetsSyncPreOrders([p]); }catch(e){}
   try{ auditAdd({type:'preorder', action:'convert', orderId:'📝 '+(p.customer||''), by:createdBy, detail:'Pre-order → '+no}); }catch(e){}
   addLog('Pre-Order → '+no+' created','+');
   syncOrders(); syncWOrders(); syncStockItems(); syncPreOrders();
@@ -17081,6 +17162,57 @@ function kpSheetSend(action, o){
   }catch(err){ console.error('Sheet sync failed (non-blocking):', err); }
 }
 function sheetsSyncOrder(o){ kpSheetSend('upsert', o); }
+/* Pre-orders → the master sheet's "Pre Orders" tab. One row per pre-order, keyed
+   by its P-number, upserted on every change (create, edit, convert, cancel).
+   Columns must stay in step with kpBuildPreOrders_ in apps-script/master-build.gs:
+     Pre-ID · Status · Zone · Customer · Phone · Contact · Address · Maps ·
+     Products · Notes · Created by · Created · Converted to · Cancel reason
+   Fire-and-forget: if the Apps Script has not been redeployed with the
+   'preorder' action yet, this fails silently and the KP menu → "Build / Update
+   master" still fills the tab from Firebase. */
+function poSheetRow(p){
+  if(!p) return null;
+  var prod=(p.lineItems||[]).map(function(li){ return (li.code||'')+' ×'+(li.qty||0); }).join(' · ');
+  var st = p.status==='converted' ? 'converted' : (p.status==='cancelled' ? 'cancelled' : 'open');
+  return {
+    preId: poLabel(p),
+    status: st,
+    zone: poZoneDigit(p.zone),
+    customer: p.customer||'',
+    phone: p.phone||'',
+    contact: p.contact||'',
+    address: p.address||'',
+    maps: p.location||'',
+    products: prod,
+    notes: p.notes||'',
+    createdBy: p.createdBy||'',
+    createdAt: p.createdAt? new Date(p.createdAt).toISOString() : '',
+    convertedTo: p.convertedId||'',
+    cancelReason: p.cancelReason||''
+  };
+}
+function sheetsSyncPreOrders(list){
+  try{
+    if(!SHEETS_WEBAPP_URL) return;
+    var rows=(list||[]).map(poSheetRow).filter(Boolean);
+    if(!rows.length) return;
+    fetch(SHEETS_WEBAPP_URL,{
+      method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ token:SHEETS_TOKEN, action:'preorder', pre:rows })
+    }).then(function(r){return r.json();})
+      .then(function(res){ console.log('Sheet preorder:', res); })
+      .catch(function(err){ console.error('Pre-order sheet sync failed (non-blocking):', err); });
+  }catch(err){ console.error('Pre-order sheet sync failed (non-blocking):', err); }
+}
+// One-click: push EVERY pre-order into the sheet (after the script is redeployed,
+// or whenever the tab looks out of step).
+function resyncPreOrdersToSheet(){
+  var all=(preOrders||[]).slice();
+  if(!all.length){ alert('No pre-orders / ไม่มีพรีออเดอร์'); return; }
+  if(!confirm('ส่งพรีออเดอร์ '+all.length+' รายการเข้าชีต? / push '+all.length+' pre-orders to the sheet?')) return;
+  sheetsSyncPreOrders(all);
+  alert('ส่งแล้ว '+all.length+' รายการ / sent — check the "Pre Orders" tab');
+}
 // One-click cleanup: re-push all cancelled orders so the sheet clears their
 // quantities + line items (fixes report totals that still count old cancelled orders).
 function resyncCancelledToSheet(){
