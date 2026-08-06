@@ -10,7 +10,7 @@
 // has not checked in 24 hours — on ordinary fetch events too. So a device that is simply
 // left running picks the new build up by itself within a day, and one where somebody
 // opens the app picks it up at once.
-const BUILD = 20260805020;
+const BUILD = 20260806001;
 const CACHE = 'kp-' + BUILD;
 const SHELL = [
   '/kp-wallpanel/',
@@ -31,32 +31,18 @@ self.addEventListener('activate', function(e) {
                           .map(function(k){ return caches.delete(k); }));
     await self.clients.claim();
 
-    // Tell every open window that a new build is live. A window already running this
-    // build answers "kp-alive" and then reloads itself POLITELY — it waits until no
-    // form is open, so nobody loses a half-typed order. A window on an older build has
-    // no such handler, never answers, and is navigated the hard way. That is the whole
-    // point of this block: it is the only way to reach a tab that has been open since
-    // before the fix went live.
+    // Tell every open window that a new build is live — and leave it at that.
+    // Until 06.08.2026 this worker navigated every window that did not answer, so a
+    // deploy in the middle of the working day pulled the page away under everybody at
+    // once. Now the window only raises its blue "new version" bar; the person in front
+    // of it reloads when it suits them (F5 / the round KP button). One reload still
+    // goes out unasked, and only because somebody pressed it: "Reload all devices" in
+    // Management → Audit Log.
+    // The price: a tab left open keeps running old code until somebody refreshes it —
+    // that is a deliberate trade, not an oversight.
     const wins = await self.clients.matchAll({ type: 'window' });
     if (!wins.length) return;
-
-    const acked = {};
-    const onMsg = function(ev) {
-      if (ev.data && ev.data.type === 'kp-alive' && ev.source) acked[ev.source.id] = 1;
-    };
-    self.addEventListener('message', onMsg);
     wins.forEach(function(c) { try { c.postMessage({ type: 'kp-newbuild', build: BUILD }); } catch(err) {} });
-    await new Promise(function(r) { setTimeout(r, 3000); });
-    self.removeEventListener('message', onMsg);
-
-    // Fire and FORGET. Awaiting the navigation here deadlocks the tab: the new page
-    // load needs a fetch, a fetch waits for this worker to finish activating, and this
-    // worker would be waiting for the navigation. Not awaiting lets waitUntil resolve,
-    // the worker becomes activated, and the queued page loads go through.
-    wins.forEach(function(c) {
-      if (acked[c.id]) return;
-      try { var p = c.navigate(c.url); if (p && p.catch) p.catch(function(){}); } catch(err) {}
-    });
   })());
 });
 

@@ -1573,7 +1573,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     </div>
     <div style="border:1.5px solid var(--border);border-radius:var(--rs);padding:12px;margin-bottom:14px;background:var(--bg2)">
       <div class="stit" style="margin-bottom:6px"><i class="ti ti-refresh"></i> โหลดใหม่ทุกเครื่อง / Reload all devices</div>
-      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">แท็บที่เปิดค้างไว้หลายวันยังใช้โค้ดเก่า — ปุ่มนี้สั่งให้ทุกเครื่องโหลดแอปใหม่ / A tab left open for days still runs old code. This tells every device to reload the app.</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">อัปเดตใหม่จะไม่บังคับโหลดเอง — ทุกเครื่องเห็นแค่แถบสีน้ำเงินแล้วกดเองเมื่อสะดวก ปุ่มนี้คือทางเดียวที่สั่งโหลดใหม่ทุกเครื่องพร้อมกัน / A new build no longer reloads anybody by itself — every device just shows a blue "new version" bar and refreshes when it suits them. This button is the one way to make all of them reload now.</div>
       <button type="button" class="btnsm btnsmp" style="width:100%;justify-content:center" onclick="kpForceReloadAll(this)"><i class="ti ti-refresh"></i> โหลดใหม่ทุกเครื่อง / Reload all devices</button>
     </div>
     <div style="border:1.5px solid var(--border);border-radius:var(--rs);padding:12px;margin-bottom:14px;background:var(--bg2)">
@@ -3865,17 +3865,19 @@ const GL='#D1FAE5',GT='#065F46',OL='#FEF3C7',OT='#92400E';
 // ── SERVICE WORKER + OFFLINE ──
 if('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/kp-wallpanel/sw.js').catch(function(){});
-  // A new worker announces every deploy to all open windows (see sw.js). Answering
-  // "kp-alive" is what marks this window as one that can reload itself politely — it
-  // waits for an open form to be closed first. A window on an older build has no such
-  // handler, never answers, and the worker navigates it instead. That is the only way
-  // to reach a device nobody is going to touch.
+  // A new worker announces every deploy to all open windows (see sw.js). Since
+  // 06.08.2026 that is an announcement and nothing else: the window puts the blue bar
+  // up and stays where it is. Whoever sits in front of it decides when to reload.
   try{
     navigator.serviceWorker.addEventListener('message', function(ev){
       if(!ev.data || ev.data.type!=='kp-newbuild') return;
       var reply=(ev.source && ev.source.postMessage) ? ev.source : navigator.serviceWorker.controller;
       try{ if(reply) reply.postMessage({ type:'kp-alive', build: KP_BUILD }); }catch(e){}
-      if((parseInt(ev.data.build)||0) > KP_BUILD) kpReloadSoon('มีเวอร์ชันใหม่ / new version', 'sw'+ev.data.build);
+      var b=parseInt(ev.data.build)||0;
+      if(b > KP_BUILD && b !== _kpBannerDismissed){
+        _kpBannerBuild=b;
+        kpShowReloadBanner('มีเวอร์ชันใหม่ / new version (b'+b+')', true);
+      }
     });
     // An always-open tab is not asked to check for a new worker very often — nudge it
     // every two hours so a device left running does not sit on old code for a whole day.
@@ -6637,17 +6639,24 @@ function appRefresh(btn){
 
 // ── BUILD NUMBER + REMOTE RELOAD ────────────────────────────────────────────
 // KP_BUILD goes up with EVERY deploy of this file. A tab that sees a higher build in
-// Firebase knows it is running outdated code and reloads itself — the only way to get
-// a device that has been open since yesterday onto the new version without walking to
-// it. Firebase node: appVersion { build, force, at, by }.
+// Firebase knows it is running outdated code. Firebase node: appVersion { build, force,
+// at, by }.
+//
+// A new build does NOT pull anybody's page away any more (06.08.2026): a deploy in the
+// middle of the working day used to reload every device in the house at once. It only
+// puts a blue bar at the top — "new version", with a Reload-now button and an ✕ to send
+// it away. Everybody reloads when it suits them (F5 / Ctrl+Shift+R / the round KP
+// button). ONE thing still reloads every device by itself, and only because somebody
+// asked for it: "โหลดใหม่ทุกเครื่อง / Reload all devices" in Management → Audit Log.
 //
 // It can only ever reach tabs that already run a build carrying this check. A tab that
 // was opened BEFORE this went live executes none of it and still has to be refreshed
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260805020;
+var KP_BUILD = 20260806001;
 var _kpReloading = false;
+var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
 function kpVersionCheck(v){
   v = v || {};
@@ -6656,9 +6665,11 @@ function kpVersionCheck(v){
   // Newest tab in the house → announce the build, so the older ones can see it.
   if(build < KP_BUILD){
     try{ if(window.fbDB) window.fbDB.ref('appVersion').update({ build: KP_BUILD, at: Date.now() }); }catch(e){}
-  } else if(build > KP_BUILD){
-    kpReloadSoon('มีเวอร์ชันใหม่ / new version', 'b'+build);
-    return;
+  } else if(build > KP_BUILD && build !== _kpBannerDismissed){
+    // Say it, do not do it. No return: a pushed reload must still get through to
+    // an outdated tab — that is the whole point of the office button.
+    _kpBannerBuild = build;
+    kpShowReloadBanner('มีเวอร์ชันใหม่ / new version (b'+build+')', true);
   }
   // A pushed reload is remembered by its timestamp, not compared against this device's
   // clock — a device running a few minutes fast would otherwise reload for ever.
@@ -6723,7 +6734,15 @@ function kpShowReloadBanner(why, manualOnly){
   }
   b.innerHTML = '<span>🔄 ' + why + (manualOnly ? '' : ' — กำลังโหลดใหม่ / reloading…') + '</span>'
     + '<button type="button" onclick="kpHardReload()" style="border:none;border-radius:8px;padding:5px 11px;'
-    + 'background:#fff;color:#1D4ED8;font-size:12px;font-weight:800;cursor:pointer">โหลดใหม่เลย / Reload now</button>';
+    + 'background:#fff;color:#1D4ED8;font-size:12px;font-weight:800;cursor:pointer">โหลดใหม่เลย / Reload now</button>'
+    // Only the "there is a new build" bar can be sent away — a reload the office
+    // pushed is on its way anyhow, hiding the bar would just hide the reason.
+    + (manualOnly ? '<button type="button" onclick="kpDismissReloadBanner()" title="ปิด / dismiss" style="border:none;background:none;color:#fff;font-size:16px;font-weight:800;cursor:pointer;line-height:1;padding:0 2px">✕</button>' : '');
+}
+// Dismissed for THIS build — a newer one puts the bar back up.
+function kpDismissReloadBanner(){
+  _kpBannerDismissed = _kpBannerBuild;
+  var b = document.getElementById('kp-reload-bar'); if(b) b.remove();
 }
 // Management button: every device reloads, no deploy needed.
 function kpForceReloadAll(btn){
