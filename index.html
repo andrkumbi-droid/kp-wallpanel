@@ -2463,6 +2463,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
       <div class="stit" style="margin-bottom:0">💼 Finance / การเงิน</div>
       <button type="button" class="btnsm" onclick="finRestoreOpen()" title="Restore closed categories / กู้คืนหมวดที่ปิดไว้"><i class="ti ti-history"></i> ♻️ Restore</button>
+      <button type="button" class="btnsm btnsmp" onclick="finReportOpen()" title="Report + charts / รายงาน"><i class="ti ti-chart-pie"></i> Report / รายงาน</button>
     </div>
     <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Payments outside Bills &amp; Payroll — container, tax, installments, extra wages / การจ่ายเงินนอกบิลและนอกเงินเดือน</div>
     <!-- Month selector — it steers the overview AND everything below it -->
@@ -2493,6 +2494,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="modal-overlay" id="fin-move-modal"><div class="modal" id="fin-move-body"></div></div>
   <!-- FINANCE: close or really delete something that still holds payments -->
   <div class="modal-overlay" id="fin-del-modal"><div class="modal" id="fin-del-body"></div></div>
+  <!-- FINANCE: report — pick what goes in, charts + full breakdown -->
+  <div class="modal-overlay" id="fin-report-modal"><div class="modal" id="fin-report-body" style="max-width:640px"></div></div>
 
   <!-- BILLS ADD/EDIT MODAL -->
   <div class="modal-overlay" id="bills-modal">
@@ -6654,7 +6657,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260806001;
+var KP_BUILD = 20260806002;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -26430,6 +26433,322 @@ function finBillsRender(){
   html+='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 15px;border-radius:var(--r);background:var(--bg2);border:1.5px solid var(--border);font-weight:900;font-size:14px;margin-bottom:12px">'
     +'<span>รวมบิล / Bills total · '+kpMLabel(mk)+'</span>'+_finBillAmt(m.blue,m.grey,15)+'</div>';
   host.innerHTML=head+html;
+}
+
+/* ══ FINANCE REPORT ════════════════════════════════════════════════════════
+   Everything the tab holds, in ONE shape:
+       source (payments · office salaries · bills)
+         └ topic      (main category · role · Bills block)
+             └ item   (category · person · carrier · fixed line)
+                 └ leaf (single payment / receipt / order)
+   The office ticks what should be in it — sources, blue/grey, how deep, which
+   charts — and the choice is remembered. Charts are picked per section, not by
+   the user: columns compare a handful of things, a donut shows a share of one
+   whole, horizontal bars rank a list that can be long.
+   The chart helpers are the Bills ones (_bcDonut/_bcBars/_bcColor) — same look,
+   and they carry explicit hex colours, so the print window renders them too. */
+var FIN_REP_DEF={ src:{pay:1,sal:1,bill:1}, color:'both', depth:'cat',
+                  ch:{sum:1,split:1,topic:1,cat:1,person:1,trend:0,table:1}, mk:'' };
+var _finRep=(function(){
+  var d=JSON.parse(JSON.stringify(FIN_REP_DEF));
+  try{
+    var s=JSON.parse(localStorage.getItem('kpFinRep')||'null');
+    if(s&&typeof s==='object'){
+      if(s.src) Object.keys(d.src).forEach(function(k){ d.src[k]=s.src[k]?1:0; });
+      if(s.ch)  Object.keys(d.ch ).forEach(function(k){ d.ch[k] =s.ch[k] ?1:0; });
+      if(s.color) d.color=s.color;
+      if(s.depth) d.depth=s.depth;
+    }
+  }catch(e){}
+  return d;
+})();
+function _finRepSave(){ try{ localStorage.setItem('kpFinRep',JSON.stringify(_finRep)); }catch(e){} }
+function finRepSet(k,v){ _finRep[k]=v; _finRepSave(); finReportRender(); }
+function finRepTog(grp,k){ _finRep[grp][k]=_finRep[grp][k]?0:1; _finRepSave(); finReportRender(); }
+function finRepMonth(v){ _finRep.mk=v; finReportRender(); }
+function finReportOpen(){
+  _finRep.mk=_finMonthKey();
+  finReportRender();
+  var m=document.getElementById('fin-report-modal'); if(m) m.classList.add('open');
+}
+function finReportClose(){ var m=document.getElementById('fin-report-modal'); if(m) m.classList.remove('open'); }
+function _finRepMk(){ return _finRep.mk||_finMonthKey(); }
+
+function finReportData(mk){
+  var srcs=[], inMonth=_finIn(mk);
+  // 1) the Finance tree itself
+  var pay={ key:'pay', label:'💼 รายการจ่าย / Finance payments', topics:[] };
+  finSecsFor(mk).forEach(function(s){
+    var t={ label:s.label, items:[] }, secPays=inMonth.filter(function(p){ return p.section===s.id; });
+    finCatsFor(s.id,mk).forEach(function(c){
+      var rows=secPays.filter(function(p){ return p.catId===c.id; });
+      t.items.push({ label:c.label||'—', grey:finCatIsGrey(c), value:_finSum(rows),
+        leaves:rows.map(function(p){ return {label:(p.what||c.label||'—'), sub:(p.date||''), value:parseFloat(p.amount)||0}; }) });
+    });
+    var known={}; finCatsOf(s.id).forEach(function(c){ known[c.id]=1; });
+    var orph=secPays.filter(function(p){ return !known[p.catId]; });
+    if(orph.length) t.items.push({ label:'⚠️ ไม่มีหมวด / not assigned', grey:false, value:_finSum(orph),
+      leaves:orph.map(function(p){ return {label:(p.what||'—'), sub:(p.date||''), value:parseFloat(p.amount)||0}; }) });
+    if(t.items.length) pay.topics.push(t);
+  });
+  srcs.push(pay);
+  // 2) office salaries, grouped the way the tab groups them: by role
+  var sal={ key:'sal', label:'👔 เงินเดือนออฟฟิศ / Office salaries', topics:[] }, byRole={};
+  try{
+    finPayNames().forEach(function(s){
+      var net=0; try{ net=pgCalc(s.id,mk).net||0; }catch(e){}
+      var rl=_finRoleLabel(s.role)||'—';
+      if(!byRole[rl]){ byRole[rl]={ label:rl, person:true, items:[] }; sal.topics.push(byRole[rl]); }
+      byRole[rl].items.push({ label:s.name||'—', grey:!!s.grey, value:net, leaves:null });
+    });
+  }catch(e){}
+  srcs.push(sal);
+  // 3) the mirrored Bills tree — same rows, same blue/grey flags
+  var bil={ key:'bill', label:'🧾 บิล / Bills', topics:[] };
+  try{
+    finBillMirror(mk).blocks.forEach(function(b){
+      bil.topics.push({ label:b.label, person:(b.kind==='staff'), items:b.rows.map(function(r){
+        var lv=null;
+        if(r.items) lv=r.items.map(function(x){ return {label:(x.what||x.subcatLabel||'—'), sub:(x.date||''), value:parseFloat(x.amount)||0}; });
+        else if(r.lines) lv=r.lines.map(function(x){ return {label:(x.cat||'—'), sub:(x.date||''), value:parseFloat(x.amount)||0}; });
+        else if(r.ships) lv=r.ships.map(function(x){ var o=x.o||{}; return {label:(o.id||'—'), sub:(o.name||''), value:parseFloat(o.shipCost)||0}; });
+        return { label:r.label, grey:finBillIsGrey(r.key), value:r.total, leaves:lv };
+      }) });
+    });
+  }catch(e){}
+  srcs.push(bil);
+  return { mk:mk, sales:finSalesOfMonth(mk).all, srcs:srcs };
+}
+// Apply the ticks: drop the sources nobody wants, keep only blue / only grey,
+// and add the sums back up from what is left.
+function finRepView(mk){
+  var d=finReportData(mk), keep=[], blue=0, grey=0;
+  d.srcs.forEach(function(s){
+    if(!_finRep.src[s.key]) return;
+    var topics=[], sb=0, sg=0;
+    s.topics.forEach(function(t){
+      var items=t.items.filter(function(it){
+        if(_finRep.color==='blue') return !it.grey;
+        if(_finRep.color==='grey') return  it.grey;
+        return true;
+      }).filter(function(it){ return it.value!==0 || (it.leaves&&it.leaves.length); });
+      if(!items.length) return;
+      var tb=0, tg=0;
+      items.forEach(function(it){ if(it.grey) tg+=it.value; else tb+=it.value; });
+      topics.push({ label:t.label, person:!!t.person, items:items, blue:tb, grey:tg, total:tb+tg });
+      sb+=tb; sg+=tg;
+    });
+    if(!topics.length) return;
+    keep.push({ key:s.key, label:s.label, topics:topics, blue:sb, grey:sg, total:sb+sg });
+    blue+=sb; grey+=sg;
+  });
+  return { mk:mk, sales:d.sales, srcs:keep, blue:blue, grey:grey, total:blue+grey };
+}
+// Column chart — a handful of things next to each other, value on top.
+function _finCols(rows,txt,fmtK){
+  if(!rows.length) return '<div style="font-size:12px;color:'+txt.muted+'">—</div>';
+  var max=rows.reduce(function(a,r){ return Math.max(a,Math.abs(r.value)); },0)||1;
+  return '<div style="display:flex;align-items:flex-end;gap:8px;height:150px">'+rows.map(function(r,i){
+    var h=Math.max(3,Math.round(Math.abs(r.value)/max*104));
+    return '<div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px">'
+      +'<div style="font-size:10px;font-weight:800;color:'+txt.text+';white-space:nowrap">'+(fmtK&&Math.abs(r.value)>=10000?_bcMoney(r.value/1000)+'k':_bcMoney(r.value))+'</div>'
+      +'<div title="'+_bcMoney(r.value)+' ฿" style="width:100%;height:'+h+'px;border-radius:5px 5px 0 0;background:'+(r.color||_bcColor(i))+'"></div>'
+      +'<div style="font-size:9.5px;color:'+txt.muted+';text-align:center;line-height:1.25;max-height:26px;overflow:hidden">'+_esc(r.label)+'</div></div>';
+  }).join('')+'</div>';
+}
+function _finRepSeg(rows){   // donut needs its colours assigned in size order
+  var segs=rows.filter(function(r){ return r.value>0; }).sort(function(a,b){ return b.value-a.value; });
+  segs.forEach(function(s,i){ s.color=_bcColor(i); });
+  return segs;
+}
+function _finRepSecTitle(t){
+  return '<div style="font-size:12px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:16px 0 8px">'+t+'</div>';
+}
+// Everything below the options — built once, used by the modal AND the print sheet.
+function finRepBody(v,txt,forPrint){
+  var box=function(inner){ return '<div style="background:'+(forPrint?'#f8fafc':'var(--bg2)')+';border:1px solid '+(forPrint?'#e5e7eb':'var(--border)')+';border-radius:8px;padding:12px;margin-bottom:12px">'+inner+'</div>'; };
+  var h='', res=v.sales-v.total;
+  if(_finRep.ch.sum){
+    h+=box(_finCols([{label:'📈 ยอดขาย / Sales',value:v.sales,color:'#00897b'},
+                     {label:'➖ รายจ่าย / Expenses',value:v.total,color:'#dc2626'},
+                     {label:'= คงเหลือ / Result',value:res,color:'#2563eb'}],txt,true));
+  }
+  if(_finRep.ch.split && _finRep.color==='both' && v.grey){
+    h+=_finRepSecTitle('น้ำเงิน / เทา · Blue vs grey')
+      +box(_finCols([{label:'🔵 นับ / counts',value:v.blue,color:'#2563eb'},
+                     {label:'🩶 นับแยก / separate',value:v.grey,color:'#9ca3af'}],txt,true));
+  }
+  if(_finRep.ch.topic){
+    var srcSeg=_finRepSeg(v.srcs.map(function(s){ return {label:s.label,value:s.total}; }));
+    h+=_finRepSecTitle('ภาพรวม / Where the money goes')
+      +box('<div style="text-align:center;margin-bottom:8px">'+_bcDonut(srcSeg,v.total,txt)+'</div>'
+        +_bcBars(srcSeg.map(function(s){ return {label:s.label,value:s.value}; }),txt,true));
+    var tops=[];
+    v.srcs.forEach(function(s){ s.topics.forEach(function(t){ tops.push({label:t.label,value:t.total}); }); });
+    tops.sort(function(a,b){ return b.value-a.value; });
+    if(tops.length>1) h+=_finRepSecTitle('ทุกหัวข้อ / Every topic')+box(_bcBars(tops,txt,true));
+  }
+  if(_finRep.ch.cat){
+    h+=_finRepSecTitle('ทุกหมวด / Every category');
+    v.srcs.forEach(function(s){
+      s.topics.forEach(function(t){
+        if(t.person && _finRep.ch.person) return;         // people get their own section
+        var rows=t.items.map(function(it){ return {label:it.label+(it.grey?' 🩶':''),value:it.value}; })
+                        .sort(function(a,b){ return b.value-a.value; });
+        if(!rows.length) return;
+        h+=box('<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:8px">'
+            +'<span style="font-size:13px;font-weight:700;color:'+txt.text+'">'+_esc(t.label)+'</span>'
+            +'<span style="font-size:13px;font-weight:800;color:#2563eb">'+_bcMoney(t.total)+' ฿</span></div>'
+          +_bcBars(rows,txt,false));
+      });
+    });
+  }
+  if(_finRep.ch.person){
+    var ppl=[];
+    v.srcs.forEach(function(s){ s.topics.forEach(function(t){
+      if(!t.person) return;
+      t.items.forEach(function(it){ ppl.push({label:it.label+(it.grey?' 🩶':''),value:it.value}); });
+    }); });
+    ppl.sort(function(a,b){ return b.value-a.value; });
+    if(ppl.length) h+=_finRepSecTitle('ทุกคน / Every person ('+ppl.length+')')+box(_bcBars(ppl,txt,false));
+  }
+  if(_finRep.ch.trend){
+    var p=String(v.mk).split('-'), y=parseInt(p[0]), m=parseInt(p[1])-1, tr=[];
+    for(var i=5;i>=0;i--){
+      var dd=new Date(y,m-i,1), k=dd.getFullYear()+'-'+(dd.getMonth()+1<10?'0':'')+(dd.getMonth()+1);
+      var vv=(k===v.mk)?v:finRepView(k);
+      tr.push({ label:['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dd.getMonth()]+' '+String(dd.getFullYear()).slice(2),
+                value:vv.total, color:(i===0?'#2563eb':'#93c5fd') });
+    }
+    h+=_finRepSecTitle('6 เดือน / 6 months')+box(_finCols(tr,txt,true));
+  }
+  if(_finRep.ch.table){
+    var tblCss=forPrint?'':'font-size:12px';
+    var rowsHtml='';
+    v.srcs.forEach(function(s){
+      rowsHtml+='<tr class="hd"><td>'+_esc(s.label)+'</td><td class="r">'+_bcMoney(s.total)+' ฿</td><td class="r">'+(v.total?Math.round(s.total/v.total*100):0)+'%</td></tr>';
+      s.topics.forEach(function(t){
+        rowsHtml+='<tr><td class="sub"><b>'+_esc(t.label)+'</b></td><td class="r">'+_bcMoney(t.total)+' ฿</td><td class="r">'+(s.total?Math.round(t.total/s.total*100):0)+'%</td></tr>';
+        if(_finRep.depth==='topic') return;
+        t.items.forEach(function(it){
+          rowsHtml+='<tr><td class="sub2">'+_esc(it.label)+(it.grey?' 🩶':'')+(it.leaves&&it.leaves.length?' <span class="n">('+it.leaves.length+')</span>':'')+'</td>'
+            +'<td class="r">'+_bcMoney(it.value)+' ฿</td><td class="r">'+(t.total?Math.round(it.value/t.total*100):0)+'%</td></tr>';
+          if(_finRep.depth!=='all' || !it.leaves) return;
+          it.leaves.forEach(function(l){
+            rowsHtml+='<tr><td class="sub3">'+_esc(l.label)+(l.sub?' <span class="n">· '+_esc(l.sub)+'</span>':'')+'</td>'
+              +'<td class="r">'+_bcMoney(l.value)+' ฿</td><td class="r"></td></tr>';
+          });
+        });
+      });
+    });
+    h+=_finRepSecTitle('รายละเอียด / Full breakdown')
+      +'<table class="finrep" style="width:100%;border-collapse:collapse;'+tblCss+'">'
+      +'<thead><tr><th style="text-align:left">หมวด / Item</th><th class="r">จำนวน / Amount</th><th class="r">%</th></tr></thead><tbody>'
+      +rowsHtml
+      +'<tr class="gr"><td>รวมรายจ่าย / TOTAL EXPENSES</td><td class="r">'+_bcMoney(v.total)+' ฿</td><td class="r">100%</td></tr>'
+      +'<tr class="gr"><td>ยอดขาย / SALES</td><td class="r">'+_bcMoney(v.sales)+' ฿</td><td class="r"></td></tr>'
+      +'<tr class="gr"><td>คงเหลือ / RESULT</td><td class="r">'+_bcMoney(res)+' ฿</td><td class="r"></td></tr>'
+      +'</tbody></table>';
+  }
+  return h;
+}
+function finReportRender(){
+  var el=document.getElementById('fin-report-body'); if(!el) return;
+  var mk=_finRepMk(), v=finRepView(mk);
+  var txt={text:'var(--text)',muted:'var(--text2)',track:'var(--bg2)'};
+  // months: every month that holds a Finance payment + the last 12
+  var mset={}, now=new Date();
+  for(var i=0;i<12;i++){ var d=new Date(now.getFullYear(),now.getMonth()-i,1); mset[d.getFullYear()+'-'+(d.getMonth()+1<10?'0':'')+(d.getMonth()+1)]=1; }
+  (finPays||[]).forEach(function(p){ if(p.date) mset[finMKey(p.date)]=1; });
+  mset[mk]=1;
+  var mopts=Object.keys(mset).filter(Boolean).sort().reverse().map(function(k){
+    return '<option value="'+k+'"'+(k===mk?' selected':'')+'>'+kpMLabel(k)+'</option>'; }).join('');
+  var chip=function(on,label,fn){
+    return '<button type="button" onclick="'+fn+'" style="padding:6px 10px;border-radius:999px;font-size:11.5px;font-weight:700;cursor:pointer;'
+      +'border:1.5px solid '+(on?'var(--blue)':'var(--border)')+';background:'+(on?'#eff6ff':'var(--bg)')+';color:'+(on?'var(--blue)':'var(--text2)')+'">'
+      +(on?'✓ ':'')+label+'</button>';
+  };
+  var res=v.sales-v.total;
+  el.innerHTML=
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +'<span style="font-size:16px;font-weight:800">📊 Finance report / รายงานการเงิน</span>'
+      +'<button type="button" onclick="finReportClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:10px">'
+      +'<select onchange="finRepMonth(this.value)" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">'+mopts+'</select>'
+      +'<button type="button" onclick="finReportPrint()" style="padding:8px 14px;border-radius:var(--rs);border:1px solid var(--blue);background:var(--blue);color:#fff;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap"><i class="ti ti-printer"></i> Print / พิมพ์</button></div>'
+    // ── what goes in ────────────────────────────────────────────────────────
+    +'<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:12px">'
+      +'<div style="font-size:11px;font-weight:800;color:var(--text2);margin-bottom:6px">มีอะไรในรายงาน / What goes in</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'
+        +chip(_finRep.src.pay,'💼 Payments',"finRepTog('src','pay')")
+        +chip(_finRep.src.sal,'👔 Salaries',"finRepTog('src','sal')")
+        +chip(_finRep.src.bill,'🧾 Bills',"finRepTog('src','bill')")
+      +'</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'
+        +chip(_finRep.color==='both','🔵+🩶 ทั้งหมด / both',"finRepSet('color','both')")
+        +chip(_finRep.color==='blue','🔵 น้ำเงิน / blue',"finRepSet('color','blue')")
+        +chip(_finRep.color==='grey','🩶 เทา / grey',"finRepSet('color','grey')")
+      +'</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'
+        +chip(_finRep.depth==='topic','หัวข้อ / topics',"finRepSet('depth','topic')")
+        +chip(_finRep.depth==='cat','+ หมวด / categories',"finRepSet('depth','cat')")
+        +chip(_finRep.depth==='all','+ ทุกรายการ / every entry',"finRepSet('depth','all')")
+      +'</div>'
+      +'<div style="font-size:11px;font-weight:800;color:var(--text2);margin:10px 0 6px">กราฟ / Charts</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:6px">'
+        +chip(_finRep.ch.sum,'📊 Sales · Expenses · Result',"finRepTog('ch','sum')")
+        +chip(_finRep.ch.split,'🔵🩶 Blue vs grey',"finRepTog('ch','split')")
+        +chip(_finRep.ch.topic,'🥧 Topics',"finRepTog('ch','topic')")
+        +chip(_finRep.ch.cat,'📶 Categories',"finRepTog('ch','cat')")
+        +chip(_finRep.ch.person,'🧑 People',"finRepTog('ch','person')")
+        +chip(_finRep.ch.trend,'📈 6 months',"finRepTog('ch','trend')")
+        +chip(_finRep.ch.table,'📋 Table',"finRepTog('ch','table')")
+      +'</div></div>'
+    // ── the numbers ─────────────────────────────────────────────────────────
+    +'<div style="display:flex;justify-content:space-between;align-items:baseline;padding:10px 12px;background:var(--bg2);border:1.5px solid var(--blue);border-radius:var(--rs);margin-bottom:4px">'
+      +'<span style="font-size:13px;font-weight:700">รายจ่ายในรายงาน / Expenses in this report</span>'
+      +'<span style="font-size:19px;font-weight:900;color:var(--blue)">'+_bcMoney(v.total)+' ฿</span></div>'
+    +'<div style="font-size:11px;color:var(--text2);margin-bottom:12px">'
+      +'🔵 '+_bcMoney(v.blue)+' ฿ · 🩶 '+_bcMoney(v.grey)+' ฿ · ยอดขาย/Sales '+_bcMoney(v.sales)+' ฿ · คงเหลือ/Result '+_bcMoney(res)+' ฿</div>'
+    +(v.srcs.length
+      ? '<style>.finrep th,.finrep td{border:1px solid var(--border);padding:4px 7px}.finrep th{background:var(--bg2);font-size:10px;text-transform:uppercase;color:var(--text2)}'
+        +'.finrep .r{text-align:right}.finrep .hd td{background:var(--bg2);font-weight:800}.finrep .sub{padding-left:16px}.finrep .sub2{padding-left:30px}'
+        +'.finrep .sub3{padding-left:44px;color:var(--text2);font-size:11px}.finrep .n{color:var(--text2);font-weight:400}'
+        +'.finrep .gr td{background:#eff6ff;font-weight:900;color:var(--blue)}</style>'
+        +finRepBody(v,txt,false)
+      : '<div class="empty" style="padding:20px;font-size:13px">ไม่มีข้อมูลตามที่เลือก / nothing selected has data</div>')
+    +'<button type="button" onclick="finReportClose()" style="width:100%;margin-top:14px;padding:10px;border-radius:var(--rs);border:none;background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer">Close / ปิด</button>';
+}
+function finReportPrint(){
+  var mk=_finRepMk(), v=finRepView(mk);
+  var txt={text:'#111827',muted:'#6b7280',track:'#e5e7eb'};
+  var body='<h1>📊 Finance report / รายงานการเงิน — '+kpMLabel(mk)+'</h1>'
+    +'<div class="tot"><span>รายจ่าย / Expenses'
+      +(_finRep.color==='blue'?' · 🔵 blue only':_finRep.color==='grey'?' · 🩶 grey only':'')
+      +'</span><b>'+_bcMoney(v.total)+' ฿</b></div>'
+    +'<div class="sub0">ยอดขาย / Sales '+_bcMoney(v.sales)+' ฿ · คงเหลือ / Result '+_bcMoney(v.sales-v.total)+' ฿'
+      +' · 🔵 '+_bcMoney(v.blue)+' ฿ · 🩶 '+_bcMoney(v.grey)+' ฿</div>'
+    +finRepBody(v,txt,true)
+    +'<div class="note">Printed '+new Date().toLocaleString()+' · KP Wallpanel</div>';
+  var css='*{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    +'body{font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;margin:14mm 10mm;color:#111827}'
+    +'h1{font-size:15pt;margin:0 0 10px}'
+    +'.tot{font-size:12pt;padding:8px 12px;border:1.5px solid #2563eb;border-radius:8px;display:flex;justify-content:space-between;margin-bottom:6px}'
+    +'.sub0{font-size:9pt;color:#6b7280;margin-bottom:14px}'
+    +'table{width:100%;border-collapse:collapse;font-size:9.5pt}'
+    +'th,td{border:1px solid #d1d5db;padding:4px 7px;text-align:left}'
+    +'th{background:#f1f5f9;font-size:8.5pt;text-transform:uppercase}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.r{text-align:right}.hd td{background:#f8fafc;font-weight:800}'
+    +'.sub{padding-left:16px}.sub2{padding-left:30px}.sub3{padding-left:44px;color:#6b7280;font-size:8.5pt}'
+    +'.n{color:#6b7280;font-weight:400}'
+    +'.gr td{background:#dbeafe;font-weight:900;border-top:2px solid #2563eb}'
+    +'.note{margin-top:12px;font-size:8pt;color:#6b7280}';
+  var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Finance report '+kpMLabel(mk)+'</title><style>'+css+'</style></head><body>'
+    +body+'<scr'+'ipt>setTimeout(function(){window.print();},350);<\/scr'+'ipt></body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(full); w.document.close(); w.focus();
 }
 
 /* ── Overview at the head of the tab ────────────────────────────────────────
