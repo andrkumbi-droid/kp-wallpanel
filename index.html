@@ -772,6 +772,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       db.ref('managerPin').on('value', function(snap) {
         if(snap.val() && snap.val().pin) managerPin = snap.val().pin;
       });
+      // Who is off which day — the wall calendar of the office. Planning only, it
+      // does not touch a single payroll cell.
+      db.ref('dayOff').on('value', function(snap) {
+        dayOff = snap.val() || {};
+        try{ if(document.getElementById('ofv-attend')&&document.getElementById('ofv-attend').classList.contains('active')) pgOffRender(); }catch(e){}
+      });
       db.ref('staffList').on('value', function(snap) {
         staffList = snap.val() ? Object.values(snap.val()) : [];
         try{ fbSeedSnap('staffList', snap.val()); }catch(e){}
@@ -2214,9 +2220,13 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#fef08a;border:1px solid #facc15;vertical-align:-1px"></span> blinking = not filled yet / ยังไม่ได้กรอก</span>
       <span>👤 tap the name for rates / กดชื่อเพื่อตั้งอัตรา</span>
     </div>
+    <!-- Days-off calendar: the paper month plan on the office wall, in the app -->
+    <div id="pg-dayoff"></div>
     <div id="pg-body"></div>
     <div id="pg-grand"></div>
   </div></div>
+  <!-- PAYROLL: who is off on one day -->
+  <div class="modal-overlay" id="pg-off-modal"><div class="modal" id="pg-off-body"></div></div>
 
   <!-- PAYROLL: per-employee rates -->
   <div class="modal-overlay" id="pgrate-modal">
@@ -6657,7 +6667,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260806002;
+var KP_BUILD = 20260806003;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -23050,6 +23060,108 @@ function payNames(){
 function payNameLabel(key){ var n=payNames().find(function(x){return x.key===key;}); return n?n.name:key; }
 function pgStaff(){ return payNames(); }
 
+/* ── Days-off calendar ──────────────────────────────────────────────────────
+   The month plan that hangs on the office wall on paper: one square per day,
+   the names of whoever is off written into it. Tap a day, tick the people.
+   Firebase: dayOff/<YYYY-MM>/<DD>/<staffId> = true.
+   It is a PLAN, nothing else — it does not write into the payroll grid and does
+   not change anybody's money. Marking a day off in the grid stays a separate
+   action, on purpose: the plan says "should be off", the grid says "was off". */
+var dayOff={};
+var _pgOffOpen=(function(){ try{ return localStorage.getItem('kpPgOffOpen')==='1'; }catch(e){ return false; } })();
+var _pgOffDay='';
+function pgOffToggle(){
+  _pgOffOpen=!_pgOffOpen;
+  try{ localStorage.setItem('kpPgOffOpen',_pgOffOpen?'1':'0'); }catch(e){}
+  pgOffRender();
+}
+function _pgOffDD(d){ return (d<10?'0':'')+d; }
+function pgOffOn(mk,dd){ var m=(dayOff||{})[mk]||{}; return Object.keys(m[dd]||{}); }
+// A name keeps its colour all month — that is how the paper calendar reads.
+function pgOffColor(sid){
+  var h=0, s=String(sid);
+  for(var i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))>>>0; }
+  return _bcColor(h%12);
+}
+function pgOffSet(dd,sid){
+  var mk=pgMonth(), on=pgOffOn(mk,dd).indexOf(sid)>=0;
+  if(!dayOff[mk]) dayOff[mk]={};
+  if(!dayOff[mk][dd]) dayOff[mk][dd]={};
+  if(on) delete dayOff[mk][dd][sid]; else dayOff[mk][dd][sid]=true;
+  if(window.fbDB) window.fbDB.ref('dayOff/'+mk+'/'+dd+'/'+sid).set(on?null:true);
+  try{ auditAdd({ type:'payroll', action:on?'day off removed':'day off set',
+    orderId:'Day off: '+pgStaffName(sid), detail:mk+'-'+dd,
+    by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office' }); }catch(e){}
+  pgOffRender(); pgOffDayRender();
+}
+function pgOffDayOpen(dd){ _pgOffDay=dd; pgOffDayRender(); var m=document.getElementById('pg-off-modal'); if(m) m.classList.add('open'); }
+function pgOffDayClose(){ var m=document.getElementById('pg-off-modal'); if(m) m.classList.remove('open'); _pgOffDay=''; }
+function pgOffDayRender(){
+  var el=document.getElementById('pg-off-body'); if(!el||!_pgOffDay) return;
+  var mk=pgMonth(), dd=_pgOffDay, on=pgOffOn(mk,dd), st=pgStaff();
+  var d=new Date(parseInt(mk.split('-')[0]),parseInt(mk.split('-')[1])-1,parseInt(dd));
+  var DW=['อาทิตย์ / Sun','จันทร์ / Mon','อังคาร / Tue','พุธ / Wed','พฤหัสบดี / Thu','ศุกร์ / Fri','เสาร์ / Sat'];
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+      +'<span style="font-size:16px;font-weight:800">'+parseInt(dd)+' '+kpMLabel(mk)+'</span>'
+      +'<button type="button" onclick="pgOffDayClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="font-size:11.5px;color:var(--text2);margin-bottom:12px">'+DW[d.getDay()]+' · ใครหยุดวันนี้ / who is off</div>'
+    +(st.length?st.map(function(s){
+      var sel=on.indexOf(s.id)>=0;
+      return '<div onclick="pgOffSet(\''+dd+'\',\''+s.id+'\')" style="display:flex;align-items:center;gap:9px;padding:9px 11px;margin-bottom:6px;cursor:pointer;'
+        +'border:1.5px solid '+(sel?pgOffColor(s.id):'var(--border)')+';border-radius:var(--rs);background:'+(sel?'var(--bg2)':'var(--bg)')+'">'
+        +'<span style="width:16px;height:16px;flex-shrink:0;border-radius:4px;border:1.5px solid '+(sel?pgOffColor(s.id):'var(--border)')+';background:'+(sel?pgOffColor(s.id):'transparent')+';color:#fff;font-size:11px;font-weight:900;line-height:14px;text-align:center">'+(sel?'✓':'')+'</span>'
+        +'<span style="flex:1;min-width:0;font-size:13.5px;font-weight:'+(sel?'800':'600')+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(s.name||'—')+'</span>'
+        +(s.role?'<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+_esc(s.role)+'</span>':'')
+      +'</div>';
+    }).join('')
+    :'<div class="empty" style="padding:16px;font-size:12.5px">ยังไม่มีพนักงาน / no payroll staff yet</div>')
+    +'<button type="button" onclick="pgOffDayClose()" style="width:100%;margin-top:8px;padding:10px;border-radius:var(--rs);border:none;background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer">เสร็จ / Done</button>';
+}
+function pgOffRender(){
+  var host=document.getElementById('pg-dayoff'); if(!host) return;
+  var mk=pgMonth(), p=String(mk).split('-'), y=parseInt(p[0]), m=parseInt(p[1])-1;
+  var first=new Date(y,m,1), days=new Date(y,m+1,0).getDate();
+  var lead=(first.getDay()+6)%7;                 // Monday-first, like the paper one
+  var month=(dayOff||{})[mk]||{}, entries=0, perP={};
+  Object.keys(month).forEach(function(dd){
+    Object.keys(month[dd]||{}).forEach(function(sid){ entries++; perP[sid]=(perP[sid]||0)+1; });
+  });
+  var head='<div onclick="pgOffToggle()" style="display:flex;align-items:center;gap:8px;cursor:pointer;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:'+(_pgOffOpen?'8px':'12px')+'">'
+    +'<i class="ti ti-chevron-'+(_pgOffOpen?'down':'right')+'" style="font-size:15px;color:var(--text2)"></i>'
+    +'<span style="flex:1;min-width:0;font-size:13px;font-weight:800">📅 วันหยุด / Days off · '+kpMLabel(mk)+'</span>'
+    +'<span style="font-size:12px;font-weight:800;color:'+(entries?'var(--blue)':'var(--text3)')+';white-space:nowrap">'+entries+'</span></div>';
+  if(!_pgOffOpen){ host.innerHTML=head; return; }
+  var DW=['จ','อ','พ','พฤ','ศ','ส','อา'];
+  var cells='';
+  for(var i=0;i<lead;i++) cells+='<div style="min-height:54px"></div>';
+  for(var d=1;d<=days;d++){
+    var dd=_pgOffDD(d), ids=pgOffOn(mk,dd);
+    var wd=(new Date(y,m,d).getDay()+6)%7, weekend=(wd>=5);
+    var isToday=(mk===kpNowMK() && d===new Date().getDate());
+    cells+='<div onclick="pgOffDayOpen(\''+dd+'\')" style="min-height:54px;padding:3px;border:1px solid '+(isToday?'var(--blue)':'var(--border)')+';border-radius:6px;'
+      +'background:'+(weekend?'var(--bg2)':'var(--bg)')+';cursor:pointer;overflow:hidden">'
+      +'<div style="font-size:10px;font-weight:800;color:'+(isToday?'var(--blue)':'var(--text2)')+';text-align:right;line-height:1">'+d+'</div>'
+      +ids.map(function(sid){
+        return '<div title="'+_esc(pgStaffName(sid))+'" style="margin-top:2px;font-size:8.5px;font-weight:800;color:#fff;background:'+pgOffColor(sid)
+          +';border-radius:3px;padding:1px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(pgStaffName(sid))+'</div>';
+      }).join('')
+    +'</div>';
+  }
+  var legend=Object.keys(perP).sort(function(a,b){ return perP[b]-perP[a]; }).map(function(sid){
+    return '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;color:var(--text2);margin:0 8px 4px 0">'
+      +'<span style="width:9px;height:9px;border-radius:2px;background:'+pgOffColor(sid)+'"></span>'+_esc(pgStaffName(sid))+' · '+perP[sid]+'</span>';
+  }).join('');
+  host.innerHTML=head
+    +'<div style="border:1px solid var(--border);border-radius:var(--rs);padding:8px;margin-bottom:12px;background:var(--bg)">'
+      +'<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:3px">'
+        +DW.map(function(w,i){ return '<div style="text-align:center;font-size:9.5px;font-weight:800;color:'+(i>=5?'var(--text3)':'var(--text2)')+'">'+w+'</div>'; }).join('')
+      +'</div>'
+      +'<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">'+cells+'</div>'
+      +'<div style="font-size:10px;color:var(--text3);margin-top:8px">กดวันเพื่อเลือกคนที่หยุด / tap a day to tick who is off</div>'
+      +(legend?'<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)">'+legend+'</div>':'')
+    +'</div>';
+}
+
 // ── rates ────────────────────────────────────────────────────────────
 function pgRate(sid){
   var r=(payRates||{})[sid]||{};
@@ -23293,6 +23405,7 @@ function pgRender(){
   var _sy=window.pageYOffset||document.documentElement.scrollTop||0;
   var _back=function(){ if(_sy) try{ window.scrollTo(0,_sy); }catch(e){} };
   pgFillMonths();
+  try{ pgOffRender(); }catch(e){}        // days-off calendar sits above the grid
   try{ finPayRender(true); }catch(e){}   // office salaries in the Finance tab share this data
   var st=pgStaff();
   if(!st.length){
