@@ -6679,7 +6679,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260807001;
+var KP_BUILD = 20260807002;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -24538,8 +24538,6 @@ function billShipToggle(idx){ var keys=window._billShipKeys||[]; var k=keys[idx]
 // The "still on tour" list starts OPEN (undefined → open), so what is coming is
 // visible without a tap; collapsing it stores an explicit false.
 function billShipTourToggle(){ _billShipOpen['__ontour']=(_billShipOpen['__ontour']===false); costsRender(); }
-// The Lalamove block's shipping list — same "open unless explicitly folded" rule.
-function billLalaShipToggle(){ _billShipOpen['__lalaship']=(_billShipOpen['__lalaship']===false); costsRender(); }
 // Driver / warehouse rows in the cost list fold open the same way.
 var _billStaffOpen={};
 function billStaffToggle(k){ _billStaffOpen[k]=!_billStaffOpen[k]; costsRender(); }
@@ -24693,7 +24691,7 @@ function billsShipData(mk){
       try{ if(_t && _t.tid) _tr=tourRegRec(_t.tid); }catch(e){}
       if(_tr) _trPay=parseFloat(_tr.driverPay)||0;
       var _dup=(amt>0 && _trPay>0);
-      if(_dup){ lalaDup++; lalaDupAmt+=Math.min(amt,_trPay); }
+      if(_dup){ lalaDup++; lalaDupAmt+=amt; }      // amt = what must NOT be counted again
       lala.push({ o:o, tour:_t||null, onTour:!!at, dup:_dup, dupPay:_trPay });
       lalaTotal+=amt; if(amt<=0 && !o.shipFree) lalaMissing++;
       return;
@@ -24783,13 +24781,24 @@ function billsCostData(mk){
       return { id:r.who, label:r.name, total:r.net,
                lines:r.lines.sort(function(a,b){ return String(b.date).localeCompare(String(a.date)); }),
                tours:billsStaffTours(r.who, r.name, mk) }; });
-    // The shipping costs the Shipper block handed over ride along as their own line
-    // inside the Lalamove block — a normal child, so the report, the Finance mirror
-    // and the monthly total all pick them up without knowing anything special.
+    // The shipping costs the Shipper block handed over belong to the SAME Lalamove
+    // line as the rides — it is one carrier, not two. So they hang inside that line
+    // (pictures, slips, ฟรี/free and all), and only what is not already booked as
+    // tour pay is added to the money. A ride typed in twice is shown once, counted once.
     if(p[0]==='Lalamove' && (sd.lala||[]).length){
-      kids.push({ id:'__ship', label:'🚚 ค่าส่ง / Shipping', total:sd.lalaTotal||0,
-                  rows:sd.lala, orders:sd.lala.map(function(r){ return r.o; }),
-                  missing:sd.lalaMissing||0, dup:sd.lalaDup||0, dupAmt:sd.lalaDupAmt||0, ship:true });
+      var host=kids.filter(function(c){ return /lalamove/i.test(c.label||''); })[0];
+      if(!host){ host={ id:'__lala', label:'Lalamove', total:0, lines:[], tours:[] }; kids.push(host); }
+      // Skipping is capped by what the payroll above really holds this month: a tour
+      // pay that was never booked can never swallow an order's shipping cost.
+      var _skip=Math.min(sd.lalaDupAmt||0, Math.max(0, host.total));
+      if(_skip<=0) sd.lala.forEach(function(x){ x.dup=false; });   // nothing to lean on → count it
+      host.rows=sd.lala;
+      host.shipTotal=sd.lalaTotal||0;                        // what the orders say
+      host.shipDup=_skip>0?(sd.lalaDup||0):0;                // …of which already in the tour pay
+      host.shipDupAmt=_skip;
+      host.shipMissing=sd.lalaMissing||0;
+      host.shipAdd=(sd.lalaTotal||0)-_skip;                  // …and only this is new money
+      host.total+=host.shipAdd;
     }
     blocks.push({ kind:'staff', group:p[0], label:p[1], alwaysShow:p[2],
       total:kids.reduce(function(a,c){ return a+c.total; },0), children:kids });
@@ -24852,8 +24861,8 @@ function _billShipRowHTML(r,idx,amber){
   var line='';
   if(t && t.tid) line='🆔 <span onclick="billTourInfo(\''+_esc(t.tid)+'\')" style="cursor:pointer;text-decoration:underline">'+_esc(t.tid)+'</span>'
     +(t.driverName?' · 🚗 '+_esc(t.driverName):'')+(t.endedDate?' · '+fmtD(t.endedDate):'')
-    // Same money as the tour pay? Say so on the row that carries it a second time.
-    +(r.dup?' <span title="ค่าทัวร์ของทัวร์นี้ '+(r.dupPay||0).toLocaleString()+' ฿ ถูกบันทึกไว้แล้ว / this tour already has '+(r.dupPay||0).toLocaleString()+' ฿ booked as tour pay" style="font-size:10px;font-weight:800;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap">⚠️ ค่าทัวร์ '+(r.dupPay||0).toLocaleString()+' ฿</span>':'');
+    // Same money as the tour pay → shown here, but counted only up there.
+    +(r.dup?' <span title="ค่าทัวร์ '+(r.dupPay||0).toLocaleString()+' ฿ ถูกนับไว้แล้ว จึงไม่นับซ้ำ / already counted as tour pay, not counted again here" style="font-size:10px;font-weight:700;color:var(--text2);background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:1px 6px;white-space:nowrap">ℹ️ ในค่าทัวร์ / in tour pay</span>':'');
   else if(o.shipCostDate) line=fmtD(o.shipCostDate)+(o.shipCostBy?' · 👤 '+_esc(o.shipCostBy):'');
   var brd=amber?'#fcd34d':(open?'#fecaca':'var(--border)');
   var col=amber?'#92400e':(open?'#b91c1c':'var(--text2)');
@@ -25044,35 +25053,15 @@ function costsRender(){
     if(!blk.children.length) tInner+='<div style="font-size:11px;color:var(--text2)">—</div>';
     blk.children.forEach(function(r){
       var pk=blk.group+'|'+r.id, popen=!!_billStaffOpen[pk];
-      // Lalamove's shipping line: the orders the Shipper block handed over. Same row
-      // as there — carrier, amount, ฟรี/free, and every picture viewable + attachable.
-      if(r.ship){
-        var lsOpen=_billShipOpen['__lalaship']!==false;   // open by default
-        tInner+='<div style="background:var(--bg);border:1px solid '+(r.missing?'#fecaca':'var(--border)')+';border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
-          '<div onclick="billLalaShipToggle()" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 9px;cursor:pointer">'+
-            '<span style="flex:1;min-width:0;font-size:13px;font-weight:600"><i class="ti ti-chevron-'+(lsOpen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(r.label)+
-              ' <span style="color:var(--text2);font-size:11px;font-weight:400">('+(r.rows||[]).length+')</span>'+
-              (r.missing?' <span title="no cost entered / ยังไม่ได้ใส่ค่าส่ง" style="font-size:11px;font-weight:800;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px">⚠️ '+r.missing+'</span>':'')+'</span>'+
-            '<span style="font-size:13px;font-weight:700;white-space:nowrap">'+r.total.toLocaleString()+' ฿</span>'+
-          '</div>'+
-          (lsOpen?'<div style="padding:0 9px 8px">'+
-            // The ride is often typed twice: as the tour pay above AND as the order's
-            // shipping cost. Both are counted — say it, instead of quietly picking one.
-            (r.dup?'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:6px 8px;margin-top:6px;font-size:11px;color:#92400e;line-height:1.45">'+
-              '<b>⚠️ อาจนับซ้ำ / possibly counted twice:</b> '+r.dup+' '+(r.dup===1?'order':'orders')+' ('+(r.dupAmt||0).toLocaleString()+' ฿) '+
-              'มีทั้งค่าทัวร์ด้านบนและค่าส่งด้านล่าง / the same ride is booked as tour pay above and as shipping cost below. '+
-              'ถ้าซ้ำ ให้ติ๊ก ฟรี/free ที่ออเดอร์ / if it is the same money, tick ฟรี/free on the order.</div>':'')+
-            (r.rows||[]).map(function(x,i){
-              return _billShipRowHTML(x,'lala'+i,!!x.onTour);
-            }).join('')+'</div>':'')+
-        '</div>';
-        return;
-      }
-      var tours=r.tours||[], lines=r.lines||[];
+      var tours=r.tours||[], lines=r.lines||[], ships=r.rows||[];
       tInner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
         '<div onclick="billStaffToggle(\''+_esc(pk)+'\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;padding:6px 9px;cursor:pointer">'+
           '<span style="flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(popen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(r.label)+
-            (tours.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+tours.length+' tour'+(tours.length!==1?'s':'')+')</span>':'')+'</span>'+
+            (tours.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+tours.length+' tour'+(tours.length!==1?'s':'')+')</span>':'')+
+            // Shipping orders hang inside this line — say so while it is folded, and
+            // flag the ones still without a price, that is the work to do.
+            (ships.length?' <span title="orders with a shipping cost / ออเดอร์ที่มีค่าส่ง" style="font-size:11px;font-weight:700;color:#1d4ed8;background:#dbeafe;border-radius:8px;padding:1px 6px">🚚 '+ships.length+'</span>':'')+
+            (r.shipMissing?' <span title="no cost entered / ยังไม่ได้ใส่ค่าส่ง" style="font-size:11px;font-weight:800;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px">⚠️ '+r.shipMissing+'</span>':'')+'</span>'+
           '<span style="font-weight:700;white-space:nowrap">'+r.total.toLocaleString()+' ฿</span>'+
         '</div>'+
         (popen ? '<div style="padding:0 9px 8px">'+
@@ -25096,6 +25085,15 @@ function costsRender(){
                 '<span style="min-width:0;flex:1">'+(l.date?fmtD(l.date):'—')+' · '+_esc(lbl)+(l.note?' <span style="color:var(--text2)">· '+_esc(String(l.note).slice(0,40))+'</span>':'')+'</span>'+
                 '<span style="font-weight:700;white-space:nowrap;color:'+(l.amount<0?'var(--red)':'var(--text)')+'">'+l.amount.toLocaleString()+' ฿</span></div>';
             }).join(''):'')+
+          // Lalamove: the orders that went with this carrier — the shipping cost, the
+          // ฟรี/free tick and every picture (goods, receipt, transfer slip) to look at
+          // and to add afterwards. Same row the Shipper block uses.
+          (ships.length?'<div style="font-size:10.5px;font-weight:800;color:var(--text2);margin:9px 0 3px;text-transform:uppercase;letter-spacing:.04em">🚚 ค่าส่ง / Shipping · '+(r.shipTotal||0).toLocaleString()+' ฿</div>'+
+            // A ride typed in twice (tour pay + order) is shown once and counted once.
+            (r.shipDup?'<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:5px 8px;margin-top:4px;font-size:10.5px;color:var(--text2);line-height:1.45">'+
+              'ℹ️ '+(r.shipDupAmt||0).toLocaleString()+' ฿ อยู่ในค่าทัวร์ด้านบนแล้ว — ไม่นับซ้ำ / already booked as tour pay above — not counted twice.'+
+              (r.shipAdd>0?' <b>+'+r.shipAdd.toLocaleString()+' ฿</b> ที่เหลือถูกนับ / the rest is counted.':'')+'</div>':'')+
+            ships.map(function(x,i){ return _billShipRowHTML(x,'lala'+i,!!x.onTour); }).join(''):'')+
         '</div>' : '')+
       '</div>';
     });
