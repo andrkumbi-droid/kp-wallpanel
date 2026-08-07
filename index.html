@@ -2613,6 +2613,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <!-- "I have chased this one" — note + when to nag again. -->
   <div class="modal-overlay" id="chase-modal"><div class="modal" id="chase-body" style="max-width:440px"></div></div>
 
+  <!-- Every picture of one order, all four kinds at once. -->
+  <div class="modal-overlay" id="allphotos-modal"><div class="modal" id="allphotos-body" style="max-width:560px;max-height:88vh;overflow-y:auto"></div></div>
+
   <!-- PICTURES VIEW -->
   <div class="view" id="ofv-pics"><div class="sec">
     <div class="stit">📷 Pictures / รูปภาพ</div>
@@ -6719,7 +6722,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260807007;
+var KP_BUILD = 20260807008;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9124,6 +9127,13 @@ function ofOrderCard(o, sfx){
   s += '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">';
   if(!window.ofReadOnly && o.status==='shipped') s += '<button type="button" class="btnsm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="ofFinalizeShipped(\''+o.id+'\')" title="Customer received — mark delivered / ลูกค้าได้รับแล้ว"><i class="ti ti-check"></i> Delivered / ส่งถึงลูกค้าแล้ว</button>';
   s += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
+  // Every picture of this order in one place — warehouse, delivery, slip and the
+  // carrier's receipt. Adding them was already possible from "More", looking at
+  // them meant going to the Pictures tab and searching for the order.
+  var _npAll=0; try{ _npAll=ofPhotoCountAll(o.id); }catch(e){}
+  s += '<button type="button" class="btnsm" onclick="ofPhotosAll(\''+o.id+'\')" title="ดูรูปทั้งหมดของออเดอร์นี้ / all pictures of this order"'
+    +' style="background:'+(_npAll?'#f5f3ff':'var(--bg2)')+';color:'+(_npAll?'#7c3aed':'var(--text2)')+';border-color:'+(_npAll?'#ddd6fe':'var(--border)')+';font-weight:'+(_npAll?'700':'400')+'">'
+    +'📷 รูป / Photos'+(_npAll?' <span style="background:#7c3aed;color:#fff;border-radius:9px;padding:0 6px;font-size:10px">'+_npAll+'</span>':' 0')+'</button>';
   if(!window.ofReadOnly) s += '<button type="button" class="btnsm" onclick="ofToggleMore(\''+_moreId+'\')" style="background:var(--bg2);color:var(--text)"><i class="ti ti-dots"></i> More / จัดการ ⌄</button>';
   s += '</div>';
   if(!window.ofReadOnly){
@@ -16677,6 +16687,72 @@ function orderPhotoCount(orderId, type){
   var idx = getPhotoIndex()[type]||{};
   var e = idx[safeOrderId(orderId)];
   return e ? (parseInt(e.n)||0) : 0;
+}
+
+// ── ALL PICTURES OF ONE ORDER ──────────────────────────────────────────────
+// The order card could only ADD pictures; looking at them meant switching to the
+// Pictures tab, picking the right sub-tab and searching for the order — four
+// times, once per kind. This shows the lot in one sheet.
+var OF_PHOTO_KINDS=[['warehouse','📦 คลัง / Warehouse','#16a34a'],
+                    ['delivery','🚚 ส่งของ / Delivery','#1d4ed8'],
+                    ['slip','💳 สลิปโอน / Transfer slip','#b45309'],
+                    ['shipreceipt','🧾 ใบเสร็จค่าส่ง / Shipping receipt','#4f46e5']];
+function ofPhotoCountAll(id){
+  var n=0;
+  OF_PHOTO_KINDS.forEach(function(k){ try{ n+=orderPhotoCount(id,k[0])||0; }catch(e){} });
+  return n;
+}
+var _ofPhotosId=null;
+function ofPhotosAll(id){
+  var body=document.getElementById('allphotos-body'), m=document.getElementById('allphotos-modal');
+  if(!body||!m) return;
+  _ofPhotosId=id;
+  var o=(typeof orders!=='undefined'?orders:[]).find(function(x){return x.id===id;})||{};
+  body.innerHTML='<div class="mhdr"><span class="mtit">📷 รูปทั้งหมด / All pictures · '+_esc(id)+'</span>'
+      +'<button type="button" class="mclose" onclick="ofPhotosClose()"><i class="ti ti-x"></i></button></div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:10px">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</div>'
+    +'<div id="allphotos-grid" style="font-size:12px;color:var(--text2)">กำลังโหลด… / loading…</div>';
+  m.classList.add('open');
+  if(!window.fbDB){ var g0=document.getElementById('allphotos-grid'); if(g0) g0.textContent='Offline'; return; }
+  var sid=safeOrderId(id), out={}, left=OF_PHOTO_KINDS.length;
+  var done=function(){ if(--left===0) _ofPhotosRender(id,out); };
+  OF_PHOTO_KINDS.forEach(function(k){
+    window.fbDB.ref('orderPhotos/'+k[0]+'/'+sid).once('value',
+      function(s){ out[k[0]]=s.val()||{}; done(); },
+      function(){ out[k[0]]={}; done(); });
+  });
+}
+function ofPhotosRefresh(){ if(_ofPhotosId) ofPhotosAll(_ofPhotosId); }
+function ofPhotosClose(){ var m=document.getElementById('allphotos-modal'); if(m) m.classList.remove('open'); _ofPhotosId=null; }
+function _ofPhotosRender(id,out){
+  var g=document.getElementById('allphotos-grid'); if(!g) return;
+  var eid=String(id).replace(/['\\]/g,''), total=0, h='';
+  OF_PHOTO_KINDS.forEach(function(k){
+    var data=out[k[0]]||{};
+    var keys=Object.keys(data).sort(function(a,b){ return (data[a].ts||0)-(data[b].ts||0); });
+    total+=keys.length;
+    h+='<div style="margin-bottom:12px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:5px">'
+        +'<span style="font-size:12px;font-weight:800;color:'+k[2]+'">'+k[1]+' <span style="color:var(--text2);font-weight:600">('+keys.length+')</span></span>'
+        +(window.ofReadOnly?'':'<button type="button" class="btnsm" style="padding:3px 9px;font-size:11px" onclick="billPickOrderPhoto(\''+eid+'\',\''+k[0]+'\')">＋ เพิ่ม / add</button>')
+      +'</div>'
+      +(keys.length
+        ? '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px">'+keys.map(function(kk){
+            var p=data[kk]||{};
+            var when=p.ts?new Date(p.ts).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'';
+            var tag=(k[0]==='slip'&&p.slip)?'<div style="position:absolute;top:3px;left:3px;background:'+kpSlipColor(p.slip.status)+';color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px">'+kpSlipShort(p.slip)+'</div>':'';
+            return '<div style="position:relative">'
+              +'<img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid var(--border)">'
+              +tag
+              +((when||p.by)?'<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);color:#fff;font-size:8px;padding:1px 3px;border-radius:0 0 6px 6px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(when)+(p.by?' · '+_esc(p.by):'')+'</div>':'')
+            +'</div>';
+          }).join('')+'</div>'
+        : '<div style="font-size:11px;color:var(--text3);padding:2px 0">— ยังไม่มีรูป / none yet —</div>')
+    +'</div>';
+  });
+  g.innerHTML=(total?'':'<div style="font-size:12px;color:var(--text2);background:var(--bg2);border-radius:var(--rs);padding:10px;margin-bottom:10px;text-align:center">ออเดอร์นี้ยังไม่มีรูปเลย / no pictures on this order yet</div>')
+    +h
+    +'<button type="button" class="btn" style="margin-top:2px" onclick="ofPhotosRefresh()"><i class="ti ti-refresh"></i> โหลดใหม่ / Reload</button>';
 }
 
 // ── PICTURES TAB (office) ──
