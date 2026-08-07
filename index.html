@@ -1048,6 +1048,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         var out={utilities:[],food:[],other:[]};
         Object.keys(v).forEach(function(k){ out[k]=_arr(v[k]); });
         costCats=out;
+        // Until this fires the local costCats is still the empty default — and the
+        // writers below replace the node wholesale. Nothing may write before it.
+        window._costCatsLoaded=true;
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
         try{ if(document.getElementById('mgv-staff')&&document.getElementById('mgv-staff').classList.contains('active')) mgRenderBillCats(); }catch(e){}
       });
@@ -2561,6 +2564,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="modal-overlay" id="bill-tourinfo-modal"><div class="modal" id="bill-tourinfo-body"></div></div>
   <!-- MOVE A SUB-CATEGORY INTO ANOTHER MAIN CATEGORY (its receipts come along) -->
   <div class="modal-overlay" id="cat-move-modal"><div class="modal" id="cat-move-body"></div></div>
+  <div class="modal-overlay" id="cat-merge-modal"><div class="modal" id="cat-merge-body"></div></div>
   <!-- RESTORE — closed / detached categories over every month, with their amounts -->
   <div class="modal-overlay" id="bill-restore-modal"><div class="modal" id="bill-restore-body"></div></div>
   <!-- BILLS REPORT — charts over every section + sub-category, with a print version -->
@@ -23931,7 +23935,27 @@ function _nowMonthKey(){ var d=new Date(); return d.getFullYear()+'-'+(d.getMont
 function _costMonthKey(){ var m=document.getElementById('bills-filter-month'); return (m&&m.value)||_nowMonthKey(); }
 function _esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 function syncCostFixed(){ if(window.fbDB) window.fbDB.ref('costFixed').set(costFixed); }
-function syncCostCats(){ if(window.fbDB) window.fbDB.ref('costCats').set(costCats); }
+// ── Writing the category list ────────────────────────────────────────────
+// syncCostCats replaces the WHOLE node. Firebase delivers costCats a moment after
+// the page opens, so a client that saves inside that window writes the empty
+// default over the real list — every category of every section gone, every older
+// receipt suddenly "⚠️ Not assigned". That happened twice (6. + 7. Aug 2026, both
+// times the 08:52 food receipt, whose category had been auto-created 250 ms
+// earlier because the list looked empty). So: no write before the snapshot is in,
+// and single-section changes only ever touch their own section.
+function costCatsReady(){ return !!window._costCatsLoaded; }
+function _costCatsWait(){ try{ alert('Categories are still loading — one moment, then try again. / กำลังโหลดหมวด รอสักครู่แล้วลองใหม่'); }catch(e){} }
+function syncCostCats(){
+  if(!costCatsReady()){ _costCatsWait(); return false; }
+  if(window.fbDB) window.fbDB.ref('costCats').set(costCats);
+  return true;
+}
+function syncCostCatsSec(sec){
+  if(!costCatsReady()){ _costCatsWait(); return false; }
+  if(!sec) return syncCostCats();
+  if(window.fbDB) window.fbDB.ref('costCats/'+sec).set(costCats[sec]||[]);
+  return true;
+}
 function syncCostSections(){ if(window.fbDB) window.fbDB.ref('costSections').set(costSections); }
 
 // ── Top sections (Oberkategorien) ────────────────────────────────────────
@@ -24081,14 +24105,14 @@ function fixedDelPhoto(id, i){
 }
 
 // Sub-categories of a section — office adds/removes/renames them.
-function catAdd(section){ var nm=prompt('New category / ชื่อหมวดใหม่:',''); if(nm===null)return; nm=nm.trim(); if(!nm)return; if(!costCats[section])costCats[section]=[]; costCats[section].push({id:'k'+Date.now()+Math.floor(Math.random()*1000),label:nm}); syncCostCats(); costsRender(); }
+function catAdd(section){ if(!costCatsReady()){ _costCatsWait(); return; } var nm=prompt('New category / ชื่อหมวดใหม่:',''); if(nm===null)return; nm=nm.trim(); if(!nm)return; if(!costCats[section])costCats[section]=[]; costCats[section].push({id:'k'+Date.now()+Math.floor(Math.random()*1000),label:nm}); syncCostCatsSec(section); costsRender(); }
 function catRec(section,id){ return (costCats[section]||[]).find(function(c){ return c.id===id; })||null; }
 // Renaming a sub-category also rewrites the label copy on its receipts, so the log
 // and the report do not keep showing the old name.
 function catSetLabel(section,id,val){
   val=String(val||'').trim(); if(!val) return;
   var c=catRec(section,id); if(!c) return;
-  var old=c.label; c.label=val; syncCostCats();
+  var old=c.label; c.label=val; syncCostCatsSec(section);
   if(old!==val){
     (typeof bills!=='undefined'?bills:[]).forEach(function(b){
       if(b.section===section && b.subcatId===id && b.subcatLabel!==val){
@@ -24103,7 +24127,7 @@ function catSetLabel(section,id,val){
 // does the receipt get the "🚚 link tour" button.
 function catSetTourLink(section,id,on){
   var c=catRec(section,id); if(!c) return;
-  c.tourLink=!!on; syncCostCats();
+  c.tourLink=!!on; syncCostCatsSec(section);
   try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
 }
 function catTourLinkOn(section,id){ var c=catRec(section,id); return !!(c&&c.tourLink); }
@@ -24119,7 +24143,7 @@ function catMove(section,id,dir){
   // does not silently throw away a half-finished rename.
   var key='cat|'+section+'|'+id, typed=null;
   try{ var el=document.querySelector('[data-editkey="'+key+'"]'); if(el) typed=el.value; }catch(e){}
-  syncCostCats(); costsRender(); try{ mgRenderBillCats(); }catch(e){}
+  syncCostCatsSec(section); costsRender(); try{ mgRenderBillCats(); }catch(e){}
   if(typed!==null){ try{ var el2=document.querySelector('[data-editkey="'+key+'"]'); if(el2) el2.value=typed; }catch(e){} }
 }
 // Into another MAIN category. The receipts carry b.section themselves, so they have
@@ -24163,6 +24187,58 @@ function catMoveTo(to){
   _billEdit={};                       // the row lives in another section now
   catMoveClose(); costsRender(); try{ mgRenderBillCats(); }catch(e){}
 }
+// ── Merging two sub-categories ───────────────────────────────────────────
+// The same category can end up twice in a section: once rebuilt from its receipts
+// (♻️ Restore) and once re-created by a client that saw an empty list. Merging
+// moves every receipt of A onto B — ALL months, not just the one on screen — and
+// then drops the empty A. The receipts keep their id, amount, photo and log.
+var _catMergeSec='', _catMergeId='';
+function _catAllBills(section,id){
+  return (typeof bills!=='undefined'?bills:[]).filter(function(b){ return b && b.section===section && b.subcatId===id; });
+}
+function catMergeOpen(section,id){
+  var c=catRec(section,id); if(!c) return;
+  _catMergeSec=section; _catMergeId=id;
+  var el=document.getElementById('cat-merge-body'); if(!el) return;
+  var mine=_catAllBills(section,id), others=(costCats[section]||[]).filter(function(x){ return x.id!==id; });
+  el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+      +'<span style="font-size:16px;font-weight:700">⧉ Merge into / รวมกับหมวด</span>'
+      +'<button type="button" onclick="catMergeClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
+    +'<div style="font-size:13px;font-weight:700;padding:9px 10px;background:var(--bg2);border-radius:var(--rs);margin-bottom:4px">'+_esc(c.label)+'</div>'
+    +'<div style="font-size:11px;color:var(--text2);margin-bottom:10px">'
+      +mine.length+' receipt(s) · <b>'+_sumAmt(mine).toLocaleString()+' ฿</b> move into the category you pick / ใบเสร็จย้ายไปหมวดที่เลือก</div>'
+    +(others.length
+      ? others.map(function(x){
+          var n=_catAllBills(section,x.id);
+          return '<div onclick="catMergeTo(\''+_esc(x.id)+'\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;cursor:pointer">'
+            +'<span style="font-size:13px;font-weight:600;min-width:0;flex:1">'+_esc(x.label)+'</span>'
+            +'<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+n.length+' · '+_sumAmt(n).toLocaleString()+' ฿</span>'
+            +'<i class="ti ti-chevron-right" style="color:var(--text3)"></i></div>';
+        }).join('')
+      : '<div class="empty" style="padding:16px;font-size:12px">No other category in this section / ไม่มีหมวดอื่นในหมวดหลักนี้</div>');
+  document.getElementById('cat-merge-modal').classList.add('open');
+}
+function catMergeClose(){ document.getElementById('cat-merge-modal').classList.remove('open'); }
+function catMergeTo(toId){
+  var sec=_catMergeSec, from=_catMergeId;
+  if(!sec || !from || from===toId){ catMergeClose(); return; }
+  if(!costCatsReady()){ _costCatsWait(); return; }
+  var a=catRec(sec,from), b=catRec(sec,toId); if(!a||!b){ catMergeClose(); return; }
+  var rows=_catAllBills(sec,from), sum=_sumAmt(rows), months={};
+  rows.forEach(function(r){ months[billsMKey(r.date)]=1; });
+  if(!confirm('Merge "'+(a.label||'')+'" into "'+(b.label||'')+'"? / รวมหมวด?\n\n'
+    +'→ '+rows.length+' receipt(s), '+sum.toLocaleString()+' ฿ move over / ใบเสร็จย้ายไป\n'
+    +'→ Months / เดือน: '+(Object.keys(months).sort().join(', ')||'—')+'\n'
+    +'→ "'+(a.label||'')+'" is removed afterwards / แล้วลบหมวดเดิม')) return;
+  rows.forEach(function(r){
+    r.subcatId=toId; r.subcatLabel=b.label||'';
+    if(window.fbDB) window.fbDB.ref('bills/'+r.id).update({ subcatId:toId, subcatLabel:b.label||'' });
+  });
+  costCats[sec]=(costCats[sec]||[]).filter(function(x){ return x.id!==from; });
+  syncCostCatsSec(sec);
+  _billAudit('categories merged', sec, (a.label||'')+' → '+(b.label||''), rows.length+' receipts / '+sum.toLocaleString()+' ฿');
+  _billEdit={}; catMergeClose(); costsRender(); try{ mgRenderBillCats(); }catch(e){}
+}
 // ── Removing a category CLOSES it, it does not erase it ───────────────────
 // The category list is one list for all months, so a plain delete reached back
 // into every past month at once (Aug 2026: one tap detached 175 receipts worth
@@ -24183,7 +24259,7 @@ function catRemove(section,id){
   if(!linked.length){
     if(!confirm('Delete category "'+(c.label||'')+'"? / ลบหมวดนี้?\n\nNo receipt uses it. / ไม่มีใบเสร็จใช้หมวดนี้')) return;
     costCats[section]=(costCats[section]||[]).filter(function(x){return x.id!==id;});
-    syncCostCats(); _billAudit('category deleted', section, c.label, 'empty / ไม่มีใบเสร็จ');
+    syncCostCatsSec(section); _billAudit('category deleted', section, c.label, 'empty / ไม่มีใบเสร็จ');
     costsRender(); return;
   }
   var months={}; linked.forEach(function(b){ months[billsMKey(b.date)]=1; });
@@ -24193,14 +24269,14 @@ function catRemove(section,id){
     +'✓ Earlier months keep the category ('+mlist.join(', ')+') / เดือนก่อนหน้าไม่เปลี่ยน\n'
     +'✓ From '+mk+' it is no longer offered for new receipts / ตั้งแต่ '+mk+' จะไม่ให้เลือกอีก\n\n'
     +'Undo any time: Bills → ♻️ Restore / ยกเลิกได้ที่ บิล → กู้คืน')) return;
-  c.hiddenFrom=mk; syncCostCats();
+  c.hiddenFrom=mk; syncCostCatsSec(section);
   _billAudit('category closed', section, c.label, 'from '+mk+' · '+linked.length+' receipts / '+sum.toLocaleString()+' ฿ kept');
   costsRender();
 }
 function catReopen(section,id){
   var c=(costCats[section]||[]).find(function(x){return x.id===id;}); if(!c) return;
   delete c.hiddenFrom;
-  if(window.fbDB) window.fbDB.ref('costCats').set(costCats);   // full write: removes the key
+  if(!syncCostCatsSec(section)) return;   // full section write: removes the key
   _billAudit('category reopened', section, c.label, '');
   costsRender(); try{ mgRenderBillCats(); }catch(e){}
 }
@@ -24211,7 +24287,7 @@ function catRebuild(section,subcatId,label){
   if((costCats[section]||[]).some(function(c){ return c.id===subcatId; })) return;
   if(!costCats[section]) costCats[section]=[];
   costCats[section].unshift({ id:subcatId, label:label||subcatId });
-  syncCostCats(); _billAudit('category rebuilt', section, label||subcatId, 'from its receipts');
+  syncCostCatsSec(section); _billAudit('category rebuilt', section, label||subcatId, 'from its receipts');
   costsRender(); try{ mgRenderBillCats(); }catch(e){}
 }
 // Category/section edits used to leave no trace at all — that is why the deletion
@@ -24596,6 +24672,9 @@ function costsRender(){
                   +_ordBtn('catMove(\''+sec+'\',\''+c.id+'\',-1)','▲','Move up / เลื่อนขึ้น',ci<=0)
                   +_ordBtn('catMove(\''+sec+'\',\''+c.id+'\',1)','▼','Move down / เลื่อนลง',ci<0||ci>=clen-1)
                   +'<button type="button" onclick="event.stopPropagation();catMoveOpen(\''+sec+'\',\''+c.id+'\')" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer">⇄ Move to… / ย้ายไปหมวดหลัก</button>'
+                +'</div>'
+                +'<div style="display:flex;gap:5px;align-items:center;margin-top:5px">'
+                  +'<button type="button" onclick="event.stopPropagation();catMergeOpen(\''+sec+'\',\''+c.id+'\')" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer">⧉ Merge into… / รวมกับหมวด</button>'
                 +'</div></div>'
             : '<div onclick="billCatToggle(\''+sec+'\',\''+c.id+'\')" style="display:flex;gap:5px;align-items:center;padding:6px 9px;cursor:pointer">'
                 +'<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)
@@ -25419,13 +25498,17 @@ function foodFillCats(){
   if(prev && cats.some(function(c){return c.id===prev;})) sel.value=prev;
 }
 // Never block the entry because the office hasn't created a category yet —
-// create a default "Food" category on first save instead.
+// create a default "Food" category on first save instead. ONLY once the real list
+// is in, though: an empty costCats used to mean "not loaded yet" just as often as
+// "nothing there", and inventing a category then wiped the whole list (see
+// syncCostCats). foodSubmit checks costCatsReady() before it gets here.
 function _foodEnsureCat(cb){
   var cats=(typeof costCats!=='undefined'&&costCats.food)?costCats.food:[];
   if(cats.length) return cb(cats[0].id, cats[0].label);
+  if(!costCatsReady()){ _costCatsWait(); return; }
   var c={ id:'k'+Date.now()+Math.floor(Math.random()*1000), label:'Food' };
   if(!costCats.food) costCats.food=[];
-  costCats.food.push(c); try{ syncCostCats(); }catch(e){}
+  costCats.food.push(c); try{ syncCostCatsSec('food'); }catch(e){}
   cb(c.id, c.label);
 }
 function foodSubmit(){
@@ -25437,6 +25520,12 @@ function foodSubmit(){
   var date=(dEl&&dEl.value)||new Date().toISOString().slice(0,10);
   var file=(pEl&&pEl.files)?pEl.files[0]:null;
   var btn=document.getElementById('food-e-save'); if(btn){ btn.disabled=true; btn.textContent='… / กำลังบันทึก'; }
+  // The receipt would otherwise be booked to a category invented on the spot —
+  // and the write behind it used to take the real list with it.
+  if(!costCatsReady()){
+    if(btn){ btn.disabled=false; btn.innerHTML='<i class="ti ti-plus"></i> Save / บันทึก'; }
+    _costCatsWait(); return;
+  }
   _foodEnsureCat(function(catId,catLabel){
     var sel=document.getElementById('food-e-cat');
     if(sel && sel.value){ catId=sel.value; var o=sel.options[sel.selectedIndex]; if(o) catLabel=o.text; }
