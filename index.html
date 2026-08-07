@@ -200,7 +200,10 @@ textarea{resize:none}
 /* Same grip on the office tour stops — there the "card" is just the order row. */
 .kmgrab{touch-action:none;cursor:grab;font-size:13px;line-height:1;padding:3px 6px;border-radius:5px;background:var(--blue-l);color:var(--blue-t);user-select:none;-webkit-user-select:none;flex-shrink:0}
 .kmgrab:active{cursor:grabbing}
-.kmrow.dragging{opacity:.95;background:var(--bg2);border-radius:var(--rs);box-shadow:0 8px 20px rgba(0,0,0,.22);position:relative;z-index:5}
+.kmrow.dragging{opacity:.97;background:var(--bg);border:1.5px solid var(--blue);border-radius:var(--rs);box-shadow:0 12px 28px rgba(0,0,0,.28);z-index:1000;transition:none}
+.kmrow-ph{border:2px dashed var(--blue);border-radius:var(--rs);background:rgba(37,99,235,.08);box-sizing:border-box}
+/* No text selection anywhere while a row is being carried (mouse drag). */
+body.kmdragging{user-select:none;-webkit-user-select:none}
 /* Driver two-column route arranger (tap a card to move it between columns). */
 #dr-arrange{margin-bottom:14px}
 .arr-cols{display:flex;gap:8px;margin-bottom:8px}
@@ -9760,7 +9763,12 @@ function ofBackfillTourDrivers(){
   });
   if(changed){ try{ syncOrders(); }catch(e){} }
 }
+// A live update (another office tab, the driver app, any order change) rebuilds this
+// whole list. Doing that while a row is being carried tore the dragged element out
+// of the DOM: the drag never ended and the row hung in mid-air. So the render waits
+// for the drop — ofKmDragEnd calls it right after.
 function ofRenderTour(){
+  if(_kmDragRow) return;
   ofUpdTourDot();
   try{ ofBackfillTourDrivers(); }catch(e){}
   // Tour IDs: tours created before this feature (or while offline) get their number now.
@@ -10887,22 +10895,46 @@ function ofSetKmRate(tourId, val){
   try{ ofRenderTour(); }catch(e){}
 }
 // ── Same reordering, but by dragging the row ─────────────────────────────
-// The stop is grabbed by its ☰ grip and dropped between two others; the driver's
-// tour cards work exactly like this (drDragStart). Only the grip listens, so the
-// buttons and taps inside the row keep working and the page still scrolls.
+// The stop is grabbed by its ☰ grip: the row is lifted out of the flow and follows
+// the finger while a dashed slot shows where it will land — the same lift the
+// driver's route arranger uses (drArrDragStart). Only the grip starts it, so every
+// button and tap inside the row keeps working.
 var _kmDragRow=null, _kmDragList=null, _kmDragHandle=null, _kmDragFrom=-1;
+var _kmPh=null, _kmGrabY=0, _kmLeft=0, _kmLastY=0, _kmScrollRaf=0;
 function ofKmDragStart(e, handle){
   if(e.button!=null && e.button>0) return;   // primary button / touch only
+  if(_kmDragRow) return;                     // one row at a time
   var row=handle.closest('.kmrow'), list=handle.closest('.ofkmlist');
   if(!row||!list) return;
   _kmDragRow=row; _kmDragList=list; _kmDragHandle=handle;
   _kmDragFrom=Array.prototype.slice.call(list.querySelectorAll('.kmrow')).indexOf(row);
-  row.classList.add('dragging');
   e.preventDefault(); e.stopPropagation();
+  // Lift: a placeholder of the same height holds the slot open, the row goes fixed
+  // and from here on only the placeholder moves — that is what makes the gap
+  // readable instead of the list jumping around under the finger.
+  var r=row.getBoundingClientRect();
+  _kmGrabY=e.clientY-r.top; _kmLeft=r.left; _kmLastY=e.clientY;
+  _kmPh=document.createElement('div');
+  _kmPh.className='kmrow-ph';
+  _kmPh.style.height=r.height+'px';
+  row.parentElement.insertBefore(_kmPh, row);
+  row.classList.add('dragging');
+  row.style.position='fixed';
+  row.style.width=r.width+'px';
+  row.style.left=r.left+'px';
+  row.style.top=r.top+'px';
+  row.style.margin='0';
+  row.style.pointerEvents='none';
+  document.body.classList.add('kmdragging');
   try{ handle.setPointerCapture(e.pointerId); handle._kpPid=e.pointerId; }catch(_){}
-  handle.addEventListener('pointermove', ofKmDragMove);
-  handle.addEventListener('pointerup', ofKmDragEnd);
-  handle.addEventListener('pointercancel', ofKmDragEnd);
+  // On window, not on the grip: a re-render (another client, the driver app) can
+  // replace the grip mid-drag and then its pointerup never arrives — that is how a
+  // row stayed hanging in mid-air until it was clicked.
+  window.addEventListener('pointermove', ofKmDragMove, true);
+  window.addEventListener('pointerup', ofKmDragEnd, true);
+  window.addEventListener('pointercancel', ofKmDragEnd, true);
+  window.addEventListener('blur', ofKmDragEnd, true);
+  _kmScrollRaf=requestAnimationFrame(_kmEdgeScroll);
 }
 function _kmAfter(list, y){
   var els=Array.prototype.slice.call(list.querySelectorAll('.kmrow:not(.dragging)'));
@@ -10910,26 +10942,51 @@ function _kmAfter(list, y){
   els.forEach(function(ch){ var b=ch.getBoundingClientRect(); var off=y-(b.top+b.height/2); if(off<0 && off>bestOff){ bestOff=off; best=ch; } });
   return best;
 }
+// Carrying a row to a stop that is off screen: the page follows near the edges.
+function _kmEdgeScroll(){
+  if(!_kmDragRow) return;
+  var h=window.innerHeight, pad=70, step=0;
+  if(_kmLastY<pad) step=-Math.ceil((pad-_kmLastY)/5);
+  else if(_kmLastY>h-pad) step=Math.ceil((_kmLastY-(h-pad))/5);
+  if(step){ window.scrollBy(0, step); _kmPlace(_kmLastY); }
+  _kmScrollRaf=requestAnimationFrame(_kmEdgeScroll);
+}
+// Move the dashed slot to wherever the row would drop right now.
+function _kmPlace(y){
+  if(!_kmDragList||!_kmPh) return;
+  var after=_kmAfter(_kmDragList, y);
+  if(after==null){ if(_kmPh!==_kmDragList.lastElementChild) _kmDragList.appendChild(_kmPh); }
+  else if(after!==_kmPh.nextSibling) _kmDragList.insertBefore(_kmPh, after);
+}
 function ofKmDragMove(e){
   if(!_kmDragRow||!_kmDragList) return;
-  e.preventDefault();
-  var after=_kmAfter(_kmDragList, e.clientY);
-  if(after==null) _kmDragList.appendChild(_kmDragRow);
-  else if(after!==_kmDragRow.nextSibling) _kmDragList.insertBefore(_kmDragRow, after);
+  e.preventDefault(); e.stopPropagation();
+  _kmLastY=e.clientY;
+  _kmDragRow.style.top=(e.clientY-_kmGrabY)+'px';
+  _kmDragRow.style.left=_kmLeft+'px';   // vertical only — the row keeps its column
+  _kmPlace(e.clientY);
 }
 function ofKmDragEnd(){
-  var h=_kmDragHandle, row=_kmDragRow, list=_kmDragList, from=_kmDragFrom;
-  _kmDragRow=null; _kmDragList=null; _kmDragHandle=null; _kmDragFrom=-1;
-  if(h){
-    try{ h.releasePointerCapture(h._kpPid); }catch(_){}
-    h.removeEventListener('pointermove', ofKmDragMove);
-    h.removeEventListener('pointerup', ofKmDragEnd);
-    h.removeEventListener('pointercancel', ofKmDragEnd);
+  var h=_kmDragHandle, row=_kmDragRow, list=_kmDragList, ph=_kmPh, from=_kmDragFrom;
+  _kmDragRow=null; _kmDragList=null; _kmDragHandle=null; _kmPh=null; _kmDragFrom=-1;
+  if(_kmScrollRaf){ cancelAnimationFrame(_kmScrollRaf); _kmScrollRaf=0; }
+  window.removeEventListener('pointermove', ofKmDragMove, true);
+  window.removeEventListener('pointerup', ofKmDragEnd, true);
+  window.removeEventListener('pointercancel', ofKmDragEnd, true);
+  window.removeEventListener('blur', ofKmDragEnd, true);
+  document.body.classList.remove('kmdragging');
+  if(h){ try{ h.releasePointerCapture(h._kpPid); }catch(_){} }
+  // Put the row down where the slot is, then clear every trace of the lift.
+  if(row){
+    if(ph && ph.parentElement) ph.parentElement.insertBefore(row, ph);
+    row.classList.remove('dragging');
+    row.style.position=''; row.style.width=''; row.style.left='';
+    row.style.top=''; row.style.margin=''; row.style.pointerEvents='';
   }
-  if(row) row.classList.remove('dragging');
-  if(!list||!row) return;
+  if(ph && ph.parentElement) ph.parentElement.removeChild(ph);
+  if(!list||!row){ try{ ofRenderTour(); }catch(e){} return; }
   var t=activeTours.find(function(x){ return x.id===list.getAttribute('data-tid'); });
-  if(!t||!t.orders) return;
+  if(!t||!t.orders){ try{ ofRenderTour(); }catch(e){} return; }
   var oid=row.getAttribute('data-oid');
   var seq=Array.prototype.slice.call(list.querySelectorAll('.kmrow'))
     .map(function(r){ return r.getAttribute('data-oid'); }).filter(Boolean);
@@ -10937,13 +10994,18 @@ function ofKmDragEnd(){
   // a re-sort must never drop an order out of the tour.
   var shown={}; seq.forEach(function(x){ shown[x]=1; });
   var next=seq.concat(t.orders.filter(function(x){ return !shown[x]; }));
-  if(next.length!==t.orders.length) return;              // safety net: never lose a stop
-  if(next.join('|')===t.orders.join('|')) return;   // dropped where it started
-  t.orders=next;
-  t.arranged=null;            // office order wins over the driver's own arrangement
-  t.kmOrderTs=Date.now();
-  try{ auditTour('reorder', oid, 'ลำดับ / stop '+(from+1)+' → '+(seq.indexOf(oid)+1)+' · 🚚 '+(t.driverName||'')); }catch(e){}
-  syncTours();
+  // Safety net: a re-sort must never drop a stop, and dropping a row where it was
+  // picked up is not a change at all.
+  var changed = next.length===t.orders.length && next.join('|')!==t.orders.join('|');
+  if(changed){
+    t.orders=next;
+    t.arranged=null;            // office order wins over the driver's own arrangement
+    t.kmOrderTs=Date.now();
+    try{ auditTour('reorder', oid, 'ลำดับ / stop '+(from+1)+' → '+(seq.indexOf(oid)+1)+' · 🚚 '+(t.driverName||'')); }catch(e){}
+    syncTours();
+  }
+  // Always re-render: it renumbers the stops and replays whatever arrived while
+  // the drag was holding the list still.
   try{ ofRenderTour(); }catch(e){}
 }
 // Take the calculated km payout over into the normal "Tour pay" field.
