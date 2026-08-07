@@ -1041,6 +1041,16 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
         try{ if(document.getElementById('ofv-food')&&document.getElementById('ofv-food').classList.contains('active')) foodListRender(); }catch(e){}
       });
+      // Filed CT settlements (one per sheet+slip the carrier sends us). Small
+      // metadata records only — the two pictures live under ctReconImg/<id> and
+      // are fetched on demand, so this listener never drags them along.
+      db.ref('ctRecon').on('value', function(snap) {
+        var v = snap.val() || {};
+        window.ctRecons = Object.keys(v).map(function(k){ return v[k]; })
+          .filter(Boolean).sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+        try{ if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active')) ctrRenderPanel(); }catch(e){}
+        try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
+      });
       db.ref('costFixed').on('value', function(snap) {
         var v=snap.val()||{}; var out={};
         Object.keys(v).forEach(function(mk){ out[mk]=Array.isArray(v[mk])?v[mk]:Object.values(v[mk]||{}); });
@@ -1963,6 +1973,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         <option value="">🚚 All shippers</option>
       </select>
     </div>
+    <!-- CT settlement check — only drawn while the shipper filter is on "CT". -->
+    <div id="ct-recon-panel"></div>
+    <input type="file" id="ctr-file-sheet" accept="image/*" style="display:none" onchange="ctrOnFile(this,'sheet')">
+    <input type="file" id="ctr-file-slip" accept="image/*" style="display:none" onchange="ctrOnFile(this,'slip')">
     <div style="position:relative;margin-bottom:10px">
       <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--text2)"></i>
       <input type="text" class="pay-search" oninput="payRender()" placeholder="Search order, customer, phone, zone... / ค้นหา" style="width:100%;box-sizing:border-box;padding:9px 10px 9px 32px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:14px">
@@ -2576,6 +2590,17 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="modal-overlay" id="bill-restore-modal"><div class="modal" id="bill-restore-body"></div></div>
   <!-- BILLS REPORT — charts over every section + sub-category, with a print version -->
   <div class="modal-overlay" id="bill-report-modal"><div class="modal" id="bill-report-body" style="max-width:620px"></div></div>
+
+  <!-- CT settlement: PIN gate before a checked sheet is filed, and the detail sheet
+       of an already-filed settlement. -->
+  <div class="modal-overlay" id="ctpin-modal"><div class="modal" style="max-width:340px">
+    <div class="mhdr"><span class="mtit">🔐 ยืนยันด้วย PIN / Confirm with PIN</span><button type="button" class="mclose" onclick="ctrPinClose()"><i class="ti ti-x"></i></button></div>
+    <div id="ctpin-sub" style="font-size:12px;color:var(--text2);margin-bottom:10px"></div>
+    <input type="password" id="ctpin-input" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="••••" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:24px;letter-spacing:10px;text-align:center" onkeydown="if(event.key==='Enter')ctrPinSubmit()">
+    <div id="ctpin-err" style="color:var(--red);font-size:12px;min-height:18px;margin-top:6px"></div>
+    <button type="button" class="btn btng" id="ctpin-go" onclick="ctrPinSubmit()"><i class="ti ti-check"></i> ส่ง / Submit</button>
+  </div></div>
+  <div class="modal-overlay" id="ctrec-modal"><div class="modal" id="ctrec-body" style="max-width:620px"></div></div>
 
   <!-- PICTURES VIEW -->
   <div class="view" id="ofv-pics"><div class="sec">
@@ -6679,7 +6704,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260807002;
+var KP_BUILD = 20260807003;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -16334,6 +16359,11 @@ var KP_TRANSLATE_URL = 'https://script.google.com/macros/s/AKfycbwW91FhwTI61HMSp
 // URL here after deploying apps-script/slipok-verify.gs. Empty = local QR
 // format check only (no real bank confirmation).
 var KP_SLIPOK_URL = '';
+// CT settlement reader (Apps Script + Claude vision). Paste your /exec URL here
+// after deploying apps-script/ct-recon.gs. If you pasted that file OVER
+// translate.gs in the same project, this is the SAME url as KP_TRANSLATE_URL.
+// Empty = the CT sheet must be typed in by hand (everything else still works).
+var KP_CT_OCR_URL = '';
 // Pull {lat,lng} for an order: saved pin → resolved coord on the order → parse link.
 function orderLatLng(o){
   if(!o) return null;
@@ -19360,6 +19390,9 @@ function _payRenderNow() {
     sf.innerHTML = '<option value="">🚚 All shippers</option>'
       + shippers.map(function(s){return '<option value="'+s+'"'+(cur===s?' selected':'')+'>'+s+'</option>';}).join('');
   }
+  // CT sends a settlement sheet + a transfer slip every few days — the check for it
+  // lives right under the filter, and only while CT is the selected shipper.
+  try{ ctrRenderPanel(); }catch(e){}
   var delivered = orders.filter(function(o){ return o.status==='delivered' && !payIrrelevant(o); });
   delivered.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
 
@@ -24883,6 +24916,486 @@ function _billShipRowHTML(r,idx,amber){
   '</div>';
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  CT SETTLEMENT CHECK — Pay tab, shipper filter "CT"
+//  ---------------------------------------------------------------------------
+//  Every few days CT sends a screenshot of their settlement sheet (one line per
+//  delivery: their bill no, OUR order no, the freight we owe them, the COD they
+//  collected from the customer, their 2 % cut, the payout) plus the bank slip for
+//  the payout total. Both pictures are dropped in here; the sheet is read by
+//  Claude (apps-script/ct-recon.gs) and every line is checked against our own
+//  order: does the order exist, is the freight the same, is the COD the same as
+//  the order total, is 2 % calculated right, does the sum equal the slip.
+//  Anything that does not line up is listed and has to be ticked off with a note
+//  before the settlement can be filed — filing needs the user's own PIN and then
+//  files both pictures under the order's slips and under Bills → Shipper → CT.
+// ════════════════════════════════════════════════════════════════════════════
+var _ctrDraft = null;    // settlement being checked, only in memory until confirmed
+var _ctrBusy  = '';      // progress line while the pictures are read
+
+function ctrIsCT(s){ s=String(s||'').trim().toUpperCase(); return s==='CT'||s.indexOf('CT ')===0||s.indexOf('CT-')===0; }
+function ctrNum(v){ var n=parseFloat(String(v==null?'':v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; }
+function ctrR2(n){ return Math.round(ctrNum(n)*100)/100; }
+function ctrMoney(n){ return ctrR2(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+// "#3-047", "3-47", " #110 " all have to land on the same key as our own order id.
+function ctrNormId(id){
+  var s=String(id||'').trim().replace(/\s+/g,'').replace(/^#+/,'');
+  var m=s.match(/^(\d+)-(\d+)$/); if(m) return m[1]+'-'+String(parseInt(m[2],10));
+  var n=s.match(/^0*(\d+)$/);     if(n) return n[1];
+  return s.toUpperCase();
+}
+function ctrOrderMap(){
+  var map={}; (typeof orders!=='undefined'?orders:[]).forEach(function(o){ if(o&&o.id) map[ctrNormId(o.id)]=o; });
+  return map;
+}
+// "6-049" mistyped for "4-049": same number, different zone prefix.
+function ctrTail(nid){ var m=String(nid||'').match(/(\d+)$/); return m?String(parseInt(m[1],10)):''; }
+
+// Resize a picture. The sheet needs detail (small Thai print + digits), the copies
+// filed on the orders do not — hence two different qualities.
+function ctrShrinkFile(file,max,q,cb){
+  var rd=new FileReader();
+  rd.onload=function(e){ ctrShrinkUrl(e.target.result,max,q,cb); };
+  rd.onerror=function(){ cb(''); };
+  rd.readAsDataURL(file);
+}
+function ctrShrinkUrl(url,max,q,cb){
+  var img=new Image();
+  img.onload=function(){
+    var w=img.width,h=img.height;
+    if(w>h&&w>max){ h=Math.round(h*max/w); w=max; } else if(h>=w&&h>max){ w=Math.round(w*max/h); h=max; }
+    var c=document.createElement('canvas'); c.width=w; c.height=h;
+    c.getContext('2d').drawImage(img,0,0,w,h);
+    cb(c.toDataURL('image/jpeg',q));
+  };
+  img.onerror=function(){ cb(''); };
+  img.src=url;
+}
+
+// ── draft lifecycle ────────────────────────────────────────────────────────
+function ctrNewDraft(){
+  _ctrDraft={ rows:[], slip:{amount:0,fee:0,date:'',ref:'',from:'',to:''}, totals:null,
+              sheetImg:'', slipImg:'', res:{}, issues:[], markPaid:false, read:false };
+  _ctrBusy=''; ctrRenderPanel();
+}
+function ctrCancel(){
+  if(_ctrDraft && (_ctrDraft.rows.length||_ctrDraft.sheetImg) && !confirm('ทิ้งใบนี้? / Discard this settlement?')) return;
+  _ctrDraft=null; _ctrBusy=''; ctrRenderPanel();
+}
+function ctrPick(kind){ var i=document.getElementById('ctr-file-'+kind); if(i){ i.value=''; i.click(); } }
+function ctrOnFile(input,kind){
+  var f=input&&input.files&&input.files[0]; if(!f) return;
+  if(!_ctrDraft) ctrNewDraft();
+  _ctrBusy='📷 '+(kind==='sheet'?'ชีต / sheet':'สลิป / slip')+'…'; ctrRenderPanel();
+  // 2000 px keeps the printed digits readable for the reader (Claude reads up to
+  // 2576 px on the long edge); the copies filed on each order are shrunk later.
+  ctrShrinkFile(f,2000,0.85,function(url){
+    _ctrBusy='';
+    if(!url){ alert('อ่านรูปไม่ได้ / Could not read that picture'); ctrRenderPanel(); return; }
+    if(kind==='sheet') _ctrDraft.sheetImg=url; else _ctrDraft.slipImg=url;
+    ctrRenderPanel();
+  });
+}
+
+// ── read both pictures ─────────────────────────────────────────────────────
+function ctrScan(){
+  var d=_ctrDraft; if(!d||!d.sheetImg) return;
+  if(!KP_CT_OCR_URL){ alert('ยังไม่ได้ตั้งค่าตัวอ่าน AI / AI reader not set up — ใส่แถวเอง / add the rows by hand'); return; }
+  _ctrBusy='🤖 กำลังอ่าน… / reading the sheet…'; ctrRenderPanel();
+  fetch(KP_CT_OCR_URL,{ method:'POST', body:JSON.stringify({ action:'ctocr', sheet:d.sheetImg, slip:d.slipImg||'' }) })
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      _ctrBusy='';
+      if(!j || j.error){ alert('อ่านไม่สำเร็จ / Reading failed: '+((j&&j.error)||'?')); ctrRenderPanel(); return; }
+      d.rows=(j.rows||[]).map(function(r){
+        return { ctBill:String(r.ctBill||''), billDate:String(r.billDate||''),
+                 orderId:String(r.orderId||''), customer:String(r.customer||''),
+                 sender:String(r.sender||''), qty:ctrNum(r.qty),
+                 shipAmount:ctrR2(r.shipAmount), province:String(r.province||''),
+                 cod:ctrR2(r.cod), fee:ctrR2(r.fee), net:ctrR2(r.net) };
+      });
+      if(j.totals) d.totals={ shipAmount:ctrR2(j.totals.shipAmount), cod:ctrR2(j.totals.cod),
+                              fee:ctrR2(j.totals.fee), net:ctrR2(j.totals.net), qty:ctrNum(j.totals.qty) };
+      if(j.slip) d.slip={ amount:ctrR2(j.slip.amount), fee:ctrR2(j.slip.fee), date:String(j.slip.date||''),
+                          ref:String(j.slip.ref||''), from:String(j.slip.from||''), to:String(j.slip.to||'') };
+      d.read=true; d.res={};
+      ctrRenderPanel();
+    })
+    .catch(function(e){ _ctrBusy=''; alert('อ่านไม่สำเร็จ / Reading failed: '+e); ctrRenderPanel(); });
+}
+
+// ── rows ───────────────────────────────────────────────────────────────────
+function ctrAddRow(){
+  if(!_ctrDraft) return;
+  _ctrDraft.rows.push({ctBill:'',billDate:'',orderId:'',customer:'',sender:'',qty:0,shipAmount:0,province:'',cod:0,fee:0,net:0});
+  ctrRenderPanel();
+}
+function ctrDelRow(i){ if(!_ctrDraft) return; _ctrDraft.rows.splice(i,1); ctrRenderPanel(); }
+function ctrSetCell(i,k,v){
+  var d=_ctrDraft; if(!d||!d.rows[i]) return;
+  if(k==='orderId'||k==='customer'||k==='ctBill'){ d.rows[i][k]=String(v||'').trim(); }
+  else { d.rows[i][k]=ctrR2(v); }
+  ctrRenderPanel();
+}
+function ctrSetSlip(k,v){
+  var d=_ctrDraft; if(!d) return;
+  d.slip[k]=(k==='amount'||k==='fee')?ctrR2(v):String(v||'').trim();
+  ctrRenderPanel();
+}
+function ctrToggleMarkPaid(on){ if(_ctrDraft){ _ctrDraft.markPaid=!!on; ctrRenderPanel(); } }
+
+// Every order id that a FILED settlement already covered — the same delivery must
+// never be settled twice.
+function ctrSettledIds(){
+  var seen={};
+  (window.ctRecons||[]).forEach(function(rec){
+    (rec.orderIds||[]).forEach(function(id){ seen[ctrNormId(id)]=rec.id; });
+  });
+  return seen;
+}
+
+// ── the check itself ───────────────────────────────────────────────────────
+// One entry per thing that does not line up. Everything listed here has to be
+// ticked off (with a note) before the settlement can be filed.
+function ctrCheck(){
+  var d=_ctrDraft; if(!d) return [];
+  var map=ctrOrderMap(), settled=ctrSettledIds(), issues=[], sums={ship:0,cod:0,fee:0,net:0};
+  d.rows.forEach(function(r,i){
+    var nid=ctrNormId(r.orderId);
+    r._nid=nid; r._order=map[nid]||null;
+    sums.ship+=ctrNum(r.shipAmount); sums.cod+=ctrNum(r.cod);
+    sums.fee+=ctrNum(r.fee); sums.net+=ctrNum(r.net);
+    var tag='แถว / row '+(i+1)+' · '+(r.orderId||'—');
+    if(!nid){ issues.push({key:'empty:'+i,row:i,t:tag,msg:'ไม่มีเลขออเดอร์ / no order number on this line'}); return; }
+    if(!r._order){
+      var tail=ctrTail(nid), near=[];
+      if(tail) (typeof orders!=='undefined'?orders:[]).forEach(function(o){
+        if(o&&o.id&&ctrTail(ctrNormId(o.id))===tail&&ctrNormId(o.id)!==nid) near.push(o.id);
+      });
+      issues.push({ key:'noorder:'+i, row:i, t:tag,
+        msg:'ไม่พบออเดอร์นี้ในระบบ / no such order here'+(near.length?' — พิมพ์ผิดหรือเปล่า? / typo for: '+near.slice(0,4).join(', '):''),
+        fix:near.length?{type:'setid',row:i,vals:near.slice(0,4)}:null });
+      return;
+    }
+    var o=r._order;
+    if(settled[nid]) issues.push({key:'dup:'+i,row:i,t:tag,msg:'ออเดอร์นี้เคลียร์ไปแล้วในใบ / already settled in '+settled[nid]});
+    if(o.shipper && !ctrIsCT(o.shipper)) issues.push({key:'shipper:'+i,row:i,t:tag,msg:'ในระบบส่งโดย / our shipper is "'+(o.shipper||'—')+'" ไม่ใช่ CT'});
+    var mySh=parseFloat(o.shipCost)||0;
+    if(!mySh && !o.shipFree) issues.push({ key:'noship:'+i, row:i, t:tag,
+      msg:'ยังไม่ได้ใส่ค่าส่งในระบบ / no freight entered here (sheet: '+ctrMoney(r.shipAmount)+' ฿)',
+      fix:{type:'useship',row:i} });
+    else if(Math.abs(mySh-ctrNum(r.shipAmount))>1) issues.push({ key:'ship:'+i, row:i, t:tag,
+      msg:'ค่าส่งไม่ตรง / freight differs — ระบบ/ours '+ctrMoney(mySh)+' ฿ · ชีต/sheet '+ctrMoney(r.shipAmount)+' ฿',
+      fix:{type:'useship',row:i} });
+    var myTot=0; try{ myTot=ofOrderTotalNum(o)||0; }catch(e){}
+    if(myTot && Math.abs(myTot-ctrNum(r.cod))>1) issues.push({key:'cod:'+i,row:i,t:tag,
+      msg:'ยอด COD ไม่ตรง / COD differs — ระบบ/ours '+ctrMoney(myTot)+' ฿ · ชีต/sheet '+ctrMoney(r.cod)+' ฿'});
+    var wantFee=ctrR2(ctrNum(r.cod)*0.02);
+    if(Math.abs(wantFee-ctrNum(r.fee))>0.05) issues.push({key:'fee:'+i,row:i,t:tag,
+      msg:'2% ไม่ตรง / commission differs — ควรเป็น/should be '+ctrMoney(wantFee)+' ฿ · ชีต/sheet '+ctrMoney(r.fee)+' ฿'});
+    var wantNet=ctrR2(ctrNum(r.cod)-ctrNum(r.fee));
+    if(Math.abs(wantNet-ctrNum(r.net))>0.05) issues.push({key:'net:'+i,row:i,t:tag,
+      msg:'ยอดโอนบรรทัดนี้ไม่ตรง / payout line differs — COD−2% = '+ctrMoney(wantNet)+' ฿ · ชีต/sheet '+ctrMoney(r.net)+' ฿'});
+  });
+  d.sums={ship:ctrR2(sums.ship),cod:ctrR2(sums.cod),fee:ctrR2(sums.fee),net:ctrR2(sums.net)};
+  // Totals line printed on the sheet vs. what the lines above actually add up to.
+  if(d.totals){
+    [['shipAmount','ship','ค่าส่งรวม / freight total'],['cod','cod','COD รวม / COD total'],
+     ['fee','fee','2% รวม / commission total'],['net','net','ยอดโอนรวม / payout total']].forEach(function(p){
+      var printed=ctrNum(d.totals[p[0]]), added=d.sums[p[1]];
+      if(printed && Math.abs(printed-added)>0.05) issues.push({key:'tot:'+p[1],row:-1,t:'รวม / totals',
+        msg:p[2]+' — ชีตพิมพ์/sheet says '+ctrMoney(printed)+' ฿ · บวกเองได้/lines add up to '+ctrMoney(added)+' ฿'});
+    });
+  }
+  // The whole point: does the money that arrived match the sheet?
+  var slipAmt=ctrNum(d.slip.amount);
+  if(d.rows.length){
+    if(!slipAmt) issues.push({key:'slip:none',row:-1,t:'สลิป / slip',msg:'ยังไม่มียอดในสลิป / no amount read from the slip — ใส่เอง / type it in'});
+    else if(Math.abs(slipAmt-d.sums.net)>0.05) issues.push({key:'slip:amt',row:-1,t:'สลิป / slip',
+      msg:'ยอดโอนไม่ตรงกับชีต / transfer does not match the sheet — สลิป/slip '+ctrMoney(slipAmt)+' ฿ · ชีต/sheet '+ctrMoney(d.sums.net)+' ฿ · ต่าง/diff '+ctrMoney(slipAmt-d.sums.net)+' ฿'});
+  }
+  d.issues=issues;
+  return issues;
+}
+function ctrOpenIssues(){ var d=_ctrDraft; if(!d) return []; return (d.issues||[]).filter(function(x){ return !(d.res[x.key]&&d.res[x.key].ok); }); }
+function ctrResolve(key,on){
+  var d=_ctrDraft; if(!d) return;
+  d.res[key]=d.res[key]||{ok:false,note:''};
+  d.res[key].ok=!!on;
+  d.res[key].by=ctrWho();
+  ctrRenderPanel();
+}
+function ctrNote(key,v){ var d=_ctrDraft; if(!d) return; d.res[key]=d.res[key]||{ok:false,note:''}; d.res[key].note=String(v||''); }
+function ctrWho(){
+  try{ var s=(staffList||[]).find(function(x){return x.id===currentStaffId;}); if(s&&s.name) return s.name; }catch(e){}
+  return 'Office';
+}
+// One-click repairs offered next to an issue.
+function ctrFixUseShip(i){
+  var d=_ctrDraft, r=d&&d.rows[i]; if(!r||!r._order) return;
+  try{ setShipCost(r._order.id, r.shipAmount); }catch(e){}
+  ctrRenderPanel();
+}
+function ctrFixSetId(i,val){ ctrSetCell(i,'orderId',val); }
+
+// ── rendering ──────────────────────────────────────────────────────────────
+function ctrRenderPanel(){
+  var el=document.getElementById('ct-recon-panel'); if(!el) return;
+  var on=(typeof payShipperFilt_!=='undefined')&&ctrIsCT(payShipperFilt_);
+  if(!on){ el.innerHTML=''; return; }
+  el.innerHTML=_ctrDraft?ctrDraftHtml():ctrIdleHtml();
+}
+function ctrHead(right){
+  return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">'
+    +'<span style="font-size:13px;font-weight:800">📄 CT — ตรวจใบแจ้งยอด / Settlement check</span>'+(right||'')+'</div>';
+}
+function ctrBox(inner){
+  return '<div style="background:var(--bg2);border:1.5px solid #c7d2fe;border-radius:var(--r);padding:11px 12px;margin-bottom:12px">'+inner+'</div>';
+}
+function ctrIdleHtml(){
+  var recent=(window.ctRecons||[]).slice(0,4);
+  return ctrBox(ctrHead('<button type="button" class="btnsm btnsmp" onclick="ctrNewDraft()"><i class="ti ti-plus"></i> ใบใหม่ / New</button>')
+    +'<div style="font-size:11.5px;color:var(--text2);line-height:1.5">อัปโหลดรูปชีตของ CT กับสลิปโอน แล้วระบบจะเทียบเลขออเดอร์ ค่าส่ง COD และยอดโอนให้'
+    +'<br>Upload CT’s sheet + the transfer slip — order numbers, freight, COD and the payout are checked against our own orders.</div>'
+    +(recent.length?'<div style="margin-top:10px">'+recent.map(ctrRecRow).join('')
+        +((window.ctRecons||[]).length>recent.length?'<div style="font-size:11px;color:var(--text2);text-align:center;padding-top:4px">+'+((window.ctRecons||[]).length-recent.length)+' ใบก่อนหน้า — ดูใน Bills → 🚚 CT / older ones in Bills</div>':'')
+      +'</div>':''));
+}
+function ctrRecRow(rec){
+  var n=(rec.orderIds||[]).length;
+  return '<div onclick="ctrOpen(\''+_esc(rec.id)+'\')" style="display:flex;align-items:center;gap:8px;padding:7px 9px;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:5px;cursor:pointer">'
+    +'<span style="font-size:14px">✅</span>'
+    +'<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:700">'+ctrMoney(rec.slipAmount)+' ฿ <span style="font-weight:500;color:var(--text2)">· '+n+' ออเดอร์</span></div>'
+    +'<div style="font-size:10.5px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(rec.slipDate?fmtD(rec.slipDate):'')+(rec.by?' · '+_esc(rec.by):'')+(rec.issues&&rec.issues.length?' · ⚠️ '+rec.issues.length+' เคลียร์แล้ว/cleared':'')+'</div></div>'
+    +'<i class="ti ti-chevron-right" style="color:var(--text2)"></i></div>';
+}
+function ctrThumb(kind,url,label){
+  if(url) return '<div style="flex:1;min-width:0;text-align:center">'
+      +'<img src="'+url+'" onclick="openPhotoLightbox(this.src)" style="width:100%;height:88px;object-fit:cover;border-radius:var(--rs);border:1.5px solid #86efac;cursor:pointer">'
+      +'<div style="font-size:10.5px;color:var(--text2);margin-top:3px">'+label+' <span onclick="ctrPick(\''+kind+'\')" style="color:var(--blue);cursor:pointer;font-weight:700">เปลี่ยน/change</span></div></div>';
+  return '<div onclick="ctrPick(\''+kind+'\')" style="flex:1;min-width:0;height:110px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;border:1.5px dashed var(--border);border-radius:var(--rs);background:var(--bg);cursor:pointer">'
+    +'<span style="font-size:22px">'+(kind==='sheet'?'📄':'💳')+'</span>'
+    +'<span style="font-size:11px;font-weight:700;color:var(--text2);text-align:center;padding:0 6px">'+label+'</span></div>';
+}
+function ctrDraftHtml(){
+  var d=_ctrDraft;
+  ctrCheck();
+  var openIss=ctrOpenIssues(), ready=d.rows.length>0&&d.sheetImg&&d.slipImg&&openIss.length===0;
+  var h=ctrHead('<button type="button" class="btnsm" onclick="ctrCancel()">✕ ยกเลิก / Cancel</button>');
+  h+='<div style="display:flex;gap:8px;margin-bottom:10px">'+ctrThumb('sheet',d.sheetImg,'ชีต CT / CT sheet')+ctrThumb('slip',d.slipImg,'สลิปโอน / Slip')+'</div>';
+  if(_ctrBusy) h+='<div style="font-size:12px;font-weight:700;color:var(--blue);background:var(--blue-bg);border-radius:var(--rs);padding:7px 10px;margin-bottom:8px">'+_ctrBusy+'</div>';
+  if(d.sheetImg&&!_ctrBusy){
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'
+      +'<button type="button" class="btnsm btnsmp" onclick="ctrScan()"'+(KP_CT_OCR_URL?'':' style="opacity:.5"')+'>🤖 อ่านด้วย AI / Read with AI</button>'
+      +'<button type="button" class="btnsm" onclick="ctrAddRow()"><i class="ti ti-plus"></i> เพิ่มแถวเอง / Add row</button></div>';
+    if(!KP_CT_OCR_URL) h+='<div style="font-size:11px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:var(--rs);padding:6px 9px;margin:-4px 0 10px">ยังไม่ได้ตั้งค่า AI (KP_CT_OCR_URL) — ใส่แถวเองได้ / AI reader not configured — add the rows by hand</div>';
+  }
+  if(d.rows.length) h+=ctrRowsHtml();
+  h+=ctrSlipHtml();
+  h+=ctrIssuesHtml();
+  if(d.rows.length){
+    var unpaid=d.rows.filter(function(r){ return r._order&&!payIsPaid(r._order); }).length;
+    if(unpaid) h+='<label style="display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;margin-bottom:9px;cursor:pointer">'
+      +'<input type="checkbox" '+(d.markPaid?'checked':'')+' onchange="ctrToggleMarkPaid(this.checked)" style="width:16px;height:16px;cursor:pointer">'
+      +'ทำเครื่องหมาย '+unpaid+' ออเดอร์ว่าชำระแล้ว (โอน) / also mark '+unpaid+' order'+(unpaid!==1?'s':'')+' as paid (online)</label>';
+    h+='<button type="button" class="btn btng" onclick="ctrConfirm()"'+(ready?'':' style="opacity:.45;pointer-events:none"')+'>'
+      +(ready?'<i class="ti ti-check"></i> ทุกอย่างตรง — ยืนยันด้วย PIN / All matches — confirm with PIN'
+             :'🔒 '+(openIss.length?('เหลือ '+openIss.length+' จุดที่ยังไม่เคลียร์ / '+openIss.length+' open point'+(openIss.length!==1?'s':''))
+                                   :(!d.slipImg?'ยังไม่มีรูปสลิป / slip picture missing':'ยังไม่มีแถว / no rows yet')))+'</button>';
+  }
+  return ctrBox(h);
+}
+function ctrRowsHtml(){
+  var d=_ctrDraft;
+  var bad={}; (d.issues||[]).forEach(function(x){ if(x.row>=0&&!(d.res[x.key]&&d.res[x.key].ok)) bad[x.row]=1; });
+  var inp=function(i,k,v,w,num){
+    return '<input type="'+(num?'number':'text')+'" value="'+_esc(String(v))+'" onchange="ctrSetCell('+i+',\''+k+'\',this.value)" style="width:'+w+';padding:3px 5px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text);font-size:11.5px">';
+  };
+  var rows=d.rows.map(function(r,i){
+    var o=r._order, ok=o&&!bad[i];
+    return '<tr style="background:'+(bad[i]?'#fef2f2':'var(--bg)')+'">'
+      +'<td style="padding:4px 5px;text-align:center">'+(ok?'✅':(o?'⚠️':'❓'))+'</td>'
+      +'<td style="padding:4px 5px;white-space:nowrap">'+inp(i,'orderId',r.orderId,'72px')
+        +'<div style="font-size:9.5px;color:var(--text2);max-width:110px;overflow:hidden;text-overflow:ellipsis">'+_esc(r.customer||'')+'</div></td>'
+      +'<td style="padding:4px 5px;text-align:right">'+inp(i,'shipAmount',r.shipAmount,'62px',1)+'</td>'
+      +'<td style="padding:4px 5px;text-align:right">'+inp(i,'cod',r.cod,'78px',1)+'</td>'
+      +'<td style="padding:4px 5px;text-align:right">'+inp(i,'fee',r.fee,'62px',1)+'</td>'
+      +'<td style="padding:4px 5px;text-align:right">'+inp(i,'net',r.net,'78px',1)+'</td>'
+      +'<td style="padding:4px 5px;text-align:center"><span onclick="ctrDelRow('+i+')" title="ลบแถว / remove row" style="cursor:pointer;color:#dc2626">🗑</span></td></tr>';
+  }).join('');
+  var th=function(t){ return '<th style="padding:5px;font-size:10.5px;color:var(--text2);font-weight:700;white-space:nowrap">'+t+'</th>'; };
+  var tf=function(v){ return '<td style="padding:5px;text-align:right;font-weight:800;font-size:11.5px;white-space:nowrap">'+ctrMoney(v)+'</td>'; };
+  return '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:10px">'
+    +'<table style="width:100%;border-collapse:collapse;min-width:520px">'
+    +'<thead><tr style="background:var(--bg2)">'+th('')+th('ออเดอร์ / order')+th('ค่าส่ง / freight')+th('COD')+th('2%')+th('โอน / payout')+th('')+'</tr></thead>'
+    +'<tbody>'+rows+'</tbody>'
+    +'<tfoot><tr style="background:var(--bg2);border-top:1.5px solid var(--border)">'
+      +'<td colspan="2" style="padding:5px;font-size:11px;font-weight:800">รวม / total ('+d.rows.length+')</td>'
+      +tf(d.sums.ship)+tf(d.sums.cod)+tf(d.sums.fee)+tf(d.sums.net)+'<td></td></tr></tfoot></table></div>';
+}
+function ctrSlipHtml(){
+  var d=_ctrDraft, diff=ctrR2(ctrNum(d.slip.amount)-(d.sums?d.sums.net:0));
+  var col=(!d.rows.length||Math.abs(diff)<=0.05)?'#16a34a':'#dc2626';
+  return '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;margin-bottom:10px">'
+    +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+      +'<span style="font-size:11.5px;font-weight:700">💳 ยอดในสลิป / slip amount</span>'
+      +'<input type="number" step="0.01" value="'+ctrR2(d.slip.amount)+'" onchange="ctrSetSlip(\'amount\',this.value)" style="width:110px;padding:4px 6px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:'+col+';font-weight:800;font-size:13px">'
+      +'<span style="font-size:11px;color:var(--text2)">฿</span>'
+      +'<input type="date" lang="en-GB" value="'+_esc(d.slip.date||'')+'" onchange="ctrSetSlip(\'date\',this.value)" style="padding:4px 6px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text);font-size:11.5px">'
+    +'</div>'
+    +(d.slip.ref?'<div style="font-size:10.5px;color:var(--text2);margin-top:4px">เลขที่รายการ / ref: '+_esc(d.slip.ref)+'</div>':'')
+    +(d.rows.length?'<div style="font-size:11px;font-weight:700;color:'+col+';margin-top:4px">'+(Math.abs(diff)<=0.05?'✅ ตรงกับชีต / matches the sheet':'⚠️ ต่างจากชีต / differs by '+ctrMoney(diff)+' ฿')+'</div>':'')
+  +'</div>';
+}
+function ctrIssuesHtml(){
+  var d=_ctrDraft, iss=d.issues||[];
+  if(!iss.length) return d.rows.length?'<div style="font-size:12px;font-weight:700;color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--rs);padding:8px 10px;margin-bottom:10px">✅ ทุกบรรทัดตรงกับระบบ / every line matches our orders</div>':'';
+  return '<div style="margin-bottom:10px">'
+    +'<div style="font-size:11.5px;font-weight:800;color:#991b1b;margin-bottom:6px">⚠️ ไม่ตรงกัน / does not match ('+ctrOpenIssues().length+' / '+iss.length+')</div>'
+    +iss.map(function(x){
+      var r=d.res[x.key]||{ok:false,note:''};
+      var fix='';
+      if(x.fix&&!r.ok&&x.fix.type==='useship') fix='<button type="button" class="btnsm" style="font-size:10.5px;padding:3px 7px" onclick="ctrFixUseShip('+x.fix.row+')">ใช้ค่าจากชีต / use sheet value</button>';
+      if(x.fix&&!r.ok&&x.fix.type==='setid') fix=x.fix.vals.map(function(v){
+        return '<button type="button" class="btnsm" style="font-size:10.5px;padding:3px 7px" onclick="ctrFixSetId('+x.fix.row+',\''+_esc(v)+'\')">→ '+_esc(v)+'</button>'; }).join(' ');
+      return '<div style="background:'+(r.ok?'#f0fdf4':'#fef2f2')+';border:1px solid '+(r.ok?'#bbf7d0':'#fecaca')+';border-radius:var(--rs);padding:7px 9px;margin-bottom:6px">'
+        +'<div style="font-size:11px;font-weight:800;color:var(--text2)">'+_esc(x.t)+'</div>'
+        +'<div style="font-size:11.5px;color:'+(r.ok?'#166534':'#991b1b')+';line-height:1.45">'+_esc(x.msg)+'</div>'
+        +(fix?'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">'+fix+'</div>':'')
+        +'<div style="display:flex;align-items:center;gap:7px;margin-top:6px">'
+          +'<label style="display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">'
+            +'<input type="checkbox" '+(r.ok?'checked':'')+' onchange="ctrResolve(\''+x.key+'\',this.checked)" style="width:15px;height:15px;cursor:pointer">เคลียร์แล้ว / cleared</label>'
+          +'<input type="text" value="'+_esc(r.note||'')+'" oninput="ctrNote(\''+x.key+'\',this.value)" placeholder="โน้ต / note…" style="flex:1;min-width:0;padding:4px 7px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text);font-size:11px">'
+        +'</div></div>';
+    }).join('')+'</div>';
+}
+
+// ── confirm (own PIN) + file ───────────────────────────────────────────────
+function ctrConfirm(){
+  var d=_ctrDraft; if(!d) return;
+  ctrCheck();
+  if(ctrOpenIssues().length){ ctrRenderPanel(); return; }
+  var me=null; try{ me=(staffList||[]).find(function(x){return x.id===currentStaffId;}); }catch(e){}
+  if(!me||!me.pin){ alert('ต้องเข้าสู่ระบบด้วย PIN ของคุณ / Log in with your own PIN first'); return; }
+  var sub=document.getElementById('ctpin-sub');
+  if(sub) sub.innerHTML='ยืนยันยอด <b>'+ctrMoney(d.slip.amount)+' ฿</b> · '+d.rows.length+' ออเดอร์<br>Confirm '+ctrMoney(d.slip.amount)+' ฿ over '+d.rows.length+' order'+(d.rows.length!==1?'s':'')+' as '+_esc(ctrWho());
+  var err=document.getElementById('ctpin-err'); if(err) err.textContent='';
+  var inp=document.getElementById('ctpin-input'); if(inp) inp.value='';
+  var m=document.getElementById('ctpin-modal'); if(m) m.classList.add('open');
+  setTimeout(function(){ if(inp) inp.focus(); },120);
+}
+function ctrPinClose(){ var m=document.getElementById('ctpin-modal'); if(m) m.classList.remove('open'); }
+function ctrPinSubmit(){
+  var inp=document.getElementById('ctpin-input'), err=document.getElementById('ctpin-err');
+  var me=null; try{ me=(staffList||[]).find(function(x){return x.id===currentStaffId;}); }catch(e){}
+  if(!me||!me.pin){ ctrPinClose(); return; }
+  if(String((inp&&inp.value||'')).trim()!==String(me.pin)){
+    if(err) err.textContent='PIN ไม่ถูกต้อง / Wrong PIN';
+    if(inp){ inp.value=''; inp.focus(); }
+    return;
+  }
+  ctrPinClose();
+  ctrSave();
+}
+// Files the settlement: one record, the two pictures once, a copy of both on every
+// order that was on the sheet (under 💳 slips) and — optionally — the payment tick.
+function ctrSave(){
+  var d=_ctrDraft; if(!d||!window.fbDB) return;
+  var by=ctrWho(), id='CT'+Date.now(), now=Date.now();
+  _ctrBusy='💾 กำลังบันทึก… / filing…'; ctrRenderPanel();
+  var ids=[], rows=d.rows.map(function(r){
+    if(r._order) ids.push(r._order.id);
+    return { ctBill:r.ctBill||'', billDate:r.billDate||'', orderId:(r._order?r._order.id:(r.orderId||'')),
+             customer:r.customer||'', qty:ctrNum(r.qty), shipAmount:ctrR2(r.shipAmount),
+             cod:ctrR2(r.cod), fee:ctrR2(r.fee), net:ctrR2(r.net), matched:!!r._order };
+  });
+  var cleared=(d.issues||[]).map(function(x){
+    var r=d.res[x.key]||{};
+    return { key:x.key, msg:x.msg, where:x.t, note:r.note||'', by:r.by||by };
+  });
+  var rec={ id:id, ts:now, by:by, shipper:'CT',
+            slipAmount:ctrR2(d.slip.amount), slipDate:d.slip.date||kpTodayStr(), slipRef:d.slip.ref||'',
+            totals:{ ship:d.sums.ship, cod:d.sums.cod, fee:d.sums.fee, net:d.sums.net },
+            rows:rows, orderIds:ids, issues:cleared, markedPaid:!!d.markPaid };
+  window.fbDB.ref('ctReconImg/'+id).set({ sheet:d.sheetImg||'', slip:d.slipImg||'', ts:now });
+  window.fbDB.ref('ctRecon/'+id).set(rec);
+  try{ auditAdd({type:'payment', area:'shipper', orderId:'📄 CT '+id, method:'settlement',
+        note:ctrMoney(rec.slipAmount)+' ฿ · '+ids.length+' orders'+(cleared.length?' · '+cleared.length+' cleared':''), by:by}); }catch(e){}
+
+  // A smaller copy goes onto every order, so the pictures show up in the order's
+  // slip section (Bills → 🚚 CT, Pictures → 💳 Slips) without bloating the database.
+  ctrShrinkUrl(d.sheetImg,1100,0.7,function(sheetSmall){
+    ctrShrinkUrl(d.slipImg,1100,0.7,function(slipSmall){
+      var stamp='CT '+(rec.slipDate?fmtD(rec.slipDate):'')+' · '+by;
+      ids.forEach(function(oid){
+        if(sheetSmall) addSlipPhoto(oid, sheetSmall, '📄 '+stamp, null);
+        if(slipSmall)  addSlipPhoto(oid, slipSmall,  '💳 '+stamp, null);
+      });
+      // Optional: tick the payments off — CT collected the COD and has now paid us.
+      if(d.markPaid){
+        var t=new Date(), hhmm=String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+        ids.forEach(function(oid){
+          var o=(orders||[]).find(function(x){return x.id===oid;});
+          if(!o||payIsPaid(o)) return;
+          var amt=0; try{ amt=ofOrderTotalNum(o)||0; }catch(e){}
+          o.payMethod='online'; o.paidOnline=amt; o.paidAmount=amt;
+          o.payDate=rec.slipDate; o.paidAt=hhmm; o.paidBy=by;
+          delete o.payAtOffice;
+        });
+        try{ syncOrders(); }catch(e){}
+      }
+      _ctrDraft=null; _ctrBusy='';
+      try{ payRender(); }catch(e){}
+      ctrRenderPanel();
+      alert('✅ บันทึกแล้ว / Filed — '+ctrMoney(rec.slipAmount)+' ฿ · '+ids.length+' ออเดอร์');
+    });
+  });
+}
+
+// ── a filed settlement ─────────────────────────────────────────────────────
+function ctrOpen(id){
+  var rec=(window.ctRecons||[]).find(function(x){return x.id===id;});
+  var body=document.getElementById('ctrec-body'), m=document.getElementById('ctrec-modal');
+  if(!rec||!body||!m) return;
+  body.innerHTML='<div class="mhdr"><span class="mtit">📄 CT · '+ctrMoney(rec.slipAmount)+' ฿</span><button type="button" class="mclose" onclick="ctrRecClose()"><i class="ti ti-x"></i></button></div>'
+    +'<div style="font-size:11.5px;color:var(--text2);margin-bottom:8px">'+(rec.slipDate?fmtD(rec.slipDate):'')+' · '+_esc(rec.by||'')+(rec.slipRef?' · ref '+_esc(rec.slipRef):'')+(rec.markedPaid?' · ✅ ทำเครื่องหมายชำระแล้ว / marked paid':'')+'</div>'
+    +'<div id="ctrec-imgs" style="display:flex;gap:8px;margin-bottom:10px"><div style="font-size:11px;color:var(--text2)">กำลังโหลดรูป… / loading pictures…</div></div>'
+    +'<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:10px"><table style="width:100%;border-collapse:collapse;min-width:440px">'
+      +'<thead><tr style="background:var(--bg2)"><th style="padding:5px;font-size:10.5px;color:var(--text2)">ออเดอร์</th><th style="padding:5px;font-size:10.5px;color:var(--text2)">ค่าส่ง</th><th style="padding:5px;font-size:10.5px;color:var(--text2)">COD</th><th style="padding:5px;font-size:10.5px;color:var(--text2)">2%</th><th style="padding:5px;font-size:10.5px;color:var(--text2)">โอน</th></tr></thead><tbody>'
+      +(rec.rows||[]).map(function(r){ return '<tr><td style="padding:4px 6px;font-size:11.5px;font-weight:700">'+_esc(r.orderId||'')+'<div style="font-size:9.5px;font-weight:400;color:var(--text2)">'+_esc(r.customer||'')+'</div></td>'
+        +'<td style="padding:4px 6px;text-align:right;font-size:11.5px">'+ctrMoney(r.shipAmount)+'</td>'
+        +'<td style="padding:4px 6px;text-align:right;font-size:11.5px">'+ctrMoney(r.cod)+'</td>'
+        +'<td style="padding:4px 6px;text-align:right;font-size:11.5px">'+ctrMoney(r.fee)+'</td>'
+        +'<td style="padding:4px 6px;text-align:right;font-size:11.5px;font-weight:700">'+ctrMoney(r.net)+'</td></tr>'; }).join('')
+      +'</tbody><tfoot><tr style="background:var(--bg2);border-top:1.5px solid var(--border)"><td style="padding:5px;font-size:11px;font-weight:800">รวม / total</td>'
+      +'<td style="padding:5px;text-align:right;font-weight:800;font-size:11.5px">'+ctrMoney(rec.totals&&rec.totals.ship)+'</td>'
+      +'<td style="padding:5px;text-align:right;font-weight:800;font-size:11.5px">'+ctrMoney(rec.totals&&rec.totals.cod)+'</td>'
+      +'<td style="padding:5px;text-align:right;font-weight:800;font-size:11.5px">'+ctrMoney(rec.totals&&rec.totals.fee)+'</td>'
+      +'<td style="padding:5px;text-align:right;font-weight:800;font-size:11.5px">'+ctrMoney(rec.totals&&rec.totals.net)+'</td></tr></tfoot></table></div>'
+    +((rec.issues||[]).length?'<div style="font-size:11.5px;font-weight:800;color:#92400e;margin-bottom:5px">⚠️ จุดที่เคลียร์ไว้ / points cleared on filing</div>'
+        +rec.issues.map(function(x){ return '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:6px 9px;margin-bottom:5px">'
+          +'<div style="font-size:11px;font-weight:700;color:var(--text2)">'+_esc(x.where||'')+'</div>'
+          +'<div style="font-size:11.5px;color:#92400e">'+_esc(x.msg||'')+'</div>'
+          +(x.note?'<div style="font-size:11px;color:var(--text);margin-top:3px">📝 '+_esc(x.note)+(x.by?' — '+_esc(x.by):'')+'</div>':'')+'</div>'; }).join('')
+      :'');
+  m.classList.add('open');
+  window.fbDB && window.fbDB.ref('ctReconImg/'+id).once('value',function(s){
+    var v=s.val()||{}, box=document.getElementById('ctrec-imgs'); if(!box) return;
+    var pic=function(u,l){ return u?'<div style="flex:1;min-width:0;text-align:center"><img src="'+u+'" onclick="openPhotoLightbox(this.src)" style="width:100%;height:120px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer"><div style="font-size:10.5px;color:var(--text2)">'+l+'</div></div>':''; };
+    box.innerHTML=(pic(v.sheet,'ชีต / sheet')+pic(v.slip,'สลิป / slip'))||'<div style="font-size:11px;color:var(--text2)">ไม่มีรูป / no pictures</div>';
+  });
+}
+function ctrRecClose(){ var m=document.getElementById('ctrec-modal'); if(m) m.classList.remove('open'); }
+// Block for the Bills tab, inside the 🚚 Shipper → CT accordion.
+function ctrBillsHtml(mk){
+  var list=(window.ctRecons||[]).filter(function(r){ return !mk||billsMKey(r.slipDate||'')===mk; });
+  if(!list.length) return '';
+  var sum=list.reduce(function(a,r){ return a+ctrNum(r.slipAmount); },0);
+  return '<div style="background:var(--bg2);border:1px solid #c7d2fe;border-radius:var(--rs);padding:7px 9px;margin-top:7px">'
+    +'<div style="font-size:11.5px;font-weight:800;margin-bottom:5px">📄 ใบแจ้งยอด CT / CT settlements ('+list.length+') · รับเข้า/received '+ctrMoney(sum)+' ฿</div>'
+    +list.map(ctrRecRow).join('')+'</div>';
+}
+
 function costsRender(){
   var el=document.getElementById('bills-costs'); if(!el) return;
   var mk=_costMonthKey();
@@ -25040,7 +25553,10 @@ function costsRender(){
           '</div>'+
           (open ? '<div style="padding:0 9px 8px">'+(rows.length
               ? rows.map(function(r){ return shipRow(r,idx,false); }).join('')
-              : '<div style="font-size:11px;color:var(--text2);padding-top:6px">No orders this month / ไม่มีออเดอร์เดือนนี้</div>')+'</div>' : '')+
+              : '<div style="font-size:11px;color:var(--text2);padding-top:6px">No orders this month / ไม่มีออเดอร์เดือนนี้</div>')
+              // CT settles by sheet + one transfer: the filed settlements of this
+              // month hang under the carrier they belong to.
+              +(function(){ try{ return ctrIsCT(c.id)?ctrBillsHtml(mk):''; }catch(e){ return ''; } })()+'</div>' : '')+
         '</div>';
       });
       html+=box(sInner);
