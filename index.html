@@ -825,6 +825,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{var _ac=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _el=document.getElementById('of-cnt');_el.textContent=_ac.length;_el.style.display=_ac.length>0?'':'none';ofUpdPrioCnt();}catch(e){}
         try{ofUpdTourDot();}catch(e){}
         try{payUpdateBadge();}catch(e){}
+        try{chaseRefresh();}catch(e){}   // unpaid + gone too long → alarm on every office tab
         try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
         try{if(document.getElementById('ofv-sales')&&document.getElementById('ofv-sales').classList.contains('active'))ofDailyRender();}catch(e){}
         try{sheetsAutoSyncInit();}catch(e){} // start mirror auto-sync once orders are loaded
@@ -1704,7 +1705,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     </div>
     <div class="tabs" style="display:flex;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;border-bottom:none;justify-content:center">
       <button type="button" class="tab" onclick="oft('sales')" id="oft-sales" style="display:none;flex-shrink:0">Sales</button>
-      <button type="button" class="tab" onclick="oft('pay')" id="oft-pay" style="display:none;flex-shrink:0">Pay <span class="tc" id="oft-pay-cnt" style="background:#fee2e2;color:#991b1b;display:none"></span></button>
+      <button type="button" class="tab" onclick="oft('pay')" id="oft-pay" style="display:none;flex-shrink:0">Pay <span class="tc" id="oft-pay-cnt" style="background:#fee2e2;color:#991b1b;display:none"></span><span id="oft-pay-dot" class="alert-dot" title="ต้องตามเงิน / follow-up overdue"></span></button>
       <button type="button" class="tab" onclick="oft('cust')" id="oft-cust" style="display:none;flex-shrink:0">Customers</button>
       <button type="button" class="tab" onclick="oft('attend')" id="oft-attend" style="display:none;flex-shrink:0">Payroll</button>
       <button type="button" class="tab" onclick="oft('inc')" id="oft-inc" style="flex-shrink:0">Incoming</button>
@@ -1717,6 +1718,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     </div>
   </div>
   </div><!-- /#of-topbar -->
+  <!-- Unpaid and sitting at the shipper / delivered for too long. Shown on EVERY
+       office tab so nobody has to go looking for it. -->
+  <div id="of-chase-banner" style="display:none"></div>
   <!-- DASHBOARD -->
   <div class="view active" id="ofv-home"><div class="sec">
     <!-- Greeting -->
@@ -1964,6 +1968,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <div class="stit" style="margin-bottom:0">Payment Tracking / ติดตามการชำระ</div>
     </div>
+    <div id="pay-chase"></div>
     <div id="pay-totals"></div>
     <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap" id="pay-filter-bar">
       <button type="button" class="fbtn active" onclick="payFilt('unpaid',this)" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5">⏳ Unpaid</button>
@@ -2601,6 +2606,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <button type="button" class="btn btng" id="ctpin-go" onclick="ctrPinSubmit()"><i class="ti ti-check"></i> ส่ง / Submit</button>
   </div></div>
   <div class="modal-overlay" id="ctrec-modal"><div class="modal" id="ctrec-body" style="max-width:620px"></div></div>
+
+  <!-- "I have chased this one" — note + when to nag again. -->
+  <div class="modal-overlay" id="chase-modal"><div class="modal" id="chase-body" style="max-width:440px"></div></div>
 
   <!-- PICTURES VIEW -->
   <div class="view" id="ofv-pics"><div class="sec">
@@ -6704,7 +6712,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260807004;
+var KP_BUILD = 20260807005;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -8313,6 +8321,11 @@ function addStatusLog(order, newStatus, byName) {
   const ts = now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
   const today = now.toLocaleDateString('en-GB',{day:'numeric',month:'short'});
   order.statusLog.push({status: newStatus, time: ts, date: today, by: byName||'—'});
+  // The log line above is a display string ("17 Jul", no year) — fine to read, no
+  // good for arithmetic. This is the exact moment, for "how long has this been
+  // sitting at the shipper" (see chaseSinceDate).
+  order.statusAt = order.statusAt || {};
+  order.statusAt[newStatus] = now.getTime();
 }
 
 
@@ -19283,7 +19296,7 @@ function payShipperFilt(val) {
   _payRenderNow();
 }
 
-function payRender() { _payRenderNow(); try{ mgRenderShippers(); }catch(e){} }
+function payRender() { _payRenderNow(); try{ mgRenderShippers(); }catch(e){} try{ chaseRefresh(); }catch(e){} }
 
 function ordNum(id){ var m = String(id||'').match(/(?:#|\d-)?(\d+)/); return m ? parseInt(m[1],10) : 0; }
 var payZoneCollapsed = {};
@@ -19501,6 +19514,225 @@ function payPendingRow(o){
     +'</div>';
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+//  FOLLOW-UP ALERTS — unpaid, and sitting at the shipper / delivered for too long
+//  ---------------------------------------------------------------------------
+//  Two orders reached the customer weeks ago and neither the carrier nor the
+//  customer said a word — so nobody asked for the money. Nothing in the app was
+//  nagging: "at shipper" is not a delivered order, so it never showed up in the
+//  Pay list at all. From now on every unpaid order that has been at the shipper
+//  or delivered for more than CHASE_DAYS days raises an alarm on EVERY office
+//  tab, for everybody. Whoever chases it writes down what came of it and picks
+//  the day it should come back — that is the only way to silence it.
+// ════════════════════════════════════════════════════════════════════════════
+var CHASE_DAYS = 3;
+var _chaseTourMap = null;   // rebuilt per refresh, not per order (700+ orders)
+
+function chaseRelevant(o){
+  if(!o) return false;
+  if(o.status!=='shipped' && o.status!=='delivered') return false;
+  try{ if(payIsPaid(o)) return false; }catch(e){}
+  try{ if(payIrrelevant(o)) return false; }catch(e){}   // free / claim / 0 ฿
+  return true;
+}
+function _chaseISO(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function chaseDateAdd(ds,n){ var d=new Date(String(ds)+'T00:00:00'); if(isNaN(d)) return ds; d.setDate(d.getDate()+n); return _chaseISO(d); }
+function chaseDaysBetween(a,b){
+  var x=new Date(String(a)+'T00:00:00'), y=new Date(String(b)+'T00:00:00');
+  if(isNaN(x)||isNaN(y)) return 0;
+  return Math.round((y-x)/86400000);
+}
+// statusLog only carries "17 Jul" — no year. Rebuild the year from the order date.
+// Takes the FIRST time the order left us (shipped or delivered, whichever came
+// first): finalising an old "at shipper" order as delivered must not look like
+// the clock started today.
+function _chaseFromLog(o){
+  var hit=null;
+  (o.statusLog||[]).forEach(function(e){
+    if(hit) return;
+    if(e && e.date && (e.status==='shipped'||e.status==='delivered')) hit=e;
+  });
+  if(!hit) return '';
+  var y=parseInt(String(o.date||'').slice(0,4),10)||(new Date()).getFullYear();
+  var d=new Date(hit.date+' '+y);
+  if(isNaN(d)) return '';
+  // Created in December, shipped in January → the log line belongs to the next year.
+  if(o.date && d < new Date(String(o.date)+'T00:00:00')){ d=new Date(hit.date+' '+(y+1)); if(isNaN(d)) return ''; }
+  return _chaseISO(d);
+}
+// Since when has this order been in its current status? Exact for everything
+// stamped from today on; for the orders that are already out there, the best
+// evidence available — the day its tour left, else the status log, else the
+// day the freight was booked, else the order date.
+function chaseSinceDate(o,tmap){
+  // Earliest of the two "it has left us" stamps — so shipped → delivered does
+  // not restart the clock on an order that was already overdue.
+  var st=[];
+  if(o.statusAt){ if(o.statusAt.shipped) st.push(o.statusAt.shipped); if(o.statusAt.delivered) st.push(o.statusAt.delivered); }
+  if(st.length) return _chaseISO(new Date(Math.min.apply(null,st)));
+  var t=(tmap||{})[String(o.id)];
+  if(t && t.day) return String(t.day);
+  var fromLog=_chaseFromLog(o); if(fromLog) return fromLog;
+  if(o.shipCostDate) return String(o.shipCostDate);
+  return String(o.date||kpTodayStr());
+}
+function chaseState(o,tmap){
+  var since=chaseSinceDate(o,tmap), today=kpTodayStr();
+  var deadline=(o.chase&&o.chase.due)?String(o.chase.due):chaseDateAdd(since,CHASE_DAYS);
+  return { since:since, days:chaseDaysBetween(since,today), deadline:deadline,
+           due:deadline<=today, wait:chaseDaysBetween(today,deadline),
+           n:(o.chase&&o.chase.n)||0 };
+}
+function chaseList(){
+  try{ _chaseTourMap=billsEndedTourByOrder(); }catch(e){ _chaseTourMap={}; }
+  var out=[];
+  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
+    if(!chaseRelevant(o)) return;
+    out.push({ o:o, c:chaseState(o,_chaseTourMap) });
+  });
+  out.sort(function(a,b){
+    if(a.c.due!==b.c.due) return a.c.due?-1:1;
+    if(a.c.due) return b.c.days-a.c.days;              // longest waiting first
+    return String(a.c.deadline).localeCompare(String(b.c.deadline));
+  });
+  return out;
+}
+function chaseAmount(o){ var n=0; try{ n=ofOrderTotalNum(o)||0; }catch(e){} var d=parseFloat(o.deposit)||0; return Math.max(0,n-d); }
+
+// Alarm on every office tab + the pulsing dot on the Pay tab.
+function chaseRefresh(){
+  var list, due;
+  try{ list=chaseList(); }catch(e){ return; }
+  due=list.filter(function(x){ return x.c.due; });
+  var el=document.getElementById('of-chase-banner');
+  // Shop and logistics accounts have no Pay tab — they can neither see the money
+  // nor do anything about it, so the alarm would be pure noise for them.
+  var maySee=true;
+  try{ var pt=document.getElementById('oft-pay'); maySee=!!pt && pt.style.display!=='none'; }catch(e){}
+  if(!maySee) due=[];
+  if(el){
+    if(!due.length){ el.style.display='none'; el.innerHTML=''; }
+    else {
+      var sum=due.reduce(function(a,x){ return a+chaseAmount(x.o); },0);
+      var worst=due[0];
+      el.style.display='';
+      el.innerHTML='<div onclick="chaseGoPay()" style="margin:8px 12px 0;background:#fef2f2;border:1.5px solid #dc2626;border-radius:var(--r);padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px">'
+        +'<span style="font-size:20px;flex-shrink:0">🔔</span>'
+        +'<div style="flex:1;min-width:0">'
+          +'<div style="font-size:13px;font-weight:800;color:#991b1b">ต้องตามเงิน '+due.length+' ออเดอร์ / '+due.length+' unpaid order'+(due.length!==1?'s':'')+' need chasing</div>'
+          +'<div style="font-size:11.5px;color:#991b1b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+sum.toLocaleString('en-US')+' ฿ · นานสุด / longest '+worst.c.days+' วัน ('+_esc(worst.o.id)+')</div>'
+        +'</div>'
+        +'<span class="btnsm" style="flex-shrink:0;background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700">ดู / Show</span>'
+      +'</div>';
+    }
+  }
+  var dot=document.getElementById('oft-pay-dot');
+  if(dot){ if(due.length) dot.classList.add('on'); else dot.classList.remove('on'); }
+  try{ chaseRenderPanel(list); }catch(e){}
+}
+function chaseGoPay(){
+  try{ oft('pay'); }catch(e){}
+  setTimeout(function(){ var el=document.getElementById('pay-chase'); if(el&&el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'start'}); },160);
+}
+function chaseRenderPanel(list){
+  var el=document.getElementById('pay-chase'); if(!el) return;
+  list=list||chaseList();
+  var due=list.filter(function(x){ return x.c.due; }), later=list.filter(function(x){ return !x.c.due; });
+  if(!due.length && !later.length){ el.innerHTML=''; return; }
+  var h='';
+  if(due.length){
+    var sum=due.reduce(function(a,x){ return a+chaseAmount(x.o); },0);
+    h+='<div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:var(--r);padding:11px 12px;margin-bottom:12px">'
+      +'<div style="font-size:13px;font-weight:800;color:#991b1b;margin-bottom:2px">🔔 ต้องตามเงิน / Chase the money ('+due.length+')</div>'
+      +'<div style="font-size:11.5px;color:#991b1b;margin-bottom:8px">ส่งไปแล้วเกิน '+CHASE_DAYS+' วันแต่ยังไม่ได้เงิน · '+sum.toLocaleString('en-US')+' ฿<br>Gone for more than '+CHASE_DAYS+' days and still unpaid — ask the shipper or the customer.</div>'
+      +due.map(chaseCardHtml).join('')
+    +'</div>';
+  }
+  if(later.length){
+    var open=!!window._chaseLaterOpen;
+    h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;margin-bottom:12px">'
+      +'<div onclick="chaseToggleLater()" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">'
+        +'<span style="font-size:12px;font-weight:700"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> ⏳ นัดตามไว้แล้ว / follow-up scheduled ('+later.length+')</span>'
+        +'<span style="font-size:11px;color:var(--text2)">'+later.reduce(function(a,x){return a+chaseAmount(x.o);},0).toLocaleString('en-US')+' ฿</span>'
+      +'</div>'
+      +(open?'<div style="margin-top:8px">'+later.map(chaseCardHtml).join('')+'</div>':'')
+    +'</div>';
+  }
+  el.innerHTML=h;
+}
+function chaseToggleLater(){ window._chaseLaterOpen=!window._chaseLaterOpen; chaseRenderPanel(); }
+function chaseCardHtml(x){
+  var o=x.o, c=x.c, eid=String(o.id).replace(/['\\]/g,'');
+  var atShip=o.status==='shipped';
+  var who=(o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:(o.driver||'ส่งเอง / self');
+  return '<div style="background:var(--bg);border:1px solid '+(c.due?'#fecaca':'var(--border)')+';border-radius:var(--rs);padding:9px 10px;margin-bottom:7px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px">'
+      +'<span style="font-size:14px;font-weight:800">'+_esc(o.id)+'</span>'
+      +'<span style="font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:10px;background:'+(atShip?'#eef2ff':'#dcfce7')+';color:'+(atShip?'#4f46e5':'#166534')+'">'+(atShip?'🚚 ที่ขนส่ง / at shipper':'✅ ส่งแล้ว / delivered')+'</span>'
+    +'</div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:2px">'+_esc(o.customer||'—')+(o.zone?' · '+_esc(o.zone):'')+'</div>'
+    +(o.phone?'<div style="font-size:12.5px;font-weight:700;margin-bottom:3px">'+phoneLinks(o.phone,'var(--blue)')+'</div>':'')
+    +'<div style="font-size:11.5px;color:'+(c.due?'#b91c1c':'var(--text2)')+';font-weight:600">'
+      +'⏱ '+c.days+' วัน / days · ตั้งแต่/since '+fmtD(c.since)+' · 🚚 '+_esc(who)
+      +(c.n?' · ตามแล้ว/chased '+c.n+'×':'')
+      +(c.due?'':' · ⏳ นัดอีกที/again '+fmtD(c.deadline))+'</div>'
+    +(o.chase&&o.chase.note?'<div style="font-size:11.5px;color:var(--text);background:var(--bg2);border-radius:var(--rs);padding:5px 8px;margin-top:5px">📝 '+_esc(o.chase.note)+(o.chase.by?' — '+_esc(o.chase.by):'')+'</div>':'')
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:7px">'
+      +'<span style="font-size:15px;font-weight:800;color:#dc2626">'+chaseAmount(o).toLocaleString('en-US')+' ฿</span>'
+      +'<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">'
+        +'<button type="button" class="btnsm" onclick="kpcJumpRef(\'order\',\''+eid+'\')" title="เปิดออเดอร์ / open order">📄</button>'
+        +'<button type="button" class="btnsm btnsmp" onclick="chaseOpen(\''+eid+'\')">📞 ตามแล้ว / Chased</button>'
+      +'</div>'
+    +'</div>'
+  +'</div>';
+}
+
+// ── "I chased it" — note + the day it should come back ────────────────────
+var _chaseId=null;
+function chaseOpen(id){
+  var o=(orders||[]).find(function(x){return x.id===id;}); if(!o) return;
+  _chaseId=id;
+  var body=document.getElementById('chase-body'), m=document.getElementById('chase-modal');
+  if(!body||!m) return;
+  var c=chaseState(o,_chaseTourMap||{});
+  var log=(o.chaseLog||[]).slice().reverse();
+  body.innerHTML='<div class="mhdr"><span class="mtit">📞 ตามเงิน / Follow-up · '+_esc(o.id)+'</span><button type="button" class="mclose" onclick="chaseClose()"><i class="ti ti-x"></i></button></div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:2px">'+_esc(o.customer||'')+' · '+chaseAmount(o).toLocaleString('en-US')+' ฿</div>'
+    +'<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-bottom:10px">⏱ '+c.days+' วัน / days ·  🚚 '+_esc((o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:(o.driver||'ส่งเอง'))+'</div>'
+    +'<label class="fl" style="margin-top:0">คุยกับใคร ว่าอย่างไร / What came of it</label>'
+    +'<textarea id="chase-note" rows="3" placeholder="เช่น โทรหาขนส่งแล้ว จะโอนวันศุกร์ / e.g. called the carrier, they pay on Friday" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;resize:vertical">'+_esc((o.chase&&o.chase.note)||'')+'</textarea>'
+    +'<label class="fl">เตือนอีกทีเมื่อไหร่ / Remind me again on</label>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px">'
+      +[1,2,3,7,14].map(function(n){ return '<button type="button" class="btnsm" onclick="chaseQuick('+n+')">+'+n+' วัน/d</button>'; }).join('')
+    +'</div>'
+    +'<input type="date" lang="en-GB" id="chase-due" value="'+chaseDateAdd(kpTodayStr(),CHASE_DAYS)+'" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px">'
+    +'<button type="button" class="btn btng" style="margin-top:12px" onclick="chaseSave()"><i class="ti ti-check"></i> บันทึก / Save</button>'
+    +(log.length?'<div style="margin-top:12px"><div style="font-size:11.5px;font-weight:800;color:var(--text2);margin-bottom:5px">ประวัติ / history</div>'
+        +log.map(function(l){ return '<div style="font-size:11.5px;color:var(--text2);border-left:2px solid var(--border);padding:2px 0 2px 8px;margin-bottom:4px">'
+          +fmtD(l.date)+' · '+_esc(l.by||'')+(l.next?' → '+fmtD(l.next):'')+(l.note?'<br>📝 '+_esc(l.note):'')+'</div>'; }).join('')
+      +'</div>':'');
+  m.classList.add('open');
+}
+function chaseClose(){ var m=document.getElementById('chase-modal'); if(m) m.classList.remove('open'); _chaseId=null; }
+function chaseQuick(n){ var el=document.getElementById('chase-due'); if(el) el.value=chaseDateAdd(kpTodayStr(),n); }
+function chaseSave(){
+  var o=(orders||[]).find(function(x){return x.id===_chaseId;}); if(!o){ chaseClose(); return; }
+  var note=((document.getElementById('chase-note')||{}).value||'').trim();
+  var due=((document.getElementById('chase-due')||{}).value||'').trim();
+  if(!due){ alert('ใส่วันที่เตือนอีกที / Pick the day it should come back'); return; }
+  if(due<=kpTodayStr()){ alert('ต้องเป็นวันในอนาคต / That day has to be in the future'); return; }
+  var by='Office';
+  try{ var s=(staffList||[]).find(function(x){return x.id===currentStaffId;}); if(s&&s.name) by=s.name; }catch(e){}
+  o.chase={ due:due, by:by, at:Date.now(), note:note, n:((o.chase&&o.chase.n)||0)+1 };
+  o.chaseLog=((o.chaseLog||[]).concat([{date:kpTodayStr(),by:by,note:note,next:due}])).slice(-10);
+  try{ syncOrders(); }catch(e){}
+  try{ auditAdd({type:'payment', area:'chase', orderId:o.id, method:'follow-up',
+        note:'→ '+due+(note?' · '+note:''), by:by}); }catch(e){}
+  chaseClose();
+  chaseRefresh();
+  try{ payRender(); }catch(e){}
+}
 
 function paySetMethod(id, method) {
   var o = orders.find(function(x){ return x.id===id; });
