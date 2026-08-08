@@ -6867,6 +6867,21 @@ document.addEventListener('touchstart', initAudio, { once: true });
 // ── OFFICE SALES TAB ──
 let ofSalesMonth = '';
 
+// ── HISTORIC SALES (months before the app held the orders) ──
+// The app only carries orders from the season reset onwards (Jul 2026), so the
+// YEAR card would miss Jan–Jun. Totals below come from the old records and are
+// added to the year total + shown in the year breakdown. Key = YYYY-MM, ฿.
+var KP_HIST_SALES = {
+  '2026-01': 2174318.68,
+  '2026-02': 4077363.15,
+  '2026-03': 4077460,
+  '2026-04': 3034583.70,
+  '2026-05': 3061075,
+  '2026-06': 3981740
+};
+function kpHistMonths(yr){ return Object.keys(KP_HIST_SALES).filter(function(k){ return k.indexOf(yr+'-')===0; }).sort(); }
+function kpHistYear(yr){ return kpHistMonths(yr).reduce(function(a,k){ return a+KP_HIST_SALES[k]; },0); }
+
 
 
 // ── REVENUE DETAIL MODAL ──
@@ -6907,6 +6922,28 @@ function closeRevDetail() {
   document.getElementById('rev-detail-modal').classList.remove('open');
 }
 
+// Jump from a month row in the year view into that month's day-by-day view.
+function revShowMonth(mk) {
+  var monthEl = document.getElementById('rev-detail-month');
+  var has = false;
+  for(var i=0;i<monthEl.options.length;i++) if(monthEl.options[i].value===mk) has = true;
+  if(!has) {
+    var y = mk.slice(0,4);
+    var MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    monthEl.innerHTML = MN.map(function(m,i){
+      var v = y+'-'+String(i+1).padStart(2,'0');
+      return '<option value="'+v+'">'+m+' '+y+'</option>';
+    }).join('');
+  }
+  monthEl.value = mk;
+  revDetailMode = 'month';
+  document.getElementById('rev-detail-date').style.display = 'none';
+  document.getElementById('rev-detail-year').style.display = 'none';
+  monthEl.style.display = 'block';
+  document.getElementById('rev-detail-list').scrollTop = 0;
+  refreshRevDetail();
+}
+
 function refreshRevDetail() {
   const mode = revDetailMode;
   const now = new Date();
@@ -6931,16 +6968,58 @@ function refreshRevDetail() {
   } else if(mode === 'year') {
     var yr = document.getElementById('rev-detail-year').value;
     filtered = rdPaid.filter(function(o){ return rdDate(o).indexOf(yr)===0; });
-    title = 'Orders in / ออเดอร์ปี';
+    title = 'Sales by month / ยอดขายรายเดือน';
     sub = yr;
   }
 
-  document.getElementById('rev-detail-title').textContent = title;
-  document.getElementById('rev-detail-sub').textContent = sub;
-  document.getElementById('rev-detail-count').textContent = filtered.length;
   var rdAmt = function(o){ return parseFloat((o.total||'0').toString().replace(/[^0-9]/g,''))||0; };
   var total = filtered.reduce(function(a,o){ return a+rdAmt(o); }, 0);
-  document.getElementById('rev-detail-total').textContent = total.toLocaleString()+' ฿';
+  // Year view also counts the months that predate the app (KP_HIST_SALES).
+  var rdHistYr = (mode==='year') ? document.getElementById('rev-detail-year').value : '';
+  var rdHistMs = rdHistYr ? kpHistMonths(rdHistYr) : [];
+  var rdHist = rdHistYr ? kpHistYear(rdHistYr) : 0;
+
+  document.getElementById('rev-detail-title').textContent = title;
+  document.getElementById('rev-detail-sub').textContent = sub;
+  document.getElementById('rev-detail-count').textContent = filtered.length + (rdHistMs.length ? ' +'+rdHistMs.length+' mo' : '');
+  document.getElementById('rev-detail-total').textContent = Math.round(total+rdHist).toLocaleString()+' ฿';
+
+  // Year view → month-by-month sales ONLY (no order list). Months without app
+  // orders come from KP_HIST_SALES and are shown as record-only rows.
+  if(mode === 'year') {
+    var byM = {};
+    rdHistMs.forEach(function(k){ byM[k] = {sum:KP_HIST_SALES[k], cnt:0, ctn:0, hist:true}; });
+    filtered.forEach(function(o){
+      var d = rdDate(o); if(!d) return;
+      var k = d.slice(0,7);
+      if(!byM[k]) byM[k] = {sum:0, cnt:0, ctn:0, hist:false};
+      byM[k].sum += rdAmt(o); byM[k].cnt++; byM[k].ctn += (parseInt(o.ctn)||0); byM[k].hist = false;
+    });
+    var mks = Object.keys(byM).sort().reverse();
+    if(!mks.length) {
+      document.getElementById('rev-detail-list').innerHTML = '<div class="empty" style="padding:1rem">No sales / ไม่มียอดขาย</div>';
+      return;
+    }
+    var maxM = mks.reduce(function(m,k){ return Math.max(m, byM[k].sum); }, 0);
+    var MNY = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    document.getElementById('rev-detail-list').innerHTML =
+      '<div style="font-size:12px;font-weight:700;color:var(--text2);margin:2px 0 6px"><i class="ti ti-calendar" style="font-size:12px;vertical-align:-1px"></i> By month / รายเดือน ('+mks.length+')</div>'
+      + mks.map(function(k){
+          var v = byM[k], pct = maxM>0?Math.round(v.sum/maxM*100):0;
+          var lbl = MNY[parseInt(k.slice(5,7),10)-1]+' '+k.slice(0,4);
+          return '<div class="card" style="margin-bottom:6px;padding:9px 12px'+(v.hist?'':';cursor:pointer')+'"'+(v.hist?'':' onclick="revShowMonth(\''+k+'\')"')+'>'
+            +'<div style="display:flex;justify-content:space-between;align-items:center">'
+              +'<span style="font-size:13px;font-weight:700;color:var(--text)">'+lbl+'</span>'
+              +'<span style="font-size:14px;font-weight:800;color:var(--green)">'+Math.round(v.sum).toLocaleString()+' ฿</span>'
+            +'</div>'
+            +'<div style="height:5px;background:var(--bg2);border-radius:3px;overflow:hidden;margin-top:5px"><div style="height:100%;background:var(--green);border-radius:3px;width:'+pct+'%"></div></div>'
+            +'<div style="font-size:10px;color:var(--text2);margin-top:3px">'
+              +(v.hist ? 'From records / จากบันทึกเก่า' : v.cnt+' order'+(v.cnt!==1?'s':'')+(v.ctn>0?' · 📦 '+v.ctn.toLocaleString()+' CTN':'')+' · tap for days / แตะดูรายวัน')
+            +'</div>'
+          +'</div>';
+        }).join('');
+    return;
+  }
 
   if(filtered.length === 0) {
     document.getElementById('rev-detail-list').innerHTML = '<div class="empty" style="padding:1rem">No orders found / ไม่มีออเดอร์</div>';
@@ -7083,7 +7162,10 @@ function ofRenderRevenue() {
   // small line now shows PAID (focus flipped: big = total, small = paid)
   document.querySelectorAll('.rev-today-all').forEach(function(s){ s.textContent=todayAmt.toLocaleString(); });
   document.querySelectorAll('.rev-month-all').forEach(function(s){ s.textContent=monthAmt.toLocaleString(); });
-  document.querySelectorAll('.rev-year-all').forEach(function(s){ s.textContent=yearAmt.toLocaleString(); });
+  // Months before the app (KP_HIST_SALES) top up the YEAR figures — those months
+  // are closed and fully settled, so they count towards total AND paid.
+  const yearHist = kpHistYear(yearStr);
+  document.querySelectorAll('.rev-year-all').forEach(function(s){ s.textContent=Math.round(yearAmt+yearHist).toLocaleString(); });
 
   // Update UI — big number = total delivered, count = all delivered
   const el = function(id){ return document.getElementById(id); };
@@ -7095,12 +7177,14 @@ function ofRenderRevenue() {
   document.querySelectorAll('.rev-today-period').forEach(function(s){ s.textContent='· '+_now.getDate()+' '+_mn[_now.getMonth()]+' '+_now.getFullYear(); });
   if(el('of-rev-month')) el('of-rev-month').textContent = monthAll.toLocaleString();
   if(el('of-rev-month-cnt')) el('of-rev-month-cnt').textContent = monthAllO.length + ' orders';
-  if(el('of-rev-year')) el('of-rev-year').textContent = yearAll.toLocaleString();
+  if(el('of-rev-year')) el('of-rev-year').textContent = Math.round(yearAll+yearHist).toLocaleString();
   if(el('of-rev-year-cnt')) el('of-rev-year-cnt').textContent = yearAllO.length + ' orders';
   // "since <first month with data>" — derived, so it stays right every year.
   if(el('of-rev-year-since')){
     var _fst='';
     yearAllO.forEach(function(o){ if(o.date && (!_fst || o.date < _fst)) _fst=o.date; });
+    var _hm = kpHistMonths(yearStr);
+    if(_hm.length && (!_fst || _hm[0] < _fst.slice(0,7))) _fst = _hm[0]+'-01';
     el('of-rev-year-since').textContent = _fst
       ? '· since '+_mn[parseInt(_fst.slice(5,7),10)-1]+' '+_fst.slice(0,4)
       : '· '+yearStr;
