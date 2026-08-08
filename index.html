@@ -1590,6 +1590,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" id="agf-panels" onclick="agSetFilter('panels')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🪵 Nur Paneele</button>
       <button type="button" id="agf-all" onclick="agSetFilter('all')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🔧 Alles (mit Leisten)</button>
     </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+      <button type="button" id="ago-new" onclick="agSetOpen(true)" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🚢 Nur Container</button>
+      <button type="button" id="ago-old" onclick="agSetOpen(false)" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🏚 Mit Altbestand</button>
+    </div>
     <div id="ag-body"></div>
   </div></div>
   <div class="view" id="mgv-drivers"><div class="sec">
@@ -6558,6 +6562,12 @@ var AG_WIN=60;          // days for "how fast does it sell right now"
 var AG_PRICE_WIN=180;   // days for the average selling price
 var AG_DEAD=60;         // no sale for this many days = not moving
 var _agFilter='panels', _agSort='age', _agSup='';   // _agSup = supplier shown in the container list ('' = all)
+// Start the count with the containers instead of the warehouse as it stands today.
+// The opening lot then does not exist: sales land on the containers straight away,
+// and anything sold before a container arrived is simply booked as "came out of the
+// old stock". Honest only while there was little old stock left of those products —
+// otherwise a container looks like it sold faster than it did. Said so in the UI.
+var _agNoOpen=true;
 
 function agToday(){ return (typeof kpTodayStr==='function')?kpTodayStr():new Date().toISOString().slice(0,10); }
 function agDays(a,b){
@@ -6680,7 +6690,7 @@ function agLedger(){
     var missing=Math.max(0, totArr+totCorr-totOut-stock);
 
     var lots=[];
-    if(opening>0) lots.push({cid:'_open', open:true, date:null, qty:opening});
+    if(opening>0 && !_agNoOpen) lots.push({cid:'_open', open:true, date:null, qty:opening});
     arr.forEach(function(a){ lots.push({cid:a.cid, date:a.date, qty:a.qty, cno:a.cno, sup:a.sup}); });
     corr.forEach(function(c){ lots.push({cid:c.arrive?'_arr':'_corr', corr:true, date:c.date, qty:c.qty}); });
     lots.sort(function(a,b){
@@ -6715,8 +6725,12 @@ function agLedger(){
         }
       };
       eat(false);
-      if(q>0) eat(true);
-      if(q>0) unattr+=q;                                  // more left than ever came in
+      // Without an opening lot the leftovers belong to the old stock, not to a
+      // container that had not even landed — booking them late would make every
+      // container look pre-sold. With one, the late pass keeps the ledger's
+      // remaining quantity in step with the real warehouse.
+      if(q>0 && !_agNoOpen) eat(true);
+      if(q>0) unattr+=q;
     });
 
     var sales=outs.filter(function(s){ return s.kind==='sale'; });
@@ -6740,14 +6754,18 @@ function agLedger(){
       ahead += l.left;
     });
     var done=lots.filter(function(l){ return l.empty && l.date && l.used>0; });
+    // Counting containers only, the stock that matters is what is LEFT OF THEM —
+    // reach and value must not be computed from a warehouse figure that still
+    // contains the old stock this mode deliberately leaves out.
+    var effStock = _agNoOpen ? sum(lots,function(l){ return l.left; }) : stock;
 
     return {
       key:k, code:dispBy[k]||(arr.length?arr[arr.length-1].code:k), type:typeBy[k]||btTypeOf(k),
-      stock:stock, lots:lots, unattr:unattr, missing:missing, opening:opening, pre:preTot,
+      stock:effStock, stockReal:stock, lots:lots, unattr:unattr, missing:missing, opening:opening, pre:preTot,
       speed:speed, sold60:sold60, price:price, lastSale:lastSale,
       idle: lastSale ? agDays(lastSale,today) : null,
-      cover: speed>0 ? Math.round(stock/speed) : null,
-      value: stock*price,
+      cover: speed>0 ? Math.round(effStock/speed) : null,
+      value: effStock*price,
       oldest:oldest, oldestOpen:oldestOpen,
       // Ø days arrival → sale, weighted by pieces, over the lots that carry a date.
       // Breakage and corrections are deliberately not in here — this is selling time.
@@ -6850,6 +6868,7 @@ var AG_BUCKETS=[
 function agSetFilter(f){ _agFilter=f; agRender(); }
 function agSetSort(s){ _agSort=s; agRender(); }
 function agSetSup(s){ _agSup=(_agSup===s)?'':s; agRender(); }
+function agSetOpen(v){ _agNoOpen=!!v; agRender(); }
 function agRenderIfOpen(){
   var v=document.getElementById('mgv-aging');
   if(v && v.classList.contains('active')) agRender();
@@ -6871,12 +6890,12 @@ function agRender(){
   var body=document.getElementById('ag-body'); if(!body) return;
   var L=agLedger(), today=L.today;
   var rows=L.codes.filter(function(r){ return _agFilter==='all' ? true : btIsPanel(r.type); });
-  ['panels','all'].forEach(function(f){
-    var b=document.getElementById('agf-'+f); if(!b) return;
-    var on=(_agFilter===f);
-    b.style.background=on?'var(--blue-bg)':'var(--bg2)';
-    b.style.borderColor=on?'var(--blue)':'var(--border)';
-    b.style.color=on?'var(--blue)':'var(--text2)';
+  [['agf-panels',_agFilter==='panels'],['agf-all',_agFilter==='all'],
+   ['ago-new',_agNoOpen],['ago-old',!_agNoOpen]].forEach(function(p){
+    var b=document.getElementById(p[0]); if(!b) return;
+    b.style.background=p[1]?'var(--blue-bg)':'var(--bg2)';
+    b.style.borderColor=p[1]?'var(--blue)':'var(--border)';
+    b.style.color=p[1]?'var(--blue)':'var(--text2)';
   });
   if(!rows.length){ body.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">Keine Daten</div>'; return; }
 
@@ -6907,7 +6926,8 @@ function agRender(){
     +box('ÄLTESTER BESTAND',
          oldestRow?((oldestRow.oldestOpen?'≥ ':'')+oldestRow.oldest+' Tage'):'—',
          oldestRow?esc(oldestRow.code):'', oldestRow&&oldestRow.oldest>90?'#dc2626':'var(--text)')
-    +box('BESTAND REICHT', coverAll==null?'—':(coverAll+' Tage'), totStock.toLocaleString('en-US')+' Stück im Lager')
+    +box('BESTAND REICHT', coverAll==null?'—':(coverAll+' Tage'),
+         totStock.toLocaleString('en-US')+(_agNoOpen?' Stück aus Containern':' Stück im Lager'))
     +box('ERWARTETER UMSATZ', agBaht(totVal),
          priceCov<100?('zum Ø Verkaufspreis · nur '+priceCov+'% der Stücke haben einen Preis'):'zum Ø Verkaufspreis','#16a34a')
     +'</div>';
@@ -6920,6 +6940,7 @@ function agRender(){
     +buckets.map(function(v,i){ return v>0?('<div title="'+AG_BUCKETS[i].l+'" style="width:'+(bTot>0?v/bTot*100:0)+'%;background:'+AG_BUCKETS[i].c+'"></div>'):''; }).join('')
     +'</div><div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:7px">'
     +buckets.map(function(v,i){
+        if(v<=0) return '';                       // an empty bucket is noise, not information
         return '<span style="font-size:11px;display:inline-flex;align-items:center;gap:4px">'
           +'<span style="width:9px;height:9px;border-radius:2px;background:'+AG_BUCKETS[i].c+';display:inline-block"></span>'
           +AG_BUCKETS[i].l+' <b>'+v.toLocaleString('en-US')+'</b>'
@@ -7025,7 +7046,7 @@ function agRender(){
           +'<span style="font-size:13px;font-weight:800">'+esc(r.code)+'</span>'
           +'<span style="font-size:13px;font-weight:800;color:'+ageCol+'">'+ageTxt+'</span></div>'
         +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'
-          +'Lager '+r.stock.toLocaleString('en-US')+' · '+(Math.round(r.speed*10)/10)+'/Tag · '
+          +(_agNoOpen?'aus Containern ':'Lager ')+r.stock.toLocaleString('en-US')+' · '+(Math.round(r.speed*10)/10)+'/Tag · '
           +'reicht <b style="color:'+covCol+'">'+(r.cover==null?'—':(r.cover+' Tage'))+'</b>'
           +(r.avgDays!=null?(' · Ø '+r.avgDays+' Tage bis verkauft'):'')
           +(r.cycle!=null?(' · Container vorher: '+r.cycle+' Tage bis leer'):'')
@@ -7048,11 +7069,18 @@ function agRender(){
                +(l.goneIn!=null?(' · '+(l.goneIn>400?'noch Jahre':('leer ~'+agFmtD(l.goneAt)))):'')))
           +'</span></div>';
       }).join('')
-      +((r.unattr>0||r.missing>0||r.pre>0)?('<div style="font-size:10.5px;color:#b45309;margin-top:4px">'
-          +(r.unattr>0?('⚠ '+r.unattr.toLocaleString('en-US')+' Stück gingen raus, ohne dass ein Container sie deckt. '):'')
-          +(r.missing>0?('⚠ '+r.missing.toLocaleString('en-US')+' Stück fehlen in der Rechnung — es kam mehr rein, als Lager + Abgänge erklären. '):'')
-          +(r.pre>0?('ℹ '+r.pre.toLocaleString('en-US')+' Stück wurden verkauft, bevor ihr Container eingebucht war (mit 0 Tagen gezählt).'):'')
-        +'</div>'):'')
+      +(function(){
+          // In container-only mode an "unattributed" outflow is not a fault — it is
+          // exactly the old stock this mode leaves out. Warning colour would be a lie.
+          var parts=[];
+          if(r.unattr>0) parts.push(_agNoOpen
+            ? 'ℹ '+r.unattr.toLocaleString('en-US')+' Stück gingen aus dem Altbestand raus (hier nicht mitgezählt).'
+            : '⚠ '+r.unattr.toLocaleString('en-US')+' Stück gingen raus, ohne dass ein Container sie deckt.');
+          if(r.missing>0 && !_agNoOpen) parts.push('⚠ '+r.missing.toLocaleString('en-US')+' Stück fehlen in der Rechnung — es kam mehr rein, als Lager + Abgänge erklären.');
+          if(r.pre>0) parts.push('ℹ '+r.pre.toLocaleString('en-US')+' Stück wurden verkauft, bevor ihr Container eingebucht war (mit 0 Tagen gezählt).');
+          if(!parts.length) return '';
+          return '<div style="font-size:10.5px;color:'+(_agNoOpen?'var(--text2)':'#b45309')+';margin-top:4px">'+parts.join(' ')+'</div>';
+        })()
       +'</div></details>';
   }).join('');
 
@@ -7097,7 +7125,9 @@ function agRender(){
   h+='<div class="card" style="padding:10px 12px">'
     +'<div style="font-size:11px;color:var(--text2);line-height:1.7">'
     +'<b>Wie das gerechnet wird:</b> FIFO — das Älteste geht zuerst raus. Als Abgang zählen Orders (nach Orderdatum), Stock-Korrekturen von Hand und Umbuchungen Grade A→B. '
-    +'Ware, die schon vor den Aufzeichnungen hier lag, ist ein einziger Posten „Altbestand" ohne Datum — sein Alter steht deshalb als „mindestens" (≥) da und geht in keinen Durchschnitt ein. '
+    +(_agNoOpen
+      ? '<b>Modus „Nur Container":</b> gezählt wird ausschließlich, was per Container reinkam. Der Bestand, der vorher schon im Lager lag, bleibt außen vor — Verkäufe davor stehen als „aus dem Altbestand" da. Solange von einem Produkt kaum noch Altbestand da war, stimmt das gut; lag noch viel davon herum, sieht der Container schneller verkauft aus, als er war. Dann auf 🏚 Mit Altbestand stellen. '
+      : '<b>Modus „Mit Altbestand":</b> was schon vor den Aufzeichnungen hier lag, ist ein einziger Posten „Altbestand" ohne Datum — sein Alter steht als „mindestens" (≥) da und geht in keinen Durchschnitt ein. ')
     +'Der Lieferanten-Filter blendet nur Container-Karten aus; Bestand, Alter und Vorschau rechnen immer mit allen Containern, sonst stimmt die Reihenfolge nicht.'
     +(L.start?('<br>Aufzeichnung beginnt am '+agFmtD(L.start)+'.'):'')
     +'</div></div>';
@@ -9702,11 +9732,22 @@ function ofDelNoteHTML(o, style){
   if(!n) return '';
   return '<div style="font-size:11.5px;font-weight:800;color:#dc2626;'+(style||'')+'">📝 '+kpcEsc(n)+'</div>';
 }
+// "packing 14:14" alone is unreadable a week later — which day was that? Older
+// entries (and every mirror import) carry no date at all, so the order's own date
+// stands in: the first step happened when the order was created.
+function ofLogWhen(l, o){
+  var d=(l&&l.date)||'';
+  if(!d && o && o.date){
+    var x=new Date(String(o.date)+'T00:00:00');
+    if(!isNaN(x)) d=x.toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+  }
+  return (d?d+' ':'')+((l&&l.time)||'');
+}
 function ofOrderCard(o, sfx){
   sfx = (typeof sfx==='string')?sfx:'';
   var logHTML = '';
   if(o.statusLog && o.statusLog.length>0){
-    logHTML = o.statusLog.map(function(l){return '<span style="background:#f5f5f5;border-radius:4px;padding:1px 5px;font-size:10px">'+l.status+' '+(l.time||'')+(l.by&&l.by!=='—'?' ('+l.by+')':'')+'</span>';}).join(' → ');
+    logHTML = o.statusLog.map(function(l){return '<span style="background:#f5f5f5;border-radius:4px;padding:1px 5px;font-size:10px">'+l.status+' '+ofLogWhen(l,o)+(l.by&&l.by!=='—'?' ('+l.by+')':'')+'</span>';}).join(' → ');
   }
   var allStatuses = ['new','packing','ready','loaded','delivered','cancelled'];
   var quickBtns = allStatuses.filter(function(s){return s!==o.status;}).map(function(s){
@@ -24384,7 +24425,7 @@ function replOrderHTML(o){
       +'<span>'+_esc(li.code)+(li.grade==='B'?' (B)':'')+'</span>'
       +'<span style="color:var(--text2);white-space:nowrap">'+(parseInt(li.qty)||0)+' pcs'+(up?' · '+up+' ฿':'')+'</span></div>';
   }).join('');
-  var log = (o.statusLog||[]).map(function(l){return l.status+' '+(l.time||'')+(l.by&&l.by!=='—'?' ('+l.by+')':'');}).join(' → ');
+  var log = (o.statusLog||[]).map(function(l){return l.status+' '+ofLogWhen(l,o)+(l.by&&l.by!=='—'?' ('+l.by+')':'');}).join(' → ');
   return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:11px 12px">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">'
       +'<span style="font-size:15px;font-weight:800">'+_esc(o.id)+'</span>'
