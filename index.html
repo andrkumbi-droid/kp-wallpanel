@@ -273,6 +273,16 @@ body.kmdragging{user-select:none;-webkit-user-select:none}
    of the bottom-sheet look. The dashed strip is the drop target. */
 #cldocs-modal{align-items:center;padding:16px}
 #cldocs-modal .modal{border-radius:16px}
+/* Sits on top of the papers sheet it was opened from. */
+#clprev-modal{align-items:center;padding:12px;z-index:320}
+#clprev-modal .modal{border-radius:16px;max-width:960px;width:100%;max-height:94vh;display:flex;flex-direction:column;padding:12px}
+#clprev-frame{flex:1;min-height:64vh;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);overflow:auto}
+#clprev-frame iframe{width:100%;height:100%;min-height:64vh;border:0;display:block}
+#clprev-frame img{max-width:100%;display:block;margin:0 auto}
+.clsheet{border-collapse:collapse;font-size:12px;background:var(--bg)}
+.clsheet td,.clsheet th{border:1px solid var(--border);padding:3px 7px;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis}
+.clsheet th{background:var(--bg2);position:sticky;top:0;font-weight:700;z-index:1}
+.clsheet tr:first-child td{font-weight:700;background:var(--bg2)}
 .cldrop{display:flex;align-items:center;justify-content:center;gap:6px;text-align:center;border:1.5px dashed var(--border);border-radius:var(--rs);padding:8px 10px;font-size:11px;color:var(--text2);cursor:pointer;transition:background .12s,border-color .12s}
 .cldrop:hover{border-color:var(--blue);color:var(--blue)}
 .cldrop.over{border-color:var(--blue);background:var(--blue-bg);color:var(--blue);font-weight:700}
@@ -6729,7 +6739,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260808002;
+var KP_BUILD = 20260808003;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -21930,6 +21940,18 @@ function calcViz() {
 
 <!-- Container paperwork: the PI and the two transfer confirmations. -->
 <div class="modal-overlay" id="cldocs-modal" ondragover="event.preventDefault()" ondrop="event.preventDefault()"><div class="modal" id="cldocs-body" style="max-width:560px;max-height:88vh;overflow-y:auto"></div></div>
+<!-- Look at a paper without downloading it: PDF in the browser's own viewer,
+     pictures as pictures, a spreadsheet as a table. -->
+<div class="modal-overlay" id="clprev-modal"><div class="modal">
+  <div class="mhdr" style="margin-bottom:8px"><span class="mtit" id="clprev-title" style="font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span>
+    <span style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+      <span id="clprev-sheets"></span>
+      <a id="clprev-tab" class="btnsm" style="text-decoration:none;padding:4px 10px;display:none" target="_blank" rel="noopener">↗ แท็บใหม่ / new tab</a>
+      <a id="clprev-dl" class="btnsm" style="text-decoration:none;padding:4px 10px" download>⬇ บันทึก / save</a>
+      <button type="button" class="mclose" onclick="clPrevClose()"><i class="ti ti-x"></i></button>
+    </span></div>
+  <div id="clprev-frame"></div>
+</div></div>
 <input type="file" id="cldoc-file" accept="image/*,.pdf,.xls,.xlsx,.csv,.doc,.docx" multiple style="display:none" onchange="clDocOnFile(this)">
 
 <!-- CONTAINER LOG MODAL -->
@@ -22889,6 +22911,100 @@ function clDocsOpen(id){
   });
 }
 function clDocUrl(f){ return f.url || (f.k?_clDocBlob[f.k]:'') || ''; }
+function clDocKindOf(f){
+  var n=(f&&f.name||'').toLowerCase(), m=(f&&f.mime||'').toLowerCase();
+  if(clDocIsImg(f)) return 'img';
+  if(/\.pdf$/.test(n)||m==='application/pdf') return 'pdf';
+  if(/\.(xlsx?|csv)$/.test(n)||/spreadsheet|excel|ms-excel|csv/.test(m)) return 'sheet';
+  return 'other';
+}
+// ── look at a paper instead of downloading it ─────────────────────────────
+var _clPrevUrls=[];   // object URLs handed to the viewer, revoked on close
+function _clB64ToU8(dataUrl){
+  var b64=String(dataUrl||'').split(',')[1]||'';
+  var bin=atob(b64), u8=new Uint8Array(bin.length);
+  for(var i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+  return u8;
+}
+function _clObjUrl(dataUrl,mime){
+  var u=URL.createObjectURL(new Blob([_clB64ToU8(dataUrl)],{type:mime||'application/octet-stream'}));
+  _clPrevUrls.push(u); return u;
+}
+function clPrevClose(){
+  var m=document.getElementById('clprev-modal'); if(m) m.classList.remove('open');
+  var fr=document.getElementById('clprev-frame'); if(fr) fr.innerHTML='';
+  var sh=document.getElementById('clprev-sheets'); if(sh) sh.innerHTML='';
+  _clPrevUrls.forEach(function(u){ try{ URL.revokeObjectURL(u); }catch(e){} });
+  _clPrevUrls=[];
+}
+function _clPrevShow(f,src){
+  var m=document.getElementById('clprev-modal'), fr=document.getElementById('clprev-frame'),
+      ti=document.getElementById('clprev-title'), dl=document.getElementById('clprev-dl'),
+      sh=document.getElementById('clprev-sheets');
+  if(!m||!fr) return;
+  if(ti) ti.textContent=f.name||'file';
+  if(sh) sh.innerHTML='';
+  var kind=clDocKindOf(f), isData=/^data:/.test(src||'');
+  // A data: URL cannot be navigated to and will not render in an iframe — turn it
+  // into a blob first. Something already on a real URL is fine as it is.
+  var href=(isData && kind!=='img') ? _clObjUrl(src, f.mime||(kind==='pdf'?'application/pdf':'')) : src;
+  if(dl){ dl.href=href; dl.setAttribute('download', f.name||'file'); }
+  // Safari on the iPhone leaves a PDF in an iframe blank — always offer the tab.
+  var tab=document.getElementById('clprev-tab');
+  if(tab){
+    if(kind==='pdf'){ tab.href=href; tab.style.display=''; }
+    else tab.style.display='none';
+  }
+  m.classList.add('open');
+  if(kind==='img'){ fr.innerHTML='<img src="'+src+'" alt="">'; return; }
+  if(kind==='pdf'){ fr.innerHTML='<iframe src="'+href+'"></iframe>'; return; }
+  if(kind==='sheet'){ fr.innerHTML='<div style="padding:14px;font-size:12px;color:var(--text2)">กำลังเปิดตาราง… / opening the sheet…</div>'; _clPrevSheet(f,src,href); return; }
+  fr.innerHTML='<div style="padding:20px;text-align:center;font-size:12.5px;color:var(--text2)">'
+    +clDocIcon(f)+' '+_esc(f.name||'')+'<br><span style="font-size:11px">เปิดในเครื่องไม่ได้ — กด “บันทึก” / this kind cannot be shown here — use “save”</span></div>';
+}
+// Spreadsheets: the same on-demand SheetJS the supplier-invoice import uses.
+function _clPrevSheet(f,src,href){
+  var fr=document.getElementById('clprev-frame');
+  var render=function(u8){
+    try{
+      var wb=XLSX.read(u8,{type:'array'});
+      var names=wb.SheetNames||[];
+      var draw=function(nm){
+        var ws=wb.Sheets[nm];
+        var aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:''});
+        // A PI is a page, not a database — cap it so a stray 10k-row sheet cannot
+        // freeze the phone that opened it.
+        var rows=aoa.slice(0,300), cut=aoa.length>300;
+        var wide=rows.reduce(function(a,r){ return Math.max(a,r.length); },0);
+        var cols=Math.min(wide,40);
+        var html='<div style="overflow:auto;max-height:78vh"><table class="clsheet">'
+          + rows.map(function(r){
+              var tds=''; for(var i=0;i<cols;i++){ tds+='<td>'+_esc(String(r[i]==null?'':r[i]))+'</td>'; }
+              return '<tr>'+tds+'</tr>';
+            }).join('')
+          +'</table>'+(cut?'<div style="padding:8px;font-size:11px;color:var(--text2)">… แสดง 300 แถวแรก / first 300 rows shown</div>':'')+'</div>';
+        fr.innerHTML=html;
+      };
+      var sh=document.getElementById('clprev-sheets');
+      if(sh && names.length>1){
+        sh.innerHTML='<select id="clprev-sheetsel" style="padding:4px 6px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px">'
+          + names.map(function(n){ return '<option value="'+_esc(n)+'">'+_esc(n)+'</option>'; }).join('')+'</select>';
+        sh.querySelector('select').onchange=function(){ draw(this.value); };
+      }
+      draw(names[0]);
+    }catch(e){
+      fr.innerHTML='<div style="padding:20px;text-align:center;font-size:12.5px;color:var(--text2)">อ่านตารางไม่ได้ / could not read this sheet<br><span style="font-size:11px">'+_esc(String(e&&e.message||e))+' — กด “บันทึก” / use “save”</span></div>';
+    }
+  };
+  var go=function(ok){
+    if(!ok||!window.XLSX){ fr.innerHTML='<div style="padding:20px;text-align:center;font-size:12.5px;color:var(--text2)">ต้องต่อเน็ตเพื่อเปิดตาราง / opening a sheet needs the internet<br><span style="font-size:11px">กด “บันทึก” เพื่อเปิดใน Excel / use “save” to open it in Excel</span></div>'; return; }
+    if(/^data:/.test(src||'')){ render(_clB64ToU8(src)); return; }
+    fetch(href||src).then(function(r){ return r.arrayBuffer(); })
+      .then(function(b){ render(new Uint8Array(b)); })
+      .catch(function(){ fr.innerHTML='<div style="padding:20px;text-align:center;font-size:12px;color:var(--text2)">โหลดไฟล์ไม่ได้ / could not load the file</div>'; });
+  };
+  try{ acInvLoadXLSX(go); }catch(e){ go(false); }
+}
 // Non-picture files are never fetched until somebody asks for them — an invoice
 // is megabytes and nothing on screen needs its bytes to draw a filename.
 function clDocFetch(kind,idx){
@@ -22896,8 +23012,7 @@ function clDocFetch(kind,idx){
   var f=clDocsOf(c,kind)[idx]; if(!f) return;
   var open=function(u){
     if(!u){ alert('ไฟล์หาย / File missing'); return; }
-    var a=document.createElement('a'); a.href=u; a.download=f.name||'file'; a.target='_blank'; a.rel='noopener';
-    document.body.appendChild(a); a.click(); a.remove();
+    _clPrevShow(f,u);
   };
   if(f.url) return open(f.url);
   if(_clDocBlob[f.k]) return open(_clDocBlob[f.k]);
@@ -22955,7 +23070,7 @@ function clDocsRender(){
             +'<div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(f.name||'file')+'</div>'
             +'<div style="font-size:10.5px;color:var(--text2)">'+clDocSize(f.size)+(f.ts?' · '+new Date(f.ts).toLocaleDateString('th-TH',{day:'numeric',month:'short'}):'')+(f.by?' · '+_esc(f.by):'')+'</div>'
           +'</div>'
-          +'<button type="button" class="btnsm" style="flex-shrink:0;padding:4px 9px" onclick="clDocFetch(\''+k[0]+'\','+i+')">เปิด / open</button>'
+          +'<button type="button" class="btnsm" style="flex-shrink:0;padding:4px 9px" onclick="clDocFetch(\''+k[0]+'\','+i+')" title="'+(clDocKindOf(f)==='sheet'?'ดูเป็นตาราง / show as a table':clDocKindOf(f)==='pdf'?'เปิดในแอป / open here':'เปิด / open')+'">👁 เปิด / open</button>'
           +'<span onclick="clDocDel(\''+k[0]+'\','+i+')" title="ลบ / delete" style="flex-shrink:0;cursor:pointer;color:#dc2626">🗑</span>'
         +'</div>';
       }).join('');
