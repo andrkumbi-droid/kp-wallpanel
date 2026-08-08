@@ -26166,6 +26166,10 @@ function billShipTourToggle(){ _billShipOpen['__ontour']=(_billShipOpen['__ontou
 // Driver / warehouse rows in the cost list fold open the same way.
 var _billStaffOpen={};
 function billStaffToggle(k){ _billStaffOpen[k]=!_billStaffOpen[k]; costsRender(); }
+// …and so does a single tour card: its orders (price, pictures, shipper picker)
+// live inside it instead of repeating the same order underneath the card.
+var _billTourOpen={};
+function billTourToggle(k){ _billTourOpen[k]=!_billTourOpen[k]; costsRender(); }
 // Bucket a payroll person into Driver / Warehouse / Lalamove / Other for the Bills split.
 // Lalamove (a carrier logged as a payroll line) is always its own group, regardless of role.
 function _billStaffGroup(who, name){
@@ -27198,13 +27202,28 @@ function costsRender(){
         '</div>'+
         (popen ? '<div style="padding:0 9px 8px">'+
           (tours.length ? tours.map(function(t){
+            // The tour card IS the fold-open header for its own orders. They used to
+            // sit underneath it a second time, in full, which is what made one order
+            // look like two. Tapping the card opens exactly those rows.
+            var tk=pk+'|'+t.tid, tOpen=!!_billTourOpen[tk];
+            var mine=ships.filter(function(x){ return x && x.tour && x.tour.tid===t.tid; });
             return '<div style="background:var(--bg2);border-radius:var(--rs);padding:6px 8px;margin-top:6px">'+
-              '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">'+
-                '<span onclick="event.stopPropagation();billTourInfo(\''+_esc(t.tid)+'\')" title="Details / รายละเอียด" style="font-size:11px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px;cursor:pointer">🆔 '+_esc(t.tid)+'</span>'+
-                '<span style="font-size:11px;color:var(--text2);flex:1;min-width:0">'+(t.day?fmtD(t.day):'—')+' · '+t.orders.length+' orders'+(t.state==='ended'?'':' · <b>'+_esc(t.state)+'</b>')+'</span>'+
+              '<div'+(mine.length?' onclick="event.stopPropagation();billTourToggle(\''+_esc(tk)+'\')"':'')+' style="display:flex;justify-content:space-between;gap:8px;align-items:center'+(mine.length?';cursor:pointer':'')+'">'+
+                '<span style="display:flex;align-items:center;gap:5px;min-width:0;flex-shrink:0">'+
+                  (mine.length?'<i class="ti ti-chevron-'+(tOpen?'down':'right')+'" style="font-size:13px;color:var(--text2)"></i>':'')+
+                  // The pill itself still opens the tour details — that is a different question.
+                  '<span onclick="event.stopPropagation();billTourInfo(\''+_esc(t.tid)+'\')" title="Details / รายละเอียด" style="font-size:11px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px;cursor:pointer">🆔 '+_esc(t.tid)+'</span>'+
+                '</span>'+
+                '<span style="font-size:11px;color:var(--text2);flex:1;min-width:0">'+(t.day?fmtD(t.day):'—')+' · '+t.orders.length+' orders'+(t.state==='ended'?'':' · <b>'+_esc(t.state)+'</b>')+
+                  (mine.length?' · <span style="color:#1d4ed8;font-weight:700">🚚 '+mine.length+'</span>':'')+'</span>'+
                 '<span style="font-size:12px;font-weight:700;white-space:nowrap">'+t.pay.toLocaleString()+' ฿'+(t.paid?' <span title="paid / จ่ายแล้ว'+(t.paidBy?' · '+_esc(t.paidBy):'')+'" style="color:#16a34a">✓</span>':'')+'</span>'+
               '</div>'+
+              ((tOpen&&mine.length)?'<div style="margin-top:2px">'+mine.map(function(x,i){
+                  return _billShipRowHTML(x,'t'+String(t.tid).replace(/[^\w]/g,'')+i,!!x.onTour);
+                }).join('')+'</div>':'')+
               (function(){
+                // Orders of this tour that carry no shipping row of their own stay as
+                // plain chips — otherwise you could not see what was on the tour.
                 var chips=t.orders.filter(function(oid){ return !shipIds[String(oid)]; });
                 if(!chips.length) return '';
                 return '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px">'+chips.slice(0,24).map(function(oid){
@@ -27224,10 +27243,16 @@ function costsRender(){
           // Lalamove: the orders that went with this carrier — the shipping cost, the
           // ฟรี/free tick and every picture (goods, receipt, transfer slip) to look at
           // and to add afterwards. Same row the Shipper block uses.
-          // The heading only earns its line when a payroll block sits above it and the
-          // two need telling apart. On a carrier the rows ARE the block.
-          (ships.length?((onPayroll&&lines.length)?'<div style="font-size:10.5px;font-weight:800;color:var(--text2);margin:9px 0 3px;text-transform:uppercase;letter-spacing:.04em">🚚 ค่าส่ง / Shipping · '+(r.shipTotal||0).toLocaleString()+' ฿</div>':'')+
-            ships.map(function(x,i){ return _billShipRowHTML(x,'lala'+i,!!x.onTour); }).join(''):'')+
+          // Only what did NOT go out on one of the tours above — those rows live
+          // inside their tour card now. The heading only earns its line when a
+          // payroll block sits above it and the two need telling apart.
+          (function(){
+            var tt={}; tours.forEach(function(t){ tt[t.tid]=1; });
+            var rest=ships.filter(function(x){ return !(x && x.tour && tt[x.tour.tid]); });
+            if(!rest.length) return '';
+            return ((onPayroll&&lines.length)?'<div style="font-size:10.5px;font-weight:800;color:var(--text2);margin:9px 0 3px;text-transform:uppercase;letter-spacing:.04em">🚚 ค่าส่ง / Shipping · '+(r.shipTotal||0).toLocaleString()+' ฿</div>':'')
+              +rest.map(function(x,i){ return _billShipRowHTML(x,'lala'+i,!!x.onTour); }).join('');
+          })()+
         '</div>' : '')+
       '</div>';
     });
