@@ -27170,6 +27170,22 @@ function costsRender(){
     blk.children.forEach(function(r){
       var pk=blk.group+'|'+r.id, popen=!!_billStaffOpen[pk];
       var tours=r.tours||[], lines=r.lines||[], ships=r.rows||[];
+      // Warehouse and drivers ARE on the payroll, so the breakdown (tour pay,
+      // advance, fine, bonus) belongs to them. Lalamove is a carrier, not an
+      // employee — there the payroll block only repeated the money a third time
+      // (tour card, payroll line, shipping row all showing the same 352 ฿).
+      // Unknown people keep their block: never hide numbers we cannot classify.
+      var onPayroll=(function(){
+        if(blk.group==='Lalamove') return false;
+        try{
+          var s=(typeof staffList!=='undefined'?staffList:[]).find(function(x){ return x && ('staff:'+x.id)===r.id; });
+          return s ? !!s.payrollOn : true;
+        }catch(e){ return true; }
+      })();
+      // An order listed below with its price, pictures and shipper picker does not
+      // need a bare chip on the tour card as well.
+      var shipIds={};
+      ships.forEach(function(x){ if(x && x.o && x.o.id) shipIds[String(x.o.id)]=1; });
       tInner+='<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;overflow:hidden">'+
         '<div onclick="billStaffToggle(\''+_esc(pk)+'\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;padding:6px 9px;cursor:pointer">'+
           '<span style="flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(popen?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(r.label)+
@@ -27188,13 +27204,17 @@ function costsRender(){
                 '<span style="font-size:11px;color:var(--text2);flex:1;min-width:0">'+(t.day?fmtD(t.day):'—')+' · '+t.orders.length+' orders'+(t.state==='ended'?'':' · <b>'+_esc(t.state)+'</b>')+'</span>'+
                 '<span style="font-size:12px;font-weight:700;white-space:nowrap">'+t.pay.toLocaleString()+' ฿'+(t.paid?' <span title="paid / จ่ายแล้ว'+(t.paidBy?' · '+_esc(t.paidBy):'')+'" style="color:#16a34a">✓</span>':'')+'</span>'+
               '</div>'+
-              (t.orders.length?'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px">'+t.orders.slice(0,24).map(function(oid){
-                  return '<span style="font-size:10.5px;padding:1px 6px;border-radius:999px;background:var(--bg);border:1px solid var(--border)">'+_esc(oid)+'</span>';
-                }).join('')+(t.orders.length>24?'<span style="font-size:10.5px;color:var(--text2)">+'+(t.orders.length-24)+'</span>':'')+'</div>':'')+
+              (function(){
+                var chips=t.orders.filter(function(oid){ return !shipIds[String(oid)]; });
+                if(!chips.length) return '';
+                return '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px">'+chips.slice(0,24).map(function(oid){
+                    return '<span style="font-size:10.5px;padding:1px 6px;border-radius:999px;background:var(--bg);border:1px solid var(--border)">'+_esc(oid)+'</span>';
+                  }).join('')+(chips.length>24?'<span style="font-size:10.5px;color:var(--text2)">+'+(chips.length-24)+'</span>':'')+'</div>';
+              })()+
             '</div>';
           }).join('') : '<div style="font-size:11px;color:var(--text2);padding-top:6px">No tour record this month / ไม่มีทัวร์เดือนนี้</div>')+
           // What the amount is actually made of — tour pay, advances, fines, bonuses…
-          (lines.length?'<div style="font-size:10.5px;font-weight:800;color:var(--text2);margin:9px 0 3px;text-transform:uppercase;letter-spacing:.04em">💵 Payroll / เงินเดือน</div>'+
+          ((onPayroll&&lines.length)?'<div style="font-size:10.5px;font-weight:800;color:var(--text2);margin:9px 0 3px;text-transform:uppercase;letter-spacing:.04em">💵 Payroll / เงินเดือน</div>'+
             lines.map(function(l){
               var lbl=(typeof payCatMeta==='function'?(payCatMeta(l.cat).label||l.cat):l.cat);
               return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:3px 8px;background:var(--bg2);border-radius:var(--rs);margin-top:3px">'+
@@ -27204,11 +27224,9 @@ function costsRender(){
           // Lalamove: the orders that went with this carrier — the shipping cost, the
           // ฟรี/free tick and every picture (goods, receipt, transfer slip) to look at
           // and to add afterwards. Same row the Shipper block uses.
-          (ships.length?'<div style="font-size:10.5px;font-weight:800;color:var(--text2);margin:9px 0 3px;text-transform:uppercase;letter-spacing:.04em">🚚 ค่าส่ง / Shipping · '+(r.shipTotal||0).toLocaleString()+' ฿</div>'+
-            // A ride typed in twice (tour pay + order) is shown once and counted once.
-            (r.shipDup?'<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:5px 8px;margin-top:4px;font-size:10.5px;color:var(--text2);line-height:1.45">'+
-              'ℹ️ '+(r.shipDupAmt||0).toLocaleString()+' ฿ อยู่ในค่าทัวร์ด้านบนแล้ว — ไม่นับซ้ำ / already booked as tour pay above — not counted twice.'+
-              (r.shipAdd>0?' <b>+'+r.shipAdd.toLocaleString()+' ฿</b> ที่เหลือถูกนับ / the rest is counted.':'')+'</div>':'')+
+          // The heading only earns its line when a payroll block sits above it and the
+          // two need telling apart. On a carrier the rows ARE the block.
+          (ships.length?((onPayroll&&lines.length)?'<div style="font-size:10.5px;font-weight:800;color:var(--text2);margin:9px 0 3px;text-transform:uppercase;letter-spacing:.04em">🚚 ค่าส่ง / Shipping · '+(r.shipTotal||0).toLocaleString()+' ฿</div>':'')+
             ships.map(function(x,i){ return _billShipRowHTML(x,'lala'+i,!!x.onTour); }).join(''):'')+
         '</div>' : '')+
       '</div>';
