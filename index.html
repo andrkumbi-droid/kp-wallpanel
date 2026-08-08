@@ -1534,9 +1534,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 <!-- MANAGER -->
 <div class="screen" id="s-manager"><div class="pb">
   <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div><div class="h-title">Management</div><div class="h-sub">KP Wallpanel</div></div></div>
-  <div class="tabs" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr">
+  <div class="tabs" style="grid-template-columns:repeat(5,1fr)">
     <button type="button" class="tab active" onclick="mgt('stock')" id="mgt-stock">Stock / สต็อก</button>
     <button type="button" class="tab" onclick="mgt('incoming')" id="mgt-incoming">Incoming / ขาเข้า</button>
+    <button type="button" class="tab" onclick="mgt('aging')" id="mgt-aging">📦 Aging / อายุสต็อก</button>
     <button type="button" class="tab" onclick="mgt('staff')" id="mgt-staff">Staff / พนักงาน</button>
     <button type="button" class="tab" onclick="mgt('audit')" id="mgt-audit">Audit Log</button>
   </div>
@@ -1578,6 +1579,18 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div id="cl-pending"></div>
     <div id="cl-history" style="margin-top:12px"></div>
     <div id="cl-stats" style="margin-top:4px"></div>
+  </div></div>
+  <!-- AGING — FIFO batch ledger: how long goods lie here before they sell -->
+  <div class="view" id="mgv-aging"><div class="sec">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <div class="stit" style="margin-bottom:0">📦 Aging / อายุสต็อก — นานแค่ไหนกว่าจะขายออก</div>
+      <button type="button" class="btnsm" onclick="agRender()"><i class="ti ti-refresh"></i></button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+      <button type="button" id="agf-panels" onclick="agSetFilter('panels')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🪵 แผ่นผนัง / Panels</button>
+      <button type="button" id="agf-all" onclick="agSetFilter('all')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🔧 ทุกอย่าง / Everything</button>
+    </div>
+    <div id="ag-body"></div>
   </div></div>
   <div class="view" id="mgv-drivers"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="stit" style="margin-bottom:0">Drivers / คนขับ</div><button type="button" class="btnsm btnsmp" onclick="openDM(null)"><i class="ti ti-plus"></i> Add</button></div>
@@ -5302,7 +5315,7 @@ function stAudit(action, code, detail, extra){
 function initials(n){return n.trim().split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);}
 
 // MANAGER
-function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();if(t==='audit')auditRender();if(t==='incoming')clRender();if(t==='block')blockRender();}
+function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();if(t==='audit')auditRender();if(t==='incoming')clRender();if(t==='aging')agRender();if(t==='block')blockRender();}
 
 function mgCleanup() {
   if(!window.fbDB) { alert('Not connected'); return; }
@@ -5332,7 +5345,7 @@ function mgCleanup() {
     });
   });
 }
-function mgRender(){mgStock();mgIncoming();mgDrivers();mgRenderStaff();mgRevenue();}
+function mgRender(){mgStock();mgIncoming();mgDrivers();mgRenderStaff();mgRevenue();try{agRenderIfOpen();}catch(e){}}
 
 function mgStock(){
   const TRIM_TYPES=['lcorner','utrim','ttrim','pvc'];
@@ -6520,6 +6533,485 @@ function btPrint(){
   var w=window.open('','_blank');
   if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
   w.document.open(); w.document.write(full); w.document.close(); w.focus();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  📦 AGING / อายุสต็อก — how long goods lie in the warehouse before they sell
+//
+//  Single panels cannot be marked, so the warehouse is kept as a FIFO ledger:
+//  every container arrival is a LOT, and every piece that leaves eats the oldest
+//  lot that had already arrived. That answers the three questions this tab is for:
+//    · how many days from arrival to sale (per lot, weighted over the pieces)
+//    · how long what is still lying there has been lying there
+//    · when a lot will be empty and what it will still bring in
+//
+//  It differs from the Batch tab (bt*, container-centric sell-through) in what it
+//  counts as an outflow: not only orders, but ALSO manual stock corrections and
+//  Grade A→B moves, because those take pieces out of the very same pool. Leave
+//  them out and the ages drift away from the real warehouse within weeks.
+//
+//  What no data can tell us is when the stock that was already here arrived. It
+//  becomes ONE opening lot with an unknown date — counted in the quantities,
+//  never in any average, and its age is reported as "at least" (≥).
+// ════════════════════════════════════════════════════════════════════════════
+var AG_WIN=60;          // days for "how fast does it sell right now"
+var AG_PRICE_WIN=180;   // days for the average selling price
+var AG_DEAD=60;         // no sale for this many days = not moving
+var _agFilter='panels', _agSort='age';
+
+function agToday(){ return (typeof kpTodayStr==='function')?kpTodayStr():new Date().toISOString().slice(0,10); }
+function agDays(a,b){
+  if(!a||!b) return null;
+  var x=new Date(String(a).slice(0,10)+'T00:00:00'), y=new Date(String(b).slice(0,10)+'T00:00:00');
+  if(isNaN(x)||isNaN(y)) return null;
+  return Math.round((y-x)/86400000);
+}
+// Local date arithmetic — toISOString() would hand back YESTERDAY in Bangkok
+// (UTC+7) and every "arrives in X days" would be one day early.
+function agShift(d,n){
+  var x=new Date(String(d||agToday()).slice(0,10)+'T00:00:00');
+  x.setDate(x.getDate()+n);
+  return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');
+}
+function agFmtD(d){ return d ? ((typeof clFmtD==='function')?clFmtD(d):d) : '—'; }
+function agBaht(n){ return Math.round(n||0).toLocaleString('en-US')+' ฿'; }
+
+// Everything that moves stock, per normalised code.
+//   out  = pieces leaving the Grade A pool  (sale · adjust · gradeb)
+//   corr = pieces appearing outside a container (upward correction, legacy arrival)
+// Grade-B order lines are skipped on purpose: they come out of the B bucket, and
+// the A→B move that put them there is already booked as an outflow.
+function agEvents(){
+  var out={}, corr={};
+  var push=function(m,k,e){ (m[k]=m[k]||[]).push(e); };
+  (orders||[]).forEach(function(o){
+    if(!o || o.status==='cancelled' || o.free) return;      // free claims are not sales
+    var d=String(o.date||'').slice(0,10); if(!d) return;
+    (o.lineItems||[]).forEach(function(li){
+      if(!li || !BT_PROD[li.type] || !li.code || li.grade==='B') return;
+      var q=parseInt(li.qty)||0; if(q<=0) return;
+      var amt=parseFloat(String(li.amount==null?0:li.amount).replace(/[^0-9.\-]/g,''))||0;
+      push(out, ofNormCode(li.code), {date:d, qty:q, kind:'sale', unit:amt/q});
+    });
+  });
+  (typeof stockAudit!=='undefined'?stockAudit:[]).forEach(function(e){
+    if(!e || !e.code) return;
+    var d=String(e.date||'').slice(0,10); if(!d) return;
+    var k=ofNormCode(e.code), q;
+    if(e.action==='move'){                                   // Grade A → B (breakage)
+      q=(parseInt(e.aFrom)||0)-(parseInt(e.aTo)||0);
+      if(q>0) push(out,k,{date:d, qty:q, kind:'gradeb', unit:0});
+    } else if(e.action==='delete'){
+      q=parseInt(e.aFrom)||0;
+      if(q>0) push(out,k,{date:d, qty:q, kind:'adjust', unit:0});
+    } else if(e.action==='add' || e.action==='arrive'){       // arrive = the old incomingItems path
+      q=(parseInt(e.aTo)||0)-(parseInt(e.aFrom)||0);
+      if(q>0) push(corr,k,{date:d, qty:q, arrive:e.action==='arrive'});
+    } else if(e.action==='edit'){
+      q=(parseInt(e.aTo)||0)-(parseInt(e.aFrom)||0);
+      if(q<0) push(out,k,{date:d, qty:-q, kind:'adjust', unit:0});
+      else if(q>0) push(corr,k,{date:d, qty:q});
+    }
+  });
+  var byDate=function(a,b){ return a.date<b.date?-1:(a.date>b.date?1:0); };
+  Object.keys(out).forEach(function(k){ out[k].sort(byDate); });
+  Object.keys(corr).forEach(function(k){ corr[k].sort(byDate); });
+  return {out:out, corr:corr};
+}
+
+// Estimated warehouse arrival of a container still on the way — same chain the
+// Container Tracker uses, so both screens promise the same date.
+function agEstArrival(c){
+  var avg=(typeof clGetAvgStats==='function')?(clGetAvgStats()||{}):{};
+  var ref=c.arrivedThAct||c.arrivedTh;
+  if(ref)       return agShift(ref, Math.round(avg.thToWh||14));
+  if(c.loading) return agShift(c.loading, Math.round((avg.loadToTh||30)+(avg.thToWh||14)));
+  if(c.deposit) return agShift(c.deposit, Math.round((avg.depToLoad||45)+(avg.loadToTh||30)+(avg.thToWh||14)));
+  return null;
+}
+function agIncoming(){
+  var m={};
+  (containerLog||[]).filter(function(c){ return c && !c.arrivedWh; }).forEach(function(c){
+    var eta=agEstArrival(c);
+    (c.items||[]).forEach(function(i){
+      if(!i||!i.code) return;
+      var q=parseInt(i.qty)||0; if(q<=0) return;
+      var k=ofNormCode(i.code);
+      var e=m[k]||(m[k]={qty:0, eta:null, cno:c.containerNo||'', sup:c.supplier||''});
+      e.qty+=q;
+      if(eta && (!e.eta || eta<e.eta)){ e.eta=eta; e.cno=c.containerNo||''; e.sup=c.supplier||''; }
+    });
+  });
+  return m;
+}
+
+// The ledger itself. One pass over every code we own or ever received.
+function agLedger(){
+  var ev=agEvents(), arrBy=btArrivalsByCode(), inc=agIncoming(), today=agToday();
+  var stockBy={}, typeBy={}, dispBy={};
+  (stockItems||[]).forEach(function(s){
+    if(!s||!s.code) return;
+    var k=ofNormCode(s.code);
+    stockBy[k]=(stockBy[k]||0)+(parseInt(s.qty)||0);
+    if(s.type) typeBy[k]=s.type;
+    if(!dispBy[k]) dispBy[k]=s.code;
+  });
+  var keys={};
+  [stockBy, arrBy, ev.out].forEach(function(m){ Object.keys(m).forEach(function(k){ keys[k]=1; }); });
+  var cutSpeed=agShift(today,-AG_WIN), cutPrice=agShift(today,-AG_PRICE_WIN);
+  var sum=function(a,f){ return a.reduce(function(x,y){ return x+f(y); },0); };
+
+  // First day the ledger knows anything about. The opening lot has no date, so
+  // this is how old it is AT LEAST — reported as "≥", never as a fact.
+  var start='';
+  [arrBy, ev.out, ev.corr].forEach(function(m){
+    Object.keys(m).forEach(function(k){ (m[k]||[]).forEach(function(x){ if(x.date && (!start || x.date<start)) start=x.date; }); });
+  });
+  var openAge = start ? agDays(start, today) : null;
+
+  var codes=Object.keys(keys).map(function(k){
+    var arr=arrBy[k]||[], outs=ev.out[k]||[], corr=ev.corr[k]||[], stock=stockBy[k]||0;
+    var totArr=sum(arr,function(a){return a.qty;}), totCorr=sum(corr,function(a){return a.qty;}),
+        totOut=sum(outs,function(a){return a.qty;});
+    // Everything the recorded inflows cannot explain was already in the warehouse.
+    var opening=Math.max(0, stock+totOut-totArr-totCorr);
+    // The other direction: more came in than what left plus what is here → outflow
+    // nobody booked (shrinkage, sales before the log started). Shown, never hidden.
+    var missing=Math.max(0, totArr+totCorr-totOut-stock);
+
+    var lots=[];
+    if(opening>0) lots.push({cid:'_open', open:true, date:null, qty:opening});
+    arr.forEach(function(a){ lots.push({cid:a.cid, date:a.date, qty:a.qty, cno:a.cno, sup:a.sup}); });
+    corr.forEach(function(c){ lots.push({cid:c.arrive?'_arr':'_corr', corr:true, date:c.date, qty:c.qty}); });
+    lots.sort(function(a,b){
+      if(!a.date) return -1;
+      if(!b.date) return 1;
+      return a.date<b.date?-1:(a.date>b.date?1:0);
+    });
+    lots.forEach(function(l){ l.key=k; l.left=l.qty; l.used=0; l.sold=0; l.lost=0; l.pre=0; l.rev=0; l.dsum=0; l.first=null; l.empty=null; });
+
+    var unattr=0, preTot=0;
+    outs.forEach(function(s){
+      var q=s.qty;
+      // Pass 1 the honest way: only lots that had already arrived. Pass 2 for what
+      // is left over — goods do get sold before the arrival is entered (pre-orders,
+      // a container booked in late). Those pieces are counted with 0 days in stock
+      // instead of vanishing into "unattributed", which would leave the ledger's
+      // remaining quantity permanently above the real warehouse.
+      var eat=function(late){
+        for(var i=0;i<lots.length && q>0;i++){
+          var l=lots[i];
+          if(l.left<=0) continue;
+          if(!late && l.date && l.date>s.date) continue;
+          var take=Math.min(q,l.left);
+          l.left-=take; l.used+=take; q-=take;
+          if(s.kind==='sale'){
+            l.sold+=take; l.rev+=take*(s.unit||0);
+            if(l.date) l.dsum+=take*Math.max(0, agDays(l.date,s.date)||0);
+          } else l.lost+=take;
+          if(late){ l.pre+=take; preTot+=take; }
+          if(!l.first) l.first=s.date;
+          if(l.left<=0) l.empty=(l.date && s.date<l.date) ? l.date : s.date;
+        }
+      };
+      eat(false);
+      if(q>0) eat(true);
+      if(q>0) unattr+=q;                                  // more left than ever came in
+    });
+
+    var sales=outs.filter(function(s){ return s.kind==='sale'; });
+    var sold60=sum(sales.filter(function(s){return s.date>=cutSpeed;}),function(s){return s.qty;});
+    var speed=sold60/AG_WIN;
+    var pq=0, pv=0;
+    sales.forEach(function(s){ if(s.date>=cutPrice){ pq+=s.qty; pv+=s.qty*(s.unit||0); } });
+    var price=pq>0?pv/pq:0;
+    var lastSale=sales.length?sales[sales.length-1].date:null;
+
+    // Age of what is still lying there + when each open lot is expected to be gone.
+    var ahead=0, oldest=null, oldestOpen=false, gotOldest=false;
+    lots.forEach(function(l){
+      if(l.left<=0) return;
+      l.age = l.date ? agDays(l.date, today) : openAge;    // opening lot: at least this old
+      l.approx = !l.date;
+      l.startIn = speed>0 ? Math.ceil(ahead/speed) : null;
+      l.goneIn  = speed>0 ? Math.ceil((ahead+l.left)/speed) : null;
+      l.goneAt  = l.goneIn!=null ? agShift(today,l.goneIn) : null;
+      if(!gotOldest){ gotOldest=true; oldest=l.age; oldestOpen=!l.date; }
+      ahead += l.left;
+    });
+    var done=lots.filter(function(l){ return l.empty && l.date && l.used>0; });
+
+    return {
+      key:k, code:dispBy[k]||(arr.length?arr[arr.length-1].code:k), type:typeBy[k]||btTypeOf(k),
+      stock:stock, lots:lots, unattr:unattr, missing:missing, opening:opening, pre:preTot,
+      speed:speed, sold60:sold60, price:price, lastSale:lastSale,
+      idle: lastSale ? agDays(lastSale,today) : null,
+      cover: speed>0 ? Math.round(stock/speed) : null,
+      value: stock*price,
+      oldest:oldest, oldestOpen:oldestOpen,
+      // Ø days arrival → sale, weighted by pieces, over the lots that carry a date.
+      // Breakage and corrections are deliberately not in here — this is selling time.
+      avgDays: (function(){
+        var dated=lots.filter(function(l){ return l.date; });
+        var s=sum(dated,function(l){return l.sold;});
+        return s>0 ? Math.round(sum(dated,function(l){return l.dsum;})/s) : null;
+      })(),
+      // full cycle of the batches that are already gone (arrival → last piece out)
+      cycle: done.length ? Math.round(sum(done,function(l){ return agDays(l.date,l.empty); })/done.length) : null,
+      inc: inc[k]||null
+    };
+  });
+
+  // Per container: its lots across all codes.
+  var byCont={};
+  codes.forEach(function(c){
+    c.lots.forEach(function(l){
+      if(!l.date || l.open || l.corr) return;
+      var b=byCont[l.cid]||(byCont[l.cid]={cid:l.cid, date:l.date, cno:l.cno, sup:l.sup, qty:0, used:0, sold:0, lost:0, left:0, rev:0, dsum:0, rest:0, empty:null, goneIn:null, rows:[]});
+      b.qty+=l.qty; b.used+=l.used; b.sold+=l.sold; b.lost+=l.lost; b.left+=l.left; b.rev+=l.rev; b.dsum+=l.dsum;
+      b.rest+=l.left*c.price;
+      if(l.empty && (!b.empty || l.empty>b.empty)) b.empty=l.empty;
+      if(l.left>0) b.goneIn = (l.goneIn==null||b.goneIn===false) ? false : Math.max(b.goneIn||0, l.goneIn);
+      b.rows.push({code:c.code, qty:l.qty, sold:l.sold, lost:l.lost, left:l.left,
+        days:l.sold>0?Math.round(l.dsum/l.sold):null, empty:l.empty, goneAt:l.goneAt, age:l.age});
+    });
+  });
+  var cont=Object.keys(byCont).map(function(id){
+    var b=byCont[id];
+    b.pct = b.qty>0 ? Math.round(b.used/b.qty*1000)/10 : 0;
+    b.avgDays = b.sold>0 ? Math.round(b.dsum/b.sold) : null;
+    b.cycle = (b.left<=0 && b.empty) ? agDays(b.date,b.empty) : null;
+    b.goneAt = (b.left>0 && b.goneIn!==false && b.goneIn!=null) ? agShift(agToday(),b.goneIn) : null;
+    b.rows.sort(function(x,y){ return y.qty-x.qty; });
+    return b;
+  }).sort(function(a,b){ return a.date<b.date?1:(a.date>b.date?-1:0); });
+
+  return {codes:codes, cont:cont, start:start, today:today};
+}
+
+function agBucket(age){ return age==null?4:(age<=30?0:(age<=60?1:(age<=90?2:3))); }
+// How dead a product is: never sold but lying here beats any number of idle days.
+function agIdleRank(r){ return (r.stock>0 && r.idle==null) ? 99999 : (r.idle==null ? -1 : r.idle); }
+var AG_BUCKETS=[
+  {l:'0–30 d',  c:'#16a34a'}, {l:'31–60 d', c:'#2563eb'},
+  {l:'61–90 d', c:'#d97706'}, {l:'90+ d',   c:'#dc2626'},
+  {l:'? / ของเดิม', c:'#9ca3af'}
+];
+function agSetFilter(f){ _agFilter=f; agRender(); }
+function agSetSort(s){ _agSort=s; agRender(); }
+function agRenderIfOpen(){
+  var v=document.getElementById('mgv-aging');
+  if(v && v.classList.contains('active')) agRender();
+}
+
+function agRender(){
+  var body=document.getElementById('ag-body'); if(!body) return;
+  var L=agLedger(), today=L.today;
+  var rows=L.codes.filter(function(r){ return _agFilter==='all' ? true : btIsPanel(r.type); });
+  ['panels','all'].forEach(function(f){
+    var b=document.getElementById('agf-'+f); if(!b) return;
+    var on=(_agFilter===f);
+    b.style.background=on?'var(--blue-bg)':'var(--bg2)';
+    b.style.borderColor=on?'var(--blue)':'var(--border)';
+    b.style.color=on?'var(--blue)':'var(--text2)';
+  });
+  if(!rows.length){ body.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">ไม่มีข้อมูล / no data</div>'; return; }
+
+  var esc=(typeof _esc==='function')?_esc:function(s){return String(s==null?'':s);};
+  var totStock=0, totVal=0, valPcs=0, dsum=0, dused=0, spd=0;
+  var buckets=[0,0,0,0,0];
+  rows.forEach(function(r){
+    totStock+=r.stock; spd+=r.speed;
+    if(r.price>0){ totVal+=r.value; valPcs+=r.stock; }
+    r.lots.forEach(function(l){
+      if(l.date){ dsum+=l.dsum; dused+=l.sold; }
+      if(l.left>0) buckets[agBucket(l.date?l.age:null)]+=l.left;
+    });
+  });
+  var avgAll = dused>0 ? Math.round(dsum/dused) : null;
+  var coverAll = spd>0 ? Math.round(totStock/spd) : null;
+  var oldestRow = rows.slice().filter(function(r){ return r.stock>0 && r.oldest!=null; })
+                      .sort(function(a,b){ return b.oldest-a.oldest; })[0];
+  var priceCov = totStock>0 ? Math.round(valPcs/totStock*100) : 0;
+
+  var box=function(l,v,s,col){
+    return '<div style="flex:1;min-width:100px"><div style="font-size:10px;font-weight:700;color:var(--text2);letter-spacing:.04em">'+l+'</div>'
+      +'<div style="font-size:17px;font-weight:800;color:'+(col||'var(--text)')+'">'+v+'</div>'
+      +(s?'<div style="font-size:10px;color:var(--text2)">'+s+'</div>':'')+'</div>';
+  };
+  var h='<div class="card" style="display:flex;gap:10px;flex-wrap:wrap;padding:11px 12px;margin-bottom:8px">'
+    +box('เวลาขายเฉลี่ย / AVG DAYS TO SELL', avgAll==null?'—':(avgAll+' d'), 'มาถึง → ขาย / arrival → sale')
+    +box('ของเก่าสุด / OLDEST STOCK',
+         oldestRow?((oldestRow.oldestOpen?'≥ ':'')+oldestRow.oldest+' d'):'—',
+         oldestRow?esc(oldestRow.code):'', oldestRow&&oldestRow.oldest>90?'#dc2626':'var(--text)')
+    +box('สต็อกพอใช้ / STOCK COVER', coverAll==null?'—':(coverAll+' d'), totStock.toLocaleString('en-US')+' pcs')
+    +box('มูลค่าที่จะขายได้ / EXPECTED REVENUE', agBaht(totVal),
+         priceCov<100?('จากราคาขายเฉลี่ย · '+priceCov+'% ของชิ้น / '+priceCov+'% of pieces priced'):'ราคาขายเฉลี่ย / at avg selling price','#16a34a')
+    +'</div>';
+
+  // ── Age of what is lying there ────────────────────────────────────────────
+  var bTot=buckets.reduce(function(a,b){return a+b;},0);
+  h+='<div class="card" style="padding:11px 12px;margin-bottom:8px">'
+    +'<div style="font-size:12px;font-weight:800;margin-bottom:6px">⏳ อายุของสต็อก / age of the stock lying here</div>'
+    +'<div style="display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--bg2)">'
+    +buckets.map(function(v,i){ return v>0?('<div title="'+AG_BUCKETS[i].l+'" style="width:'+(bTot>0?v/bTot*100:0)+'%;background:'+AG_BUCKETS[i].c+'"></div>'):''; }).join('')
+    +'</div><div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:7px">'
+    +buckets.map(function(v,i){
+        return '<span style="font-size:11px;display:inline-flex;align-items:center;gap:4px">'
+          +'<span style="width:9px;height:9px;border-radius:2px;background:'+AG_BUCKETS[i].c+';display:inline-block"></span>'
+          +AG_BUCKETS[i].l+' <b>'+v.toLocaleString('en-US')+'</b>'
+          +(bTot>0?(' <span style="color:var(--text2)">'+Math.round(v/bTot*100)+'%</span>'):'')+'</span>';
+      }).join('')
+    +'</div></div>';
+
+  // ── Containers ────────────────────────────────────────────────────────────
+  if(L.cont.length){
+    h+='<div class="stit" style="margin:14px 0 6px">🚢 รอบตู้ / container turnover</div>';
+    h+=L.cont.slice(0,12).map(function(b){
+      var pctCol=b.pct>=95?'#166534':(b.pct>=50?'#2563eb':'var(--text)');
+      return '<details class="card" style="padding:10px 12px;margin-bottom:6px">'
+        +'<summary style="cursor:pointer;list-style:none">'
+          +'<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'
+            +'<span style="font-size:13px;font-weight:800">'+(b.cno?('No. '+esc(b.cno)):esc(b.sup||'—'))+'</span>'
+            +'<span style="font-size:13px;font-weight:800;color:'+pctCol+'">'+b.pct+'%</span></div>'
+          +'<div style="height:5px;background:var(--bg2);border-radius:3px;overflow:hidden;margin:5px 0 4px"><div style="height:100%;width:'+Math.min(100,b.pct)+'%;background:'+pctCol+';border-radius:3px"></div></div>'
+          +'<div style="font-size:11px;color:var(--text2)">'
+            +'มาถึง '+agFmtD(b.date)+' · '+b.qty.toLocaleString('en-US')+' pcs · ขายแล้ว '+b.sold.toLocaleString('en-US')
+            +(b.lost>0?(' · เสีย/แก้ '+b.lost.toLocaleString('en-US')):'')
+            +(b.avgDays!=null?(' · Ø '+b.avgDays+' วันต่อชิ้น'):'')
+          +'</div>'
+          +'<div style="font-size:11px;margin-top:2px">'
+            +(b.cycle!=null
+              ? '<b style="color:#166534">ขายหมดใน '+b.cycle+' วัน / sold out in '+b.cycle+' days ✓</b>'
+              : (b.goneAt ? ('เหลือ '+b.left.toLocaleString('en-US')+' → คาดว่าหมด '+agFmtD(b.goneAt)+' / est. empty')
+                          : ('เหลือ '+b.left.toLocaleString('en-US')+' · ยังไม่มีความเร็วขาย / no selling speed yet')))
+            +' · <span style="color:#16a34a;font-weight:700">'+agBaht(b.rev)+'</span>'
+            +(b.rest>0?(' <span style="color:var(--text2)">+ '+agBaht(b.rest)+' ในสต็อก</span>'):'')
+          +'</div>'
+        +'</summary>'
+        +'<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px">'
+        +b.rows.map(function(x){
+          return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:2px 0">'
+            +'<span style="font-weight:700">'+esc(x.code)+'</span>'
+            +'<span style="color:var(--text2)">'+x.qty.toLocaleString('en-US')+' → ขาย '+x.sold.toLocaleString('en-US')
+            +(x.days!=null?(' · Ø '+x.days+' d'):'')
+            +(x.left>0?(' · เหลือ '+x.left.toLocaleString('en-US')+(x.age!=null?(' ('+x.age+' d)'):'')):' · <b style="color:#166534">หมด '+agFmtD(x.empty)+'</b>')
+            +'</span></div>';
+        }).join('')
+        +'</div></details>';
+    }).join('');
+  }
+
+  // ── Products ──────────────────────────────────────────────────────────────
+  var sorted=rows.slice();
+  if(_agSort==='age')        sorted.sort(function(a,b){ return (b.oldest==null?-1:b.oldest)-(a.oldest==null?-1:a.oldest); });
+  else if(_agSort==='cover') sorted.sort(function(a,b){ return (a.cover==null?1e9:a.cover)-(b.cover==null?1e9:b.cover); });
+  // "never sold" is the deadest stock there is, so it ranks above any idle count —
+  // sorting it to the bottom (null → -1) hid exactly the products that matter here.
+  else if(_agSort==='dead')  sorted.sort(function(a,b){ return agIdleRank(b)-agIdleRank(a) || b.stock-a.stock; });
+  else                       sorted.sort(function(a,b){ return b.value-a.value; });
+  var chip=function(id,lbl){
+    var on=_agSort===id;
+    return '<button type="button" onclick="agSetSort(\''+id+'\')" style="flex-shrink:0;padding:5px 10px;border:1px solid '+(on?'#1d4ed8':'var(--border)')+';border-radius:14px;background:'+(on?'var(--blue-bg)':'var(--bg)')+';color:'+(on?'#1d4ed8':'var(--text2)')+';font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">'+lbl+'</button>';
+  };
+  h+='<div class="stit" style="margin:14px 0 6px">📋 สินค้า / per product</div>'
+    +'<div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:8px">'
+    +chip('age','⏳ อายุ / age')+chip('cover','📉 พอใช้ / cover')+chip('dead','🐢 ไม่ขยับ / idle')+chip('value','💰 มูลค่า / value')
+    +'</div>';
+
+  h+=sorted.filter(function(r){ return r.stock>0 || r.lots.some(function(l){return l.used>0;}); }).map(function(r){
+    var ageTxt = r.oldest==null?'—':((r.oldestOpen?'≥':'')+r.oldest+' d');
+    var ageCol = r.oldest==null?'var(--text2)':(r.oldest>90?'#dc2626':(r.oldest>60?'#b45309':'#166534'));
+    var covCol = r.cover==null?'var(--text2)':(r.cover<30?'#dc2626':(r.cover<60?'#b45309':'#166534'));
+    var warn='';
+    if(r.inc && r.inc.eta && r.cover!=null){
+      var gap=agDays(today,r.inc.eta)-r.cover;
+      if(gap>0) warn='<div style="font-size:11px;color:#dc2626;margin-top:3px">⚠ หมดก่อนตู้ถัดไป '+gap+' วัน / out of stock '+gap+' days before the next container ('+agFmtD(r.inc.eta)+')</div>';
+    }
+    return '<details class="card" style="padding:9px 12px;margin-bottom:5px">'
+      +'<summary style="cursor:pointer;list-style:none">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'
+          +'<span style="font-size:13px;font-weight:800">'+esc(r.code)+'</span>'
+          +'<span style="font-size:13px;font-weight:800;color:'+ageCol+'">'+ageTxt+'</span></div>'
+        +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'
+          +'สต็อก '+r.stock.toLocaleString('en-US')+' · ขาย '+(Math.round(r.speed*10)/10)+'/วัน · '
+          +'พอใช้ <b style="color:'+covCol+'">'+(r.cover==null?'—':(r.cover+' วัน'))+'</b>'
+          +(r.avgDays!=null?(' · Ø ขายใน '+r.avgDays+' วัน'):'')
+          +(r.cycle!=null?(' · ตู้ก่อนหมดใน '+r.cycle+' วัน'):'')
+          +(r.price>0?(' · '+agBaht(r.value)):'')
+        +'</div>'
+        +(r.stock>0&&r.idle==null?'<div style="font-size:11px;color:#dc2626;margin-top:2px">🐢 ยังไม่เคยขายเลย / never sold, still lying here</div>'
+          :(r.idle!=null&&r.idle>=AG_DEAD&&r.stock>0?('<div style="font-size:11px;color:#b45309;margin-top:2px">🐢 ไม่ขายมา '+r.idle+' วัน / no sale for '+r.idle+' days</div>'):''))
+        +warn
+      +'</summary>'
+      +'<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px">'
+      +r.lots.map(function(l){
+        var name = l.open?'ของเดิม / opening':(l.corr?(l.cid==='_arr'?'เข้าคลัง / arrival':'แก้ไข / correction'):(l.cno?('No. '+esc(l.cno)):esc(l.sup||'ตู้ / container')));
+        return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:2px 0">'
+          +'<span style="font-weight:700">'+name+' <span style="font-weight:400;color:var(--text2)">'+(l.date?agFmtD(l.date):'? ')+'</span></span>'
+          +'<span style="color:var(--text2)">'+l.qty.toLocaleString('en-US')+' → '
+          +(l.left<=0
+            ? ('<b style="color:#166534">หมด '+agFmtD(l.empty)+(l.date?(' · '+agDays(l.date,l.empty)+' d'):'')+'</b>')
+            : ('ออกไป '+l.used.toLocaleString('en-US')+' · เหลือ <b>'+l.left.toLocaleString('en-US')+'</b>'
+               +(l.age!=null?(' · นอนคลัง '+(l.approx?'≥':'')+l.age+' d'):' · ? d')
+               +(l.goneAt?(' · หมด ~'+agFmtD(l.goneAt)):'')))
+          +'</span></div>';
+      }).join('')
+      +((r.unattr>0||r.missing>0||r.pre>0)?('<div style="font-size:10.5px;color:#b45309;margin-top:4px">'
+          +(r.unattr>0?('⚠ '+r.unattr.toLocaleString('en-US')+' ชิ้นออกไปโดยไม่มีตู้รองรับ / left with no lot to book against. '):'')
+          +(r.missing>0?('⚠ '+r.missing.toLocaleString('en-US')+' ชิ้นหายไปจากบัญชี / more came in than stock + outflows explain. '):'')
+          +(r.pre>0?('ℹ '+r.pre.toLocaleString('en-US')+' ชิ้นขายก่อนตู้ถึง (นับ 0 วัน) / sold before the lot was booked in — counted as 0 days.'):'')
+        +'</div>'):'')
+      +'</div></details>';
+  }).join('');
+
+  // ── Forecast ──────────────────────────────────────────────────────────────
+  var fc=function(days){
+    var pcs=0, baht=0;
+    rows.forEach(function(r){
+      var q=Math.min(r.stock, r.speed*days);
+      pcs+=q; baht+=q*r.price;
+    });
+    return {pcs:Math.round(pcs), baht:baht};
+  };
+  var f30=fc(30), f60=fc(60), f90=fc(90);
+  var risk=rows.filter(function(r){ return r.inc && r.inc.eta && r.cover!=null && (agDays(today,r.inc.eta)-r.cover)>0; })
+               .sort(function(a,b){ return (agDays(today,b.inc.eta)-b.cover)-(agDays(today,a.inc.eta)-a.cover); });
+  var noInc=rows.filter(function(r){ return !r.inc && r.cover!=null && r.cover<45 && r.stock>0; })
+                .sort(function(a,b){ return a.cover-b.cover; });
+  h+='<div class="stit" style="margin:14px 0 6px">🔮 คาดการณ์ / forecast</div>'
+    +'<div class="card" style="padding:11px 12px;margin-bottom:8px">'
+      +'<div style="display:flex;gap:10px;flex-wrap:wrap">'
+        +box('30 วัน / DAYS', f30.pcs.toLocaleString('en-US')+' pcs', agBaht(f30.baht),'#16a34a')
+        +box('60 วัน / DAYS', f60.pcs.toLocaleString('en-US')+' pcs', agBaht(f60.baht),'#16a34a')
+        +box('90 วัน / DAYS', f90.pcs.toLocaleString('en-US')+' pcs', agBaht(f90.baht),'#16a34a')
+      +'</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:6px">ความเร็วขาย '+AG_WIN+' วันล่าสุด × ราคาขายเฉลี่ย '+AG_PRICE_WIN+' วัน — จำกัดที่ของที่มีจริง (ไม่นับตู้ที่ยังไม่มาถึง)'
+      +'<br>Selling speed of the last '+AG_WIN+' days × average selling price of the last '+AG_PRICE_WIN+' days, capped at the stock actually here — containers still on the way are not counted.</div>'
+    +'</div>';
+  if(risk.length||noInc.length){
+    h+='<div class="card" style="padding:11px 12px;margin-bottom:8px">'
+      +'<div style="font-size:12px;font-weight:800;margin-bottom:4px">⚠ ช่องว่างสต็อก / stock gaps</div>'
+      +'<div style="font-size:12px;line-height:1.8">'
+      +risk.slice(0,10).map(function(r){
+        var g=agDays(today,r.inc.eta)-r.cover;
+        return '• <b>'+esc(r.code)+'</b>: พอใช้ '+r.cover+' วัน · ตู้ถัดไป '+agFmtD(r.inc.eta)+' → <b style="color:#dc2626">ขาดของ '+g+' วัน / '+g+' days without stock</b>';
+      }).join('<br>')
+      +((risk.length&&noInc.length)?'<br>':'')
+      +noInc.slice(0,10).map(function(r){
+        return '• <b>'+esc(r.code)+'</b>: เหลือ '+r.stock.toLocaleString('en-US')+' · พอใช้ '+r.cover+' วัน · <b style="color:#dc2626">ไม่มีในตู้ / nothing on the way</b>';
+      }).join('<br>')
+      +'</div></div>';
+  }
+
+  h+='<div class="card" style="padding:10px 12px">'
+    +'<div style="font-size:11px;color:var(--text2);line-height:1.7">'
+    +'* FIFO — ของเก่าออกก่อน. นับออกจากคลัง: ออเดอร์ (ตามวันที่ออเดอร์) + การแก้สต็อกด้วยมือ + ย้ายเกรด A→B. ของที่มีอยู่ก่อนเริ่มบันทึกรวมเป็นก้อนเดียว "ของเดิม" อายุจึงเป็น "อย่างน้อย" (≥)'
+    +'<br>FIFO ledger — oldest stock leaves first. Outflows counted: orders (by order date), manual stock corrections and Grade A→B moves. Stock that was already here before the records began is one opening lot with an unknown date, so its age is reported as "at least" (≥).'
+    +(L.start?('<br>บันทึกเริ่ม / ledger starts '+agFmtD(L.start)):'')
+    +'</div></div>';
+
+  body.innerHTML=h;
 }
 
 // Every product we HAVE or ever HAD — for the yearly stock count: the stock list (even
