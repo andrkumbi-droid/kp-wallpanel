@@ -11416,7 +11416,8 @@ function ofLalaUploadCarFeeSlip(input,ti){
     var t=activeTours[ti]; if(!t){ return; }
     if(!t.carFeeSlips) t.carFeeSlips=[];
     t.carFeeSlips.push(dataUrl);
-    syncTours(); ofRenderLala(); try{ ofRenderTour(); }catch(e){}
+    syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){}
+    ofRenderLala(); try{ ofRenderTour(); }catch(e){}
   });
   input.value='';
 }
@@ -11424,7 +11425,8 @@ function ofLalaDelFeeSlip(ti,pi){
   var t=activeTours[ti]; if(!t||!t.carFeeSlips) return;
   if(!confirm('Remove slip? / ลบสลิป?')) return;
   t.carFeeSlips.splice(pi,1);
-  syncTours(); ofRenderLala(); try{ ofRenderTour(); }catch(e){}
+  syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){}
+  ofRenderLala(); try{ ofRenderTour(); }catch(e){}
 }
 function ofLalaViewFeeSlip(ti,pi){
   var t=activeTours[ti]; if(!t||!t.carFeeSlips||!t.carFeeSlips[pi]) return;
@@ -12079,8 +12081,10 @@ function tourEffStatus(t, id){
 }
 function tourPayState(t){
   if(!t) return {paid:false};
-  if(t.payMethodTour==='cash') return {paid:true, how:'cash', by:t.paidByTour||'', at:t.paidAtTour||0};
-  if((t.carFeeSlips||[]).length>0) return {paid:true, how:'online', by:t.paidByTour||'', at:t.paidAtTour||0};
+  // fromTour = settled in the tour view itself (cash button / slip photo), not by a
+  // payout record. The tour-ID list needs to tell the two apart.
+  if(t.payMethodTour==='cash') return {paid:true, how:'cash', by:t.paidByTour||'', at:t.paidAtTour||0, fromTour:true};
+  if((t.carFeeSlips||[]).length>0) return {paid:true, how:'online', by:t.paidByTour||'', at:t.paidAtTour||0, fromTour:true};
   // Several tours settled with ONE transfer: the slip hangs on the payout, not on
   // this tour — otherwise only the tour that happens to hold the picture looks paid.
   try{
@@ -12103,6 +12107,7 @@ function ofTourPayCash(tourId){
     t.paidAtTour=Date.now();
   }
   syncTours();
+  try{ tourSyncPaidFromTour(t); }catch(e){}
   try{ ofRenderTour(); }catch(e){}
   try{ ofDriversRender(); }catch(e){}
 }
@@ -12242,7 +12247,8 @@ function ofUnpaidGroups(){
   var by={}, out=[];
   Object.keys(tourReg||{}).filter(tidOk).forEach(function(k){
     var r=tourReg[k]||{}; r.id=k;
-    if(r.state!=='ended' || r.paid) return;      // still driving → not due yet
+    // still driving → not due yet · already settled (tick OR paid inside the tour)
+    if(r.state!=='ended' || tourRegPaidRec(r)) return;
     var gk=(r.driverId||r.driverName||'?')+'|'+tidDay(k);
     if(!by[gk]){ by[gk]={key:gk, driverId:r.driverId||'', driverName:r.driverName||'—', day:tidDay(k), tours:[], pay:0, orders:0}; out.push(by[gk]); }
     by[gk].tours.push(r); by[gk].pay+=Number(r.driverPay)||0; by[gk].orders+=tidArr(r.orders).length;
@@ -12741,7 +12747,9 @@ function tourRegUpsert(t){
     state:(old.state==='deleted'?'deleted':(old.state==='ended'?'ended':'active')),
     orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length,
     driverPay:parseFloat(t.driverPay)||0,
-    paid:!!old.paid, paidBy:old.paidBy||'', paidAt:old.paidAt||0, ts:old.ts||Date.now() };
+    // payVoid must survive the upsert — dropping it would let a slip sitting on the
+    // tour mark a day paid again that the office had explicitly unticked.
+    paid:!!old.paid, payVoid:!!old.payVoid, paidBy:old.paidBy||'', paidAt:old.paidAt||0, ts:old.ts||Date.now() };
   tourReg[t.tid]=rec;
   try{ if(window.fbDB) window.fbDB.ref('tourReg/'+t.tid).set(rec); }catch(e){}
   // Keep the claim map in step — that is what stops a second number being minted
@@ -12775,6 +12783,47 @@ function tourRecAny(reg){
     });
   });
   return found;
+}
+// ── "paid" can be stamped in TWO places ────────────────────────────────────
+// The office ticks the driver-day in the tour-ID list (rec.paid), or the tour was
+// already settled inside the tour itself — cash button or slip photo, often on the
+// spot when the driver comes back. Only the first one used to count, so a tour paid
+// with a slip in the tour view kept sitting in "unpaid tours" and got paid twice.
+// Both count now. rec.payVoid is the office overruling the tour mark by unticking.
+function tourRegPaidRec(rec){
+  if(!rec) return false;
+  if(rec.paid) return true;
+  if(rec.payVoid) return false;
+  try{ return !!tourPayState(tourRecAny(rec)).paid; }catch(e){ return false; }
+}
+// Where the mark comes from — '' none · 'reg' the tick · 'tour' cash/slip in the tour
+function tourRegPaidSrc(rec){
+  if(!rec) return '';
+  if(rec.paid) return 'reg';
+  if(rec.payVoid) return '';
+  try{ var st=tourPayState(tourRecAny(rec)); return st.paid?(st.fromTour?'tour':'reg'):''; }catch(e){ return ''; }
+}
+// A tour settled in the tour view long before the office opens the tour-ID list:
+// stamp it onto the registry right away so every screen tells the same story.
+function tourSyncPaidFromTour(t){
+  try{
+    if(!t) return;
+    var id=tidOk(t.tid)?t.tid:tourRegFindByTourId(t.id);
+    var rec=tourRegRec(id); if(!rec) return;
+    var st=tourPayState(t);
+    if(st.paid && !rec.paid){
+      rec.paid=true; rec.payVoid=false;
+      rec.paidBy=st.by||(((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office');
+      rec.paidAt=st.at||Date.now();
+    } else if(!st.paid && rec.paid && !tourPayoutFor(id)){
+      // Taken back where it was given, and no transfer record keeps it paid.
+      rec.paid=false; rec.paidBy=''; rec.paidAt=0;
+    } else return;
+    tourReg[id]=rec;
+    if(window.fbDB) window.fbDB.ref('tourReg/'+id).set(rec);
+    try{ ofRenderTourIds(); }catch(e){}
+    try{ ofRenderUnpaid(); }catch(e){}
+  }catch(e){}
 }
 // Photos + pay slips of one tour ID — loaded on demand (base64 images are heavy).
 function ofTourIdPhotos(id){
@@ -12820,7 +12869,9 @@ function tourDriverOnPayroll(g){
 }
 function tourRegTogglePaidGroup(idsCsv){
   var ids=String(idsCsv||'').split(',').filter(tidOk); if(!ids.length) return;
-  var allPaid=ids.every(function(id){ return !!(tourRegRec(id)||{}).paid; });
+  // Same reading as the display — a day already settled inside the tour must untick,
+  // not get "paid" a second time.
+  var allPaid=ids.every(function(id){ return tourRegPaidRec(tourRegRec(id)); });
   var mkPaid=!allPaid;
   // Undoing takes the payout with it — the slip is the proof of exactly this
   // transfer, so it must not stay behind on a day that counts as unpaid again.
@@ -12847,6 +12898,10 @@ function tourRegTogglePaidGroup(idsCsv){
   ids.forEach(function(id){
     var rec=tourRegRec(id); if(!rec) return;
     rec.paid=mkPaid; rec.paidBy=by; rec.paidAt=at;
+    // Unticking has to overrule a cash/slip mark sitting on the tour itself,
+    // otherwise the next render reads it back as paid and the tick springs back.
+    // The photo stays where it is — it just no longer counts as proof of payment.
+    rec.payVoid=!mkPaid;
     sum+=Number(rec.driverPay)||0; drv=drv||rec.driverName||'';
     tourReg[id]=rec;
     try{ if(window.fbDB) window.fbDB.ref('tourReg/'+id).set(rec); }catch(e){}
@@ -12965,7 +13020,8 @@ function ofRenderTourIds(){
     var ids=g.tours.map(function(r){return r.id;});
     var multi=g.tours.length>1;
     var anyActive=g.tours.some(function(r){ return r.state!=='ended'&&r.state!=='deleted'; });
-    var allPaid=g.tours.every(function(r){ return !!r.paid; });
+    var allPaid=g.tours.every(function(r){ return tourRegPaidRec(r); });
+    var paidInTour=allPaid && g.tours.some(function(r){ return tourRegPaidSrc(r)==='tour'; });
     var ordCnt=g.tours.reduce(function(a,r){ return a+tidArr(r.orders).length; },0);
     var dayLbl=(function(){ var d=g.day; return d?('20'+d.slice(0,2)+'-'+d.slice(2,4)+'-'+d.slice(4,6)):''; })();
     var gcol=anyActive?'#16a34a':'#64748b';
@@ -12975,7 +13031,8 @@ function ofRenderTourIds(){
       ? '💰 ค่าทัวร์ / Tour pay: '+(parts.length>1?parts.join(' + ')+' = ':'')+'<b style="color:var(--green)">'+g.pay.toLocaleString()+' ฿</b>'+(multi?' <span style="color:var(--text2)">('+g.tours.length+' ทัวร์ จ่ายครั้งเดียว / paid once)</span>':'')
       : '💰 ค่าทัวร์ / Tour pay: <b>—</b>';
     var payTxt=allPaid
-      ? '✅ จ่ายคนขับแล้ว / driver paid'+(g.tours[0].paidBy?' · '+g.tours[0].paidBy:'')+(g.tours[0].paidAt?' · '+fmtD(new Date(g.tours[0].paidAt).toISOString().slice(0,10)):'')
+      ? '✅ จ่ายคนขับแล้ว / driver paid'+(paidInTour?' <span style="font-weight:400">(ในทัวร์ / in the tour)</span>':'')
+        +(g.tours[0].paidBy?' · '+g.tours[0].paidBy:'')+(g.tours[0].paidAt?' · '+fmtD(new Date(g.tours[0].paidAt).toISOString().slice(0,10)):'')
       : '⬜ ยังไม่จ่ายคนขับ / not paid yet';
     // A driver who is on the payroll (Amy, Aung Lay …) has the tour pay booked into
     // the payroll grid the moment the tour ends — "Tour Pay (auto)". Nobody hands
@@ -13092,7 +13149,7 @@ function ofRenderTourIds(){
     var g=groups[gk]; donePay+=g.pay;
     // Payroll drivers are never ticked — counting them here would leave a permanent
     // "not ticked" warning for money that is already in their wage.
-    if(!g.tours.every(function(r){ return !!r.paid; }) && !tourDriverOnPayroll(g)) doneUnticked++;
+    if(!g.tours.every(function(r){ return tourRegPaidRec(r); }) && !tourDriverOnPayroll(g)) doneUnticked++;
     g.tours.forEach(function(r){ doneOrders+=tidArr(r.orders).length; });
   });
   var doneHTML=doneKeys.length
@@ -13414,7 +13471,7 @@ function ofTourAddSlip(input, tourId){
   files.forEach(function(f){
     compressPhotoFile(f, function(dataUrl){
       t.carFeeSlips.push(dataUrl); done++;
-      if(done===total){ syncTours(); try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){} }
+      if(done===total){ syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){} try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){} }
     });
   });
   input.value='';
@@ -13423,7 +13480,8 @@ function ofTourDelSlip(tourId, pi){
   var t=activeTours.find(function(x){return x.id===tourId;}); if(!t||!t.carFeeSlips) return;
   if(!confirm('Remove slip? / ลบสลิป?')) return;
   t.carFeeSlips.splice(pi,1);
-  syncTours(); try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){}
+  syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){}
+  try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){}
 }
 // Advance the driver got at the START of the tour (cash up front). Deducted from the
 // tour pay when the tour is ended, so payroll only books the remaining amount.
@@ -26101,7 +26159,8 @@ function billsStaffTours(who, name, mk){
     if(billsMKey(day)!==mk) return;
     out.push({ tid:k, day:day, driverName:r.driverName||'', state:r.state||'active',
                orders:(typeof tidArr==='function'?tidArr(r.orders):[]),
-               pay:parseFloat(r.driverPay)||0, paid:!!r.paid, paidBy:r.paidBy||'' });
+               // paid = the tick OR a cash/slip mark on the tour itself
+               pay:parseFloat(r.driverPay)||0, paid:tourRegPaidRec(r), paidBy:r.paidBy||'' });
   });
   return out.sort(function(a,b){ return String(b.day).localeCompare(String(a.day)); });
 }
