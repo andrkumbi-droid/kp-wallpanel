@@ -269,6 +269,13 @@ body.kmdragging{user-select:none;-webkit-user-select:none}
 .modal{background:var(--bg);border-radius:20px 20px 0 0;padding:16px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto}
 /* Order-info (tour) popup: centered on screen instead of a bottom sheet. */
 #order-info-modal{align-items:center;padding:16px}
+/* Paperwork is read, not swiped — centre it and give it square corners instead
+   of the bottom-sheet look. The dashed strip is the drop target. */
+#cldocs-modal{align-items:center;padding:16px}
+#cldocs-modal .modal{border-radius:16px}
+.cldrop{display:flex;align-items:center;justify-content:center;gap:6px;text-align:center;border:1.5px dashed var(--border);border-radius:var(--rs);padding:8px 10px;font-size:11px;color:var(--text2);cursor:pointer;transition:background .12s,border-color .12s}
+.cldrop:hover{border-color:var(--blue);color:var(--blue)}
+.cldrop.over{border-color:var(--blue);background:var(--blue-bg);color:var(--blue);font-weight:700}
 #order-info-modal .modal{border-radius:16px;max-height:86vh}
 /* Delivery + odometer popups: centered too, not glued to the bottom edge. */
 #delivery-modal,#km-modal,#tpay-modal,#pocancel-modal,#insmode-modal,#inspay-modal{align-items:center;padding:16px}
@@ -6722,7 +6729,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260808001;
+var KP_BUILD = 20260808002;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -21922,8 +21929,8 @@ function calcViz() {
 </div>
 
 <!-- Container paperwork: the PI and the two transfer confirmations. -->
-<div class="modal-overlay" id="cldocs-modal"><div class="modal" id="cldocs-body" style="max-width:560px;max-height:88vh;overflow-y:auto"></div></div>
-<input type="file" id="cldoc-file" accept="image/*,.pdf,.xls,.xlsx,.csv,.doc,.docx" style="display:none" onchange="clDocOnFile(this)">
+<div class="modal-overlay" id="cldocs-modal" ondragover="event.preventDefault()" ondrop="event.preventDefault()"><div class="modal" id="cldocs-body" style="max-width:560px;max-height:88vh;overflow-y:auto"></div></div>
+<input type="file" id="cldoc-file" accept="image/*,.pdf,.xls,.xlsx,.csv,.doc,.docx" multiple style="display:none" onchange="clDocOnFile(this)">
 
 <!-- CONTAINER LOG MODAL -->
 <div class="modal-overlay" id="cl-modal">
@@ -22916,11 +22923,18 @@ function clDocsRender(){
     h+='<div style="margin-bottom:12px">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:5px">'
         +'<span style="font-size:12px;font-weight:800;color:'+k[2]+'">'+k[1]+' <span style="color:var(--text2);font-weight:600">('+files.length+')</span></span>'
-        +'<button type="button" class="btnsm" style="padding:3px 9px;font-size:11px" onclick="clDocPick(\''+k[0]+'\')">＋ อัปโหลด / upload</button>'
-      +'</div>';
+        +'<button type="button" class="btnsm" style="padding:3px 9px;font-size:11px" onclick="clDocPick(\''+k[0]+'\')">＋ เลือกไฟล์ / choose</button>'
+      +'</div>'
+      // Drop target and tap target in one: on a computer the .xlsx from WeChat can
+      // be dragged straight onto it, on a phone it just opens the file picker.
+      +'<div class="cldrop" id="cldrop-'+k[0]+'"'
+        +' ondragover="clDocDragOver(event,\''+k[0]+'\')" ondragenter="clDocDragOver(event,\''+k[0]+'\')"'
+        +' ondragleave="clDocDragLeave(event,\''+k[0]+'\')" ondrop="clDocDrop(event,\''+k[0]+'\')"'
+        +' onclick="clDocPick(\''+k[0]+'\')">⬇ ลากไฟล์มาวาง / drag a file here · Excel · PDF · รูป</div>';
     if(!files.length){
-      h+='<div style="font-size:11px;color:var(--text3);padding:2px 0">— ยังไม่มีไฟล์ / nothing yet —</div>';
+      h+='<div style="font-size:11px;color:var(--text3);padding:4px 0 0">— ยังไม่มีไฟล์ / nothing yet —</div>';
     } else {
+      h+='<div style="height:6px"></div>';
       var imgs=files.filter(clDocIsImg), rest=files.filter(function(f){ return !clDocIsImg(f); });
       if(imgs.length) h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;margin-bottom:6px">'
         + imgs.map(function(f){
@@ -22955,16 +22969,51 @@ function clDocPick(kind){
   var i=document.getElementById('cldoc-file'); if(i){ i.value=''; i.click(); }
 }
 function clDocOnFile(input){
-  var f=input&&input.files&&input.files[0]; if(!f||!_clDocId) return;
-  var c=(containerLog||[]).find(function(x){return x.id===_clDocId;}); if(!c) return;
-  var kind=_clDocKind, by=clDocWho(), busy=document.getElementById('cldoc-busy');
+  var files=(input&&input.files)?Array.prototype.slice.call(input.files):[];
+  input.value='';
+  clDocQueue(files,_clDocKind);
+}
+// ── drag & drop, one strip per kind ───────────────────────────────────────
+function _clDropEl(kind){ return document.getElementById('cldrop-'+kind); }
+function clDocDragOver(ev,kind){
+  ev.preventDefault(); ev.stopPropagation();
+  try{ ev.dataTransfer.dropEffect='copy'; }catch(e){}
+  var el=_clDropEl(kind); if(el) el.classList.add('over');
+}
+function clDocDragLeave(ev,kind){
+  ev.preventDefault(); ev.stopPropagation();
+  var el=_clDropEl(kind); if(el) el.classList.remove('over');
+}
+function clDocDrop(ev,kind){
+  ev.preventDefault(); ev.stopPropagation();
+  var el=_clDropEl(kind); if(el) el.classList.remove('over');
+  var dt=ev.dataTransfer, files=[];
+  if(dt && dt.files && dt.files.length) files=Array.prototype.slice.call(dt.files);
+  if(!files.length){ alert('ลากไฟล์จากคอมพิวเตอร์เท่านั้น / Drop a file from your computer'); return; }
+  clDocQueue(files,kind);
+}
+// One after another: each file may be several MB going into the database, and
+// firing them in parallel only makes every one of them slower.
+function clDocQueue(files,kind){
+  if(!files || !files.length || !_clDocId) return;
+  var i=0;
+  (function next(){
+    if(i>=files.length) return;
+    _clDocUpload(files[i++],kind,next);
+  })();
+}
+function _clDocUpload(f,kind,done){
+  done=done||function(){};
+  if(!f||!_clDocId){ done(); return; }
+  var c=(containerLog||[]).find(function(x){return x.id===_clDocId;}); if(!c){ done(); return; }
+  var by=clDocWho(), busy=document.getElementById('cldoc-busy');
   if(busy){ busy.style.display=''; busy.textContent='⏳ กำลังอัปโหลด… / uploading…'; }
   // meta goes on the container (small, live for everybody), the bytes go to their
   // own node under the key — or, if Storage ever starts working, to `url`.
-  var save=function(meta,blob){
+  var save=function(meta,blob,silent){
     if(busy) busy.style.display='none';
-    if(!meta){ alert('อัปโหลดไม่สำเร็จ / Upload failed'); return; }
-    var done=function(){
+    if(!meta){ if(!silent) alert('อัปโหลดไม่สำเร็จ / Upload failed'); done(); return; }
+    var commit=function(){
       var arr=clDocsOf(c,kind);
       arr.push(meta);
       c.docs=c.docs||{}; c.docs[kind]=arr;
@@ -22972,14 +23021,15 @@ function clDocOnFile(input){
       try{ auditAdd({type:'edit', area:'container', orderId:'🚢 '+(c.supplier||'')+' '+(c.containerNo||''),
             note:kind+' + '+(f.name||''), by:by}); }catch(e){}
       clDocsRender(); try{ clRender(); }catch(e){}
+      done();   // next file in the drop, if there is one
     };
     if(blob && meta.k && window.fbDB){
       _clDocBlob[meta.k]=blob;
       window.fbDB.ref('containerDocs/'+c.id+'/'+meta.k).set(blob, function(err){
-        if(err){ alert('บันทึกไฟล์ไม่สำเร็จ / Could not store the file — '+(err.message||'')); return; }
-        done();
+        if(err){ alert('บันทึกไฟล์ไม่สำเร็จ / Could not store the file — '+(err.message||'')); done(); return; }
+        commit();
       });
-    } else done();
+    } else commit();
   };
   var base={ name:f.name||'file', size:f.size||0, mime:f.type||'', ts:Date.now(), by:by };
   // Try Storage first so this starts working the day the bucket is fixed — but on
@@ -23005,7 +23055,8 @@ function _clDocToDb(f,base,save){
   }
   if((f.size||0)>CL_DOC_MAXB64){
     if(busy) busy.style.display='none';
-    alert('ไฟล์ใหญ่เกินไป / File too big — '+clDocSize(f.size)+' (สูงสุด/max '+clDocSize(CL_DOC_MAXB64)+')');
+    alert('ไฟล์ใหญ่เกินไป / File too big — '+(f.name||'')+'\n'+clDocSize(f.size)+' (สูงสุด/max '+clDocSize(CL_DOC_MAXB64)+')');
+    save(null,null,true);   // keeps a multi-file drop going instead of stopping dead
     return;
   }
   var r=new FileReader();
