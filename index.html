@@ -1537,7 +1537,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="tabs" style="grid-template-columns:repeat(5,1fr)">
     <button type="button" class="tab active" onclick="mgt('stock')" id="mgt-stock">Stock / สต็อก</button>
     <button type="button" class="tab" onclick="mgt('incoming')" id="mgt-incoming">Incoming / ขาเข้า</button>
-    <button type="button" class="tab" onclick="mgt('aging')" id="mgt-aging">📦 Aging / อายุสต็อก</button>
+    <button type="button" class="tab" onclick="mgt('aging')" id="mgt-aging">📦 Lageralter</button>
     <button type="button" class="tab" onclick="mgt('staff')" id="mgt-staff">Staff / พนักงาน</button>
     <button type="button" class="tab" onclick="mgt('audit')" id="mgt-audit">Audit Log</button>
   </div>
@@ -1583,12 +1583,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <!-- AGING — FIFO batch ledger: how long goods lie here before they sell -->
   <div class="view" id="mgv-aging"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-      <div class="stit" style="margin-bottom:0">📦 Aging / อายุสต็อก — นานแค่ไหนกว่าจะขายออก</div>
+      <div class="stit" style="margin-bottom:0">📦 Lageralter — wie lange liegt die Ware, bis sie verkauft ist</div>
       <button type="button" class="btnsm" onclick="agRender()"><i class="ti ti-refresh"></i></button>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
-      <button type="button" id="agf-panels" onclick="agSetFilter('panels')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🪵 แผ่นผนัง / Panels</button>
-      <button type="button" id="agf-all" onclick="agSetFilter('all')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🔧 ทุกอย่าง / Everything</button>
+      <button type="button" id="agf-panels" onclick="agSetFilter('panels')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🪵 Nur Paneele</button>
+      <button type="button" id="agf-all" onclick="agSetFilter('all')" style="padding:7px 6px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);font-size:12px;font-weight:700;cursor:pointer;color:var(--text2)">🔧 Alles (mit Leisten)</button>
     </div>
     <div id="ag-body"></div>
   </div></div>
@@ -6557,7 +6557,7 @@ function btPrint(){
 var AG_WIN=60;          // days for "how fast does it sell right now"
 var AG_PRICE_WIN=180;   // days for the average selling price
 var AG_DEAD=60;         // no sale for this many days = not moving
-var _agFilter='panels', _agSort='age';
+var _agFilter='panels', _agSort='age', _agSup='';   // _agSup = supplier shown in the container list ('' = all)
 
 function agToday(){ return (typeof kpTodayStr==='function')?kpTodayStr():new Date().toISOString().slice(0,10); }
 function agDays(a,b){
@@ -6843,17 +6843,30 @@ function agBucket(age){ return age==null?4:(age<=30?0:(age<=60?1:(age<=90?2:3)))
 // How dead a product is: never sold but lying here beats any number of idle days.
 function agIdleRank(r){ return (r.stock>0 && r.idle==null) ? 99999 : (r.idle==null ? -1 : r.idle); }
 var AG_BUCKETS=[
-  {l:'0–30 d',  c:'#16a34a'}, {l:'31–60 d', c:'#2563eb'},
-  {l:'61–90 d', c:'#d97706'}, {l:'90+ d',   c:'#dc2626'},
-  {l:'? / ของเดิม', c:'#9ca3af'}
+  {l:'0–30 Tage',  c:'#16a34a'}, {l:'31–60 Tage', c:'#2563eb'},
+  {l:'61–90 Tage', c:'#d97706'}, {l:'über 90 Tage', c:'#dc2626'},
+  {l:'Altbestand (Datum unbekannt)', c:'#9ca3af'}
 ];
 function agSetFilter(f){ _agFilter=f; agRender(); }
 function agSetSort(s){ _agSort=s; agRender(); }
+function agSetSup(s){ _agSup=(_agSup===s)?'':s; agRender(); }
 function agRenderIfOpen(){
   var v=document.getElementById('mgv-aging');
   if(v && v.classList.contains('active')) agRender();
 }
 
+// Days until empty, said honestly. A precise date three years out is false
+// precision — at 4 pieces a day everything after a year is a guess, not a plan.
+function agWhen(days, dateStr){
+  if(days==null) return null;
+  if(days>400){
+    var y=Math.round(days/365*10)/10;
+    return 'bei diesem Tempo <b>über '+String(y).replace('.',',')+' Jahre</b>';
+  }
+  return 'voraussichtlich leer <b>'+agFmtD(dateStr)+'</b>';
+}
+// This tab is the owner's own analysis, so it speaks German — the rest of the app
+// stays Thai/English for the staff who work in it.
 function agRender(){
   var body=document.getElementById('ag-body'); if(!body) return;
   var L=agLedger(), today=L.today;
@@ -6865,7 +6878,7 @@ function agRender(){
     b.style.borderColor=on?'var(--blue)':'var(--border)';
     b.style.color=on?'var(--blue)':'var(--text2)';
   });
-  if(!rows.length){ body.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">ไม่มีข้อมูล / no data</div>'; return; }
+  if(!rows.length){ body.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">Keine Daten</div>'; return; }
 
   var esc=(typeof _esc==='function')?_esc:function(s){return String(s==null?'':s);};
   var totStock=0, totVal=0, valPcs=0, dsum=0, dused=0, spd=0;
@@ -6890,19 +6903,19 @@ function agRender(){
       +(s?'<div style="font-size:10px;color:var(--text2)">'+s+'</div>':'')+'</div>';
   };
   var h='<div class="card" style="display:flex;gap:10px;flex-wrap:wrap;padding:11px 12px;margin-bottom:8px">'
-    +box('เวลาขายเฉลี่ย / AVG DAYS TO SELL', avgAll==null?'—':(avgAll+' d'), 'มาถึง → ขาย / arrival → sale')
-    +box('ของเก่าสุด / OLDEST STOCK',
-         oldestRow?((oldestRow.oldestOpen?'≥ ':'')+oldestRow.oldest+' d'):'—',
+    +box('Ø TAGE BIS VERKAUFT', avgAll==null?'—':(avgAll+' Tage'), 'von der Ankunft bis zum Verkauf')
+    +box('ÄLTESTER BESTAND',
+         oldestRow?((oldestRow.oldestOpen?'≥ ':'')+oldestRow.oldest+' Tage'):'—',
          oldestRow?esc(oldestRow.code):'', oldestRow&&oldestRow.oldest>90?'#dc2626':'var(--text)')
-    +box('สต็อกพอใช้ / STOCK COVER', coverAll==null?'—':(coverAll+' d'), totStock.toLocaleString('en-US')+' pcs')
-    +box('มูลค่าที่จะขายได้ / EXPECTED REVENUE', agBaht(totVal),
-         priceCov<100?('จากราคาขายเฉลี่ย · '+priceCov+'% ของชิ้น / '+priceCov+'% of pieces priced'):'ราคาขายเฉลี่ย / at avg selling price','#16a34a')
+    +box('BESTAND REICHT', coverAll==null?'—':(coverAll+' Tage'), totStock.toLocaleString('en-US')+' Stück im Lager')
+    +box('ERWARTETER UMSATZ', agBaht(totVal),
+         priceCov<100?('zum Ø Verkaufspreis · nur '+priceCov+'% der Stücke haben einen Preis'):'zum Ø Verkaufspreis','#16a34a')
     +'</div>';
 
   // ── Age of what is lying there ────────────────────────────────────────────
   var bTot=buckets.reduce(function(a,b){return a+b;},0);
   h+='<div class="card" style="padding:11px 12px;margin-bottom:8px">'
-    +'<div style="font-size:12px;font-weight:800;margin-bottom:6px">⏳ อายุของสต็อก / age of the stock lying here</div>'
+    +'<div style="font-size:12px;font-weight:800;margin-bottom:6px">⏳ Wie lange liegt der Bestand schon hier?</div>'
     +'<div style="display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--bg2)">'
     +buckets.map(function(v,i){ return v>0?('<div title="'+AG_BUCKETS[i].l+'" style="width:'+(bTot>0?v/bTot*100:0)+'%;background:'+AG_BUCKETS[i].c+'"></div>'):''; }).join('')
     +'</div><div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:7px">'
@@ -6915,41 +6928,62 @@ function agRender(){
     +'</div></div>';
 
   // ── Containers ────────────────────────────────────────────────────────────
+  // Container numbers alone ("No. 19") say nothing about WHOSE container it was,
+  // which is why the old imported ones looked like strangers. Supplier on every
+  // card, plus a filter — but it only hides cards. Stock, age and forecast always
+  // count every container, otherwise the FIFO queue would be a lie.
   if(L.cont.length){
-    h+='<div class="stit" style="margin:14px 0 6px">🚢 รอบตู้ / container turnover</div>';
-    h+=L.cont.slice(0,12).map(function(b){
+    var sups={};
+    L.cont.forEach(function(b){ var s=b.sup||'—'; sups[s]=(sups[s]||0)+1; });
+    var supKeys=Object.keys(sups).sort();
+    var shown=L.cont.filter(function(b){ return !_agSup || (b.sup||'—')===_agSup; });
+    var supChip=function(val,lbl,n){
+      var on=(_agSup===val);
+      return '<button type="button" onclick="agSetSup(\''+String(val).replace(/'/g,"\\'")+'\')" style="flex-shrink:0;padding:5px 10px;border:1px solid '+(on?'#1d4ed8':'var(--border)')+';border-radius:14px;background:'+(on?'var(--blue-bg)':'var(--bg)')+';color:'+(on?'#1d4ed8':'var(--text2)')+';font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">'+esc(lbl)+' <span style="opacity:.7">'+n+'</span></button>';
+    };
+    h+='<div class="stit" style="margin:14px 0 6px">🚢 Container — wie schnell hat sich einer verkauft?</div>'
+      +(supKeys.length>1
+        ? '<div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:8px">'
+            +supChip('','Alle Lieferanten',L.cont.length)
+            +supKeys.map(function(s){ return supChip(s,s,sups[s]); }).join('')
+          +'</div>'
+        : '');
+    h+=shown.slice(0,12).map(function(b){
       var pctCol=b.pct>=95?'#166534':(b.pct>=50?'#2563eb':'var(--text)');
+      var when=agWhen(b.goneIn===false?null:b.goneIn, b.goneAt);
       return '<details class="card" style="padding:10px 12px;margin-bottom:6px">'
         +'<summary style="cursor:pointer;list-style:none">'
           +'<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'
-            +'<span style="font-size:13px;font-weight:800">'+(b.cno?('No. '+esc(b.cno)):esc(b.sup||'—'))+'</span>'
+            +'<span style="font-size:13px;font-weight:800">'+esc(b.sup||'—')+(b.cno?(' <span style="font-weight:600;color:var(--text2)">Nr. '+esc(b.cno)+'</span>'):'')+'</span>'
             +'<span style="font-size:13px;font-weight:800;color:'+pctCol+'">'+b.pct+'%</span></div>'
           +'<div style="height:5px;background:var(--bg2);border-radius:3px;overflow:hidden;margin:5px 0 4px"><div style="height:100%;width:'+Math.min(100,b.pct)+'%;background:'+pctCol+';border-radius:3px"></div></div>'
           +'<div style="font-size:11px;color:var(--text2)">'
-            +'มาถึง '+agFmtD(b.date)+' · '+b.qty.toLocaleString('en-US')+' pcs · ขายแล้ว '+b.sold.toLocaleString('en-US')
-            +(b.lost>0?(' · เสีย/แก้ '+b.lost.toLocaleString('en-US')):'')
-            +(b.avgDays!=null?(' · Ø '+b.avgDays+' วันต่อชิ้น'):'')
+            +'angekommen '+agFmtD(b.date)+' · '+b.qty.toLocaleString('en-US')+' Stück · verkauft '+b.sold.toLocaleString('en-US')
+            +(b.lost>0?(' · Bruch/Korrektur '+b.lost.toLocaleString('en-US')):'')
+            +(b.avgDays!=null?(' · Ø '+b.avgDays+' Tage bis verkauft'):'')
           +'</div>'
           +'<div style="font-size:11px;margin-top:2px">'
             +(b.cycle!=null
-              ? '<b style="color:#166534">ขายหมดใน '+b.cycle+' วัน / sold out in '+b.cycle+' days ✓</b>'
-              : (b.goneAt ? ('เหลือ '+b.left.toLocaleString('en-US')+' → คาดว่าหมด '+agFmtD(b.goneAt)+' / est. empty')
-                          : ('เหลือ '+b.left.toLocaleString('en-US')+' · ยังไม่มีความเร็วขาย / no selling speed yet')))
-            +' · <span style="color:#16a34a;font-weight:700">'+agBaht(b.rev)+'</span>'
-            +(b.rest>0?(' <span style="color:var(--text2)">+ '+agBaht(b.rest)+' ในสต็อก</span>'):'')
+              ? '<b style="color:#166534">war nach '+b.cycle+' Tagen leer ✓</b>'
+              : (b.used===0
+                  ? ('noch nicht an der Reihe — älterer Bestand liegt davor (FIFO)'+(when?' · '+when:''))
+                  : ('Rest '+b.left.toLocaleString('en-US')+' · '+(when||'noch kein Verkaufstempo'))))
+            +' · <span style="color:#16a34a;font-weight:700">'+agBaht(b.rev)+' eingenommen</span>'
+            +(b.rest>0?(' <span style="color:var(--text2)">+ '+agBaht(b.rest)+' liegen noch da</span>'):'')
           +'</div>'
         +'</summary>'
         +'<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px">'
         +b.rows.map(function(x){
           return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:2px 0">'
             +'<span style="font-weight:700">'+esc(x.code)+'</span>'
-            +'<span style="color:var(--text2)">'+x.qty.toLocaleString('en-US')+' → ขาย '+x.sold.toLocaleString('en-US')
-            +(x.days!=null?(' · Ø '+x.days+' d'):'')
-            +(x.left>0?(' · เหลือ '+x.left.toLocaleString('en-US')+(x.age!=null?(' ('+x.age+' d)'):'')):' · <b style="color:#166534">หมด '+agFmtD(x.empty)+'</b>')
+            +'<span style="color:var(--text2)">'+x.qty.toLocaleString('en-US')+' → verkauft '+x.sold.toLocaleString('en-US')
+            +(x.days!=null?(' · Ø '+x.days+' Tage'):'')
+            +(x.left>0?(' · Rest '+x.left.toLocaleString('en-US')+(x.age!=null?(' · liegt '+x.age+' Tage'):'')):' · <b style="color:#166534">leer am '+agFmtD(x.empty)+'</b>')
             +'</span></div>';
         }).join('')
         +'</div></details>';
     }).join('');
+    if(!shown.length) h+='<div class="empty" style="padding:1rem;font-size:13px">Kein Container von '+esc(_agSup)+'</div>';
   }
 
   // ── Products ──────────────────────────────────────────────────────────────
@@ -6964,19 +6998,19 @@ function agRender(){
     var on=_agSort===id;
     return '<button type="button" onclick="agSetSort(\''+id+'\')" style="flex-shrink:0;padding:5px 10px;border:1px solid '+(on?'#1d4ed8':'var(--border)')+';border-radius:14px;background:'+(on?'var(--blue-bg)':'var(--bg)')+';color:'+(on?'#1d4ed8':'var(--text2)')+';font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">'+lbl+'</button>';
   };
-  h+='<div class="stit" style="margin:14px 0 6px">📋 สินค้า / per product</div>'
+  h+='<div class="stit" style="margin:14px 0 6px">📋 Je Produkt</div>'
     +'<div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:8px">'
-    +chip('age','⏳ อายุ / age')+chip('cover','📉 พอใช้ / cover')+chip('dead','🐢 ไม่ขยับ / idle')+chip('value','💰 มูลค่า / value')
+    +chip('age','⏳ Alter')+chip('cover','📉 Reichweite')+chip('dead','🐢 Ladenhüter')+chip('value','💰 Wert')
     +'</div>';
 
   h+=sorted.filter(function(r){ return r.stock>0 || r.lots.some(function(l){return l.used>0;}); }).map(function(r){
-    var ageTxt = r.oldest==null?'—':((r.oldestOpen?'≥':'')+r.oldest+' d');
+    var ageTxt = r.oldest==null?'—':((r.oldestOpen?'≥':'')+r.oldest+' Tage');
     var ageCol = r.oldest==null?'var(--text2)':(r.oldest>90?'#dc2626':(r.oldest>60?'#b45309':'#166534'));
     var covCol = r.cover==null?'var(--text2)':(r.cover<30?'#dc2626':(r.cover<60?'#b45309':'#166534'));
     var warn='';
     if(r.inc && r.inc.eta && r.cover!=null){
       var gap=agDays(today,r.inc.eta)-r.cover;
-      if(gap>0) warn='<div style="font-size:11px;color:#dc2626;margin-top:3px">⚠ หมดก่อนตู้ถัดไป '+gap+' วัน / out of stock '+gap+' days before the next container ('+agFmtD(r.inc.eta)+')</div>';
+      if(gap>0) warn='<div style="font-size:11px;color:#dc2626;margin-top:3px">⚠ '+gap+' Tage ohne Ware, bevor der nächste Container kommt ('+agFmtD(r.inc.eta)+')</div>';
     }
     return '<details class="card" style="padding:9px 12px;margin-bottom:5px">'
       +'<summary style="cursor:pointer;list-style:none">'
@@ -6984,33 +7018,33 @@ function agRender(){
           +'<span style="font-size:13px;font-weight:800">'+esc(r.code)+'</span>'
           +'<span style="font-size:13px;font-weight:800;color:'+ageCol+'">'+ageTxt+'</span></div>'
         +'<div style="font-size:11px;color:var(--text2);margin-top:2px">'
-          +'สต็อก '+r.stock.toLocaleString('en-US')+' · ขาย '+(Math.round(r.speed*10)/10)+'/วัน · '
-          +'พอใช้ <b style="color:'+covCol+'">'+(r.cover==null?'—':(r.cover+' วัน'))+'</b>'
-          +(r.avgDays!=null?(' · Ø ขายใน '+r.avgDays+' วัน'):'')
-          +(r.cycle!=null?(' · ตู้ก่อนหมดใน '+r.cycle+' วัน'):'')
+          +'Lager '+r.stock.toLocaleString('en-US')+' · '+(Math.round(r.speed*10)/10)+'/Tag · '
+          +'reicht <b style="color:'+covCol+'">'+(r.cover==null?'—':(r.cover+' Tage'))+'</b>'
+          +(r.avgDays!=null?(' · Ø '+r.avgDays+' Tage bis verkauft'):'')
+          +(r.cycle!=null?(' · Container vorher: '+r.cycle+' Tage bis leer'):'')
           +(r.price>0?(' · '+agBaht(r.value)):'')
         +'</div>'
-        +(r.stock>0&&r.idle==null?'<div style="font-size:11px;color:#dc2626;margin-top:2px">🐢 ยังไม่เคยขายเลย / never sold, still lying here</div>'
-          :(r.idle!=null&&r.idle>=AG_DEAD&&r.stock>0?('<div style="font-size:11px;color:#b45309;margin-top:2px">🐢 ไม่ขายมา '+r.idle+' วัน / no sale for '+r.idle+' days</div>'):''))
+        +(r.stock>0&&r.idle==null?'<div style="font-size:11px;color:#dc2626;margin-top:2px">🐢 noch nie verkauft, liegt trotzdem hier</div>'
+          :(r.idle!=null&&r.idle>=AG_DEAD&&r.stock>0?('<div style="font-size:11px;color:#b45309;margin-top:2px">🐢 seit '+r.idle+' Tagen kein Verkauf</div>'):''))
         +warn
       +'</summary>'
       +'<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px">'
       +r.lots.map(function(l){
-        var name = l.open?'ของเดิม / opening':(l.corr?(l.cid==='_arr'?'เข้าคลัง / arrival':'แก้ไข / correction'):(l.cno?('No. '+esc(l.cno)):esc(l.sup||'ตู้ / container')));
+        var name = l.open?'Altbestand':(l.corr?(l.cid==='_arr'?'Wareneingang':'Korrektur'):(esc(l.sup||'Container')+(l.cno?(' Nr. '+esc(l.cno)):'')));
         return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:2px 0">'
-          +'<span style="font-weight:700">'+name+' <span style="font-weight:400;color:var(--text2)">'+(l.date?agFmtD(l.date):'? ')+'</span></span>'
+          +'<span style="font-weight:700">'+name+' <span style="font-weight:400;color:var(--text2)">'+(l.date?agFmtD(l.date):'Datum unbekannt')+'</span></span>'
           +'<span style="color:var(--text2)">'+l.qty.toLocaleString('en-US')+' → '
           +(l.left<=0
-            ? ('<b style="color:#166534">หมด '+agFmtD(l.empty)+(l.date?(' · '+agDays(l.date,l.empty)+' d'):'')+'</b>')
-            : ('ออกไป '+l.used.toLocaleString('en-US')+' · เหลือ <b>'+l.left.toLocaleString('en-US')+'</b>'
-               +(l.age!=null?(' · นอนคลัง '+(l.approx?'≥':'')+l.age+' d'):' · ? d')
-               +(l.goneAt?(' · หมด ~'+agFmtD(l.goneAt)):'')))
+            ? ('<b style="color:#166534">leer am '+agFmtD(l.empty)+(l.date?(' · nach '+agDays(l.date,l.empty)+' Tagen'):'')+'</b>')
+            : ('raus '+l.used.toLocaleString('en-US')+' · Rest <b>'+l.left.toLocaleString('en-US')+'</b>'
+               +(l.age!=null?(' · liegt '+(l.approx?'≥':'')+l.age+' Tage'):'')
+               +(l.goneIn!=null?(' · '+(l.goneIn>400?'noch Jahre':('leer ~'+agFmtD(l.goneAt)))):'')))
           +'</span></div>';
       }).join('')
       +((r.unattr>0||r.missing>0||r.pre>0)?('<div style="font-size:10.5px;color:#b45309;margin-top:4px">'
-          +(r.unattr>0?('⚠ '+r.unattr.toLocaleString('en-US')+' ชิ้นออกไปโดยไม่มีตู้รองรับ / left with no lot to book against. '):'')
-          +(r.missing>0?('⚠ '+r.missing.toLocaleString('en-US')+' ชิ้นหายไปจากบัญชี / more came in than stock + outflows explain. '):'')
-          +(r.pre>0?('ℹ '+r.pre.toLocaleString('en-US')+' ชิ้นขายก่อนตู้ถึง (นับ 0 วัน) / sold before the lot was booked in — counted as 0 days.'):'')
+          +(r.unattr>0?('⚠ '+r.unattr.toLocaleString('en-US')+' Stück gingen raus, ohne dass ein Container sie deckt. '):'')
+          +(r.missing>0?('⚠ '+r.missing.toLocaleString('en-US')+' Stück fehlen in der Rechnung — es kam mehr rein, als Lager + Abgänge erklären. '):'')
+          +(r.pre>0?('ℹ '+r.pre.toLocaleString('en-US')+' Stück wurden verkauft, bevor ihr Container eingebucht war (mit 0 Tagen gezählt).'):'')
         +'</div>'):'')
       +'</div></details>';
   }).join('');
@@ -7029,36 +7063,36 @@ function agRender(){
                .sort(function(a,b){ return (agDays(today,b.inc.eta)-b.cover)-(agDays(today,a.inc.eta)-a.cover); });
   var noInc=rows.filter(function(r){ return !r.inc && r.cover!=null && r.cover<45 && r.stock>0; })
                 .sort(function(a,b){ return a.cover-b.cover; });
-  h+='<div class="stit" style="margin:14px 0 6px">🔮 คาดการณ์ / forecast</div>'
+  h+='<div class="stit" style="margin:14px 0 6px">🔮 Vorschau</div>'
     +'<div class="card" style="padding:11px 12px;margin-bottom:8px">'
       +'<div style="display:flex;gap:10px;flex-wrap:wrap">'
-        +box('30 วัน / DAYS', f30.pcs.toLocaleString('en-US')+' pcs', agBaht(f30.baht),'#16a34a')
-        +box('60 วัน / DAYS', f60.pcs.toLocaleString('en-US')+' pcs', agBaht(f60.baht),'#16a34a')
-        +box('90 วัน / DAYS', f90.pcs.toLocaleString('en-US')+' pcs', agBaht(f90.baht),'#16a34a')
+        +box('NÄCHSTE 30 TAGE', f30.pcs.toLocaleString('en-US')+' Stück', agBaht(f30.baht),'#16a34a')
+        +box('NÄCHSTE 60 TAGE', f60.pcs.toLocaleString('en-US')+' Stück', agBaht(f60.baht),'#16a34a')
+        +box('NÄCHSTE 90 TAGE', f90.pcs.toLocaleString('en-US')+' Stück', agBaht(f90.baht),'#16a34a')
       +'</div>'
-      +'<div style="font-size:11px;color:var(--text2);margin-top:6px">ความเร็วขาย '+AG_WIN+' วันล่าสุด × ราคาขายเฉลี่ย '+AG_PRICE_WIN+' วัน — จำกัดที่ของที่มีจริง (ไม่นับตู้ที่ยังไม่มาถึง)'
-      +'<br>Selling speed of the last '+AG_WIN+' days × average selling price of the last '+AG_PRICE_WIN+' days, capped at the stock actually here — containers still on the way are not counted.</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:6px">Verkaufstempo der letzten '+AG_WIN+' Tage × Ø Verkaufspreis der letzten '+AG_PRICE_WIN+' Tage, begrenzt auf die Ware, die wirklich hier liegt. Container, die noch unterwegs sind, zählen nicht mit.</div>'
     +'</div>';
   if(risk.length||noInc.length){
     h+='<div class="card" style="padding:11px 12px;margin-bottom:8px">'
-      +'<div style="font-size:12px;font-weight:800;margin-bottom:4px">⚠ ช่องว่างสต็อก / stock gaps</div>'
+      +'<div style="font-size:12px;font-weight:800;margin-bottom:4px">⚠ Lücken im Bestand</div>'
       +'<div style="font-size:12px;line-height:1.8">'
       +risk.slice(0,10).map(function(r){
         var g=agDays(today,r.inc.eta)-r.cover;
-        return '• <b>'+esc(r.code)+'</b>: พอใช้ '+r.cover+' วัน · ตู้ถัดไป '+agFmtD(r.inc.eta)+' → <b style="color:#dc2626">ขาดของ '+g+' วัน / '+g+' days without stock</b>';
+        return '• <b>'+esc(r.code)+'</b>: reicht '+r.cover+' Tage · nächster Container '+agFmtD(r.inc.eta)+' → <b style="color:#dc2626">'+g+' Tage ohne Ware</b>';
       }).join('<br>')
       +((risk.length&&noInc.length)?'<br>':'')
       +noInc.slice(0,10).map(function(r){
-        return '• <b>'+esc(r.code)+'</b>: เหลือ '+r.stock.toLocaleString('en-US')+' · พอใช้ '+r.cover+' วัน · <b style="color:#dc2626">ไม่มีในตู้ / nothing on the way</b>';
+        return '• <b>'+esc(r.code)+'</b>: noch '+r.stock.toLocaleString('en-US')+' · reicht '+r.cover+' Tage · <b style="color:#dc2626">nichts unterwegs</b>';
       }).join('<br>')
       +'</div></div>';
   }
 
   h+='<div class="card" style="padding:10px 12px">'
     +'<div style="font-size:11px;color:var(--text2);line-height:1.7">'
-    +'* FIFO — ของเก่าออกก่อน. นับออกจากคลัง: ออเดอร์ (ตามวันที่ออเดอร์) + การแก้สต็อกด้วยมือ + ย้ายเกรด A→B. ของที่มีอยู่ก่อนเริ่มบันทึกรวมเป็นก้อนเดียว "ของเดิม" อายุจึงเป็น "อย่างน้อย" (≥)'
-    +'<br>FIFO ledger — oldest stock leaves first. Outflows counted: orders (by order date), manual stock corrections and Grade A→B moves. Stock that was already here before the records began is one opening lot with an unknown date, so its age is reported as "at least" (≥).'
-    +(L.start?('<br>บันทึกเริ่ม / ledger starts '+agFmtD(L.start)):'')
+    +'<b>Wie das gerechnet wird:</b> FIFO — das Älteste geht zuerst raus. Als Abgang zählen Orders (nach Orderdatum), Stock-Korrekturen von Hand und Umbuchungen Grade A→B. '
+    +'Ware, die schon vor den Aufzeichnungen hier lag, ist ein einziger Posten „Altbestand" ohne Datum — sein Alter steht deshalb als „mindestens" (≥) da und geht in keinen Durchschnitt ein. '
+    +'Der Lieferanten-Filter blendet nur Container-Karten aus; Bestand, Alter und Vorschau rechnen immer mit allen Containern, sonst stimmt die Reihenfolge nicht.'
+    +(L.start?('<br>Aufzeichnung beginnt am '+agFmtD(L.start)+'.'):'')
     +'</div></div>';
 
   body.innerHTML=h;
