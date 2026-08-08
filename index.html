@@ -6722,7 +6722,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260807008;
+var KP_BUILD = 20260808001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -21921,6 +21921,10 @@ function calcViz() {
   </div>
 </div>
 
+<!-- Container paperwork: the PI and the two transfer confirmations. -->
+<div class="modal-overlay" id="cldocs-modal"><div class="modal" id="cldocs-body" style="max-width:560px;max-height:88vh;overflow-y:auto"></div></div>
+<input type="file" id="cldoc-file" accept="image/*,.pdf,.xls,.xlsx,.csv,.doc,.docx" style="display:none" onchange="clDocOnFile(this)">
+
 <!-- CONTAINER LOG MODAL -->
 <div class="modal-overlay" id="cl-modal">
   <div class="modal">
@@ -22816,6 +22820,216 @@ function clGetAvgStats() {
   return { depToLoad: depToLoad/done.length, loadToTh: loadToTh/done.length, thToWh: thToWh/done.length };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  CONTAINER PAPERWORK — the PI and the two transfer confirmations
+//  ---------------------------------------------------------------------------
+//  Every container has a proforma invoice and, later, proof that the deposit and
+//  the balance were transferred. They used to live in WeChat and in somebody's
+//  downloads folder. Here they hang on the container itself: pictures show as
+//  thumbnails, an .xlsx or .pdf as a line you can open.
+//
+//  WHERE THE BYTES GO. Firebase Storage is set up in this project but its bucket
+//  refuses browser uploads (CORS preflight fails, verified from the live app) —
+//  so it is tried first, with a short retry, and everything falls back to the
+//  database. Which means the file must NOT sit in containerLog: every client
+//  holds that node open with .on('value') and would re-download a 4 MB invoice on
+//  every container change. So containerLog keeps only the small metadata (name,
+//  size, who, when) and the bytes live under containerDocs/<container>/<key>,
+//  fetched one by one, only when somebody actually looks at them.
+// ════════════════════════════════════════════════════════════════════════════
+var CL_DOCS=[['pi','📄 PI / ใบแจ้งราคา','#4f46e5'],
+             ['depositSlip','💰 สลิปมัดจำ / Deposit slip','#16a34a'],
+             ['balanceSlip','💳 สลิปยอดคงเหลือ / Balance slip','#b45309']];
+var CL_DOC_MAXB64 = 5*1024*1024;  // a PI runs 0.5–4.4 MB; past this ask for a smaller export
+var _clDocBlob = {};              // key → data-url, fetched on demand, kept for the session
+function clDocsOf(c,kind){
+  var d=(c&&c.docs&&c.docs[kind]);
+  if(!d) return [];
+  return Array.isArray(d) ? d.filter(Boolean) : Object.keys(d).map(function(k){return d[k];}).filter(Boolean);
+}
+function clDocIsImg(f){ return /^image\//.test(f&&f.mime||'') || /\.(jpe?g|png|gif|webp|heic)$/i.test(f&&f.name||''); }
+function clDocIcon(f){
+  var n=(f&&f.name||'').toLowerCase();
+  if(/\.(xlsx?|csv)$/.test(n)) return '📊';
+  if(/\.pdf$/.test(n)) return '📕';
+  if(/\.docx?$/.test(n)) return '📘';
+  return '📎';
+}
+function clDocSize(b){ b=parseInt(b)||0; if(!b) return ''; return b>1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB'; }
+function clDocWho(){
+  try{ var s=(staffList||[]).find(function(x){return x.id===currentStaffId;}); if(s&&s.name) return s.name; }catch(e){}
+  return 'Office';
+}
+
+var _clDocId=null, _clDocKind='pi';
+function clDocsOpen(id){
+  var c=(containerLog||[]).find(function(x){return x.id===id;}); if(!c) return;
+  _clDocId=id;
+  var m=document.getElementById('cldocs-modal'); if(!m) return;
+  clDocsRender();
+  m.classList.add('open');
+  // Pull the thumbnails (compressed pictures only — never the invoices).
+  if(!window.fbDB) return;
+  CL_DOCS.forEach(function(k){
+    clDocsOf(c,k[0]).forEach(function(f){
+      if(!f.k || f.url || _clDocBlob[f.k] || !clDocIsImg(f)) return;
+      window.fbDB.ref('containerDocs/'+c.id+'/'+f.k).once('value', function(s){
+        var v=s.val(); if(!v) return;
+        _clDocBlob[f.k]=v;
+        if(_clDocId===c.id) clDocsRender();
+      });
+    });
+  });
+}
+function clDocUrl(f){ return f.url || (f.k?_clDocBlob[f.k]:'') || ''; }
+// Non-picture files are never fetched until somebody asks for them — an invoice
+// is megabytes and nothing on screen needs its bytes to draw a filename.
+function clDocFetch(kind,idx){
+  var c=(containerLog||[]).find(function(x){return x.id===_clDocId;}); if(!c) return;
+  var f=clDocsOf(c,kind)[idx]; if(!f) return;
+  var open=function(u){
+    if(!u){ alert('ไฟล์หาย / File missing'); return; }
+    var a=document.createElement('a'); a.href=u; a.download=f.name||'file'; a.target='_blank'; a.rel='noopener';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  if(f.url) return open(f.url);
+  if(_clDocBlob[f.k]) return open(_clDocBlob[f.k]);
+  if(!window.fbDB) return;
+  var busy=document.getElementById('cldoc-busy');
+  if(busy){ busy.style.display=''; busy.textContent='⏳ กำลังเปิด… / fetching…'; }
+  window.fbDB.ref('containerDocs/'+c.id+'/'+f.k).once('value', function(s){
+    if(busy){ busy.style.display='none'; busy.textContent='⏳ กำลังอัปโหลด… / uploading…'; }
+    var v=s.val(); if(v) _clDocBlob[f.k]=v;
+    open(v);
+  }, function(){ if(busy) busy.style.display='none'; alert('โหลดไม่สำเร็จ / Could not load'); });
+}
+function clDocsClose(){ var m=document.getElementById('cldocs-modal'); if(m) m.classList.remove('open'); _clDocId=null; }
+function clDocsRender(){
+  var body=document.getElementById('cldocs-body'); if(!body) return;
+  var c=(containerLog||[]).find(function(x){return x.id===_clDocId;}); if(!c) return;
+  var h='<div class="mhdr"><span class="mtit">📎 เอกสารตู้ / Container papers · '+_esc(c.supplier||'')+'</span>'
+      +'<button type="button" class="mclose" onclick="clDocsClose()"><i class="ti ti-x"></i></button></div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:10px">'+_esc(c.containerNo||'')+(c.piNo?' · '+_esc(c.piNo):'')+'</div>'
+    +'<div id="cldoc-busy" style="display:none;font-size:12px;font-weight:700;color:var(--blue);background:var(--blue-bg);border-radius:var(--rs);padding:7px 10px;margin-bottom:8px">⏳ กำลังอัปโหลด… / uploading…</div>';
+  CL_DOCS.forEach(function(k){
+    var files=clDocsOf(c,k[0]);
+    h+='<div style="margin-bottom:12px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:5px">'
+        +'<span style="font-size:12px;font-weight:800;color:'+k[2]+'">'+k[1]+' <span style="color:var(--text2);font-weight:600">('+files.length+')</span></span>'
+        +'<button type="button" class="btnsm" style="padding:3px 9px;font-size:11px" onclick="clDocPick(\''+k[0]+'\')">＋ อัปโหลด / upload</button>'
+      +'</div>';
+    if(!files.length){
+      h+='<div style="font-size:11px;color:var(--text3);padding:2px 0">— ยังไม่มีไฟล์ / nothing yet —</div>';
+    } else {
+      var imgs=files.filter(clDocIsImg), rest=files.filter(function(f){ return !clDocIsImg(f); });
+      if(imgs.length) h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;margin-bottom:6px">'
+        + imgs.map(function(f){
+            var i=files.indexOf(f), src=clDocUrl(f);
+            if(!src) return '<div style="aspect-ratio:1;border:1px dashed var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text2)">…</div>';
+            return '<div style="position:relative">'
+              +'<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid var(--border)">'
+              +'<span onclick="clDocDel(\''+k[0]+'\','+i+')" title="ลบ / delete" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,.6);color:#fff;border-radius:6px;padding:0 5px;font-size:11px;cursor:pointer">✕</span>'
+              +'<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);color:#fff;font-size:8px;padding:1px 3px;border-radius:0 0 6px 6px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(f.by||'')+'</div>'
+            +'</div>';
+          }).join('')
+        +'</div>';
+      h+=rest.map(function(f){
+        var i=files.indexOf(f);
+        return '<div style="display:flex;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:7px 9px;margin-bottom:5px">'
+          +'<span style="font-size:18px;flex-shrink:0">'+clDocIcon(f)+'</span>'
+          +'<div style="flex:1;min-width:0">'
+            +'<div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(f.name||'file')+'</div>'
+            +'<div style="font-size:10.5px;color:var(--text2)">'+clDocSize(f.size)+(f.ts?' · '+new Date(f.ts).toLocaleDateString('th-TH',{day:'numeric',month:'short'}):'')+(f.by?' · '+_esc(f.by):'')+'</div>'
+          +'</div>'
+          +'<button type="button" class="btnsm" style="flex-shrink:0;padding:4px 9px" onclick="clDocFetch(\''+k[0]+'\','+i+')">เปิด / open</button>'
+          +'<span onclick="clDocDel(\''+k[0]+'\','+i+')" title="ลบ / delete" style="flex-shrink:0;cursor:pointer;color:#dc2626">🗑</span>'
+        +'</div>';
+      }).join('');
+    }
+    h+='</div>';
+  });
+  body.innerHTML=h;
+}
+function clDocPick(kind){
+  _clDocKind=kind;
+  var i=document.getElementById('cldoc-file'); if(i){ i.value=''; i.click(); }
+}
+function clDocOnFile(input){
+  var f=input&&input.files&&input.files[0]; if(!f||!_clDocId) return;
+  var c=(containerLog||[]).find(function(x){return x.id===_clDocId;}); if(!c) return;
+  var kind=_clDocKind, by=clDocWho(), busy=document.getElementById('cldoc-busy');
+  if(busy){ busy.style.display=''; busy.textContent='⏳ กำลังอัปโหลด… / uploading…'; }
+  // meta goes on the container (small, live for everybody), the bytes go to their
+  // own node under the key — or, if Storage ever starts working, to `url`.
+  var save=function(meta,blob){
+    if(busy) busy.style.display='none';
+    if(!meta){ alert('อัปโหลดไม่สำเร็จ / Upload failed'); return; }
+    var done=function(){
+      var arr=clDocsOf(c,kind);
+      arr.push(meta);
+      c.docs=c.docs||{}; c.docs[kind]=arr;
+      if(window.fbDB) window.fbDB.ref('containerLog/'+c.id+'/docs/'+kind).set(arr);
+      try{ auditAdd({type:'edit', area:'container', orderId:'🚢 '+(c.supplier||'')+' '+(c.containerNo||''),
+            note:kind+' + '+(f.name||''), by:by}); }catch(e){}
+      clDocsRender(); try{ clRender(); }catch(e){}
+    };
+    if(blob && meta.k && window.fbDB){
+      _clDocBlob[meta.k]=blob;
+      window.fbDB.ref('containerDocs/'+c.id+'/'+meta.k).set(blob, function(err){
+        if(err){ alert('บันทึกไฟล์ไม่สำเร็จ / Could not store the file — '+(err.message||'')); return; }
+        done();
+      });
+    } else done();
+  };
+  var base={ name:f.name||'file', size:f.size||0, mime:f.type||'', ts:Date.now(), by:by };
+  // Try Storage first so this starts working the day the bucket is fixed — but on
+  // a short leash, otherwise the SDK retries for two minutes before giving up.
+  if(window.fbStorage){
+    try{ window.fbStorage.setMaxUploadRetryTime(12000); window.fbStorage.setMaxOperationRetryTime(12000); }catch(e){}
+    var path='containers/'+c.id+'/'+kind+'/'+Date.now()+'_'+String(f.name||'file').replace(/[^\w.\-]/g,'_');
+    window.fbStorage.ref(path).put(f)
+      .then(function(s){ return s.ref.getDownloadURL(); })
+      .then(function(u){ save(Object.assign({url:u,path:path},base),null); })
+      .catch(function(){ _clDocToDb(f,base,save); });
+  } else {
+    _clDocToDb(f,base,save);
+  }
+}
+// Into the database: pictures get compressed first, everything else goes as it is.
+function _clDocToDb(f,base,save){
+  var key='d'+Date.now()+Math.floor(Math.random()*1000);
+  var busy=document.getElementById('cldoc-busy');
+  if(busy){ busy.style.display=''; busy.textContent='⏳ กำลังบันทึก… / storing…'; }
+  if(/^image\//.test(f.type||'')){
+    try{ compressPhotoFile(f,function(u){ save(u?Object.assign({k:key},base):null,u); }); return; }catch(e){}
+  }
+  if((f.size||0)>CL_DOC_MAXB64){
+    if(busy) busy.style.display='none';
+    alert('ไฟล์ใหญ่เกินไป / File too big — '+clDocSize(f.size)+' (สูงสุด/max '+clDocSize(CL_DOC_MAXB64)+')');
+    return;
+  }
+  var r=new FileReader();
+  r.onload=function(e){ save(Object.assign({k:key},base),e.target.result); };
+  r.onerror=function(){ save(null,null); };
+  r.readAsDataURL(f);
+}
+function clDocDel(kind,idx){
+  var c=(containerLog||[]).find(function(x){return x.id===_clDocId;}); if(!c) return;
+  var arr=clDocsOf(c,kind), f=arr[idx]; if(!f) return;
+  if(!confirm('ลบไฟล์นี้? / Delete this file?\n'+(f.name||''))) return;
+  arr.splice(idx,1);
+  c.docs=c.docs||{}; c.docs[kind]=arr;
+  if(window.fbDB){
+    window.fbDB.ref('containerLog/'+c.id+'/docs/'+kind).set(arr);
+    if(f.k) window.fbDB.ref('containerDocs/'+c.id+'/'+f.k).remove();
+  }
+  if(f.k) delete _clDocBlob[f.k];
+  if(f.path && window.fbStorage){ try{ window.fbStorage.ref(f.path).delete(); }catch(e){} }
+  try{ auditAdd({type:'delete', area:'container', orderId:'🚢 '+(c.supplier||'')+' '+(c.containerNo||''),
+        note:'ลบ/removed '+kind+' '+(f.name||''), by:clDocWho()}); }catch(e){}
+  clDocsRender(); try{ clRender(); }catch(e){}
+}
+
 function clCard(c, isPending) {
   var d1=clDaysBetween(c.deposit,c.loading), d2=clDaysBetween(c.loading,c.arrivedThAct), d3=clDaysBetween(c.arrivedThAct,c.arrivedWh), dtot=clDaysBetween(c.deposit,c.arrivedWh);
   var statusColor = c.arrivedWh?'var(--green)':c.arrivedThAct?'var(--orange)':c.loading?'var(--blue)':'var(--text2)';
@@ -22830,13 +23044,26 @@ function clCard(c, isPending) {
     +'<button type="button" class="btnsm" onclick="openCL(\''+c.id+'\')"><i class="ti ti-pencil"></i></button>'
     +'</div></div>';
 
-  // Dates grid
+  // Dates grid — a 📎 next to a payment means its transfer confirmation is filed.
+  var _dpN=clDocsOf(c,'depositSlip').length, _blN=clDocsOf(c,'balanceSlip').length;
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;font-size:11px;margin-bottom:8px">'
-    +'<div><span style="color:var(--text2)">💰 Deposit:</span> '+(c.deposit?clFmtD(c.deposit):'—')+'</div>'
-    +'<div><span style="color:var(--text2)">💳 Balance:</span> '+(c.balance?clFmtD(c.balance):'<span style="color:var(--red)">Unpaid</span>')+'</div>'
+    +'<div><span style="color:var(--text2)">💰 Deposit:</span> '+(c.deposit?clFmtD(c.deposit):'—')+(_dpN?' <span title="มีสลิป / slip filed">📎</span>':'')+'</div>'
+    +'<div><span style="color:var(--text2)">💳 Balance:</span> '+(c.balance?clFmtD(c.balance):'<span style="color:var(--red)">Unpaid</span>')+(_blN?' <span title="มีสลิป / slip filed">📎</span>':'')+'</div>'
     +'<div><span style="color:var(--text2)">🏭 Loading:</span> '+(c.loading?clFmtD(c.loading):'—')+'</div>'
     +'<div><span style="color:var(--text2)">🛳️ Thailand:</span> '+(c.arrivedThAct?clFmtD(c.arrivedThAct):(c.arrivedTh?'<span style="color:var(--orange)">~'+clFmtD(c.arrivedTh)+' (est)</span>':'—'))+'</div>'
     +'<div><span style="color:var(--text2)">🏪 Warehouse:</span> '+(c.arrivedWh?clFmtD(c.arrivedWh):'—')+'</div>'
+    +'</div>';
+
+  // Paperwork: PI + the two transfer confirmations. Counts on the chips, so a
+  // missing balance slip is visible without opening anything.
+  html += '<div style="display:flex;gap:5px;margin-bottom:8px">'
+    + CL_DOCS.map(function(k){
+        var n=clDocsOf(c,k[0]).length;
+        return '<button type="button" class="btnsm" onclick="clDocsOpen(\''+c.id+'\')" title="'+k[1]+'"'
+          +' style="flex:1;min-width:0;justify-content:center;padding:5px 4px;font-size:11px;white-space:nowrap;overflow:hidden;'
+          +'background:'+(n?'var(--bg2)':'var(--bg)')+';color:'+(n?k[2]:'var(--text2)')+';border-color:'+(n?k[2]+'55':'var(--border)')+';font-weight:'+(n?'700':'400')+'">'
+          +k[1].split(' ')[0]+' '+n+'</button>';
+      }).join('')
     +'</div>';
 
   // Products dropdown
@@ -23052,7 +23279,10 @@ function saveCL() {
   var helpersTotal = helperGroups.reduce(function(a,g){return a+g.count*g.per;},0);
   var helpersCount = helperGroups.reduce(function(a,g){return a+g.count;},0);
   var old = _clEditId ? containerLog.find(function(x){return x.id===_clEditId;}) : null;
-  var entry = {
+  // Start from the stored record, then overwrite what this form owns. Building a
+  // fresh object here would silently drop everything the form does not know about
+  // — the filed PI and transfer slips, and the old per-person helper lists.
+  var entry = Object.assign({}, old||{}, {
     id: _clEditId || 'cl'+Date.now(),
     supplier: sup,
     containerNo: (document.getElementById('cl-container-no').value||'').trim(),
@@ -23069,7 +23299,7 @@ function saveCL() {
     helpersTotal: helpersTotal,
     notes: (document.getElementById('cl-notes').value||'').trim(),
     createdAt: old ? (old.createdAt||Date.now()) : Date.now()
-  };
+  });
   window.fbDB.ref('containerLog/'+entry.id).set(entry);
   closeCL();
 }
@@ -26165,7 +26395,10 @@ function billsEntrySubmit(){
     _billEntryTid=''; try{ billsEntryTourRow(); }catch(e){}
   }
   if(photoFile && window.fbStorage){
-    window.fbStorage.ref('bills/'+Date.now()+'_'+photoFile.name).put(photoFile).then(function(s){return s.ref.getDownloadURL();}).then(persist).catch(function(){persist('');});
+    // Storage failing must not swallow the receipt — fall back to a compressed
+    // JPEG in the record, the same way every other photo path here does.
+    window.fbStorage.ref('bills/'+Date.now()+'_'+photoFile.name).put(photoFile).then(function(s){return s.ref.getDownloadURL();}).then(persist)
+      .catch(function(){ try{ compressPhotoFile(photoFile, function(u){ persist(u||''); }); }catch(e){ persist(''); } });
   } else if(photoFile){ var r=new FileReader(); r.onload=function(e){persist(e.target.result);}; r.readAsDataURL(photoFile); }
   else persist('');
 }
@@ -26883,7 +27116,9 @@ function billsSave(){
     window.fbStorage.ref('bills/'+Date.now()+'_'+photoFile.name).put(photoFile)
       .then(function(s){ return s.ref.getDownloadURL(); })
       .then(function(url){ persist(url); })
-      .catch(function(){ persist(existingUrl); });
+      // Same as above: keep the new picture as a compressed JPEG rather than
+      // quietly falling back to whatever was attached before.
+      .catch(function(){ try{ compressPhotoFile(photoFile, function(u){ persist(u||existingUrl); }); }catch(e){ persist(existingUrl); } });
   } else if(photoFile){
     var reader = new FileReader();
     reader.onload = function(e){ persist(e.target.result); };
