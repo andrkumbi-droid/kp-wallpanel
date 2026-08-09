@@ -10416,7 +10416,6 @@ function ofRenderTour(){
   }
 
   // Active tours
-  var _multiTour = activeTours.filter(function(t){return t&&t.orders&&t.orders.length;}).length>1;
   var ro=!!window.ofReadOnly;  // logistics (e.g. Milk): view active tours, only photo/departed/print
   var _tourCardHTML = function(t) {
     // Real index into activeTours — NOT the map position. The card's handlers
@@ -10563,13 +10562,15 @@ function ofRenderTour(){
         '<div style="display:flex;align-items:center;gap:4px 6px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;min-width:0">'+
         '<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+(ord?((ord.province||'').trim()||ord.zone||''):'')+'</span>'+
         payInline+
+        // How many days this order has been waiting since it was placed — took the
+        // slot of the ⇄ move-to-other-tour button, which nobody used.
+        (typeof ofAgeBadge==='function'?ofAgeBadge(ord):'')+
         (ro
           ? '<span class="badge" style="font-size:10px;background:var(--green-bg);color:var(--green)">'+(st==='shipped'?'🚚 At shipper':st)+'</span>'
           : (st==='loaded'||st==='ready'
-          ? (_multiTour?'<button type="button" onclick="ofMoveOrder(\''+t.id+'\',\''+id+'\')" title="Move to another tour" style="font-size:11px;padding:2px 8px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">⇄</button>':'')
             // A carrier is set → the driver hands over, they don't deliver: same slot,
             // but it books "at shipper" instead of "delivered".
-            +(isCompany
+          ? (isCompany
               ? '<button type="button" onclick="ofTourShip(\''+t.id+'\',\''+id+'\')" title="Handed over to the carrier / ส่งให้ขนส่งแล้ว" style="font-size:11px;padding:2px 8px;border:none;background:#4f46e5;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🚚 At shipper</button>'
               : '<button type="button" onclick="ofTourDeliver(\''+t.id+'\',\''+id+'\')" style="font-size:11px;padding:2px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">✓ Delivered</button>')
             +'<button type="button" data-tid="'+t.id+'" data-oid="'+id+'" onclick="rmFromTour(this)" style="font-size:11px;padding:2px 8px;border:1px solid #dc2626;background:#fee2e2;color:#dc2626;border-radius:var(--rs);cursor:pointer">✕ ลบ</button>'
@@ -13857,37 +13858,9 @@ function ofOrderShip(id){
   try{ ofRenderTour(); }catch(e){}
   try{ payUpdateBadge(); }catch(e){}
 }
-// Move an order from one active tour to another (e.g. driver came back for it)
-function ofMoveOrder(fromTourId, orderId){
-  var from = activeTours.find(function(x){return x.id===fromTourId;}); if(!from) return;
-  var targets = activeTours.filter(function(t){return t&&t.orders&&t.id!==fromTourId;});
-  if(!targets.length){ alert('No other active tour to move to. / ไม่มีทัวร์อื่น'); return; }
-  var target;
-  if(targets.length===1){
-    target=targets[0];
-    if(!confirm('Move '+orderId+' → '+target.driverName+"'s tour ("+target.orders.length+' orders)?')) return;
-  } else {
-    var msg='Move '+orderId+' to which tour?\n\n'+targets.map(function(t,i){return (i+1)+') '+t.driverName+' — '+t.orders.length+' orders';}).join('\n')+'\n\nEnter number:';
-    var pick=prompt(msg,'1'); if(pick===null) return;
-    var idx=parseInt(pick)-1; if(isNaN(idx)||idx<0||idx>=targets.length){ alert('Invalid choice / เลือกไม่ถูกต้อง'); return; }
-    target=targets[idx];
-  }
-  var st=(from.status&&from.status[orderId])||'loaded';
-  from.orders=from.orders.filter(function(x){return x!==orderId;});
-  if(from.status) delete from.status[orderId];
-  if(target.orders.indexOf(orderId)<0) target.orders.push(orderId);
-  target.status=target.status||{}; target.status[orderId]=st;
-  // The order now belongs to the target tour → it carries the target's tour ID.
-  try{ if(tidOk(target.tid)){ var _mo=(orders||[]).find(function(x){return x.id===orderId;}); if(_mo){ _mo.tourNo=target.tid; syncOrders(); } } }catch(e){}
-  // remove now-empty source tour (its tour ID is burnt as "deleted")
-  if(from.orders.length===0){ try{ if(tidOk(from.tid)) tourRegMark(from.tid,'deleted'); }catch(e){} activeTours=activeTours.filter(function(x){return x.id!==fromTourId;}); fbRemoveTour(fromTourId); }
-  else { try{ tourRegUpsert(from); }catch(e){} }
-  try{ tourRegUpsert(target); }catch(e){}
-  auditTour('move', orderId, 'Moved: '+(from.driverName||'?')+' → '+(target.driverName||'?'));
-  // "Delivered by" follows the order to the new tour's driver.
-  try{ if(ofSyncOrderDriver(orderId)) syncOrders(); }catch(e){}
-  ofRenderTour(); syncTours();
-}
+// The ⇄ move-to-another-tour button lived here until 09.08.2026 — removed with
+// its ofMoveOrder() at the owner's request (nobody used it; moving = ✕ off one
+// tour, add to the other). Its slot on the row now shows the order-age badge.
 
 // Add a ready order to an ALREADY-EXISTING tour (incl. one that already left) —
 // e.g. an order came in after the driver departed, driver returned and loaded it.
