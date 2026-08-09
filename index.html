@@ -9517,9 +9517,9 @@ function ofOrderCard(o, sfx){
   s += '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">';
   if(!window.ofReadOnly && o.status==='shipped') s += '<button type="button" class="btnsm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="ofFinalizeShipped(\''+o.id+'\')" title="Customer received — mark delivered / ลูกค้าได้รับแล้ว"><i class="ti ti-check"></i> Delivered / ส่งถึงลูกค้าแล้ว</button>';
   s += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
-  // Tax invoice via FlowAccount — only once the relay URL is configured, and not
-  // for cancelled orders. ✓ = already issued (tap again to reprint).
-  if(typeof KP_FLOWACCOUNT_URL!=='undefined' && KP_FLOWACCOUNT_URL && !window.ofReadOnly && o.status!=='cancelled'){
+  // Tax invoice via FlowAccount — only once the relay reports its credentials
+  // are in place (fataxProbe), and not for cancelled orders. ✓ = already issued.
+  if(typeof _fataxReady!=='undefined' && _fataxReady && !window.ofReadOnly && o.status!=='cancelled'){
     s += '<button type="button" class="btnsm" style="background:'+(o.taxInv?'#f0fdf4':'#fefce8')+';color:'+(o.taxInv?'#16a34a':'#a16207')+';border-color:'+(o.taxInv?'#bbf7d0':'#fef08a')+';font-weight:700" onclick="fataxOpen(\''+o.id+'\')">🧾 Tax invoice'+(o.taxInv?' ✓':'')+'</button>';
   }
   // Every picture of this order in one place — warehouse, delivery, slip and the
@@ -9833,6 +9833,7 @@ function ofPayMethodPartialSel(id, m){
 function ofUpdPrioCnt(){try{var el=document.getElementById('of-prio-cnt');if(!el)return;var n=orders.filter(function(o){return o.priority&&(o.status==='new'||o.status==='packing');}).length;if(n>0){el.textContent='⭐'+n;el.style.display='';}else{el.style.display='none';}}catch(e){}}
 
 function ofRenderOrders(){
+  try{ fataxProbe(); }catch(e){}   // once per session; re-renders when the relay says ok
   var activeOrders = orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});
   var cntEl = document.getElementById('of-cnt');
   if(activeOrders.length>0){cntEl.textContent=activeOrders.length;cntEl.style.display='';}else{cntEl.style.display='none';}
@@ -16887,7 +16888,25 @@ var KP_TRANSLATE_URL = 'https://script.google.com/macros/s/AKfycbwW91FhwTI61HMSp
 //  Empty URL = the button does not exist. Setup: apps-script/FLOWACCOUNT-SETUP.md
 //  (sandbox first — FA_MODE decides, the app cannot tell the difference).
 // ════════════════════════════════════════════════════════════════════════════
-var KP_FLOWACCOUNT_URL = '';
+var KP_FLOWACCOUNT_URL = 'https://script.google.com/macros/s/AKfycby3eHRQxCptZULaBQp9zdub4qV0hMtoZVGpi_eR6Z8X4JVGGjbwj_Qkw_KZLatAHrQoYw/exec';
+
+// The button gates itself on a health probe: URL and deployment can sit ready
+// here while the FlowAccount credentials are still with the account manager.
+// The moment FA_CLIENT_ID/SECRET land in the script properties, the relay
+// answers ok and the button appears on its own — no further code change.
+var _fataxReady=false, _fataxProbed=false;
+function fataxProbe(){
+  if(_fataxProbed || !KP_FLOWACCOUNT_URL) return;
+  _fataxProbed=true;
+  try{
+    fetch(KP_FLOWACCOUNT_URL, { method:'POST', body: JSON.stringify({ action:'health' }) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j && j.ok){ _fataxReady=true; window._fataxMode=j.mode||''; try{ ofRenderOrders(); }catch(e){} }
+      })
+      .catch(function(){});
+  }catch(e){}
+}
 
 // Unit per line-item type — what the paper should say, not the internal name.
 function fataxUnit(t){
