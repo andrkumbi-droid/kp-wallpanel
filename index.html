@@ -20208,10 +20208,18 @@ function chaseRenderPanel(list){
   el.innerHTML=h;
 }
 function chaseToggleLater(){ window._chaseLaterOpen=!window._chaseLaterOpen; chaseRenderPanel(); }
+// When a chase note was written — shown next to every note so nobody has to type
+// the date/time into the text anymore. Same th-TH format as the photo grids.
+function chaseFmtAt(ts){
+  if(!ts) return '';
+  try{ return new Date(ts).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; }
+}
 function chaseCardHtml(x){
   var o=x.o, c=x.c, eid=String(o.id).replace(/['\\]/g,'');
   var atShip=o.status==='shipped';
   var who=(o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:(o.driver||'ส่งเอง / self');
+  var nShip=0; try{ nShip=orderPhotoCount(o.id,'shipreceipt'); }catch(e){}
+  var phId='chaseph_'+String(o.id).replace(/[^A-Za-z0-9]/g,'_');
   return '<div style="background:var(--bg);border:1px solid '+(c.due?'#fecaca':'var(--border)')+';border-radius:var(--rs);padding:9px 10px;margin-bottom:7px">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px">'
       +'<span style="font-size:14px;font-weight:800">'+_esc(o.id)+'</span>'
@@ -20223,14 +20231,18 @@ function chaseCardHtml(x){
       +'⏱ '+c.days+' วัน / days · ตั้งแต่/since '+fmtD(c.since)+' · 🚚 '+_esc(who)
       +(c.n?' · ตามแล้ว/chased '+c.n+'×':'')
       +(c.due?'':' · ⏳ นัดอีกที/again '+fmtD(c.deadline))+'</div>'
-    +(o.chase&&o.chase.note?'<div style="font-size:11.5px;color:var(--text);background:var(--bg2);border-radius:var(--rs);padding:5px 8px;margin-top:5px">📝 '+_esc(o.chase.note)+(o.chase.by?' — '+_esc(o.chase.by):'')+'</div>':'')
+    +(o.chase&&o.chase.note?'<div style="font-size:11.5px;color:var(--text);background:var(--bg2);border-radius:var(--rs);padding:5px 8px;margin-top:5px">📝 '+_esc(o.chase.note)+(o.chase.by?' — '+_esc(o.chase.by):'')+(o.chase.at?' <span style="color:var(--text2);font-weight:600">· 🕐 '+chaseFmtAt(o.chase.at)+'</span>':'')+'</div>':'')
     +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:7px">'
       +'<span style="font-size:15px;font-weight:800;color:#dc2626">'+chaseAmount(o).toLocaleString('en-US')+' ฿</span>'
       +'<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">'
+        // Shipper receipt photos from Pictures (🚚 Shipper) right on the chase card —
+        // the proof of handover is usually what the carrier asks for on the phone.
+        +(nShip>0?'<button type="button" class="btnsm" onclick="ofDrvLoadPhotos(\''+eid+'\',\'shipreceipt\',\''+phId+'\')" title="รูปใบเสร็จขนส่ง / shipper receipt photos" style="border-color:#c7d2fe;background:#eef2ff;color:#4f46e5;font-weight:700">🚚📷 '+nShip+'</button>':'')
         +'<button type="button" class="btnsm" onclick="kpcJumpRef(\'order\',\''+eid+'\')" title="เปิดออเดอร์ / open order">📄</button>'
         +'<button type="button" class="btnsm btnsmp" onclick="chaseOpen(\''+eid+'\')">📞 ตามแล้ว / Chased</button>'
       +'</div>'
     +'</div>'
+    +(nShip>0?'<div id="'+phId+'" data-type="" style="display:none;margin-top:6px"></div>':'')
   +'</div>';
 }
 
@@ -20316,7 +20328,7 @@ function chaseOpen(id){
     +'<button type="button" class="btn btng" style="margin-top:12px" onclick="chaseSave()"><i class="ti ti-check"></i> บันทึก / Save</button>'
     +(log.length?'<div style="margin-top:12px"><div style="font-size:11.5px;font-weight:800;color:var(--text2);margin-bottom:5px">ประวัติ / history</div>'
         +log.map(function(l){ return '<div style="font-size:11.5px;color:var(--text2);border-left:2px solid var(--border);padding:2px 0 2px 8px;margin-bottom:4px">'
-          +fmtD(l.date)+' · '+_esc(l.by||'')+(l.next?' → '+fmtD(l.next):'')+(l.note?'<br>📝 '+_esc(l.note):'')+'</div>'; }).join('')
+          +(l.at?'🕐 '+chaseFmtAt(l.at):fmtD(l.date))+' · '+_esc(l.by||'')+(l.next?' → '+fmtD(l.next):'')+(l.note?'<br>📝 '+_esc(l.note):'')+'</div>'; }).join('')
       +'</div>':'');
   m.classList.add('open');
 }
@@ -20331,7 +20343,7 @@ function chaseSave(){
   var by='Office';
   try{ var s=(staffList||[]).find(function(x){return x.id===currentStaffId;}); if(s&&s.name) by=s.name; }catch(e){}
   o.chase={ due:due, by:by, at:Date.now(), note:note, n:((o.chase&&o.chase.n)||0)+1 };
-  o.chaseLog=((o.chaseLog||[]).concat([{date:kpTodayStr(),by:by,note:note,next:due}])).slice(-10);
+  o.chaseLog=((o.chaseLog||[]).concat([{date:kpTodayStr(),at:Date.now(),by:by,note:note,next:due}])).slice(-10);
   try{ syncOrders(); }catch(e){}
   try{ auditAdd({type:'payment', area:'chase', orderId:o.id, method:'follow-up',
         note:'→ '+due+(note?' · '+note:''), by:by}); }catch(e){}
