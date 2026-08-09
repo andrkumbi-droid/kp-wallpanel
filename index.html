@@ -10730,8 +10730,11 @@ function ofRenderTour(){
         })())+
         // Lalamove only: driver/plate/phone/fee live in the Lalamove tab — same data, editable here too.
         (ofIsLala(t) ? (function(){ var ok=lalaInfoComplete(t); return '<button type="button" onclick="event.stopPropagation();openLalaInfo(\''+t.id+'\')" style="width:100%;margin-bottom:8px;padding:9px;border-radius:var(--rs);border:1px solid '+(ok?'#bbf7d0':'#fed7aa')+';background:'+(ok?'#f0fdf4':'#fff7ed')+';color:'+(ok?'#16a34a':'#c2410c')+';font-size:12px;font-weight:700;cursor:pointer">'+(ok?'✅':'⚠️')+' 🛺 ข้อมูลคนขับ / Driver info'+(ok?'':' — กรอกให้ครบ / incomplete')+'</button>'; })() : '')+
-        // KM tour: route cross-check right under the slips block.
-        (_kmOn ? kmRouteRowHTML(t, ro) : '')+
+        // KM tour: route cross-check right under the slips block. KM OFF: the same
+        // row stays available behind a small dropdown (no auto-calc while closed).
+        (_kmOn ? kmRouteRowHTML(t, ro)
+               : '<div onclick="event.stopPropagation();ofKmRouteToggle(\''+t.id+'\')" style="margin-bottom:8px;padding:4px 8px;font-size:11px;color:var(--text2);cursor:pointer;font-weight:600">🗺️ ระยะทาง / Route km ▾</div>'
+                +'<div id="kmroute_'+t.id+'" style="display:none">'+kmRouteRowHTML(t, ro, 1)+'</div>')+
       '</div>'+
       '</div>';
   };
@@ -11665,6 +11668,14 @@ function kmRouteMapsUrl(t){
   if(mid.length) u+='&waypoints='+mid.map(function(c){return c.lat+','+c.lng;}).join('|');
   return u;
 }
+// KM-off tours: opening the route dropdown also kicks off the (guarded) calc that
+// the collapsed render deliberately skips.
+function ofKmRouteToggle(tid){
+  var box=document.getElementById('kmroute_'+tid); if(!box) return;
+  var open=box.style.display==='none';
+  box.style.display=open?'block':'none';
+  if(open){ try{ kmRouteCalc(tid,0); }catch(e){} }
+}
 var _kmRouteResolving={};
 function kmRouteCalc(tourId, force){
   var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
@@ -11770,11 +11781,13 @@ function kmSetHome(){
   save(c.lat,c.lng);
 }
 // The comparison line shown under the Slips block on a KM tour card.
-function kmRouteRowHTML(t, ro){
+// noAuto: rendered collapsed (KM-off dropdown) — must not fire route requests
+// for every card; the calc runs when the office actually opens the dropdown.
+function kmRouteRowHTML(t, ro, noAuto){
   var r=kmRouteOf(t), drv=kmTotal(t), sig=kmRouteSig(t);
   // Auto-calc at most once a minute per tour — a render must never trigger a write
   // storm (write → listener → render → write …).
-  if(homeLoc && (!r || r.sig!==sig) && !_kmRouteBusy[t.id] && (Date.now()-(_kmRouteTried[t.id]||0))>60000){
+  if(!noAuto && homeLoc && (!r || r.sig!==sig) && !_kmRouteBusy[t.id] && (Date.now()-(_kmRouteTried[t.id]||0))>60000){
     _kmRouteTried[t.id]=Date.now();
     setTimeout(function(){ kmRouteCalc(t.id,0); }, 50);
   }
