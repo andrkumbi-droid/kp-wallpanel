@@ -11016,6 +11016,7 @@ function ofLalaHistoryHTML(){
     if(t.plate) infoBits.push('🚗 '+esc(t.plate));
     if(t.driverPhone) infoBits.push('📞 '+esc(t.driverPhone));
     if(t.carFee>0) infoBits.push('💵 ค่ารถ '+Number(t.carFee).toLocaleString()+' ฿');
+    else if(t.carFeeByCustomer) infoBits.push('🙋 ลูกค้าจ่ายค่ารถเอง / customer pays');
     var infoHTML=infoBits.length?'<div style="font-size:11px;color:var(--text2);padding:4px 0">'+infoBits.join(' · ')+'</div>':'';
     var photoHTML=kpPhotoDrop('lalahphotos_'+t._k,(t.carPhotos||[]).length,'<div style="display:flex;gap:4px;flex-wrap:wrap">'+(t.carPhotos||[]).map(function(src){return '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:64px;height:64px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';}).join('')+'</div>');
     var slipHTML=kpPhotoDrop('lalahslips_'+t._k,(t.carFeeSlips||[]).length,'<div style="display:flex;gap:4px;flex-wrap:wrap">'+(t.carFeeSlips||[]).map(function(src){return '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:64px;height:64px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';}).join('')+'</div>','Car fee slips / สลิปค่ารถ','receipt');
@@ -11060,14 +11061,15 @@ function ofLalaHistoryHTML(){
 // Same fields on the same tour object → editing in either tab shows up in the other.
 function lalaInfoComplete(t){
   if(!t) return false;
-  return !!(String(t.lalaDriver||'').trim() && String(t.plate||'').trim() && String(t.driverPhone||'').trim() && (parseFloat(t.carFee||t.driverPay)||0)>0);
+  // A fee of 0 is fine when the CUSTOMER pays Lalamove directly — the tickbox says so.
+  return !!(String(t.lalaDriver||'').trim() && String(t.plate||'').trim() && String(t.driverPhone||'').trim() && ((parseFloat(t.carFee||t.driverPay)||0)>0 || t.carFeeByCustomer));
 }
 function lalaInfoMissing(t){
   var m=[];
   if(!String((t&&t.lalaDriver)||'').trim()) m.push('👤 คนขับ / Driver');
   if(!String((t&&t.plate)||'').trim()) m.push('🚗 ทะเบียนรถ / Plate');
   if(!String((t&&t.driverPhone)||'').trim()) m.push('📞 เบอร์ / Phone');
-  if(!((parseFloat((t&&(t.carFee||t.driverPay)))||0)>0)) m.push('💵 ค่ารถ / Car fee');
+  if(!((parseFloat((t&&(t.carFee||t.driverPay)))||0)>0) && !(t&&t.carFeeByCustomer)) m.push('💵 ค่ารถ / Car fee (หรือติ๊ก ลูกค้าจ่ายเอง / or tick customer pays)');
   return m;
 }
 // Block ending a Lalamove tour while the driver info is incomplete; offer to fill it in.
@@ -11090,6 +11092,7 @@ function openLalaInfo(tourId){
   document.getElementById('lalainfo-plate').value=t.plate||'';
   document.getElementById('lalainfo-phone').value=t.driverPhone||'';
   document.getElementById('lalainfo-fee').value=(t.carFee||t.driverPay||'');
+  var _fc=document.getElementById('lalainfo-feecust'); if(_fc) _fc.checked=!!t.carFeeByCustomer;
   // Photo buttons reuse the Lalamove tab's upload handlers (index-based).
   var ph=document.getElementById('lalainfo-photos');
   if(ph){
@@ -11115,6 +11118,8 @@ function saveLalaInfo(){
   t.plate=(document.getElementById('lalainfo-plate').value||'').trim();
   t.driverPhone=(document.getElementById('lalainfo-phone').value||'').trim();
   var fee=parseFloat(document.getElementById('lalainfo-fee').value)||0;
+  t.carFeeByCustomer=!!((document.getElementById('lalainfo-feecust')||{}).checked);
+  if(t.carFeeByCustomer) fee=0;   // the customer settles Lalamove directly — nothing for us to pay
   t.carFee=fee; t.driverPay=fee;   // Car fee (Lalamove tab) === Tour pay (Tour tab)
   syncTours();
   try{ ofRenderTour(); }catch(e){}
@@ -11314,7 +11319,7 @@ function archiveTour(t){
     created:t.created||'', tourDay:t.tourDay||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'', backDate:t.backDate||'', backAt:t.backAt||'',
     endedDate:now.toISOString().slice(0,10), endedAt:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0, driverPayNet:tourNetPay(t),
-    carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
+    carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0, carFeeByCustomer:!!t.carFeeByCustomer,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
     payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now() };
@@ -13385,7 +13390,7 @@ function ofActiveTourRec(t){
   return { tourNo:null, tid:t.tid||'', tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
     created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'', backDate:t.backDate||'', backAt:t.backAt||'',
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0,
-    carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0,
+    carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0, carFeeByCustomer:!!t.carFeeByCustomer,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
     payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now(), _active:true };
@@ -13555,6 +13560,7 @@ function ofDriversRender(){
       if(t.plate) infoBits.push('🚗 '+esc(t.plate));
       if(t.driverPhone) infoBits.push('📞 '+esc(t.driverPhone));
       if(t.carFee>0) infoBits.push('💵 ค่ารถ '+Number(t.carFee).toLocaleString()+' ฿');
+    else if(t.carFeeByCustomer) infoBits.push('🙋 ลูกค้าจ่ายค่ารถเอง / customer pays');
       var infoHTML=infoBits.length?'<div style="font-size:11px;color:var(--text2);padding:6px 0 0">'+infoBits.join(' · ')+'</div>':'';
       var _start=((t.departedDate?fmtD(t.departedDate):'')+(t.departedAt?' '+t.departedAt:'')).trim();
       var _end=((t.endedDate?fmtD(t.endedDate):'')+(t.endedAt?' '+t.endedAt:'')).trim();
@@ -22498,6 +22504,7 @@ function calcViz() {
     <input type="tel" id="lalainfo-phone" placeholder="08x xxx xxxx">
     <label class="fl">💵 ค่ารถ / Car fee (฿)</label>
     <input type="number" min="0" id="lalainfo-fee" placeholder="0" style="font-weight:700;text-align:right">
+    <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12.5px;font-weight:700;color:var(--text);cursor:pointer"><input type="checkbox" id="lalainfo-feecust" style="width:16px;height:16px;cursor:pointer" onchange="if(this.checked)document.getElementById('lalainfo-fee').value=0"> 🙋 ลูกค้าจ่ายค่ารถเอง / Customer pays the car fee</label>
     <div id="lalainfo-photos"></div>
     <button type="button" class="btn btng" style="width:100%;margin-top:14px" onclick="saveLalaInfo()"><i class="ti ti-check"></i> บันทึก / Save</button>
   </div>
