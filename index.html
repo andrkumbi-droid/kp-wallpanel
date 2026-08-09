@@ -9517,6 +9517,11 @@ function ofOrderCard(o, sfx){
   s += '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">';
   if(!window.ofReadOnly && o.status==='shipped') s += '<button type="button" class="btnsm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700" onclick="ofFinalizeShipped(\''+o.id+'\')" title="Customer received — mark delivered / ลูกค้าได้รับแล้ว"><i class="ti ti-check"></i> Delivered / ส่งถึงลูกค้าแล้ว</button>';
   s += '<button type="button" class="btnsm" style="background:#DBEAFE;color:#1D4ED8;border-color:#DBEAFE" onclick="openReceiptBtn(this)" data-id="'+o.id+'"><i class="ti ti-printer"></i> Print receipt</button>';
+  // Tax invoice via FlowAccount — only once the relay URL is configured, and not
+  // for cancelled orders. ✓ = already issued (tap again to reprint).
+  if(typeof KP_FLOWACCOUNT_URL!=='undefined' && KP_FLOWACCOUNT_URL && !window.ofReadOnly && o.status!=='cancelled'){
+    s += '<button type="button" class="btnsm" style="background:'+(o.taxInv?'#f0fdf4':'#fefce8')+';color:'+(o.taxInv?'#16a34a':'#a16207')+';border-color:'+(o.taxInv?'#bbf7d0':'#fef08a')+';font-weight:700" onclick="fataxOpen(\''+o.id+'\')">🧾 Tax invoice'+(o.taxInv?' ✓':'')+'</button>';
+  }
   // Every picture of this order in one place — warehouse, delivery, slip and the
   // carrier's receipt. Adding them was already possible from "More", looking at
   // them meant going to the Pictures tab and searching for the order.
@@ -16869,6 +16874,185 @@ var KP_RESOLVER_URL = 'https://script.google.com/macros/s/AKfycbzrohJubgH23jnwaq
 // Translate web-app URL (Apps Script + Claude). Paste your /exec URL here after
 // deploying apps-script/translate.gs. Empty = chat auto-translate disabled.
 var KP_TRANSLATE_URL = 'https://script.google.com/macros/s/AKfycbwW91FhwTI61HMSpONi92Fk34C9x-wIHBoTDg6g0tu1YgnCRkR_nSogk7pPpiYIS_crkg/exec';
+
+// ════════════════════════════════════════════════════════════════════════════
+//  🧾 TAX INVOICE via FlowAccount (apps-script/flowaccount.gs relay)
+//
+//  The button on the order card creates the ใบกำกับภาษี IN FlowAccount — same
+//  INV number series, same VAT report, exactly as if the office typed it there —
+//  and prints the PDF FlowAccount sends back (ต้นฉบับ + สำเนา in one file).
+//  Who prefers typing in FlowAccount keeps doing that; both roads end in the
+//  same book. The app only stores the returned id/serial on the order.
+//
+//  Empty URL = the button does not exist. Setup: apps-script/FLOWACCOUNT-SETUP.md
+//  (sandbox first — FA_MODE decides, the app cannot tell the difference).
+// ════════════════════════════════════════════════════════════════════════════
+var KP_FLOWACCOUNT_URL = '';
+
+// Unit per line-item type — what the paper should say, not the internal name.
+function fataxUnit(t){
+  if(t==='panel'||t==='pvc') return 'แผ่น';
+  if(t==='lcorner'||t==='ttrim'||t==='utrim'||t==='tedge'||t==='uedge') return 'เส้น';
+  if(t==='clips') return 'แพ็ค';
+  return 'ชิ้น';
+}
+function fataxNum(v){ return Math.round((parseFloat(String(v==null?0:v).replace(/[^0-9.\-]/g,''))||0)*100)/100; }
+// Order → FlowAccount InlineDocument. Prices in the app are VAT-INCLUSIVE, so the
+// document says so and the 7% is backed out of the total (×7/107), like the
+// FlowAccount originals. Discount lines become the document discount; free lines
+// carry no money and land in the remarks instead.
+function fataxDoc(o, info){
+  var items=[], disc=0, remarks=[];
+  (o.lineItems||[]).forEach(function(li){
+    if(!li) return;
+    var amt=fataxNum(li.amount), qty=parseFloat(li.qty)||0;
+    if(li.type==='discount'){ disc+=Math.abs(amt); return; }
+    if(li.type==='free-clips'||li.type==='free-gift-clips'){
+      if(qty>0) remarks.push('แถมฟรีคลิป '+(qty*(li.type==='free-clips'?100:1)).toLocaleString('en-US')+' ตัว');
+      return;
+    }
+    if(o.free) return;                        // free claim → no priced lines at all
+    if(qty<=0 && amt<=0) return;
+    var name=(li.type==='delivery')?'ค่าขนส่ง / Delivery'
+            :(li.type==='extra')?((li.code||li.label||'Extra')+'')
+            :String(li.code||'')+(li.grade==='B'?' (Grade B)':'');
+    items.push({ type:1, name:name, description:'',
+      quantity: qty>0?qty:1, unitName: fataxUnit(li.type),
+      pricePerUnit: qty>0?Math.round(amt/qty*100)/100:amt,
+      total: amt, discountAmount:0, vatRate:7 });
+  });
+  var sub=Math.round(items.reduce(function(a,x){ return a+x.total; },0)*100)/100;
+  var after=Math.round((sub-disc)*100)/100;
+  var vat=Math.round(after*7/107*100)/100;
+  if(o.reqNote) remarks.push(String(o.reqNote));
+  return {
+    contactCode:'', contactName: info.name, contactAddress: info.addr,
+    contactTaxId: info.tin||'', contactBranch: info.branch||'',
+    contactNumber: String(o.phone||'').split(/[,\s\/]+/)[0]||'',
+    publishedOn: kpTodayStr(), dueDate: kpTodayStr(), creditType:1, creditDays:0,
+    salesName: (typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office',
+    projectName: 'KP Wallpanel ('+o.id+')', reference: String(o.id),
+    isVatInclusive:true, isVat:true,
+    useInlineDiscount:false, useInlineVat:false, discountType:1,
+    subTotal: sub, discountPercentage:0, discountAmount: disc,
+    totalAfterDiscount: after, vatAmount: vat, grandTotal: after,
+    remarks: remarks.join(' · '), internalNotes:'', showSignatureOrStamp:true,
+    items: items
+  };
+}
+// The dialog: customer block (name/address prefilled from the order, TIN + branch
+// remembered on the order for the next invoice), line preview with the VAT split,
+// then create → print. An order that already has one reprints instead.
+function fataxOpen(id){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  var esc=_esc, inv=o.taxInv||null;
+  var html='<div id="fatax-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)fataxClose()">'
+    +'<div style="background:var(--bg);border-radius:14px;max-width:420px;width:100%;max-height:90vh;overflow-y:auto;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,0.4)">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">'
+      +'<div style="font-weight:800;font-size:15px">🧾 ใบกำกับภาษี / Tax invoice</div>'
+      +'<button type="button" onclick="fataxClose()" style="border:none;background:var(--bg2);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:16px;color:var(--text)">✕</button>'
+    +'</div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:10px">Order '+esc(o.id)+' · สร้างใน FlowAccount / created in FlowAccount</div>'
+    +(inv
+      ? '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--rs);padding:8px 10px;margin-bottom:10px;font-size:12px">'
+        +'✅ ออกแล้ว / already issued: <b>'+esc(inv.serial||('#'+inv.id))+'</b>'+(inv.mode==='sandbox'?' <b style="color:#b45309">[SANDBOX]</b>':'')
+        +'<div style="margin-top:6px"><button type="button" onclick="fataxReprint(\''+esc(o.id)+'\')" style="padding:7px 12px;border:none;border-radius:var(--rs);background:#1d4ed8;color:#fff;font-size:12px;font-weight:700;cursor:pointer">🖨 พิมพ์อีกครั้ง / print again</button></div>'
+      +'</div>'
+      : '')
+    +'<label style="font-size:11px;font-weight:700;color:var(--text2)">ชื่อลูกค้า (ตามบิล) / Bill-to name</label>'
+    +'<input id="fatax-name" type="text" value="'+esc(o.taxName||o.customer||'')+'" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin:2px 0 8px">'
+    +'<label style="font-size:11px;font-weight:700;color:var(--text2)">ที่อยู่ / Address</label>'
+    +'<textarea id="fatax-addr" rows="2" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin:2px 0 8px">'+esc(o.taxAddr||o.address||'')+'</textarea>'
+    +'<label style="font-size:11px;font-weight:700;color:var(--text2)">เลขประจำตัวผู้เสียภาษี 13 หลัก / Tax ID</label>'
+    +'<input id="fatax-tin" type="text" inputmode="numeric" maxlength="13" value="'+esc(o.taxTIN||'')+'" placeholder="0135553000954" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;letter-spacing:1px;background:var(--bg);color:var(--text);margin:2px 0 2px">'
+    +'<div style="font-size:10.5px;color:var(--text2);margin-bottom:8px">ลูกค้าบริษัทต้องมี ไม่งั้นเครดิตภาษีไม่ได้ · บุคคลธรรมดาเว้นว่างได้ / companies need it, private buyers may leave it empty</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:10px">'
+      +'<select id="fatax-branch-t" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
+        +'<option value="">สำนักงานใหญ่ / Head office</option>'
+        +'<option value="b"'+((o.taxBranch||'').indexOf('สาขา')===0?' selected':'')+'>สาขาที่ / Branch no.</option>'
+      +'</select>'
+      +'<input id="fatax-branch-n" type="text" inputmode="numeric" maxlength="5" value="'+esc(((o.taxBranch||'').match(/\d+/)||[''])[0])+'" placeholder="00001" style="width:90px;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
+    +'</div>'
+    +'<div id="fatax-prev" style="background:var(--bg2);border-radius:var(--rs);padding:9px 11px;margin-bottom:12px;font-size:12px"></div>'
+    +'<button type="button" id="fatax-go" onclick="fataxCreate(\''+esc(o.id)+'\')" style="width:100%;padding:12px;border:none;border-radius:var(--rs);background:#16a34a;color:#fff;font-size:14px;font-weight:800;cursor:pointer">'+(inv?'🧾 ออกใบใหม่อีกใบ / issue ANOTHER invoice':'🧾 สร้าง + พิมพ์ / create + print')+'</button>'
+    +'<div id="fatax-msg" style="font-size:12px;margin-top:8px;display:none"></div>'
+  +'</div></div>';
+  var wrap=document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap.firstChild);
+  // preview with the same maths the document will carry
+  var d=fataxDoc(o,{name:'',addr:'',tin:'',branch:''});
+  var pv=document.getElementById('fatax-prev');
+  if(pv) pv.innerHTML=d.items.map(function(x){
+      return '<div style="display:flex;justify-content:space-between;gap:8px"><span>'+_esc(x.name)+' × '+x.quantity+' '+x.unitName+'</span><span style="white-space:nowrap">'+x.total.toLocaleString('en-US')+' ฿</span></div>';
+    }).join('')
+    +(d.discountAmount>0?'<div style="display:flex;justify-content:space-between;color:#dc2626"><span>ส่วนลด / Discount</span><span>−'+d.discountAmount.toLocaleString('en-US')+' ฿</span></div>':'')
+    +'<div style="border-top:1px solid var(--border);margin-top:5px;padding-top:5px;display:flex;justify-content:space-between;color:var(--text2)"><span>ราคาไม่รวม VAT</span><span>'+(Math.round((d.grandTotal-d.vatAmount)*100)/100).toLocaleString('en-US')+' ฿</span></div>'
+    +'<div style="display:flex;justify-content:space-between;color:var(--text2)"><span>ภาษีมูลค่าเพิ่ม 7%</span><span>'+d.vatAmount.toLocaleString('en-US')+' ฿</span></div>'
+    +'<div style="display:flex;justify-content:space-between;font-weight:800"><span>รวมทั้งสิ้น</span><span>'+d.grandTotal.toLocaleString('en-US')+' ฿</span></div>'
+    +(d.remarks?'<div style="color:var(--text2);margin-top:4px">📝 '+_esc(d.remarks)+'</div>':'');
+}
+function fataxClose(){ var m=document.getElementById('fatax-modal'); if(m) m.remove(); }
+function fataxMsg(t, ok){
+  var el=document.getElementById('fatax-msg'); if(!el) return;
+  el.style.display='block'; el.style.color=ok?'#166534':'#dc2626'; el.textContent=t;
+}
+function fataxCreate(id){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  if(!KP_FLOWACCOUNT_URL){ fataxMsg('KP_FLOWACCOUNT_URL not set — see apps-script/FLOWACCOUNT-SETUP.md'); return; }
+  var name=(document.getElementById('fatax-name')||{}).value||'';
+  var addr=(document.getElementById('fatax-addr')||{}).value||'';
+  var tin=String((document.getElementById('fatax-tin')||{}).value||'').replace(/\D/g,'');
+  if(!name.trim()){ fataxMsg('ใส่ชื่อลูกค้า / enter the bill-to name'); return; }
+  if(tin && tin.length!==13){ fataxMsg('TIN ต้องมี 13 หลัก / must be 13 digits (or empty)'); return; }
+  var bt=(document.getElementById('fatax-branch-t')||{}).value;
+  var bn=String((document.getElementById('fatax-branch-n')||{}).value||'').replace(/\D/g,'');
+  var branch = bt==='b' ? ('สาขาที่ '+(bn||'00001')) : 'สำนักงานใหญ่';
+  var doc=fataxDoc(o,{name:name.trim(), addr:addr.trim(), tin:tin, branch:branch});
+  if(!doc.items.length){ fataxMsg('ออเดอร์นี้ไม่มีรายการที่คิดเงิน / no priced lines on this order'); return; }
+  var btn=document.getElementById('fatax-go');
+  if(btn){ btn.disabled=true; btn.textContent='⏳ กำลังสร้างใน FlowAccount…'; }
+  fetch(KP_FLOWACCOUNT_URL, { method:'POST', body: JSON.stringify({ action:'create', doc:doc }) })
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(!j || !j.ok){ throw new Error((j&&j.error)||'no response'); }
+      o.taxInv={ id:j.id, serial:j.serial||'', at:Date.now(), mode:j.mode||'',
+                 by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office' };
+      o.taxTIN=tin; o.taxBranch=branch; o.taxName=name.trim(); o.taxAddr=addr.trim();
+      try{ syncOrders(); }catch(e){}
+      try{ addLog('Tax invoice '+(j.serial||j.id)+' for '+o.id+(j.mode==='sandbox'?' [SANDBOX]':''),'+'); }catch(e){}
+      try{ auditAdd({type:'payment', orderId:o.id, by:o.taxInv.by, detail:'🧾 Tax invoice '+(j.serial||j.id)+(j.mode==='sandbox'?' [SANDBOX]':'')}); }catch(e){}
+      fataxMsg('✅ '+(j.serial||('#'+j.id))+(j.mode==='sandbox'?' [SANDBOX]':'')+(j.pdfError?' — PDF ยังไม่มา ลองพิมพ์อีกครั้ง / PDF failed, use print again':''), true);
+      if(btn){ btn.disabled=false; btn.textContent='🧾 ออกใบใหม่อีกใบ / issue ANOTHER invoice'; }
+      try{ ofRenderOrders(); }catch(e){}
+      if(j.pdf) fataxPrint(j.pdf);
+    })
+    .catch(function(err){
+      fataxMsg('❌ '+String(err&&err.message||err));
+      if(btn){ btn.disabled=false; btn.textContent='🧾 สร้าง + พิมพ์ / create + print'; }
+    });
+}
+function fataxReprint(id){
+  var o=orders.find(function(x){return x.id===id;}); if(!o||!o.taxInv) return;
+  fataxMsg('⏳ ดึง PDF…', true);
+  fetch(KP_FLOWACCOUNT_URL, { method:'POST', body: JSON.stringify({ action:'pdf', id:o.taxInv.id }) })
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(!j || !j.ok || !j.pdf) throw new Error((j&&j.error)||'no pdf');
+      fataxMsg('✅', true); fataxPrint(j.pdf);
+    })
+    .catch(function(err){ fataxMsg('❌ '+String(err&&err.message||err)); });
+}
+// base64 → Blob-URL → new tab. Same route the container papers use: a data: URL
+// cannot be navigated to, and Safari on the iPhone leaves iframes blank — the
+// tab with the browser's own PDF viewer prints reliably everywhere.
+function fataxPrint(b64){
+  try{
+    var bin=atob(b64), u8=new Uint8Array(bin.length);
+    for(var i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+    var url=URL.createObjectURL(new Blob([u8],{type:'application/pdf'}));
+    var w=window.open(url,'_blank');
+    if(!w) alert('เปิดป๊อปอัพไม่ได้ กรุณาอนุญาต popup / please allow popups');
+  }catch(e){ alert('PDF error: '+e); }
+}
 // SlipOK verify web-app URL (Apps Script proxy → SlipOK API). Paste your /exec
 // URL here after deploying apps-script/slipok-verify.gs. Empty = local QR
 // format check only (no real bank confirmation).
