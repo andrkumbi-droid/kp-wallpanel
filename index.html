@@ -20238,6 +20238,41 @@ function chaseSlipUpload(input, id){
   if(n>0){ try{ auditAdd({type:'payment', area:'chase', orderId:id, method:'slip-photo',
         note:'🧾 +'+n+' สลิปจากตามเงิน / slip photo'+(n>1?'s':'')+' added from the chase list', by:chaseBy()}); }catch(e){} }
 }
+// Cash/online choice stays local until ✓ Done books it — picking a method alone
+// changes no data, so it writes no audit entry.
+var _chaseMth={};
+function chaseSetMethod(id, m){
+  _chaseMth[id]=(_chaseMth[id]===m?'':m);
+  chaseRenderPanel();
+}
+// ✓ Done = money arrived in full: books the total with the chosen method, which
+// also removes the order from the chase list on the re-render.
+function chaseDone(id){
+  var o=(orders||[]).find(function(x){return x.id===id;}); if(!o) return;
+  var m=_chaseMth[id]||o.payMethod||o.payMethodPartial||'';
+  if(m!=='cash'&&m!=='online'){ alert('เลือก 💵 เงินสด หรือ 🏦 โอน ก่อน / Pick cash or online first'); return; }
+  var total=ofOrderTotalNum(o);
+  if(!(total>0)){ alert('ออเดอร์นี้ไม่มียอดเงิน / This order has no total'); return; }
+  if(!confirm('บันทึกว่าได้รับเงินครบ '+total.toLocaleString('en-US')+' ฿ ('+(m==='cash'?'💵 เงินสด':'🏦 โอน')+') ?\nMark '+id+' fully paid by '+m+'?')) return;
+  o.paidAmount=total; o.payMethod=m; o.payMethodPartial='';
+  if(m==='online'){ o.paidOnline=total; o.paidCash=0; } else { o.paidCash=total; o.paidOnline=0; }
+  if(!o.payDate) o.payDate=kpTodayStr();
+  var now=new Date();
+  o.paidAt=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  o.paidBy=chaseBy();
+  delete o.payAtOffice;
+  delete _chaseMth[id];
+  try{ syncOrders(); }catch(e){}
+  try{ sheetsSyncOrder(o); }catch(e){}
+  try{ auditAdd({type:'payment', area:'chase', orderId:id, method:m,
+        note:'✓ เก็บเงินครบ '+total.toLocaleString('en-US')+' ฿ ปิดจากตามเงิน / settled in full, cleared from the chase list', by:chaseBy()}); }catch(e){}
+  try{ showNotif('✅ '+id+' จ่ายครบ — ออกจากรายการตามเงิน / paid, off the chase list'); }catch(e){}
+  try{ ofRenderOrders(); }catch(e){}
+  try{ payUpdateBadge(); }catch(e){}
+  try{ _payRenderNow(); }catch(e){}
+  try{ ofRenderRevenue(); }catch(e){}
+  try{ mgRevenue(); }catch(e){}
+}
 function chaseCardHtml(x){
   var o=x.o, c=x.c, eid=String(o.id).replace(/['\\]/g,'');
   var atShip=o.status==='shipped';
@@ -20280,6 +20315,18 @@ function chaseCardHtml(x){
       +'<input type="number" min="0" value="'+(part>0?part:'')+'" placeholder="฿ paid" onchange="chasePaidAmt(\''+eid+'\',this.value)" style="width:88px;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
       +'<span style="font-size:11px;font-weight:700;margin-left:auto;white-space:nowrap;color:#991b1b">'+(part>0?'มัดจำ/partial '+part.toLocaleString('en-US')+' ฿':'Unpaid')+'</span>'
     +'</div>'
+    // Method + Done: pick how the money came in, then ✓ books the full total and
+    // the order leaves this list.
+    +(function(){
+      var mSel=_chaseMth[o.id]||o.payMethod||o.payMethodPartial||'';
+      var mb=function(m,lbl,onBg,onCo){ var on=mSel===m;
+        return '<button type="button" class="btnsm" onclick="chaseSetMethod(\''+eid+'\',\''+m+'\')" style="'+(on?('background:'+onBg+';color:'+onCo+';border-color:'+onCo+';font-weight:800'):'')+'">'+lbl+(on?' ✓':'')+'</button>'; };
+      return '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">'
+        +mb('cash','💵 เงินสด/Cash','#dcfce7','#166534')
+        +mb('online','🏦 โอน/Online','#dbeafe','#1d4ed8')
+        +'<button type="button" class="btnsm" onclick="chaseDone(\''+eid+'\')" title="ได้เงินครบแล้ว ปิดรายการ / money arrived — settle & clear" style="margin-left:auto;background:#16a34a;color:#fff;border-color:#16a34a;font-weight:800">✓ เสร็จ / Done</button>'
+      +'</div>';
+    })()
   +'</div>';
 }
 
