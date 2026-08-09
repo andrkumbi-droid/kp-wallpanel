@@ -843,6 +843,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{ofUpdTourDot();}catch(e){}
         try{payUpdateBadge();}catch(e){}
         try{chaseRefresh();}catch(e){}   // unpaid + gone too long → alarm on every office tab
+        // Orders may arrive after the tours snapshot — run the loaded-orphan
+        // release here too (no-op until _toursLoaded is set).
+        try{ if(typeof ofHealLoadedOrphans==='function') ofHealLoadedOrphans(); }catch(e){}
         try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
         try{if(document.getElementById('ofv-sales')&&document.getElementById('ofv-sales').classList.contains('active'))ofDailyRender();}catch(e){}
         try{sheetsAutoSyncInit();}catch(e){} // start mirror auto-sync once orders are loaded
@@ -899,6 +902,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         // that sees a tour without an ID asks for one, and that is how the same tour
         // used to collect a whole row of numbers.
         try{ tourHealTids(); }catch(e){}
+        // Only now is "no tour carries this order" a fact rather than "not loaded
+        // yet" — release loaded orders whose tour disappeared (stale tab, old bug).
+        window._toursLoaded=true;
+        try{ if(typeof ofHealLoadedOrphans==='function') ofHealLoadedOrphans(); }catch(e){}
         try{if(document.getElementById('s-manager').classList.contains('active'))mgDrivers();}catch(e){}
         // Re-render only when something actually changed, and never while the user has
         // a popup open — a full innerHTML rebuild closes dropdowns and jumps the page.
@@ -5635,7 +5642,7 @@ function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filte
 // Management view "End tour". It never archived the tour, so a tour ended here was
 // missing from the Drivers tab entirely — archiveTour is idempotent, so calling it
 // from both end paths is safe.
-function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!tourEndOpenGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndShipWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}var _rid=t&&t.id;var _oids=(t.orders||[]).slice();activeTours.splice(i,1);fbRemoveTour(_rid);try{var _ch=false;_oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; });if(_ch) syncOrders();}catch(e){}mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!tourEndOpenGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndShipWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}try{ tourReleaseLoaded(t); }catch(e){}var _rid=t&&t.id;var _oids=(t.orders||[]).slice();activeTours.splice(i,1);fbRemoveTour(_rid);try{var _ch=false;_oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; });if(_ch) syncOrders();}catch(e){}mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').value = kpTodayStr();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -8476,6 +8483,7 @@ function ofEndTourFromDetail() {
   try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders', _pinBy); }catch(e){}
   try{ archiveTour(t); }catch(e){}
   try{ endTourPayroll(t); }catch(e){}
+  try{ tourReleaseLoaded(t); }catch(e){}
   var _rid = t && t.id;
   var _oids = (t.orders||[]).slice();
   activeTours.splice(currentTourDetailIdx, 1);
@@ -13699,6 +13707,48 @@ function ofDrvLoadPhotos(oid, type, gridId){
       return '<div style="position:relative"><img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid var(--border)">'+slipTag+(when?'<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);color:#fff;font-size:8px;padding:1px 3px;border-radius:0 0 6px 6px;text-align:center">'+when+'</div>':'')+'</div>';
     }).join('')+'</div>';
   });
+}
+// When a tour goes away, its undelivered stops go with it — "loaded" means "on
+// the truck", and that truck no longer drives. Without this, ending or cancelling
+// a tour left its orders stuck on loaded, where no new tour could pick them up.
+// Delivered / shipped / cancelled stops keep their status: those really happened.
+function tourReleaseLoaded(t){
+  var st=(t&&t.status)||{}, n=0;
+  ((t&&t.orders)||[]).forEach(function(id){
+    var os=st[id];
+    if(os==='delivered'||os==='cancelled'||os==='shipped') return;
+    var o=(orders||[]).find(function(x){return x.id===id;});
+    if(o && o.status==='loaded'){
+      o.status='ready';
+      try{ addStatusLog(o,'ready',ofWho()); }catch(e){}
+      try{ auditStatus(o.id,'loaded','ready',ofWho(),'tour ended/removed'); }catch(e){}
+      n++;
+    }
+  });
+  if(n){ try{ syncOrders(); }catch(e){} try{ ofRenderOrders(); }catch(e){} }
+  return n;
+}
+// Repair pass for orders that already fell through that hole (or fall through a
+// new one): status "loaded", a tour number on record, but no active tour carries
+// them → back to ready. Orders set to loaded by hand (no tour number) are left
+// alone. Runs only after the tours snapshot has actually arrived — before that,
+// an empty activeTours just means "not loaded yet" and everything would look
+// orphaned.
+function ofHealLoadedOrphans(){
+  if(!window._toursLoaded) return 0;
+  var onTour={};
+  (activeTours||[]).forEach(function(t){ (t&&t.orders||[]).forEach(function(id){ onTour[id]=1; }); });
+  var n=0;
+  (orders||[]).forEach(function(o){
+    if(!o || o.status!=='loaded' || onTour[o.id] || !tidOk(o.tourNo)) return;
+    o.status='ready';
+    try{ addStatusLog(o,'ready','Auto'); }catch(e){}
+    try{ auditStatus(o.id,'loaded','ready','Auto','tour gone — released for the next tour'); }catch(e){}
+    try{ addLog(o.id+' loaded → ready (tour gone / ทัวร์หายไป)','~'); }catch(e){}
+    n++;
+  });
+  if(n){ try{ syncOrders(); }catch(e){} try{ ofRenderOrders(); }catch(e){} try{ ofRenderTour(); }catch(e){} }
+  return n;
 }
 function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.getAttribute("data-oid");
   var t = activeTours.find(function(x){return x.id===tourId;});
