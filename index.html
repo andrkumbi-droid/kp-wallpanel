@@ -12059,7 +12059,24 @@ function tpSelectDay(day){
 function ofPayoutsNoSlip(){
   return tourPayoutArr()
     .filter(function(p){ return p && p.method!=='cash' && !tourPayoutSlips(p).length && tidArr(p.tourIds).length; })
+    // 0 ฿ = nothing was transferred, so no slip can ever exist — a driver-day
+    // ticked off with no tour pay would otherwise sit in this list forever.
+    .filter(function(p){ return (Number(p.amount)||0) > 0; })
+    // …and the office can wave one out by hand (paid another way, slip lost).
+    .filter(function(p){ return !p.noSlipOk; })
     .sort(function(a,b){ return (b.at||0)-(a.at||0); });
+}
+// The ✕ on a "slip missing" row: this payout will never get a slip — stop asking.
+// The payout itself stays (the tours stay paid); only the reminder goes.
+function tourPayoutNoSlip(poId){
+  var p=tourPayouts[poId]; if(!p) return;
+  if(!confirm('เอาออกจากลิสต์สลิป? รายการนี้จะไม่ถูกทวงสลิปอีก\nRemove from the slip list? This payout will no longer ask for a slip.')) return;
+  p.noSlipOk=true;
+  p.noSlipBy=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office';
+  p.noSlipAt=Date.now();
+  tourPayoutSave(p);
+  try{ auditTour('pay','🆔 '+tidArr(p.tourIds).join(', '),'🧾 no slip for this payout — removed from the list · '+p.noSlipBy); }catch(e){}
+  try{ ofRenderUnpaid(); }catch(e){}
 }
 function ofNoSlipHTML(){
   var miss=ofPayoutsNoSlip(); if(!miss.length) return '';
@@ -12078,6 +12095,7 @@ function ofNoSlipHTML(){
         +'</span>'
         +'<button type="button" onclick="document.getElementById(\'poslip-'+p.id+'\').click()" title="ถ่ายสลิป / take a photo" style="'+btn+'">📷</button>'
         +'<button type="button" onclick="document.getElementById(\'poslipg-'+p.id+'\').click()" title="อัปโหลด / upload" style="'+btn+'">🖼️</button>'
+        +'<button type="button" onclick="tourPayoutNoSlip(\''+p.id+'\')" title="ไม่มีสลิปสำหรับรายการนี้ — เอาออกจากลิสต์ / no slip for this one — remove from the list" style="flex-shrink:0;padding:5px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);cursor:pointer;font-size:13px">✕</button>'
         +'<div id="poup-'+p.id+'" style="display:none;width:100%;font-size:11px;color:var(--text2)"></div>'
       +'</div>';
     }).join('')
