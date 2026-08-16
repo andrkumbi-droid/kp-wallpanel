@@ -111,6 +111,21 @@ Einrichtung kann die Live-App also nicht aussperren.
    Genau hier zeigt sich auch, ob der alte TV-Browser im Lager mitkommt.
 5. **Dann erst „Erzwingen"** für die Realtime Database einschalten.
 
+### Zwei Fallen, beide beim Einrichten am 2026-08-16 aufgelaufen
+
+**1. `activate()` darf nicht im `<head>` laufen.** App Check hängt einen unsichtbaren
+reCAPTCHA-Container an `document.body` — im Head existiert der noch nicht, der Aufruf wirft
+`Cannot read properties of null (reading 'appendChild')`. Das `try/catch` schluckt den Fehler,
+App Check startet stillschweigend nie. `index.html` wartet deshalb auf den Body; in
+`warehouse-display.html` steht der Block ohnehin im Body.
+
+**2. Ohne gültiges Token hängt die Datenbank, sie scheitert nicht.** Gemessen mit nicht
+eingetragenem Debug-Token: `.info/connected` stand nach 172 Sekunden noch auf `false`, kein
+Lesevorgang kam zurück, im Netzwerk-Log endlos `…:exchangeDebugToken` → 403. Kein Fehler in
+der Oberfläche, die App bleibt einfach leer. Wichtig fürs Verständnis: erreicht ein Gerät
+`google.com/recaptcha` nicht (Werbeblocker, Firmen-DNS), sieht das genauso aus — **auch ohne
+eingeschaltetes Erzwingen**. Bei „App zeigt keine Daten" also zuerst hierauf prüfen.
+
 Apps Script (Master-Sheet, LINE-Bot, Meta-Assistent) meldet sich mit dem Legacy-Secret an.
 Das ist eine Admin-Anmeldung und umgeht Regeln wie App Check — die Skripte sollten also
 unberührt bleiben. Vor Schritt 5 trotzdem in den Metriken gegenprüfen, statt darauf zu wetten.
