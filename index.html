@@ -138,6 +138,7 @@ textarea{resize:none}
 .pline input{background:var(--bg);border:1px solid var(--border)}
 .grsel{background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:center;color:var(--text);padding:2px 0;cursor:pointer}
 .grsel.gb{color:#ea580c;border-color:#ea580c;background:#fff7ed}
+.grsel.gc{color:#7c3aed;border-color:#7c3aed;background:#f5f3ff}
 .eline{display:grid;grid-template-columns:72px 1fr 1fr 1fr 32px;gap:6px;align-items:center;margin-bottom:6px;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);border-left:3px solid var(--orange)}
 .colh-e{display:grid;grid-template-columns:72px 1fr 1fr 1fr 32px;gap:6px;padding:0 10px;margin-bottom:3px}
 .colh-e span{font-size:11px;color:var(--text2);font-weight:500}
@@ -669,6 +670,23 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     // throws "Cannot read properties of null (reading 'appendChild')" and App
     // Check silently never starts. So wait for the body (a few ms — the parser
     // reaches <body> right after these head scripts), then activate.
+    //
+    // Field safety net: if google.com/recaptcha cannot be reached — a driver in a
+    // dead spot, an ad blocker, a hotel wifi — activate() still succeeds but the
+    // token never arrives, and a missing token does NOT fail the database
+    // connection, it STALLS it. That device would show a blank app with nothing
+    // its user could do about it. So reachability is probed first (no-cors, 5s):
+    // no reCAPTCHA, no activation, and the app behaves exactly as it did before
+    // App Check existed. Once enforcement is on the server turns such a client
+    // away anyway — but with a clear denial instead of an endless wait.
+    function acReachable(){
+      return new Promise(function(res){
+        var to = setTimeout(function(){ res(false); }, 5000);
+        fetch('https://www.google.com/recaptcha/api.js', {mode:'no-cors'})
+          .then(function(){ clearTimeout(to); res(true); })
+          .catch(function(){ clearTimeout(to); res(false); });
+      });
+    }
     const fbAppCheckReady = new Promise(function(resolve){
       if (!APPCHECK_SITE_KEY) { resolve(false); return; }
       function go(){
@@ -688,7 +706,16 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
           resolve(false);   // never block the app on App Check
         }
       }
-      if (document.body) go(); else setTimeout(function w(){ document.body ? go() : setTimeout(w, 5); }, 0);
+      function whenBody(fn){ if (document.body) fn(); else setTimeout(function w(){ document.body ? fn() : setTimeout(w, 5); }, 0); }
+      acReachable().then(function(ok){
+        if (!ok) {
+          console.warn('[FB] reCAPTCHA unreachable — App Check skipped, app runs as before');
+          window.fbAppCheckSkipped = true;
+          resolve(false);
+          return;
+        }
+        whenBody(go);
+      });
     });
     window.fbAppCheckReady = fbAppCheckReady;
 
@@ -1923,7 +1950,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <input type="text" id="of-reqnote" placeholder="Note for delivery / หมายเหตุการส่ง (e.g. ส่งช่วงเช้า)" style="margin-top:4px">
     <label class="fl">Wall panels / แผ่นวอลล์</label>
     <div class="colh"><span>Code</span><span>Qty</span><span>฿/pc</span><span></span></div>
-    <div id="of-panels"><div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><select class="grsel" title="Grade A=normal · B=defekt" onchange="kpGradeColor(this)"><option value="A">A</option><option value="B">B</option></select><button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div></div>
+    <div id="of-panels"><div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><select class="grsel" title="Grade A = normal · B = ตำหนิ / defect · C = ตัดแล้ว ~95 cm / pre-cut" onchange="kpGradeColor(this)"><option value="A">A</option><option value="B">B</option><option value="C">C</option></select><button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div></div>
     <button type="button" class="abtn" onclick="ofAddP()"><i class="ti ti-plus"></i> Add panel / เพิ่มแผ่น</button>
     <label class="fl" style="margin-top:12px">Edge strips <span style="font-size:11px;color:var(--text2)">(optional)</span></label>
     <div class="colh-e"><span>Type</span><span>Code</span><span>Qty</span><span>฿/pc</span><span></span></div>
@@ -7052,7 +7079,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260816001;
+var KP_BUILD = 20260816002;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -8844,13 +8871,24 @@ function ofCalc(){
     if(stcvEl) stcvEl.textContent = totalClips.toLocaleString() + ' pcs';
   }
 }
-// ── GRADE A/B per panel line (B = broken/seconds, A = standard) ──
-function gradeSelHTML(g){ g=(g==='B')?'B':'A'; return '<select class="grsel'+(g==='B'?' gb':'')+'" title="Grade A=normal · B=defekt" onchange="kpGradeColor(this)">'
-  +'<option value="A"'+(g==='A'?' selected':'')+'>A</option>'
-  +'<option value="B"'+(g==='B'?' selected':'')+'>B</option></select>'; }
-function lineGrade(l){ var s=l.querySelector('select.grsel'); return (s&&s.value==='B')?'B':'A'; }
-function gradeTag(g){ return g==='B'?' (B)':''; }
-function kpGradeColor(s){ if(s) s.classList.toggle('gb', s.value==='B'); }
+// ── GRADE per panel line ──
+//   A = standard full-length panel
+//   B = damaged / seconds (own stock bucket: st.damaged)
+//   C = pre-cut, normally 95 cm — a perfectly good panel that is already cut to
+//       length. Gets its own stock bucket once that stock exists; until then it
+//       comes off the Grade-A bucket exactly as before.
+// Everything goes through gradeNorm(): any unknown value falls back to 'A', and a
+// new grade only has to be added here, not at each of the four line builders.
+var GRADE_TITLE = 'Grade A = normal · B = ตำหนิ / defect · C = ตัดแล้ว ~95 cm / pre-cut';
+function gradeNorm(g){ return (g==='B'||g==='C') ? g : 'A'; }
+function gradeCls(g){ return g==='B' ? ' gb' : (g==='C' ? ' gc' : ''); }
+function gradeSelHTML(g){ g=gradeNorm(g);
+  return '<select class="grsel'+gradeCls(g)+'" title="'+GRADE_TITLE+'" onchange="kpGradeColor(this)">'
+  + ['A','B','C'].map(function(v){ return '<option value="'+v+'"'+(g===v?' selected':'')+'>'+v+'</option>'; }).join('')
+  + '</select>'; }
+function lineGrade(l){ var s=l.querySelector('select.grsel'); return gradeNorm(s && s.value); }
+function gradeTag(g){ g=gradeNorm(g); return g==='A' ? '' : ' ('+g+')'; }
+function kpGradeColor(s){ if(!s) return; s.classList.toggle('gb', s.value==='B'); s.classList.toggle('gc', s.value==='C'); }
 function ofAddP(){const d=document.createElement('div');d.className='pline';d.innerHTML='<input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="฿/pc" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button>';document.getElementById('of-panels').appendChild(d);}
 function ofAddE(){
   const d=document.createElement('div');
@@ -17009,7 +17047,7 @@ function fataxDoc(o, info){
     if(qty<=0 && amt<=0) return;
     var name=(li.type==='delivery')?'ค่าขนส่ง / Delivery'
             :(li.type==='extra')?((li.code||li.label||'Extra')+'')
-            :String(li.code||'')+(li.grade==='B'?' (Grade B)':'');
+            :String(li.code||'')+(li.grade==='B'?' (Grade B)':(li.grade==='C'?' (Pre-cut / ตัดแล้ว)':''));
     items.push({ type:1, name:name, description:'',
       quantity: qty>0?qty:1, unitName: fataxUnit(li.type),
       pricePerUnit: qty>0?Math.round(amt/qty*100)/100:amt,
@@ -18445,6 +18483,10 @@ function kpFlatOrder(o){
     tab:kpZoneTab(o.id), orderNo:o.id, date:o.date||'',
     status:(o.status==='cancelled')?'Cancelled':kpStatusEN(o.status),
     paid:payLabel, prio:o.priority?'⭐':'',
+    // Grade C counts into panelsA here, because the sheet has no third column for
+    // it. Fine while C still moves Grade-A stock; the day pre-cut gets its own
+    // stock, this number starts overstating full-length panels — a panelsC column
+    // in the master sheet (and in master-build.gs) is the fix.
     panelsA:sq(function(x){return x.type==='panel'&&x.grade!=='B';}),
     panelsB:sq(function(x){return x.type==='panel'&&x.grade==='B';}),
     lcorner:sq(function(x){return x.type==='lcorner';}),
@@ -18472,7 +18514,7 @@ function kpFlatOrder(o){
         : t==='clips' ? 'Clip sold'
         : t==='free-clips' ? 'Clip free/panel'
         : 'Clip free gift';
-      return { code:String(x.code||''), cat:cat, grade:(t==='panel')?(x.grade==='B'?'B':'A'):'', qty:parseInt(x.qty)||0, amount:sheetsNum(x.amount) };
+      return { code:String(x.code||''), cat:cat, grade:(t==='panel')?gradeNorm(x.grade):'', qty:parseInt(x.qty)||0, amount:sheetsNum(x.amount) };
     })
   };
 }
@@ -18925,6 +18967,11 @@ function mirrorToAppOrder(g){
 // Grade-aware stock buckets: st.qty = Grade A (good), st.damaged = Grade B
 // (defekt, sellable as seconds). Grade-B order lines move stock in/out of the
 // Grade-B bucket so the two stocks never mix.
+//
+// Grade C (pre-cut, ~95 cm) has NO bucket of its own yet and therefore moves the
+// Grade-A stock, exactly as it did before Grade C existed. When the pre-cut stock
+// is added, this is the one place that has to change: give C its own branch here
+// and in stockBucketAdd, nothing else in the app decides where stock comes from.
 function _stockFind(code){ return stockItems.find(function(x){ return (x.code||'').toUpperCase()===(code||'').toUpperCase().trim(); }); }
 function stockBucketDeduct(code, qty, grade){
   var st=_stockFind(code); if(!st) return;
