@@ -126,6 +126,12 @@ der Oberfläche, die App bleibt einfach leer. Wichtig fürs Verständnis: erreic
 `google.com/recaptcha` nicht (Werbeblocker, Firmen-DNS), sieht das genauso aus — **auch ohne
 eingeschaltetes Erzwingen**. Bei „App zeigt keine Daten" also zuerst hierauf prüfen.
 
+**3. Aus einem automatisierten Browser kommt immer 403.** reCAPTCHA v3 bewertet den Besucher,
+und ein ferngesteuerter Browser wird als Bot eingestuft — `exchangeRecaptchaV3Token` antwortet
+mit 403, danach drosselt das SDK. Das sieht exakt aus wie ein falscher Schlüssel, ist aber die
+Prüfung, die ihre Arbeit tut. Gegenprobe immer in einem normalen Browserfenster: dort kam auf
+`andrkumbi-droid.github.io` sofort ein Token mit 944 Zeichen.
+
 Apps Script (Master-Sheet, LINE-Bot, Meta-Assistent) meldet sich mit dem Legacy-Secret an.
 Das ist eine Admin-Anmeldung und umgeht Regeln wie App Check — die Skripte sollten also
 unberührt bleiben. Vor Schritt 5 trotzdem in den Metriken gegenprüfen, statt darauf zu wetten.
