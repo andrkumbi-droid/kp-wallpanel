@@ -70,11 +70,55 @@ akute Befund aus der Google-Mail.
 anonym anmelden und hat dann wieder vollen Zugriff. Anonyme Auth allein ist eine Hürde,
 keine Mauer.
 
+## Zweite Google-Mail, 2026-08-16
+
+*„Jeder **angemeldete** Nutzer kann Ihre gesamte Datenbank lesen / darin schreiben."*
+
+Kein neuer Befund, sondern die Folge von Stufe 1: Google liest die Regel `auth != null`,
+sieht anonyme Anmeldung aktiviert — und für Google ist jeder anonyme Gast ein Nutzer.
+Das ist exakt die Lücke, die oben unter *„Leistet nicht"* steht.
+
+Wichtig zu trennen:
+
+| Ziel | Was es braucht |
+|---|---|
+| Daten wirklich schützen | **Stufe 1b — App Check** (unten) |
+| Die Mail beenden | **Stufe 3** — erst wenn die Regel nicht mehr pauschal `auth != null` heißt, ist Google zufrieden. App Check ändert die Regel nicht, die Mail kommt also weiter. |
+
+## Stufe 1b — App Check (Code steht, Console fehlt)
+
+Der Code ist eingebaut und **inaktiv**, solange kein Site-Key eingetragen ist:
+
+| Datei | Stelle | SDK |
+|---|---|---|
+| `index.html` | `APPCHECK_SITE_KEY` im Head-IIFE, direkt nach `initializeApp` | `firebase-app-check-compat.js` 10.12.0 |
+| `warehouse-display.html` | `APPCHECK_SITE_KEY` vor dem ersten `db.ref()` | `firebase-app-check.js` 8.10.1 |
+
+Leerer Key = `activate()` wird nie aufgerufen = alles läuft wie heute. Eine halbfertige
+Einrichtung kann die Live-App also nicht aussperren.
+
+### Reihenfolge (wichtig — Erzwingen zuletzt)
+
+1. **Console → App Check → Apps** → diese Web-App registrieren, Anbieter **reCAPTCHA v3**.
+   Google zeigt dabei zwei Schlüssel — gebraucht wird der **Site-Key** (der öffentliche).
+2. Site-Key in **beide** Dateien eintragen (derselbe Wert) und deployen.
+3. **Debug-Token für lokal**: `serve.ps1`/localhost ist keine reCAPTCHA-Domain. Der Code
+   schaltet dort automatisch den Debug-Modus an; beim ersten Laden steht ein Token in der
+   Browser-Konsole → App Check → Apps → ⋮ → **Debug-Tokens verwalten** → eintragen.
+   Niemals ein Debug-Token für die Live-Domain anlegen.
+4. **2–3 Tage warten** und **App Check → APIs → Realtime Database** beobachten. Erst wenn
+   dort praktisch nur noch *verifizierte* Anfragen stehen, ist alles umgestellt.
+   Genau hier zeigt sich auch, ob der alte TV-Browser im Lager mitkommt.
+5. **Dann erst „Erzwingen"** für die Realtime Database einschalten.
+
+Apps Script (Master-Sheet, LINE-Bot, Meta-Assistent) meldet sich mit dem Legacy-Secret an.
+Das ist eine Admin-Anmeldung und umgeht Regeln wie App Check — die Skripte sollten also
+unberührt bleiben. Vor Schritt 5 trotzdem in den Metriken gegenprüfen, statt darauf zu wetten.
+
+**Rollback:** „Erzwingen" wieder aus (wirkt sofort), notfalls Site-Key im Code leeren.
+
 ## Nächste Stufen
 
-- **Stufe 1b — App Check** (reCAPTCHA v3, RTDB erzwingen): Tokens nur noch aus der echten
-  App auf der echten Domain. Das schließt die Lücke oben und ist der grösste Sicherheits-
-  gewinn pro Aufwand. Debug-Token für `serve.ps1`/localhost nicht vergessen.
 - **Stufe 1c — Storage-Regeln**: Der Bucket (`storageBucket`) dürfte genauso offen sein.
   `allow read, write: if request.auth != null;` — geteilte Download-URLs mit Token
   funktionieren weiterhin, die sind Token-basiert und regelunabhängig.

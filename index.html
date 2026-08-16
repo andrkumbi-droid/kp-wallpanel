@@ -625,6 +625,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 
   <!-- Firebase Compat (global scope) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
@@ -646,6 +647,36 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     };
 
     const app = firebase.initializeApp(firebaseConfig);
+
+    // ── APP CHECK (security stage 1b) ───────────────────────────
+    // Anonymous auth is a hurdle, not a wall: the apiKey above is public in this
+    // file, so anyone who copies it can sign in anonymously and the rules
+    // (`auth != null`) let them straight in. App Check binds every request to
+    // THIS app on ITS registered domain via an invisible reCAPTCHA v3 check.
+    //
+    // Setup, in this order (details in SECURITY.md):
+    //   1. Firebase Console → App Check → Apps → this web app → reCAPTCHA v3 →
+    //      register; paste the SITE key below and deploy.
+    //   2. Watch App Check → APIs → Realtime Database for a few days: the
+    //      metrics must show (almost) only verified requests.
+    //   3. Only then switch "Enforce" on. Enforcing earlier locks the app out.
+    //
+    // While the key is empty App Check simply never activates — a half-finished
+    // setup can never break the live app.
+    const APPCHECK_SITE_KEY = '';   // ← reCAPTCHA v3 SITE key goes here
+    try {
+      if (APPCHECK_SITE_KEY) {
+        // localhost / serve.ps1 is not a reCAPTCHA domain and gets no real token.
+        // `true` makes the SDK print a debug token to the console once; register
+        // it under App Check → Apps → ⋮ → Manage debug tokens. Local only —
+        // a debug token on the live domain would defeat the whole thing.
+        if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || location.protocol === 'file:') {
+          self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+        }
+        firebase.appCheck().activate(APPCHECK_SITE_KEY, true);   // true = auto-refresh the token
+        window.fbAppCheckOn = true;
+      }
+    } catch(e){ console.error('[FB] App Check activate failed:', e && e.message); }
 
     // ── ANONYMOUS AUTH (required by the security rules) ──────────
     // The DB rules are no longer wide open: every read/write needs `auth != null`.
