@@ -663,20 +663,34 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     //
     // While the key is empty App Check simply never activates — a half-finished
     // setup can never break the live app.
-    const APPCHECK_SITE_KEY = '';   // ← reCAPTCHA v3 SITE key goes here
-    try {
-      if (APPCHECK_SITE_KEY) {
-        // localhost / serve.ps1 is not a reCAPTCHA domain and gets no real token.
-        // `true` makes the SDK print a debug token to the console once; register
-        // it under App Check → Apps → ⋮ → Manage debug tokens. Local only —
-        // a debug token on the live domain would defeat the whole thing.
-        if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || location.protocol === 'file:') {
-          self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    const APPCHECK_SITE_KEY = '6LebwYgtAAAAAB9LWZ91x3eZfllT9mPsV3Y8Vfpv';   // reCAPTCHA v3 SITE key (public — the secret half lives only in the console)
+    // This block sits in <head>, so document.body does NOT exist yet — and
+    // activate() appends an invisible reCAPTCHA container to it. Calling it here
+    // throws "Cannot read properties of null (reading 'appendChild')" and App
+    // Check silently never starts. So wait for the body (a few ms — the parser
+    // reaches <body> right after these head scripts), then activate.
+    const fbAppCheckReady = new Promise(function(resolve){
+      if (!APPCHECK_SITE_KEY) { resolve(false); return; }
+      function go(){
+        try {
+          // localhost / serve.ps1 is not a reCAPTCHA domain and gets no real token.
+          // `true` makes the SDK print a debug token to the console once; register
+          // it under App Check → Apps → ⋮ → Manage debug tokens. Local only —
+          // a debug token on the live domain would defeat the whole thing.
+          if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || location.protocol === 'file:') {
+            self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+          }
+          firebase.appCheck().activate(APPCHECK_SITE_KEY, true);   // true = auto-refresh the token
+          window.fbAppCheckOn = true;
+          resolve(true);
+        } catch(e){
+          console.error('[FB] App Check activate failed:', e && e.message);
+          resolve(false);   // never block the app on App Check
         }
-        firebase.appCheck().activate(APPCHECK_SITE_KEY, true);   // true = auto-refresh the token
-        window.fbAppCheckOn = true;
       }
-    } catch(e){ console.error('[FB] App Check activate failed:', e && e.message); }
+      if (document.body) go(); else setTimeout(function w(){ document.body ? go() : setTimeout(w, 5); }, 0);
+    });
+    window.fbAppCheckReady = fbAppCheckReady;
 
     // ── ANONYMOUS AUTH (required by the security rules) ──────────
     // The DB rules are no longer wide open: every read/write needs `auth != null`.
@@ -684,7 +698,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     // staff PIN login stays exactly as it is. NOTHING may touch the DB before
     // this promise resolves: a listener attached pre-auth gets PERMISSION_DENIED
     // and the SDK does NOT retry it once auth arrives.
-    const fbAuthReady = firebase.auth().signInAnonymously()
+    // Chained behind App Check on purpose: once enforcement is on, a sign-in that
+    // starts before the App Check token exists is the one request that gets denied.
+    const fbAuthReady = fbAppCheckReady
+      .then(function(){ return firebase.auth().signInAnonymously(); })
       .then(function(){ return true; })
       .catch(function(e){
         console.error('[FB] anonymous sign-in failed — DB access will be denied:', e && e.code, e && e.message);
