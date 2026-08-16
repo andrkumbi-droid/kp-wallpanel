@@ -8506,7 +8506,7 @@ function printDeliverySheet() {
   var _tos = (t.orders||[]).map(function(id){
     return orders.find(function(x){return x.id===id;}) || {id:id, customer:'—', address:'—', panels:'—', lcorner:'—', clips:0, total:'—', zone:'—', phone:'—'};
   }).filter(function(o){ return ((t.status||{})[o.id]||'loaded') !== 'cancelled'; });
-  return dsPrintSheet(t.driverName||'', _tos);
+  return dsPrintSheet(t.driverName||'', _tos, '', t.tid||'');
 }
 // Reprint a sheet later from the Drivers tab — works for an archived tourHistory record
 // AND for a tour that is still on the road. Each stop prints from the LIVE order record
@@ -8522,17 +8522,20 @@ function ofDrvPrintSheet(driverKey, tourKey, tourId){
     .map(function(sp){ return (orders||[]).find(function(x){return x.id===sp.id;}) || sp; });
   if(!list.length){ alert('No orders in this tour / ทัวร์นี้ไม่มีออเดอร์'); return; }
   // A reprint carries the tour's OWN date (the day it left), not today's.
-  dsPrintSheet(rec.driverName||'', list, tourCountDate(rec));
+  dsPrintSheet(rec.driverName||'', list, tourCountDate(rec), rec.tid||'');
 }
 // dateISO ('YYYY-MM-DD') overrides the printed date — a sheet reprinted weeks later must
 // still show the day the tour ran. Left empty for a live tour: that prints today.
-function dsPrintSheet(driverName, tourOrders, dateISO) {
+// tid = tour ID (YYMMDD-N, same code stamped on the orders as o.tourNo) — printed on
+// every page so a loose sheet can still be traced back to its tour.
+function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
   const now = new Date();
   var _dt = dateISO ? new Date(String(dateISO)+'T00:00:00') : now;
   if(isNaN(_dt)) _dt = now;
   const dateStr = _dt.toLocaleDateString('th-TH', {day:'numeric', month:'long', year:'numeric'});
   const driver = driverName || '';
   const esc = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  const tidTxt = (typeof tidOk==='function' && tidOk(tid)) ? String(tid) : '';
   const PRODT = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
 
   function moneyOf(o){ return parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0; }
@@ -8622,13 +8625,14 @@ function dsPrintSheet(driverName, tourOrders, dateISO) {
     + 'ชื่อบัญชี / Account: บริษัท พิมมิแกรนด์ จำกัด<br>'
     + 'เลขบัญชี / No.: <span class="ds-acct">'+PAYINFO_ACCT+'</span></div>';
 
-  var fullHTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Delivery Sheet — '+esc(driver)+'</title>'
+  var fullHTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Delivery Sheet — '+esc(driver)+(tidTxt?' · '+esc(tidTxt):'')+'</title>'
   + '<style>'
   + '*{box-sizing:border-box;margin:0;padding:0}'
   + '@page{size:A4 portrait;margin:8mm;margin-top:40mm}'  /* 4cm clear at top for the clipboard clip (every page) */
   + 'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;background:#fff}'
   + '.ds-header{background:#ffeb3b;border:1px solid #999;padding:5px 8px;margin:0 auto 6px;width:180mm;display:flex;justify-content:space-between;align-items:center}'
   + '.ds-h-title{font-size:12pt;font-weight:800}.ds-h-sub{font-size:9.5pt;font-weight:600}'
+  + '.ds-h-tid{display:inline-block;font-size:10pt;font-weight:800;background:#111;color:#fff;border-radius:9px;padding:1px 8px;margin-left:6px;letter-spacing:.4px;vertical-align:1px;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
   + '.ds-bank{border:2px solid #16a34a;background:#f0fdf4;border-radius:4px;padding:6px 10px;margin:0 auto 6px;width:180mm;font-size:10pt;line-height:1.5;color:#111}.ds-bank b{color:#166534}'
   + '.ds-acct{font-size:16pt;font-weight:800;letter-spacing:.5px;vertical-align:-1px}'  /* same size as the Grand Total value */
   + '.ds-order{display:flex;align-items:stretch;border:1.5px solid #333;border-radius:4px;margin:0 auto 6px;width:180mm;min-height:40mm;overflow:hidden;page-break-inside:avoid}'
@@ -8657,12 +8661,17 @@ function dsPrintSheet(driverName, tourOrders, dateISO) {
   + '.ds-sum-note{border:1.5px solid #333;border-radius:6px;padding:6px 8px;font-size:9pt;color:#666;min-height:18mm}'
   + '</style></head><body>'
   + '<div id="ds-flow"></div>'
-  + '<template id="ds-htpl"><div class="ds-header"><span class="ds-h-title">📋 ใบส่งสินค้า / Delivery Sheet — '+esc(driver)+'</span><span class="ds-h-sub">'+dateStr+' · หน้า {PG} · '+tourOrders.length+' ออเดอร์</span></div></template>'
+  + '<template id="ds-htpl"><div class="ds-header"><span class="ds-h-title">📋 ใบส่งสินค้า / Delivery Sheet — '+esc(driver)
+  + (tidTxt?'<span class="ds-h-tid">🚚 '+esc(tidTxt)+'</span>':'')
+  + '</span><span class="ds-h-sub">'+dateStr+' · หน้า {PG} · '+tourOrders.length+' ออเดอร์</span></div></template>'
   + '<scr'+'ipt>(function(){'
   + 'var flow=document.getElementById("ds-flow");'
   + 'flow.innerHTML='+JSON.stringify(summaryHTML+blocksHTML)+';'
   + 'var blocks=[].slice.call(flow.children);'
   + 'var htpl=document.getElementById("ds-htpl").innerHTML;'
+  // Tour ID repeated on every following page — a sheet that gets separated from page 1
+  // still says which tour it belongs to.
+  + 'var TID='+JSON.stringify(tidTxt?('<b style="color:#111">🚚 '+esc(tidTxt)+'</b> · '):'')+';'
   + 'var BANK='+JSON.stringify(bankHTML)+';'
   // Measure the bank box instead of hardcoding its height — it grew when the account
   // number went to 16pt, and a wrong reserve pushes the last block off the page.
@@ -8674,7 +8683,7 @@ function dsPrintSheet(driverName, tourOrders, dateISO) {
   + 'if(cur.length)pages.push(cur);'
   + 'flow.innerHTML="";'
   + 'pages.forEach(function(pg,i){var pd=document.createElement("div");if(i<pages.length-1)pd.style.pageBreakAfter="always";'
-  + 'pd.innerHTML=((i===0)?htpl.replace("{PG}",(i+1)+"/"+pages.length):("<div style=\\"text-align:right;font-size:9pt;color:#666;margin-bottom:4px\\">หน้า "+(i+1)+"/"+pages.length+"</div>"))+BANK;'
+  + 'pd.innerHTML=((i===0)?htpl.replace("{PG}",(i+1)+"/"+pages.length):("<div style=\\"text-align:right;font-size:9pt;color:#666;margin-bottom:4px\\">"+TID+"หน้า "+(i+1)+"/"+pages.length+"</div>"))+BANK;'
   + 'pg.forEach(function(b){pd.appendChild(b);});flow.appendChild(pd);});'
   + 'setTimeout(function(){window.print();},300);'
   + '})();<\/scr'+'ipt></body></html>';
