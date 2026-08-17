@@ -2655,13 +2655,13 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px">
       <div style="flex:1;min-width:170px">
         <div style="font-size:12px;color:var(--text2);font-weight:700">วันนี้ / today</div>
-        <div id="cashfeed-total" style="font-size:34px;font-weight:800;color:#16a34a;line-height:1.05">0 ฿</div>
-        <div id="cashfeed-sub" style="font-size:12px;color:var(--text2)"></div>
+        <div class="cashfeed-total" style="font-size:34px;font-weight:800;color:#16a34a;line-height:1.05">0 ฿</div>
+        <div class="cashfeed-sub" style="font-size:12px;color:var(--text2)"></div>
       </div>
-      <button type="button" class="btnsm" id="cashfeed-arm" onclick="kpCashArm()" title="เปิด/ปิดเสียง / sound on this device">🔔 เปิดเสียง / sound on</button>
+      <button type="button" class="btnsm cashfeed-arm" onclick="kpCashArm()" title="เปิด/ปิดเสียง / sound on this device">🔔 เปิดเสียง / sound on</button>
       <button type="button" class="btnsm" onclick="cashFeedRender()" title="Refresh"><i class="ti ti-refresh"></i></button>
     </div>
-    <div id="cashfeed-list"></div>
+    <div class="cashfeed-list"></div>
   </div></div>
 
   <!-- BILLS VIEW -->
@@ -7414,7 +7414,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817019;
+var KP_BUILD = 20260817020;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17390,13 +17390,13 @@ function kpPayFeedListen(){
 // monitor needs one tap after every reload. The same button is the on/off switch.
 function kpCashArm(){
   _cashArmed=!_cashArmed;
-  var b=document.getElementById('cashfeed-arm');
-  if(b){
+  Array.prototype.forEach.call(document.querySelectorAll('.cashfeed-arm'), function(b){
     b.textContent=_cashArmed?'🔔 เสียงเปิด / sound ON':'🔕 เสียงปิด / sound off';
     b.style.background=_cashArmed?'#dcfce7':'';
     b.style.color=_cashArmed?'#166534':'';
-  }
+  });
   if(_cashArmed) try{ kpPlayCash(); }catch(e){}   // also unlocks audio for later
+  try{ cashFeedRender(); }catch(e){}
 }
 // Keep the node from growing forever. Push keys are chronological, so the oldest
 // records come first — no index needed for this.
@@ -17416,18 +17416,25 @@ function cashFeedBadge(){
   var n=_cashFeed.filter(function(v){ return (v.ts||0)>=t0.getTime(); }).length;
   el.textContent=n; el.style.display=n?'':'none';
 }
+// Renders into EVERY .cashfeed-* holder — the office tab and, when it is up, the
+// full-screen monitor (#cashdisplay) share one feed and one renderer.
 function cashFeedRender(){
-  var el=document.getElementById('cashfeed-list'); if(!el) return;
+  var holders=document.querySelectorAll('.cashfeed-list'); if(!holders.length) return;
   var rows=_cashFeed.slice().sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
   var t0=new Date(); t0.setHours(0,0,0,0); var today=t0.getTime();
   var sum=0, n=0;
   rows.forEach(function(v){ if((v.ts||0)>=today){ sum+=parseFloat(v.amt)||0; n++; } });
-  var tot=document.getElementById('cashfeed-total');
-  if(tot) tot.textContent=Math.round(sum).toLocaleString('en-US')+' ฿';
-  var sub=document.getElementById('cashfeed-sub');
-  if(sub) sub.textContent=n+' รายการ / payments'+(_cashArmed?'':'  ·  🔕 เสียงปิด / sound off');
-  if(!rows.length){ el.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">ยังไม่มีรายการ / nothing yet</div>'; return; }
-  el.innerHTML=rows.map(function(v){
+  Array.prototype.forEach.call(document.querySelectorAll('.cashfeed-total'), function(el){
+    el.textContent=Math.round(sum).toLocaleString('en-US')+' ฿';
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.cashfeed-sub'), function(el){
+    el.textContent=n+' รายการ / payments'+(_cashArmed?'':'  ·  🔕 เสียงปิด / sound off');
+  });
+  if(!rows.length){
+    Array.prototype.forEach.call(holders, function(el){ el.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">ยังไม่มีรายการ / nothing yet</div>'; });
+    return;
+  }
+  var html=rows.map(function(v){
     var d=new Date(v.ts||0);
     var hh=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
     var day=(v.ts||0)>=today ? '' : (d.getDate()+'.'+(d.getMonth()+1)+'. ');
@@ -17436,17 +17443,141 @@ function cashFeedRender(){
           :                     '#dcfce7;color:#166534|🚚 ส่งแล้ว / delivered';
     var tag='<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:'
       +st.split('|')[0]+'">'+st.split('|')[1]+'</span>';
-    return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);'
+    // Classes, not just inline styles: the monitor (#cashdisplay) restyles these
+    // for reading across a room — see the #kp-kiosk block in kpCashKioskInit.
+    return '<div class="cf-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);'
       +'border-radius:var(--rs);background:var(--bg);margin-bottom:6px">'
-      +'<div style="font-size:22px;font-weight:800;color:#16a34a;min-width:120px;text-align:right">'
+      +'<div class="cf-amt" style="font-size:22px;font-weight:800;color:#16a34a;min-width:120px;text-align:right">'
         +Math.round(parseFloat(v.amt)||0).toLocaleString('en-US')+' ฿</div>'
       +'<div style="flex:1;min-width:0">'
-        +'<div style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+        +'<div class="cf-main" style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
           +kpcEsc(v.id||'')+(v.cust?' · '+kpcEsc(v.cust):'')+'</div>'
-        +'<div style="font-size:11px;color:var(--text2)">'+tag+' '+day+hh+(v.by?' · '+kpcEsc(v.by):'')+'</div>'
+        +'<div class="cf-meta" style="font-size:11px;color:var(--text2)">'+tag+' '+day+hh+(v.by?' · '+kpcEsc(v.by):'')+'</div>'
       +'</div></div>';
   }).join('');
+  Array.prototype.forEach.call(holders, function(el){ el.innerHTML=html; });
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+//  🖥️ MONEY MONITOR — index.html#cashdisplay
+//
+//  For the laptop/screen that just stays on. It is the same app (so the voice,
+//  the feed and the sound are the one implementation, not a copy), but the page
+//  shows NOTHING except the money: a full-screen layer over everything else.
+//
+//  Access: one staff PIN, once. The PIN must belong to somebody who has the
+//  💰 Live flag, and it is remembered on THIS device only — so unlike the
+//  office session there is no 4-hour expiry to re-enter every morning.
+//  Honest limit: this keeps a passer-by who knows the URL out. It is not
+//  encryption — anybody who reads the page source reaches the database the same
+//  way every other screen of this app does.
+// ══════════════════════════════════════════════════════════════════════════
+function kpCashKioskOn(){ return String(location.hash||'').indexOf('cashdisplay')>=0; }
+function kpCashKioskInit(){
+  if(!kpCashKioskOn() || document.getElementById('kp-kiosk')) return;
+  var d=document.createElement('div');
+  d.id='kp-kiosk';
+  d.style.cssText='position:fixed;inset:0;z-index:2147483000;background:#0b1220;color:#e5e7eb;'
+    +'padding:18px 20px;overflow:auto;font-family:inherit';
+  d.innerHTML=
+    // Read-across-the-room styling. The rows themselves are built by
+    // cashFeedRender() for the office tab; here they get bigger and darker.
+    '<style>'
+      +'#kp-kiosk .cf-row{background:#111827 !important;border-color:#334155 !important;padding:14px 16px !important;margin-bottom:8px !important}'
+      +'#kp-kiosk .cf-amt{font-size:32px !important;min-width:180px !important}'
+      +'#kp-kiosk .cf-main{font-size:18px !important;color:#f1f5f9 !important}'
+      +'#kp-kiosk .cf-meta{font-size:13px !important;color:#94a3b8 !important}'
+      +'#kp-kiosk .empty{color:#94a3b8 !important;font-size:16px !important}'
+    +'</style>'
+    +'<div id="kp-kiosk-gate" style="max-width:340px;margin:12vh auto;text-align:center">'
+      +'<div style="font-size:44px">💰</div>'
+      +'<div style="font-size:19px;font-weight:800;margin:6px 0 2px">เงินเข้า / Live payments</div>'
+      +'<div style="font-size:13px;color:#94a3b8;margin-bottom:16px">ใส่รหัส PIN ของพนักงาน / enter your staff PIN</div>'
+      +'<input id="kp-kiosk-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" '
+        +'style="width:100%;padding:14px;font-size:22px;text-align:center;letter-spacing:6px;border-radius:12px;'
+        +'border:1.5px solid #334155;background:#111827;color:#e5e7eb;box-sizing:border-box">'
+      +'<button type="button" onclick="kpCashKioskLogin()" style="margin-top:10px;width:100%;padding:13px;'
+        +'border:none;border-radius:12px;background:#16a34a;color:#fff;font-size:15px;font-weight:700;cursor:pointer">เข้า / Enter</button>'
+      +'<div id="kp-kiosk-msg" style="font-size:12px;color:#f87171;margin-top:8px;min-height:16px"></div>'
+    +'</div>'
+    +'<div id="kp-kiosk-body" style="display:none">'
+      +'<div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;border-bottom:1px solid #1f2937;padding-bottom:12px;margin-bottom:14px">'
+        +'<div style="flex:1;min-width:220px">'
+          +'<div style="font-size:13px;color:#94a3b8;font-weight:700;letter-spacing:1px">วันนี้ / TODAY</div>'
+          +'<div class="cashfeed-total" style="font-size:64px;font-weight:800;color:#22c55e;line-height:1">0 ฿</div>'
+          +'<div class="cashfeed-sub" style="font-size:14px;color:#94a3b8"></div>'
+        +'</div>'
+        +'<button type="button" class="cashfeed-arm" onclick="kpCashArm()" style="padding:12px 16px;border-radius:12px;'
+          +'border:1.5px solid #334155;background:#111827;color:#e5e7eb;font-size:14px;font-weight:700;cursor:pointer">🔔 เปิดเสียง / sound on</button>'
+        +'<button type="button" onclick="kpCashKioskOut()" title="ออก / leave this screen" style="padding:12px 14px;border-radius:12px;'
+          +'border:1.5px solid #334155;background:#111827;color:#94a3b8;font-size:14px;cursor:pointer">✕</button>'
+      +'</div>'
+      +'<div class="cashfeed-list" style="font-size:15px"></div>'
+    +'</div>';
+  document.body.appendChild(d);
+  var inp=document.getElementById('kp-kiosk-pin');
+  if(inp) inp.addEventListener('keydown', function(e){ if(e.key==='Enter') kpCashKioskLogin(); });
+  // Already unlocked on this device? Then straight in — no PIN every morning.
+  var saved='';
+  try{ saved=localStorage.getItem('kpCashDisp')||''; }catch(e){}
+  if(saved) kpCashKioskWait(saved);
+  else if(inp) try{ inp.focus(); }catch(e){}
+}
+// staffList arrives from Firebase a moment after load, so a saved unlock has to
+// wait for it before it can be checked (and re-checked: a flag taken away must
+// close this screen too).
+function kpCashKioskWait(id, tries){
+  tries=tries||0;
+  var list=(typeof staffList!=='undefined' && staffList) ? staffList : [];
+  if(!list.length){
+    if(tries>50) return;                       // ~20 s, then leave the PIN screen up
+    setTimeout(function(){ kpCashKioskWait(id, tries+1); }, 400);
+    return;
+  }
+  var s=list.find(function(x){ return x && x.id===id; });
+  if(s && s.cashFeedAccess) kpCashKioskShow(s);
+  else {
+    try{ localStorage.removeItem('kpCashDisp'); }catch(e){}
+    var m=document.getElementById('kp-kiosk-msg');
+    if(m) m.textContent='สิทธิ์ถูกยกเลิก / access was removed — ask for the 💰 Live flag';
+  }
+}
+function kpCashKioskLogin(){
+  var inp=document.getElementById('kp-kiosk-pin'), m=document.getElementById('kp-kiosk-msg');
+  var pin=String((inp&&inp.value)||'').trim();
+  var list=(typeof staffList!=='undefined' && staffList) ? staffList : [];
+  if(!list.length){ if(m) m.textContent='กำลังโหลด… / still loading, try again in a moment'; return; }
+  var s=list.find(function(x){ return x && x.pin && String(x.pin)===pin && x.cashFeedAccess; });
+  if(!s){
+    if(m) m.textContent='PIN ไม่ถูกต้อง หรือไม่มีสิทธิ์ 💰 Live / wrong PIN, or no 💰 Live access';
+    if(inp){ inp.value=''; try{ inp.focus(); }catch(e){} }
+    return;
+  }
+  try{ localStorage.setItem('kpCashDisp', s.id); }catch(e){}
+  kpCashKioskShow(s);
+}
+function kpCashKioskShow(s){
+  var g=document.getElementById('kp-kiosk-gate'), b=document.getElementById('kp-kiosk-body');
+  if(g) g.style.display='none';
+  if(b) b.style.display='';
+  try{ kpPayFeedListen(); }catch(e){}
+  try{ cashFeedRender(); }catch(e){}
+  try{ kpPayFeedTrim(); }catch(e){}
+  // The PIN we just typed is the gesture the browser wanted, so the sound can be
+  // switched on right away. After a reload without typing, the button does it.
+  if(!_cashArmed) try{ kpCashArm(); }catch(e){}
+}
+function kpCashKioskOut(){
+  if(!confirm('ออกจากหน้าจอเงินเข้า? / leave the money screen on this device?')) return;
+  try{ localStorage.removeItem('kpCashDisp'); }catch(e){}
+  location.hash='';
+  location.reload();
+}
+try{
+  if(document.readyState==='complete') kpCashKioskInit();
+  else { window.addEventListener('load', kpCashKioskInit); document.addEventListener('DOMContentLoaded', kpCashKioskInit); }
+  window.addEventListener('hashchange', kpCashKioskInit);
+}catch(e){}
 
 // ── Voice test ────────────────────────────────────────────────────────────
 // Open the app with  #voicetest  (or #voicetest=1234 for another amount) and a
