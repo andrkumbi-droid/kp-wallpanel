@@ -7388,7 +7388,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817014;
+var KP_BUILD = 20260817015;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17012,6 +17012,106 @@ function kpThaiBaht(amt){
   if(st>0) t+=kpThaiNum(st)+'สตางค์';
   return t;
 }
+
+// ── The female Thai voice that SHIPS WITH THE APP ─────────────────────────
+// Windows has exactly one Thai TTS voice ("Microsoft Pattara") and it is male,
+// so on the office PC the browser simply cannot read a baht amount in a female
+// voice. These 21 syllable clips under snd/th/ are fetched + decoded once and
+// then scheduled back to back with the silence at both ends cut off — one and
+// the same female voice on every device, offline too (the service worker caches
+// them on first use). The device's own voice is only used when it has a female
+// Thai one (Android/Google TTS), because that sounds more natural than clips.
+// The token rules below MUST stay in step with kpThaiNum() above.
+var KP_TH_CLIPS='snd/th/';
+var KP_TH_NAMES=['0','1','2','3','4','5','6','7','8','9','sip','roi','phan','muen','saen','lan','et','yi','baht','kha','satang'];
+var _kpThBufs=null, _kpThLoading=null;
+function kpNumTokens(n){
+  n=Math.floor(Math.abs(Number(n)||0));
+  if(!n) return ['0'];
+  if(n>=1000000){ var mil=Math.floor(n/1000000), rest=n%1000000; return kpNumTokens(mil).concat(['lan'], rest?kpNumTokens(rest):[]); }
+  var U=['','sip','roi','phan','muen','saen'];
+  var s=String(n), out=[];
+  for(var i=0;i<s.length;i++){
+    var d=+s.charAt(i), pos=s.length-1-i;
+    if(!d) continue;
+    if(pos===1 && d===1)                    out.push('sip');
+    else if(pos===1 && d===2)               out.push('yi','sip');
+    else if(pos===0 && d===1 && s.length>1) out.push('et');
+    else { out.push(String(d)); if(U[pos]) out.push(U[pos]); }
+  }
+  return out;
+}
+// The amount as clip names: 5482 → 5 phan 4 roi 8 sip 2 baht kha
+function kpThaiTokens(amt){
+  amt=Math.abs(Number(amt)||0);
+  var b=Math.floor(amt), st=Math.round((amt-b)*100);
+  var t=kpNumTokens(b); t.push('baht');
+  if(st>0){ t=t.concat(kpNumTokens(st)); t.push('satang'); }
+  t.push('kha');
+  return t;
+}
+// Where the syllable really starts/ends, so clips can be butted together
+// without the silence around each one. The threshold is relative to the clip's
+// own peak (they differ in loudness) and deliberately low-ish: cutting harder
+// eats the final consonant, and in Thai that changes the word.
+function kpThTrim(buf){
+  var d=buf.getChannelData(0), n=d.length, i, peak=0;
+  for(i=0;i<n;i++){ var a=d[i]<0?-d[i]:d[i]; if(a>peak) peak=a; }
+  var thr=Math.max(0.008, peak*0.12), s=0, e=n-1;
+  while(s<n && Math.abs(d[s])<thr) s++;
+  while(e>s && Math.abs(d[e])<thr) e--;
+  if(s>=e){ s=0; e=n-1; }
+  var sr=buf.sampleRate, from=Math.max(0, s-Math.round(0.010*sr)), to=Math.min(n-1, e+Math.round(0.025*sr));
+  return { buf:buf, off:from/sr, dur:(to-from)/sr };
+}
+// Fetch + decode the clips once. Resolves with the map, or null when this
+// device cannot do it (no Web Audio, files missing, decode refused).
+function kpThLoadClips(){
+  if(_kpThBufs) return Promise.resolve(_kpThBufs);
+  if(_kpThLoading) return _kpThLoading;
+  _kpThLoading=(function(){
+    try{
+      initAudio();
+      if(!audioCtx || !window.fetch || !window.Promise) return Promise.resolve(null);
+      return Promise.all(KP_TH_NAMES.map(function(n){
+        return fetch(KP_TH_CLIPS+n+'.mp3')
+          .then(function(r){ if(!r.ok) throw new Error('http '+r.status); return r.arrayBuffer(); })
+          .then(function(ab){ return new Promise(function(ok,no){
+            var p=audioCtx.decodeAudioData(ab, ok, no);   // older Safari only has the callback form
+            if(p && p.then) p.then(ok, no);
+          }); })
+          .then(function(buf){ return { n:n, v:kpThTrim(buf) }; });
+      })).then(function(list){
+        var map={}; list.forEach(function(x){ map[x.n]=x.v; });
+        _kpThBufs=map; return map;
+      }).catch(function(){ return null; });
+    }catch(e){ return Promise.resolve(null); }
+  })();
+  return _kpThLoading;
+}
+// Play the amount from the clips. A hair of overlap hides the joins.
+function kpPlayThClips(amt, map, cb){
+  cb=cb||function(){};
+  try{
+    initAudio();
+    if(!audioCtx){ cb(); return; }
+    if(audioCtx.state==='suspended' && audioCtx.resume) { try{ audioCtx.resume(); }catch(e){} }
+    var toks=kpThaiTokens(amt).filter(function(t){ return map[t]; });
+    if(!toks.length){ cb(); return; }
+    var g=audioCtx.createGain(); g.gain.value=0.9; g.connect(audioCtx.destination);
+    // Google speaks a single syllable slowly and deliberately, so played 1:1 the
+    // amount comes out dictated rather than spoken. 1.15× and a little overlap
+    // bring it close to connected speech; more than that turns squeaky.
+    var rate=1.15, seam=0.03;
+    var t=audioCtx.currentTime+0.06;
+    toks.forEach(function(n){
+      var c=map[n], s=audioCtx.createBufferSource();
+      s.buffer=c.buf; s.playbackRate.value=rate; s.connect(g); s.start(t, c.off, c.dur);
+      t += Math.max(0.05, c.dur/rate - seam);
+    });
+    setTimeout(cb, Math.max(0,(t-audioCtx.currentTime))*1000 + 120);
+  }catch(e){ cb(); }
+}
 // Female Thai voices we know by name, so a device that has several picks the
 // right one. Windows: Premwadee/Achara are female, Pattara/Niwat male. iOS: Kanya.
 // Android/Google usually ships one Thai voice (female) with no name to match on.
@@ -17041,13 +17141,68 @@ function kpVoiceIsFemale(v){
   return false;
 }
 try{ if(window.speechSynthesis && speechSynthesis.getVoices) speechSynthesis.getVoices(); }catch(e){}  // warm the voice list up
-// Say "<amount> baht kha" in Thai — soft and unhurried, female where the device
-// has such a voice. Then cb() — also on error, no voice, or timeout.
+// The best-sounding option: the WHOLE sentence in one recording, spoken by a
+// female Thai voice, fetched through the Apps Script relay (action 'say' —
+// Google refuses the same request straight from a browser). Amounts repeat, so
+// keep what we got. cb(true) = it was spoken, cb(false) = not available.
+var _kpSayMp3={};
+function kpSayRelay(amt, cb){
+  var key=Math.round(Math.abs(Number(amt)||0)*100);
+  var play=function(b64){
+    var over=false, done=function(ok){ if(over) return; over=true; cb(ok); };
+    try{
+      var a=new Audio('data:audio/mpeg;base64,'+b64);
+      a.volume=0.95;
+      a.onended=function(){ done(true); };
+      a.onerror=function(){ done(false); };
+      var pr=a.play(); if(pr&&pr.catch) pr.catch(function(){ done(false); });
+      setTimeout(function(){ done(true); }, 9000);       // 'ended' is not guaranteed
+    }catch(e){ done(false); }
+  };
+  if(_kpSayMp3[key]){ play(_kpSayMp3[key]); return; }
+  // An /exec without the 'say' action answers, just without an mp3. Asking it
+  // again on every amount would put a pointless second in front of each
+  // announcement, so remember it for this session.
+  if(window._kpSayRelayOff || !KP_CT_OCR_URL || !window.fetch){ cb(false); return; }
+  var done=false, fin=function(b64){ if(done) return; done=true; if(b64) play(b64); else cb(false); };
+  setTimeout(function(){ fin(null); }, 7000);            // don't hold the sound up
+  try{
+    // `say`, not `text` — an /exec that predates this action then answers
+    // {error:'no text'} at once instead of paying for a chat translation.
+    fetch(KP_CT_OCR_URL,{ method:'POST', body:JSON.stringify({action:'say', say:kpThaiBaht(amt)+'ค่ะ'}) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j && j.mp3){ _kpSayMp3[key]=j.mp3; fin(j.mp3); return; }
+        if(j) window._kpSayRelayOff=true;      // answered, but knows no 'say' → stop asking
+        fin(null);
+      })
+      .catch(function(){ fin(null); });
+  }catch(e){ fin(null); }
+}
+// Say "<amount> baht kha" in Thai, then cb() — also on error or timeout.
+// Route, best first: a FEMALE Thai voice on the device (Android — natural and
+// instant) → the relay recording → the syllable clips we ship → whatever Thai
+// voice is installed (male on Windows, pitched up).
 function kpSayBaht(amt, cb){
   cb=cb||function(){};
   var said=false, fin=function(){ if(said) return; said=true; try{ cb(); }catch(e){} };
-  if(!kpSlipSoundOn() || !window.speechSynthesis || !window.SpeechSynthesisUtterance){ fin(); return; }
+  if(!kpSlipSoundOn()){ fin(); return; }
   var v=kpThaiVoice();
+  if(v && kpVoiceIsFemale(v)){ kpSayBahtTTS(amt, fin, v); return; }
+  var clips=function(){
+    kpThLoadClips().then(function(map){
+      if(map) kpPlayThClips(amt, map, fin);
+      else    kpSayBahtTTS(amt, fin, v);
+    }, function(){ kpSayBahtTTS(amt, fin, v); });
+  };
+  kpSayRelay(amt, function(ok){ if(ok) fin(); else clips(); });
+}
+// The device's own speech engine (fallback, and the fast path on Android).
+function kpSayBahtTTS(amt, cb, v){
+  cb=cb||function(){};
+  var said=false, fin=function(){ if(said) return; said=true; try{ cb(); }catch(e){} };
+  if(!window.speechSynthesis || !window.SpeechSynthesisUtterance){ fin(); return; }
+  if(v===undefined) v=kpThaiVoice();
   if(v===null){ fin(); return; }                    // device has voices, none Thai
   try{
     var txt=kpThaiBaht(amt)+'ค่ะ';                   // ...บาทค่ะ — polite, female speaker

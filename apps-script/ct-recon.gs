@@ -55,7 +55,8 @@ function _kpHandle(e) {
     }
     if (p.action === 'ctocr')    return _json(_ctOcr(p));
     if (p.action === 'slipread') return _json(_slipRead(p));
-    if (p.action === 'ping')  return _json({ ok: true, ctocr: true, slipread: true });
+    if (p.action === 'say')      return _json(_sayTh(p));
+    if (p.action === 'ping')  return _json({ ok: true, ctocr: true, slipread: true, say: true });
     return _json(_translate(p));
   } catch (err) {
     return _json({ error: String(err) });
@@ -251,6 +252,42 @@ function _slipRead(p) {
   var out = _joinText(body);
   if (!out) return { error: 'empty answer' };
   try { return JSON.parse(out); } catch (err) { return { error: 'bad json from model' }; }
+}
+
+// ── THAI SPEECH: text → mp3 (female voice) ─────────────────────────────────
+// The app says the slip / delivery amount out loud in Thai. Windows only ships a
+// MALE Thai voice, and Google's tts endpoint refuses requests that come straight
+// from a browser — from here (server side) it answers fine, so this relay is what
+// gets a female voice onto the office PC. Answers { mp3: "<base64>" }.
+// Not an official API: if it ever stops answering, the app falls back to the
+// syllable clips it ships in snd/th/, so nothing breaks — it just sounds flatter.
+function _sayTh(p) {
+  // The app sends the sentence as `say`, NOT as `text`: a deployment that
+  // predates this action then falls through to the chat translator, which
+  // answers {error:'no text'} at once instead of paying for a translation.
+  var text = (p.say || p.text || '').toString().trim();
+  if (!text) return { error: 'no text' };
+  if (text.length > 200) text = text.slice(0, 200);
+
+  // Amounts repeat (slip upload + delivery confirm of the same order), so keep
+  // each rendering for 6 h — a cache hit answers in well under a second.
+  var cache = CacheService.getScriptCache();
+  var key = 'tts_' + Utilities.base64EncodeWebSafe(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, text, Utilities.Charset.UTF_8));
+  var hit = null;
+  try { hit = cache.get(key); } catch (err) { hit = null; }
+  if (hit) return { mp3: hit, cached: true };
+
+  var res = UrlFetchApp.fetch(
+    'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=th&q=' + encodeURIComponent(text),
+    { muteHttpExceptions: true, followRedirects: true,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' } });
+  if (res.getResponseCode() !== 200) return { error: 'tts ' + res.getResponseCode() };
+
+  var b64 = Utilities.base64Encode(res.getBlob().getBytes());
+  if (b64.length < 500) return { error: 'tts empty' };
+  try { if (b64.length < 95000) cache.put(key, b64, 21600); } catch (err) {}   // 100 KB per cache entry
+  return { mp3: b64 };
 }
 
 // ── CHAT TRANSLATE (unchanged behaviour of the old translate.gs) ───────────
