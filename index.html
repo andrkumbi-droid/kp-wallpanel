@@ -176,6 +176,15 @@ textarea{resize:none}
 .fbtn{padding:5px 11px;border-radius:20px;border:1px solid var(--border);background:var(--bg);font-size:12px;font-weight:500;cursor:pointer;color:var(--text2);-webkit-tap-highlight-color:transparent}
 .fbtn.active{background:var(--blue-l);color:var(--blue-t);border-color:transparent}
 .srow{display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border)}
+/* A stock row carries a thumbnail, the name, THREE grade columns and an edit button.
+   On a phone that is ~300px of fixed width, which left the name a few pixels and broke
+   it one character per line. Wrapping is allowed and the name keeps a floor, so the
+   grade columns drop onto their own line instead of crushing the text. */
+.srow{flex-wrap:wrap}
+/* !important on purpose: the element carries an inline min-width:0, and an inline
+   style beats any normal rule. Without it the name block still collapses to a few
+   pixels and the "Low" badge lands on top of the Grade-A figure. */
+.srow>div[style*="flex:1"]{min-width:145px!important}
 .srow:last-child{border-bottom:none}
 .scode{font-size:13px;font-weight:600;color:var(--text);min-width:78px}
 .sqty{font-size:13px;color:var(--text);flex:1}
@@ -5868,10 +5877,23 @@ function ofStockValueSum(items){ return (items||[]).reduce(function(a,s){ return
 // product with a different length cannot cause a wrong deduction here.
 var PANEL_FULL_CM = 290;
 function _pcEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// Folded shut by default: 32 entries pushed the whole stock catalogue off the
+// screen, and most of the time the office only wants the total. The header stays
+// readable while closed — item count and pieces — so opening it is a choice, not
+// a necessity.
+var _pcOpen=false;
+function pcToggle(){ _pcOpen=!_pcOpen; ofPrecutBox(); }
 function ofPrecutBox(){
   var host=document.getElementById('of-precut-box'); if(!host) return;
   var canEdit=!!window.ofStockEdit;
   var prod=function(code){ return (window.QT_PRODUCTS||[]).find(function(p){ return precutNorm(p.code)===precutNorm(code); }) || {}; };
+  // Same picture the stock catalogue shows, by code. Missing file → onerror hides it
+  // and the row closes up, so a product without a photo costs nothing.
+  var thumb=function(code){
+    return '<img loading="lazy" src="'+IMG_BASE+_pcEsc(String(code||'').toUpperCase())+'.jpg" alt="" '
+      +'onerror="this.style.display=\'none\'" '
+      +'style="width:30px;height:30px;object-fit:cover;border-radius:5px;flex-shrink:0">';
+  };
   var rows=(precutItems||[]).slice().sort(function(a,b){
     var c=precutNorm(a.code).localeCompare(precutNorm(b.code));
     return c || ((parseInt(a.len)||0)-(parseInt(b.len)||0));
@@ -5879,12 +5901,15 @@ function ofPrecutBox(){
   var total=rows.reduce(function(a,p){ return a+(parseInt(p.qty)||0); }, 0);
   host.style.display='block';
   host.innerHTML='<div class="card" style="border:1px solid #ddd6fe;background:#faf8ff">'
-    +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">'
+    // The whole header is the toggle — a 14 px chevron is not a tap target on a phone.
+    +'<div onclick="pcToggle()" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer'+(_pcOpen?';margin-bottom:10px':'')+'">'
+      +'<i class="ti ti-chevron-'+(_pcOpen?'down':'right')+'" style="font-size:15px;color:#6d28d9"></i>'
       +'<span style="font-size:14px;font-weight:800;color:#6d28d9">✂ ตัดแล้ว / Pre-cut · Grade C</span>'
       +'<span style="font-size:11px;color:var(--text2)">'+rows.length+' รายการ / items</span>'
       +'<span style="margin-left:auto;font-size:16px;font-weight:800;color:#6d28d9">'+total.toLocaleString()+' pcs</span>'
     +'</div>'
-    +(canEdit
+    +(!_pcOpen ? '' :
+     (canEdit
       ? '<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;background:var(--bg);border:1px dashed #c4b5fd;border-radius:var(--rs);padding:8px 9px;margin-bottom:10px">'
         +'<div style="flex:1;min-width:110px"><label class="fl" style="margin-top:0">รุ่น / Model</label>'
           +'<input type="text" id="pc-code" placeholder="KP058" oninput="this.value=this.value.toUpperCase()" style="width:100%;box-sizing:border-box"></div>'
@@ -5928,11 +5953,14 @@ function ofPrecutBox(){
               +'</div>'
               // auto-fill columns: three or four abreast on a desktop, one on a phone,
               // without a media query.
-              +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:0 14px">'
+              // Wider minimum than before — the picture needs its 30 px, and a column
+              // too narrow to hold code + colour + count would ellipse the colour away.
+              +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(245px,1fr));gap:0 14px">'
               +g.map(function(p){
                 var n=parseInt(p.qty)||0, nm=prod(p.code).name||'';
-                return '<div style="display:grid;grid-template-columns:1fr 52px auto;align-items:center;gap:6px;'
+                return '<div style="display:grid;grid-template-columns:auto 1fr 52px auto;align-items:center;gap:7px;'
                     +'padding:4px 2px;border-bottom:1px solid rgba(109,40,217,.10)'+(n<=0?';opacity:.45':'')+'">'
+                  +thumb(p.code)
                   +'<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px">'
                     +'<b>'+_pcEsc(p.code)+'</b>'
                     +(nm?' <span style="font-size:11px;color:#b45309">'+_pcEsc(nm)+'</span>':'')+'</span>'
@@ -5946,7 +5974,7 @@ function ofPrecutBox(){
               +'</div></div>';
           }).join('');
         })()
-      : '<div class="empty" style="padding:.7rem;font-size:12.5px">ยังไม่มีแผ่นตัดแล้ว / nothing pre-cut yet</div>')
+      : '<div class="empty" style="padding:.7rem;font-size:12.5px">ยังไม่มีแผ่นตัดแล้ว / nothing pre-cut yet</div>'))
     +'</div>';
 }
 // Adding a pre-cut row normally means somebody took a full panel and cut it, so
@@ -7360,7 +7388,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817013;
+var KP_BUILD = 20260817014;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
