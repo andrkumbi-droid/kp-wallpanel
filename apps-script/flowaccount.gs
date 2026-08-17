@@ -140,8 +140,23 @@ function _faHandle(e) {
 
     return _faJson({ error: 'unknown action' });
   } catch (err) {
-    return _faJson({ error: String(err) });
+    return _faJson({ error: String(err), hint: _faHint(String(err)) });
   }
+}
+
+// The two failures that actually happen, in plain words — so whoever hits them
+// knows whether to fix a credential, a plan, or a URL.
+function _faHint(msg) {
+  msg = String(msg || '');
+  if (/token 40[13]/.test(msg))
+    return 'FlowAccount refuses the credentials: either FA_CLIENT_ID / FA_CLIENT_SECRET are still the placeholders / wrong, or this account has no Open API access yet (it is only in the Pro Business package — sandbox access is issued by developer_support@flowaccount.com).';
+  if (/token 400/.test(msg))
+    return 'Token request rejected — check FA_CLIENT_ID / FA_CLIENT_SECRET for stray spaces or a swapped pair.';
+  if (/api 404/.test(msg))
+    return 'Endpoint not found for this account: the base URL does not match. Override FA_BASE_SANDBOX / FA_BASE_LIVE with the value from developers.flowaccount.com.';
+  if (/api 40[13]/.test(msg))
+    return 'Authenticated, but not allowed to create this document — check the package and that the credentials belong to this company.';
+  return '';
 }
 
 function _faJson(obj) {
