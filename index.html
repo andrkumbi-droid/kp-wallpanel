@@ -1127,6 +1127,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{ if(document.getElementById('mg-shipper-list')) mgRenderShippers(); }catch(e){}
         try{ if(document.getElementById('ofv-tour') && document.getElementById('ofv-tour').classList.contains('active')) ofRenderTour(); }catch(e){}
       });
+      db.ref('shipperFee').on('value', function(snap) {
+        shipperFee = snap.val() || {};
+        try{ if(document.getElementById('mg-shipper-list')) mgRenderShippers(); }catch(e){}
+        try{ if(document.getElementById('ofv-pay') && document.getElementById('ofv-pay').classList.contains('active')) payRender(); }catch(e){}
+        try{ if(document.getElementById('ofv-bills') && document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
+      });
       db.ref('homeLoc').on('value', function(snap) {
         var v=snap.val();
         homeLoc = (v && typeof v.lat==='number' && typeof v.lng==='number') ? {lat:v.lat,lng:v.lng} : null;
@@ -4240,6 +4246,10 @@ var customerMeta={}; // phoneKey -> {name,address,loc,note,blocked,blockReason} 
 var homeLoc=null;    // warehouse start point {lat,lng} for the KM route cross-check
 var orsKey='';       // optional OpenRouteService key → route that avoids tollways
 var shipperLoc={};   // shipKey(name) -> {name,link,lat,lng} — the carrier's depot we deliver to
+// shipKey(name) -> {type:'pct'|'fix', val:Number} — what the carrier keeps for
+// collecting the money from the customer. Percent for most, a flat amount for some.
+// Self-delivery never has one: we collect our own money.
+var shipperFee={};
 var _shipLocLoaded=false;  // true once Firebase delivered shipperLoc — no routing before that
 var preOrders=[]; // pre-orders: {id,zone,customer,phone,address,location,contact,lineItems,notes,status(open|converted|cancelled),cancelReason,convertedId,createdBy,createdAt}
 var shippers=['ส่งเอง','ธวัชชัย TCH','CT','คู่บุญ KBD','PT','มีชัย','เอสพี สุภาภัณฑ์','บี.เอส.','สหะหล่มสัก'];
@@ -7296,7 +7306,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817009;
+var KP_BUILD = 20260817010;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -12009,6 +12019,44 @@ function kmRouteSig(t){
 }
 // ── Carrier depots — where the goods are handed over (Pay tab → Shippers) ──
 function shipKey(name){ return String(name||'').trim().replace(/[.#$\[\]\/]/g,'_'); }
+// ── SHIPPER COLLECTION FEE ────────────────────────────────────────────────
+// The carrier hands the goods over AND collects the money, and keeps a cut for
+// doing so: a percentage for most, a flat amount for some. On a 1,000 ฿ order at
+// 2 % the customer still pays 1,000, but only 980 reaches us — the 20 ฿ is a cost
+// that belongs in Bills next to the shipping cost, not a discount on the sale.
+//
+// The rate is per carrier; the amount lands on the order as o.shipFee so a rate
+// change later can never rewrite what was already settled. o.shipFee === '' or
+// null means "not decided yet" and follows the carrier's rate; a typed 0 means
+// "this one costs nothing" (customer had already transferred the money to us).
+function shipFeeCfg(name){
+  if(!name || name==='ส่งเอง') return null;
+  var c=shipperFee[shipKey(name)];
+  if(!c) return null;
+  var v=parseFloat(c.val)||0;
+  return v>0 ? {type:(c.type==='fix'?'fix':'pct'), val:v} : null;
+}
+function shipFeeAuto(o){
+  if(!o || !billsShipIsCarrier(o)) return 0;      // self-delivery: nothing, ever
+  var c=shipFeeCfg(o.shipper); if(!c) return 0;
+  if(c.type==='fix') return c.val;
+  var tot=0; try{ tot=ofOrderTotalNum(o)||0; }catch(e){}
+  return Math.round(tot*c.val)/100;               // 2 % of 1,000 = 20
+}
+function shipFeeOf(o){
+  if(!o) return 0;
+  if(o.shipFee!=null && o.shipFee!=='') return Math.max(0, parseFloat(o.shipFee)||0);
+  return shipFeeAuto(o);
+}
+// What the carrier actually owes us: the order total minus its cut.
+function shipNetOf(o){
+  var tot=0; try{ tot=ofOrderTotalNum(o)||0; }catch(e){}
+  return Math.max(0, tot - shipFeeOf(o));
+}
+function shipFeeLabel(name){
+  var c=shipFeeCfg(name); if(!c) return '';
+  return c.type==='fix' ? (c.val.toLocaleString()+' ฿') : (c.val+' %');
+}
 function shipperLatLng(name){
   var e=shipperLoc[shipKey(name)];
   return (e && geoSane(e.lat,e.lng)) ? {lat:e.lat,lng:e.lng} : null;
@@ -21069,7 +21117,15 @@ function chaseCardHtml(x){
       +(c.due?'':' · ⏳ นัดอีกที/again '+fmtD(c.deadline))+'</div>'
     +(o.chase&&o.chase.note?'<div style="font-size:11.5px;color:var(--text);background:var(--bg2);border-radius:var(--rs);padding:5px 8px;margin-top:5px">📝 '+_esc(o.chase.note)+(o.chase.by?' — '+_esc(o.chase.by):'')+(o.chase.at?' <span style="color:var(--text2);font-weight:600">· 🕐 '+chaseFmtAt(o.chase.at)+'</span>':'')+'</div>':'')
     +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:7px">'
-      +'<span style="font-size:15px;font-weight:800;color:#dc2626">'+chaseAmount(o).toLocaleString('en-US')+' ฿</span>'
+      // With a carrier the customer pays the full amount but the carrier keeps its
+      // cut, so the number to expect on the bank statement is the one below — shown
+      // right under the amount, because that is the figure being chased.
+      +'<span>'+'<span style="font-size:15px;font-weight:800;color:#dc2626">'+chaseAmount(o).toLocaleString('en-US')+' ฿</span>'
+        +(function(){ var f=0; try{ f=shipFeeOf(o); }catch(e){}
+          if(!(f>0)) return '';
+          return '<br><span style="font-size:10.5px;color:#92400e;font-weight:700">💸 −'+f.toLocaleString('en-US')
+            +' → <b>'+Math.max(0,chaseAmount(o)-f).toLocaleString('en-US')+' ฿</b></span>'; })()
+      +'</span>'
       +'<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">'
         // Shipper receipt photos from Pictures (🚚 Shipper) right on the chase card —
         // the proof of handover is usually what the carrier asks for on the phone.
@@ -21350,8 +21406,44 @@ function shipCtrlHtml(o){
     // it up. Ticking this says "settled, nothing to pay" so it stops being flagged red.
     +'<label title="Delivered for free — no carrier bill / ส่งฟรี ไม่มีค่าส่ง" style="display:flex;align-items:center;gap:3px;font-size:11px;font-weight:700;color:'+(o.shipFree?'#16a34a':'#6b7280')+';white-space:nowrap;flex-shrink:0;cursor:pointer">'
       +'<input type="checkbox" '+(o.shipFree?'checked':'')+' onchange="setShipFree(\''+oid+'\',this.checked)" style="width:15px;height:15px;cursor:pointer">ฟรี/free</label>'
+    +_shipFeeCtrl(o)
     +'<button type="button" onclick="pickShipReceipt(\''+oid+'\')" title="Shipping receipt photo / ถ่ายรูปใบเสร็จค่าส่ง" style="flex-shrink:0;padding:5px 9px;border-radius:var(--rs);border:1px solid #fde68a;background:#fffbeb;color:#b45309;font-size:13px;cursor:pointer;font-weight:700">🧾'+(nP>0?' '+nP:'')+'</button>'
   +'</div>';
+}
+// The collection fee, shown wherever the shipper row is (order window, Pay tab).
+// It stays out of the way for self-delivery and for carriers without a rate, and
+// spells the money out in full — total, the carrier's cut, what actually reaches
+// us — because that subtraction is the whole point of the field.
+function _shipFeeCtrl(o){
+  if(!billsShipIsCarrier(o)) return '';
+  var cfg=shipFeeCfg(o.shipper);
+  var manual=(o.shipFee!=null && o.shipFee!=='');
+  if(!cfg && !manual) return '';
+  var fee=shipFeeOf(o), tot=0; try{ tot=ofOrderTotalNum(o)||0; }catch(e){}
+  var net=Math.max(0, tot-fee);
+  return '<div style="flex:0 0 100%;display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;'
+      +'background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:5px 8px">'
+    +'<span style="font-size:11px;font-weight:700;color:#92400e;white-space:nowrap">💸 ค่าเก็บเงิน / fee'
+      +(cfg?' <span style="font-weight:800">'+_esc(shipFeeLabel(o.shipper))+'</span>':'')+'</span>'
+    +'<input type="number" min="0" step="0.01" value="'+(manual?o.shipFee:'')+'" placeholder="'+(Math.round(fee*100)/100)+'" '
+      +'title="ว่าง = ตามอัตราขนส่ง / empty = the carrier\'s rate · 0 = ไม่มี / none" '
+      +'onchange="setShipFee(\''+o.id+'\',this.value)" '
+      +'style="width:76px;padding:4px 6px;border:1px solid #fcd34d;border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px">'
+    +'<span style="font-size:11px;color:#92400e;white-space:nowrap">'
+      +tot.toLocaleString()+' − '+fee.toLocaleString()+' = <b style="font-size:12.5px">'+net.toLocaleString()+' ฿</b></span>'
+  +'</div>';
+}
+// Empty box = follow the carrier's rate. A typed number — including 0 — overrules it
+// for this one order, which is how a prepaid order gets no fee at all.
+function setShipFee(id,val){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  var raw=String(val==null?'':val).trim();
+  if(raw===''){ delete o.shipFee; }
+  else o.shipFee=Math.max(0, parseFloat(raw.replace(/[^0-9.]/g,''))||0);
+  syncOrders(); try{sheetsSyncOrder(o);}catch(e){}
+  try{ auditAdd({type:'payment', area:'ship', orderId:id, method:'ship-fee',
+        note:'💸 ค่าเก็บเงินขนส่ง / carrier fee: '+(raw===''?'ตามอัตรา / by rate':raw+' ฿'), by:(typeof chaseBy==='function'?chaseBy():'Office')}); }catch(e){}
+  _shipRefreshViews(id);
 }
 // Free delivery: settled at 0 ฿. Clears any amount that was typed before, because
 // "free" and "450 ฿" cannot both be true.
@@ -23518,13 +23610,42 @@ function mgRenderShippers() {
           : '<div style="font-size:11px;color:var(--text2);margin-top:2px">📍 ยังไม่มีตำแหน่ง / no depot location</div>'));
     return '<div style="display:flex;align-items:flex-start;gap:8px;padding:9px 12px;background:var(--bg2);border-radius:var(--rs);margin-bottom:6px">'
       +'<span style="font-size:18px;line-height:1.4">🚚</span>'
-      +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">'+s+'</div>'+locLine+'</div>'
+      +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500">'+s+'</div>'+locLine+_shipFeeRowHtml(s,i)+'</div>'
       +(s==='ส่งเอง'?'':'<button type="button" class="btnsm" onclick="setShipperLoc('+i+')" title="ตำแหน่งร้านขนส่ง / depot location" style="color:'+(hasGeo?'var(--blue)':'#d97706')+';border-color:'+(hasGeo?'var(--blue)':'#d97706')+'">📍</button>')
       +'<button type="button" class="btnsm" onclick="deleteShipper('+i+')" style="color:var(--red);border-color:var(--red)"><i class="ti ti-trash"></i></button>'
       +'</div>';
   }).join('');
 }
 
+// Rate row under each carrier in the shipper list. ส่งเอง has none — we collect our
+// own money — so it is not even offered there.
+function _shipFeeRowHtml(name, idx){
+  if(name==='ส่งเอง') return '';
+  var c=shipperFee[shipKey(name)]||{};
+  var type=(c.type==='fix')?'fix':'pct';
+  var val=(c.val!=null&&c.val!=='')?c.val:'';
+  return '<div style="display:flex;align-items:center;gap:5px;margin-top:5px;flex-wrap:wrap">'
+    +'<span style="font-size:11px;color:var(--text2);white-space:nowrap">💸 ค่าเก็บเงิน / fee</span>'
+    +'<input type="number" min="0" step="0.01" value="'+val+'" placeholder="0" onchange="setShipperFee('+idx+',null,this.value)" '
+      +'style="width:74px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px">'
+    +'<select onchange="setShipperFee('+idx+',this.value,null)" style="width:64px;padding:4px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px">'
+      +'<option value="pct"'+(type==='pct'?' selected':'')+'>%</option>'
+      +'<option value="fix"'+(type==='fix'?' selected':'')+'>฿</option>'
+    +'</select>'
+    +(shipFeeCfg(name)?'<span style="font-size:11px;color:#b45309;font-weight:700">'+_esc(shipFeeLabel(name))+' ต่อออเดอร์ / per order</span>'
+                      :'<span style="font-size:11px;color:var(--text2)">ไม่มีค่าเก็บเงิน / no fee</span>')
+  +'</div>';
+}
+function setShipperFee(idx, type, val){
+  var name=shippers[idx]; if(!name || name==='ส่งเอง') return;
+  var k=shipKey(name), c=shipperFee[k]||{type:'pct',val:0};
+  if(type!=null) c.type=(type==='fix'?'fix':'pct');
+  if(val!=null)  c.val=Math.max(0, parseFloat(String(val).replace(/[^0-9.]/g,''))||0);
+  shipperFee[k]=c;
+  if(window.fbDB){ try{ window.fbDB.ref('shipperFee/'+k).set(c); }catch(e){} }
+  try{ addLog('Shipper fee '+name+' = '+(c.val||0)+(c.type==='fix'?' ฿':' %'),'🚚'); }catch(e){}
+  mgRenderShippers();
+}
 function openShipperAdd() {
   document.getElementById('mg-shipper-add').style.display = 'block';
   document.getElementById('mg-shipper-input').value = '';
@@ -26866,16 +26987,16 @@ var BILL_SHIP_NONE='— ไม่ระบุบริษัท / no company —
 function billsIsLalaShipper(s){ return /lalamove/i.test(String(s||'')); }
 function billsShipData(mk){
   var ended=billsEndedTourByOrder(), active=billsActiveTourOrders();
-  var groups={}, order=[], onTour=[], total=0;
+  var groups={}, order=[], onTour=[], total=0, feeTotal=0;
   var lala=[], lalaTotal=0, lalaMissing=0, lalaDup=0, lalaDupAmt=0;
   (typeof shippers!=='undefined'?shippers:[]).forEach(function(s){
     if(!s || s==='ส่งเอง') return;                   // self-delivery has no carrier bill
     if(billsIsLalaShipper(s)) return;                // own block, see below
     if(groups[s]) return;
-    groups[s]={ id:s, label:s, total:0, rows:[], missing:0 }; order.push(s);
+    groups[s]={ id:s, label:s, total:0, fees:0, rows:[], missing:0 }; order.push(s);
   });
   function grp(k){
-    if(!groups[k]){ groups[k]={ id:k, label:k, total:0, rows:[], missing:0 }; order.push(k); }
+    if(!groups[k]){ groups[k]={ id:k, label:k, total:0, fees:0, rows:[], missing:0 }; order.push(k); }
     return groups[k];
   }
   (typeof orders!=='undefined'?orders:[]).forEach(function(o){
@@ -26908,8 +27029,13 @@ function billsShipData(mk){
     // Marked free → settled, so it belongs with its company, not in the pending bucket.
     if(at && amt<=0 && !o.shipFree){ onTour.push({ o:o, tour:at }); return; }
     var g=grp(o.shipper||BILL_SHIP_NONE);
-    g.total+=amt; g.rows.push({ o:o, tour:et||at||null }); if(amt<=0 && !o.shipFree) g.missing++;
-    total+=amt;
+    // The carrier's cut for collecting the money is a second cost on the same order.
+    // It is summed apart from the shipping cost so the office can see which is which,
+    // and only added into the company total afterwards.
+    var _fee=0; try{ _fee=shipFeeOf(o); }catch(e){}
+    g.total+=amt; g.fees+=_fee; g.rows.push({ o:o, tour:et||at||null, fee:_fee });
+    if(amt<=0 && !o.shipFree) g.missing++;
+    total+=amt; feeTotal+=_fee;
   });
   // Newest first inside a company; unpriced ones on top — that is the work to do.
   var _shipSort=function(a,b){
@@ -26919,7 +27045,7 @@ function billsShipData(mk){
   };
   order.forEach(function(k){ groups[k].rows.sort(_shipSort); });
   lala.sort(_shipSort);
-  return { total:total, onTour:onTour, groups:order.map(function(k){ return groups[k]; }),
+  return { total:total, feeTotal:feeTotal, onTour:onTour, groups:order.map(function(k){ return groups[k]; }),
            lala:lala, lalaTotal:lalaTotal, lalaMissing:lalaMissing,
            lalaDup:lalaDup, lalaDupAmt:lalaDupAmt };
 }
@@ -26958,11 +27084,13 @@ function billsCostData(mk){
 
   // 3) Shipper — one group per carrier company, plus whatever is still on tour
   var sd=billsShipData(mk);
+  // The block total is shipping cost PLUS the carriers' collection fees — both are
+  // money that leaves us through the carrier, so the month's figure has to hold both.
   blocks.push({ kind:'shipper', label:'🚚 Shipper / ค่าส่ง',
-    total:sd.total, onTour:sd.onTour,
+    total:sd.total+sd.feeTotal, cost:sd.total, fees:sd.feeTotal, onTour:sd.onTour,
     children:sd.groups.map(function(g){
-      return { id:g.id, label:g.label, total:g.total, missing:g.missing,
-               rows:g.rows, orders:g.rows.map(function(r){ return r.o; }) };
+      return { id:g.id, label:g.label, total:g.total+g.fees, cost:g.total, fees:g.fees,
+               missing:g.missing, rows:g.rows, orders:g.rows.map(function(r){ return r.o; }) };
     }) });
 
   // 4) Staff — net per person from the payroll log, split Driver / Warehouse / Lalamove / Other
@@ -27734,7 +27862,14 @@ function costsRender(){
             '<span style="min-width:0;flex:1;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-chevron-'+(open?'down':'right')+'" style="font-size:13px;vertical-align:-1px"></i> '+_esc(c.label)+
               (rows.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+rows.length+')</span>':'')+
               (miss?' <span title="no cost entered / ยังไม่ได้ใส่ค่าส่ง" style="font-size:11px;font-weight:800;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px">⚠️ '+miss+'</span>':'')+'</span>'+
-            '<span style="font-size:13px;font-weight:800;white-space:nowrap">'+c.total.toLocaleString()+' ฿</span>'+
+            // Two costs, one company: the shipping bill and the cut kept for
+            // collecting. Split out so the office sees which is which, then the sum.
+            '<span style="text-align:right;white-space:nowrap;flex-shrink:0">'+
+              ((c.fees>0)
+                ? '<span style="font-size:10.5px;color:var(--text2)">'+c.cost.toLocaleString()+' + 💸 '+c.fees.toLocaleString()+'</span><br>'
+                : '')+
+              '<span style="font-size:13px;font-weight:800">'+c.total.toLocaleString()+' ฿</span>'+
+            '</span>'+
           '</div>'+
           (open ? '<div style="padding:0 9px 8px">'+(rows.length
               ? rows.map(function(r){ return shipRow(r,idx,false); }).join('')
