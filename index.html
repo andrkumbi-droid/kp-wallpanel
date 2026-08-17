@@ -7296,7 +7296,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817005;
+var KP_BUILD = 20260817006;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -8471,24 +8471,35 @@ function printReceiptDoc(bodyHTML, cssOverride, w, h){
 
 /* ══ CARTON LABEL 🏷️ ═══════════════════════════════════════════════════════
    Printed from the order sheet, cut out and glued onto the carton: the name big
-   enough to read from across the yard, the full address, the phone number.
-   20 × 14 cm, landscape on A4 — and 200 mm still fits a portrait page, so a
-   printer that ignores the landscape request crops nothing. Several cartons →
-   one label per carton, numbered กล่อง 1/2.
+   enough to read from across the yard, the full address, the phone number, plus
+   the order date and the tour it rides on.
+   TWO labels per A4 portrait sheet, each exactly half the page (210 × 148.4 mm,
+   A5 landscape). Cut along the dashed middle line and you have both — no
+   measuring, no offcut. Several cartons → one label per carton, numbered
+   กล่อง 1/2; an odd count leaves the bottom half of the last sheet blank.
 ════════════════════════════════════════════════════════════════════════════ */
-var LABEL_PRINT_CSS = '@page{size:A4 landscape;margin:0}'
+var LABEL_PRINT_CSS = '@page{size:A4 portrait;margin:0}'
   +'*{box-sizing:border-box}'
   +"html,body{margin:0;padding:0;font-family:'Sarabun',Arial,sans-serif;color:#000;background:#fff}"
-  +'.lbl{width:200mm;height:140mm;margin:6mm auto;padding:7mm 9mm;border:2px dashed #000;'
-    +'display:flex;flex-direction:column;overflow:hidden;page-break-after:always}'
-  +'.lbl:last-child{page-break-after:auto}'
+  // 148.4 rather than 148.5: two halves of an exact 297 mm round up on some
+  // printers and push a blank third page out.
+  +'.sheet{width:210mm;height:296.8mm;page-break-after:always}'
+  +'.sheet:last-child{page-break-after:auto}'
+  +'.lbl{width:210mm;height:148.4mm;padding:9mm 10mm;display:flex;flex-direction:column;'
+    +'overflow:hidden;border-bottom:1.2pt dashed #666}'
+  +'.sheet .lbl:last-child{border-bottom:none}'
   +'.lbl-top{display:flex;justify-content:space-between;align-items:baseline;gap:6mm;'
-    +'font-size:13pt;font-weight:700;border-bottom:1.5pt solid #000;padding-bottom:3mm;margin-bottom:5mm}'
+    +'font-size:12.5pt;font-weight:700;border-bottom:1.5pt solid #000;padding-bottom:2.5mm}'
+  // Date and tour ride under the head rule, small but bold — the packer scans for
+  // the tour, the office for the date.
+  +'.lbl-meta{display:flex;justify-content:space-between;align-items:baseline;gap:6mm;'
+    +'font-size:11pt;font-weight:700;margin-top:2mm;margin-bottom:3.5mm}'
+  +'.lbl-tour{font-weight:900;letter-spacing:.3px}'
   +'.lbl-name{font-weight:900;line-height:1.12;word-break:break-word}'
-  +'.lbl-addr{line-height:1.35;margin-top:4mm;word-break:break-word;flex:1;overflow:hidden}'
+  +'.lbl-addr{line-height:1.32;margin-top:3mm;word-break:break-word;flex:1;overflow:hidden}'
   +'.lbl-tel{display:flex;justify-content:space-between;align-items:flex-end;gap:6mm;'
-    +'border-top:1.5pt solid #000;padding-top:4mm;margin-top:3mm}'
-  +'.lbl-num{font-size:32pt;font-weight:900;letter-spacing:1px;line-height:1;white-space:nowrap}'
+    +'border-top:1.5pt solid #000;padding-top:3mm;margin-top:2mm}'
+  +'.lbl-num{font-size:30pt;font-weight:900;letter-spacing:1px;line-height:1;white-space:nowrap}'
   +'.lbl-from{font-size:9pt;text-align:right;line-height:1.35;color:#000;flex-shrink:0}'
   +'.lbl-from b{font-size:10pt;font-weight:800}';
 // 0819797748 → 081 979 7748. Anything that is not a plain Thai number stays as typed.
@@ -8502,12 +8513,19 @@ function _lblPhone(p){
 // one shrinks instead of spilling off a label nobody can re-cut.
 function _labelPageHTML(o, name, addr, tel, idx, total){
   var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
-  var nl=name.length, ns=nl<=18?46:(nl<=26?40:(nl<=36?34:(nl<=52?28:(nl<=80?22:18))));
-  var al=addr.length, as=al<=55?28:(al<=100?22:(al<=170?17:14));
+  var nl=name.length, ns=nl<=18?44:(nl<=26?38:(nl<=36?32:(nl<=52?27:(nl<=80?21:17))));
+  var al=addr.length, as=al<=55?26:(al<=100?21:(al<=170?16:13));
   var head=[o.id, o.zone||'', o.province||''].filter(Boolean).map(esc).join(' · ');
+  // Order date — the same basis the sheet report uses, so a label and the report
+  // never disagree about when an order came in.
+  var dateTxt=o.date ? (function(){ try{ return fmtD(o.date); }catch(e){ return String(o.date); } })() : '—';
+  // The tour ID is stamped onto the order as tourNo; blank until it joins a tour.
+  var tourTxt=(typeof tidOk==='function' && tidOk(o.tourNo)) ? esc(o.tourNo) : '—';
   return '<div class="lbl">'
     +'<div class="lbl-top"><span>'+head+'</span>'
       +'<span>'+(total>1?'📦 กล่อง / Carton '+idx+' / '+total:(o.ctn?'📦 '+esc(o.ctn)+' CTN':''))+'</span></div>'
+    +'<div class="lbl-meta"><span>📅 วันที่ / Date '+esc(dateTxt)+'</span>'
+      +'<span class="lbl-tour">🚚 Tour '+tourTxt+'</span></div>'
     +'<div class="lbl-name" style="font-size:'+ns+'pt">'+esc(name||'—')+'</div>'
     +(addr?'<div class="lbl-addr" style="font-size:'+as+'pt">'+esc(addr)+'</div>':'<div class="lbl-addr"></div>')
     +'<div class="lbl-tel">'
@@ -8529,9 +8547,17 @@ function printOrderLabel(orderId){
       +'This order has '+ctn+' cartons — print '+ctn+' labels, one per carton?\n\n'
       +'ยกเลิก = พิมพ์ใบเดียว / Cancel = one label') ? ctn : 1;
   }
+  // Two labels to a sheet. An odd count leaves the bottom half empty rather than
+  // repeating a label nobody asked for — the cut line still sits in the middle.
+  var labels=[];
+  for(var i=1;i<=n;i++) labels.push(_labelPageHTML(o, name, addr, tel, i, n));
   var pages='';
-  for(var i=1;i<=n;i++) pages+=_labelPageHTML(o, name, addr, tel, i, n);
-  printReceiptDoc(pages, LABEL_PRINT_CSS, '297mm', '210mm');
+  for(var s=0;s<labels.length;s+=2){
+    // The empty half is a real element on purpose: without it the single label
+    // would be :last-child and lose the very cut line the sheet is cut along.
+    pages+='<div class="sheet">'+labels[s]+(labels[s+1]||'<div class="lbl"></div>')+'</div>';
+  }
+  printReceiptDoc(pages, LABEL_PRINT_CSS, '210mm', '297mm');
 }
 
 // ── SALES-BY-ZONE DONUT CHARTS ──────────────────────────────────────
