@@ -139,6 +139,15 @@ textarea{resize:none}
 .grsel{background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:center;color:var(--text);padding:2px 0;cursor:pointer}
 .grsel.gb{color:#ea580c;border-color:#ea580c;background:#fff7ed}
 .grsel.gc{color:#7c3aed;border-color:#7c3aed;background:#f5f3ff}
+/* Cut length, only for Grade C. Own row across the whole line (grid-column 1/-1):
+   the line above is a tight 5-column grid and a sixth box would crush it on a phone. */
+/* order:9 puts the row last in the grid, behind the ✕ button — without it the
+   length row would sit between the grade select and ✕, pushing ✕ onto a row of
+   its own. */
+.pline .cutwrap{grid-column:1/-1;order:9;display:none;align-items:center;gap:7px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:var(--rs);padding:5px 9px;margin-top:1px}
+.pline .cutwrap.on{display:flex}
+.pline .cutwrap .cutlbl{font-size:11.5px;font-weight:800;color:#6d28d9;white-space:nowrap}
+.pline .cutwrap input.cutcm{width:82px;text-align:right;font-weight:700;color:#6d28d9}
 .eline{display:grid;grid-template-columns:72px 1fr 1fr 1fr 32px;gap:6px;align-items:center;margin-bottom:6px;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);border-left:3px solid var(--orange)}
 .colh-e{display:grid;grid-template-columns:72px 1fr 1fr 1fr 32px;gap:6px;padding:0 10px;margin-bottom:3px}
 .colh-e span{font-size:11px;color:var(--text2);font-weight:500}
@@ -1950,7 +1959,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <input type="text" id="of-reqnote" placeholder="Note for delivery / หมายเหตุการส่ง (e.g. ส่งช่วงเช้า)" style="margin-top:4px">
     <label class="fl">Wall panels / แผ่นวอลล์</label>
     <div class="colh"><span>Code</span><span>Qty</span><span>฿/pc</span><span></span></div>
-    <div id="of-panels"><div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><select class="grsel" title="Grade A = normal · B = ตำหนิ / defect · C = ตัดแล้ว ~95 cm / pre-cut" onchange="kpGradeColor(this)"><option value="A">A</option><option value="B">B</option><option value="C">C</option></select><button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div></div>
+    <div id="of-panels"><div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><select class="grsel" title="Grade A = normal · B = ตำหนิ / defect · C = ตัดแล้ว ~95 cm / pre-cut" onchange="kpGradeColor(this)"><option value="A">A</option><option value="B">B</option><option value="C">C</option></select><div class="cutwrap"><span class="cutlbl">✂ ยาว / Length</span><input type="number" class="cutcm" min="1" max="600" placeholder="95"><span class="cutlbl">cm</span></div><button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div></div>
     <button type="button" class="abtn" onclick="ofAddP()"><i class="ti ti-plus"></i> Add panel / เพิ่มแผ่น</button>
     <label class="fl" style="margin-top:12px">Edge strips <span style="font-size:11px;color:var(--text2)">(optional)</span></label>
     <div class="colh-e"><span>Type</span><span>Code</span><span>Qty</span><span>฿/pc</span><span></span></div>
@@ -7133,7 +7142,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817001;
+var KP_BUILD = 20260817002;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -8936,13 +8945,40 @@ function ofCalc(){
 var GRADE_TITLE = 'Grade A = normal · B = ตำหนิ / defect · C = ตัดแล้ว ~95 cm / pre-cut';
 function gradeNorm(g){ return (g==='B'||g==='C') ? g : 'A'; }
 function gradeCls(g){ return g==='B' ? ' gb' : (g==='C' ? ' gc' : ''); }
-function gradeSelHTML(g){ g=gradeNorm(g);
+// Grade C carries a cut length. The input rides along with the select so all four
+// line builders (new order, edit, checkout, pre-order) get it without changes, and
+// it only unfolds once C is picked.
+var CUT_DEFAULT = 95;
+function gradeSelHTML(g, cutLen){ g=gradeNorm(g);
+  var cm = parseInt(cutLen)||0;
   return '<select class="grsel'+gradeCls(g)+'" title="'+GRADE_TITLE+'" onchange="kpGradeColor(this)">'
   + ['A','B','C'].map(function(v){ return '<option value="'+v+'"'+(g===v?' selected':'')+'>'+v+'</option>'; }).join('')
-  + '</select>'; }
+  + '</select>'
+  + '<div class="cutwrap'+(g==='C'?' on':'')+'">'
+  +   '<span class="cutlbl">✂ ยาว / Length</span>'
+  +   '<input type="number" class="cutcm" min="1" max="600" placeholder="'+CUT_DEFAULT+'" value="'+(cm>0?cm:'')+'">'
+  +   '<span class="cutlbl">cm</span>'
+  + '</div>'; }
 function lineGrade(l){ var s=l.querySelector('select.grsel'); return gradeNorm(s && s.value); }
-function gradeTag(g){ g=gradeNorm(g); return g==='A' ? '' : ' ('+g+')'; }
-function kpGradeColor(s){ if(!s) return; s.classList.toggle('gb', s.value==='B'); s.classList.toggle('gc', s.value==='C'); }
+function lineCutLen(l){ var i=l.querySelector('input.cutcm'); var n=parseInt(i && i.value)||0; return n>0?n:0; }
+// Only Grade C shows its length — B has none, and A is the silent default.
+function gradeTag(g, cutLen){ g=gradeNorm(g);
+  if(g==='A') return '';
+  if(g==='C'){ var n=parseInt(cutLen)||0; return n>0 ? ' (C '+n+'cm)' : ' (C)'; }
+  return ' ('+g+')'; }
+function kpGradeColor(s){
+  if(!s) return;
+  s.classList.toggle('gb', s.value==='B');
+  s.classList.toggle('gc', s.value==='C');
+  var line=s.closest('.pline'); if(!line) return;
+  var wrap=line.querySelector('.cutwrap'); if(!wrap) return;
+  var on = s.value==='C';
+  wrap.classList.toggle('on', on);
+  // 95 cm is what pre-cut nearly always means, so offer it rather than an empty
+  // box — but only when nothing was typed yet, never overwriting a real length.
+  var inp=wrap.querySelector('input.cutcm');
+  if(on && inp && !inp.value) inp.value=CUT_DEFAULT;
+}
 function ofAddP(){const d=document.createElement('div');d.className='pline';d.innerHTML='<input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="฿/pc" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button>';document.getElementById('of-panels').appendChild(d);}
 function ofAddE(){
   const d=document.createElement('div');
@@ -9216,8 +9252,10 @@ function ofCreate(){
   let pa=[],la=[],tq=0,lineItems=[];
   document.querySelectorAll('#of-panels .pline').forEach(l=>{
     const i=l.querySelectorAll('input');
-    const code=i[0].value.trim().toUpperCase(),qty=parseInt(i[1].value)||0,price=parseFloat(i[2].value)||0,grade=lineGrade(l);
-    if(code&&qty){pa.push(code+' × '+qty+gradeTag(grade));tq+=qty;lineItems.push({type:'panel',code,qty,unitPrice:price,amount:price*qty,grade});}
+    const code=i[0].value.trim().toUpperCase(),qty=parseInt(i[1].value)||0,price=parseFloat(i[2].value)||0,grade=lineGrade(l),cut=lineCutLen(l);
+    // cutLen is only ever set for Grade C — Firebase throws on undefined, so the
+    // key has to stay absent rather than be written empty.
+    if(code&&qty){pa.push(code+' × '+qty+gradeTag(grade,cut));tq+=qty;var _pi={type:'panel',code,qty,unitPrice:price,amount:price*qty,grade};if(grade==='C'&&cut>0)_pi.cutLen=cut;lineItems.push(_pi);}
   });
   document.querySelectorAll('#of-edges .eline').forEach(l=>{
     const sel=l.querySelector('select');
@@ -14880,19 +14918,19 @@ function openEM(idOrBtn){
   // Populate editable product lines from the order's products
   var emWrap=document.getElementById('em-lines'); if(emWrap){ emWrap.innerHTML='';
     var EMPROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
-    (o.lineItems||[]).forEach(function(li){ if(EMPROD[li.type]) emAddLine(li.code, li.unitPrice, li.qty, li.grade); });
+    (o.lineItems||[]).forEach(function(li){ if(EMPROD[li.type]) emAddLine(li.code, li.unitPrice, li.qty, li.grade, li.cutLen); });
     if(!emWrap.children.length) emAddLine();
     emCalc();
   }
   document.getElementById('edit-modal').classList.add('open');}
 function closeEM(){document.getElementById('edit-modal').classList.remove('open');editId=null;}
-function emAddLine(code, price, qty, grade){
+function emAddLine(code, price, qty, grade, cutLen){
   var wrap=document.getElementById('em-lines'); if(!wrap) return;
   var div=document.createElement('div'); div.className='pline';
   div.innerHTML='<input type="text" placeholder="KP009" value="'+(code||'')+'" oninput="this.value=this.value.toUpperCase();emCalc()">'
     +'<input type="number" min="0" placeholder="179" value="'+(price!=null&&price!==''?price:'')+'" oninput="emCalc()">'
     +'<input type="number" min="0" placeholder="0" value="'+(qty!=null&&qty!==''?qty:'')+'" oninput="emCalc()">'
-    +gradeSelHTML(grade)
+    +gradeSelHTML(grade, cutLen)
     +'<button type="button" class="xbtn" onclick="this.parentNode.remove();emCalc()"><i class="ti ti-x"></i></button>';
   wrap.appendChild(div);
 }
@@ -14914,11 +14952,11 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   var emItems=[], emPa=[], emLa=[], emTq=0;
   document.querySelectorAll('#em-lines .pline').forEach(function(l){
     var i=l.querySelectorAll('input');
-    var code=i[0].value.trim().toUpperCase(), price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0, grade=lineGrade(l);
+    var code=i[0].value.trim().toUpperCase(), price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0, grade=lineGrade(l), cut=lineCutLen(l);
     if(!code||!qty) return;
     var t=mirrorClassify(code); if(t==='clip') t='clips';
     var item={type:t, code:code, qty:qty, unitPrice:price, amount:price*qty};
-    if(t==='panel'){ item.grade=grade; emPa.push(code+' × '+qty+gradeTag(grade)); emTq+=qty; }
+    if(t==='panel'){ item.grade=grade; if(grade==='C'&&cut>0) item.cutLen=cut; emPa.push(code+' × '+qty+gradeTag(grade,cut)); emTq+=qty; }
     else if(t==='lcorner'||t==='tedge'||t==='uedge'){ emLa.push(code+' × '+qty); }
     emItems.push(item);
   });
@@ -14955,7 +14993,7 @@ function coDiffText(cr){
 function coProdText(items){
   var pa=[],la=[];
   (items||[]).forEach(function(li){
-    if(li.type==='panel')pa.push(li.code+' × '+li.qty+gradeTag(li.grade));
+    if(li.type==='panel')pa.push(li.code+' × '+li.qty+gradeTag(li.grade, li.cutLen));
     else if(li.type==='lcorner'||li.type==='tedge'||li.type==='uedge'||li.type==='ttrim'||li.type==='utrim')la.push(li.code+' × '+li.qty);
   });
   return pa.concat(la).join(' · ')||'—';
@@ -14982,7 +15020,7 @@ function openCO(btn){
   var EDGE={lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
   var clipPacks=0,giftClips=0,deliv=0,disc=0;
   (o.lineItems||[]).forEach(function(li){
-    if(li.type==='panel') coAddLine(li.code, li.unitPrice, li.qty, li.grade);
+    if(li.type==='panel') coAddLine(li.code, li.unitPrice, li.qty, li.grade, li.cutLen);
     else if(EDGE[li.type]) coAddE(li.type, li.code, li.unitPrice, li.qty);
     else if(li.type==='clips') clipPacks+=parseInt(li.qty)||0;
     else if(li.type==='free-gift-clips') giftClips+=parseInt(li.qty)||0;
@@ -15001,13 +15039,13 @@ function openCO(btn){
   document.getElementById('change-modal').classList.add('open');
 }
 function closeCO(){document.getElementById('change-modal').classList.remove('open');coId=null;}
-function coAddLine(code,price,qty,grade){
+function coAddLine(code,price,qty,grade,cutLen){
   var wrap=document.getElementById('co-lines'); if(!wrap)return;
   var div=document.createElement('div'); div.className='pline';
   div.innerHTML='<input type="text" placeholder="KP009" value="'+(code||'')+'" oninput="this.value=this.value.toUpperCase();coCalc()">'
     +'<input type="number" min="0" placeholder="0" value="'+(qty!=null&&qty!==''?qty:'')+'" oninput="coCalc()">'
     +'<input type="number" min="0" placeholder="179" value="'+(price!=null&&price!==''?price:'')+'" oninput="coCalc()">'
-    +gradeSelHTML(grade)
+    +gradeSelHTML(grade, cutLen)
     +'<button type="button" class="xbtn" onclick="this.parentNode.remove();coCalc()"><i class="ti ti-x"></i></button>';
   wrap.appendChild(div);
 }
@@ -15082,11 +15120,11 @@ function submitCO(){
   var newItems=[], tq=0, freeGift=0;
   document.querySelectorAll('#co-lines .pline').forEach(function(l){
     var i=l.querySelectorAll('input');
-    var code=i[0].value.trim().toUpperCase(), qty=parseInt(i[1].value)||0, price=parseFloat(i[2].value)||0, grade=lineGrade(l);
+    var code=i[0].value.trim().toUpperCase(), qty=parseInt(i[1].value)||0, price=parseFloat(i[2].value)||0, grade=lineGrade(l), cut=lineCutLen(l);
     if(!code||!qty)return;
     var t=mirrorClassify(code); if(t==='clip')t='clips';
     var item={type:t,code:code,qty:qty,unitPrice:price,amount:price*qty};
-    if(t==='panel'){ item.grade=grade; tq+=qty; }
+    if(t==='panel'){ item.grade=grade; if(grade==='C'&&cut>0) item.cutLen=cut; tq+=qty; }
     newItems.push(item);
   });
   document.querySelectorAll('#co-edges .eline').forEach(function(l){
@@ -15140,7 +15178,7 @@ function submitCO(){
   try{ if(o._stockDeducted){ addOrderStock(o); o._stockDeducted=false; } }catch(e){}
   var pa=[],la=[];
   newItems.forEach(function(li){
-    if(li.type==='panel')pa.push(li.code+' × '+li.qty+gradeTag(li.grade));
+    if(li.type==='panel')pa.push(li.code+' × '+li.qty+gradeTag(li.grade, li.cutLen));
     else if(li.type==='lcorner'||li.type==='tedge'||li.type==='uedge'||li.type==='ttrim'||li.type==='utrim')la.push(li.code+' × '+li.qty);
   });
   o.lineItems=newItems;
@@ -17101,7 +17139,7 @@ function fataxDoc(o, info){
     if(qty<=0 && amt<=0) return;
     var name=(li.type==='delivery')?'ค่าขนส่ง / Delivery'
             :(li.type==='extra')?((li.code||li.label||'Extra')+'')
-            :String(li.code||'')+(li.grade==='B'?' (Grade B)':(li.grade==='C'?' (Pre-cut / ตัดแล้ว)':''));
+            :String(li.code||'')+(li.grade==='B'?' (Grade B)':(li.grade==='C'?(' (Pre-cut / ตัดแล้ว'+((parseInt(li.cutLen)||0)>0?' '+(parseInt(li.cutLen)||0)+' cm':'')+')'):''));
     items.push({ type:1, name:name, description:'',
       quantity: qty>0?qty:1, unitName: fataxUnit(li.type),
       pricePerUnit: qty>0?Math.round(amt/qty*100)/100:amt,
@@ -17901,9 +17939,9 @@ function poUpdateBadge(){
   var el=document.getElementById('oft-po-cnt');
   if(el){ el.textContent=ready; el.style.display=ready>0?'':'none'; }
 }
-function poAddP(code,price,qty,grade){
+function poAddP(code,price,qty,grade,cutLen){
   var d=document.createElement('div'); d.className='pline';
-  d.innerHTML='<input type="text" placeholder="KP009" value="'+(code||'')+'" oninput="this.value=this.value.toUpperCase();poCalc()"><input type="number" min="0" placeholder="0" value="'+(qty!=null&&qty!==''?qty:'')+'" oninput="poCalc()"><input type="number" min="0" placeholder="฿/pc" value="'+(price!=null&&price!==''?price:'')+'" oninput="poCalc()">'+gradeSelHTML(grade)+'<button type="button" class="xbtn" onclick="this.closest(\'.pline\').remove();poCalc()"><i class="ti ti-x"></i></button>';
+  d.innerHTML='<input type="text" placeholder="KP009" value="'+(code||'')+'" oninput="this.value=this.value.toUpperCase();poCalc()"><input type="number" min="0" placeholder="0" value="'+(qty!=null&&qty!==''?qty:'')+'" oninput="poCalc()"><input type="number" min="0" placeholder="฿/pc" value="'+(price!=null&&price!==''?price:'')+'" oninput="poCalc()">'+gradeSelHTML(grade, cutLen)+'<button type="button" class="xbtn" onclick="this.closest(\'.pline\').remove();poCalc()"><i class="ti ti-x"></i></button>';
   document.getElementById('po-products').appendChild(d);
 }
 // Same money model as New Order: products + clip packs + extra + delivery − discount.
@@ -17974,8 +18012,8 @@ function poReadProducts(){
   var items=[];
   document.querySelectorAll('#po-products .pline').forEach(function(l){
     var i=l.querySelectorAll('input');
-    var code=(i[0].value||'').trim().toUpperCase(), qty=parseInt(i[1].value)||0, price=parseFloat(i[2].value)||0, grade=lineGrade(l);
-    if(code&&qty){ var t=mirrorClassify(code); var item={type:t, code:code, qty:qty, unitPrice:price, amount:price*qty}; if(t==='panel') item.grade=grade; items.push(item); }
+    var code=(i[0].value||'').trim().toUpperCase(), qty=parseInt(i[1].value)||0, price=parseFloat(i[2].value)||0, grade=lineGrade(l), cut=lineCutLen(l);
+    if(code&&qty){ var t=mirrorClassify(code); var item={type:t, code:code, qty:qty, unitPrice:price, amount:price*qty}; if(t==='panel'){ item.grade=grade; if(grade==='C'&&cut>0) item.cutLen=cut; } items.push(item); }
   });
   return items;
 }
@@ -18071,7 +18109,7 @@ function poEdit(id){
   try{ poLookupCustomer(); }catch(e){}
   _poPriority=!!p.priority; _poPriorityReason=p.priorityReason||''; try{poUpdatePriorityBtn();}catch(e){}
   document.getElementById('po-products').innerHTML='';
-  (p.lineItems||[]).forEach(function(li){ poAddP(li.code, li.unitPrice, li.qty, li.grade); });
+  (p.lineItems||[]).forEach(function(li){ poAddP(li.code, li.unitPrice, li.qty, li.grade, li.cutLen); });
   if(!document.querySelector('#po-products .pline')) poAddP();
   var lbl=document.getElementById('po-save-label'); if(lbl) lbl.textContent='Update Pre-Order / อัปเดต';
   var cx=document.getElementById('po-cancel-edit'); if(cx) cx.style.display='block';
