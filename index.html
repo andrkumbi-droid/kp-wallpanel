@@ -7296,7 +7296,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817008;
+var KP_BUILD = 20260817009;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -20968,10 +20968,36 @@ function chaseBy(){
   try{ var s=(staffList||[]).find(function(x){return x.id===currentStaffId;}); if(s&&s.name) by=s.name; }catch(e){}
   return by;
 }
+// One tick used to book the ENTIRE order total straight away and the card left the
+// list on the next render — far too final for a checkbox sitting right under the
+// phone number, where it is easy to hit while reaching for the number. Worse, the
+// booking went through ofPaidAmt(), which falls back to 'cash' when no method is
+// set: a guess that has put office payments in the wrong column before.
+// So ticking now needs a method first and then goes through chaseDone(), the same
+// path as the ✓ Done button — it asks for confirmation and records the payment
+// properly (method, cash/online split, date, who). Unticking asks too, because it
+// wipes an amount that was already recorded.
 function chasePaidToggle(id, checked){
-  ofPaidToggle(id, checked);
-  try{ auditAdd({type:'payment', area:'chase', orderId:id, method:checked?'paid-full':'paid-clear',
-        note:checked?'✅ ติ๊กจ่ายแล้วจากตามเงิน / marked paid from the chase list':'↩︎ ยกเลิกจ่ายจากตามเงิน / unmarked paid from the chase list', by:chaseBy()}); }catch(e){}
+  var o=(orders||[]).find(function(x){return x.id===id;});
+  // Whatever happens below, the box has already flipped in the DOM. Re-rendering
+  // from the data is what puts it back when nothing was booked.
+  var back=function(){ try{ chaseRenderPanel(); }catch(e){} };
+  if(!o){ back(); return; }
+  if(checked){
+    var m=_chaseMth[id]||o.payMethod||o.payMethodPartial||'';
+    if(m!=='cash'&&m!=='online'){
+      alert('เลือก 💵 เงินสด หรือ 🏦 โอน ก่อน / Pick cash or online first');
+      back(); return;
+    }
+    chaseDone(id);   // confirms, books in full with the method, writes its own audit
+    back(); return;  // cancelled → the tick goes back; booked → the card is gone
+  }
+  var who=(o.customer&&o.customer!=='—')?(' · '+o.customer):'';
+  if(!confirm('ยกเลิกการชำระ? / Clear this payment?\n\n'+id+who
+      +'\n\nยอดที่บันทึกไว้จะถูกลบ\nthe recorded amount is removed')){ back(); return; }
+  ofPaidToggle(id, false);
+  try{ auditAdd({type:'payment', area:'chase', orderId:id, method:'paid-clear',
+        note:'↩︎ ยกเลิกจ่ายจากตามเงิน / unmarked paid from the chase list', by:chaseBy()}); }catch(e){}
 }
 function chasePaidAmt(id, val){
   ofPaidAmt(id, val);
