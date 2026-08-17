@@ -10110,7 +10110,7 @@ function ofUploadOrderPhoto(input){
   input.value='';
   if(typeof compressPhotoFile!=='function' || typeof addOrderPhoto!=='function'){ alert('Image not supported'); return; }
   var by=((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
-  var total=files.length, done=0, ok=0;
+  var total=files.length, done=0, ok=0, lastSlip='';
   // Upload one at a time (sequential) so the Firebase writes don't race each other.
   (function next(i){
     if(i>=files.length){
@@ -10121,11 +10121,13 @@ function ofUploadOrderPhoto(input){
       try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) costsRender(); }catch(e){}
       if(ok){ var _tl=(type==='warehouse'?'Warehouse':(type==='slip'?'Slip':(type==='shipreceipt'?'Shipping receipt / ใบเสร็จค่าส่ง':'Delivery'))); try{ showNotif('✓ '+ok+(total>1?'/'+total:'')+' Foto'+(ok>1?'s':'')+' → '+_tl+' · '+id); }catch(e){} }
       if(ok<total){ alert('❌ '+(total-ok)+' / '+total+' Upload failed / อัปโหลดไม่สำเร็จ'); }
+      // Slip uploaded → read the amount, say it in Thai, ring the till.
+      if(type==='slip' && lastSlip){ try{ kpSlipCelebrate(lastSlip, 0, id); }catch(e){} }
       return;
     }
     compressPhotoFile(files[i], function(dataUrl){
       addOrderPhoto(id, type, dataUrl, by, function(success){
-        done++; if(success) ok++;
+        done++; if(success){ ok++; if(type==='slip') lastSlip=dataUrl; }
         next(i+1);
       });
     });
@@ -16961,6 +16963,137 @@ function closeDeliveryModal(){
   _slipResult = null;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+//  💰 SLIP UPLOADED → Thai voice reads the amount, then the money sound
+//
+//  Office or driver uploads a transfer slip → the app reads the baht amount off
+//  the picture (Claude vision via apps-script/ct-recon.gs, action:'slipread'),
+//  speaks it in Thai ("ห้าพันสี่ร้อยแปดสิบสองบาท") and THEN rings the till.
+//  Nothing here is load-bearing: no reader deployed, no Thai voice on the
+//  device, or audio blocked by the browser → the upload still works, you just
+//  hear less. Mute on one device:  localStorage.setItem('kpSlipVoice','0')
+// ══════════════════════════════════════════════════════════════════════════
+var KP_CASH_SND = 'data:audio/mp4;base64,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';
+var _kpCashAudio = null;
+function kpSlipSoundOn(){ try{ return localStorage.getItem('kpSlipVoice')!=='0'; }catch(e){ return true; } }
+// One Audio element, rewound each time, so 5 slips in a row don't pile up.
+function kpPlayCash(){
+  if(!kpSlipSoundOn()) return;
+  try{
+    if(!_kpCashAudio){ _kpCashAudio=new Audio(KP_CASH_SND); _kpCashAudio.preload='auto'; }
+    try{ _kpCashAudio.pause(); _kpCashAudio.currentTime=0; }catch(e){}
+    _kpCashAudio.volume=1;
+    var pr=_kpCashAudio.play(); if(pr&&pr.catch) pr.catch(function(){});
+  }catch(e){}
+}
+// Whole baht → Thai words. 5482 → 'ห้าพันสี่ร้อยแปดสิบสอง'  (10 = สิบ, 21 = ยี่สิบเอ็ด)
+function kpThaiNum(n){
+  n=Math.floor(Math.abs(Number(n)||0));
+  if(!n) return 'ศูนย์';
+  if(n>=1000000){ var mil=Math.floor(n/1000000), rest=n%1000000; return kpThaiNum(mil)+'ล้าน'+(rest?kpThaiNum(rest):''); }
+  var D=['','หนึ่ง','สอง','สาม','สี่','ห้า','หก','เจ็ด','แปด','เก้า'];
+  var U=['','สิบ','ร้อย','พัน','หมื่น','แสน'];
+  var s=String(n), out='';
+  for(var i=0;i<s.length;i++){
+    var d=+s.charAt(i), pos=s.length-1-i;
+    if(!d) continue;
+    if(pos===1 && d===1)                  out+='สิบ';        // 10..19 → สิบ, not หนึ่งสิบ
+    else if(pos===1 && d===2)              out+='ยี่สิบ';      // 20..29 → ยี่สิบ
+    else if(pos===0 && d===1 && s.length>1) out+='เอ็ด';       // ...1 → เอ็ด
+    else                                    out+=D[d]+U[pos];
+  }
+  return out;
+}
+// 5482 → 'ห้าพันสี่ร้อยแปดสิบสองบาท' (satang appended only when the slip has them)
+function kpThaiBaht(amt){
+  amt=Number(amt)||0;
+  var b=Math.floor(amt), st=Math.round((amt-b)*100);
+  var t=kpThaiNum(b)+'บาท';
+  if(st>0) t+=kpThaiNum(st)+'สตางค์';
+  return t;
+}
+// A Thai TTS voice, if the device has one. Returns null = voices known but no
+// Thai one (then we stay silent — an English voice reading Thai is gibberish),
+// undefined = list not loaded yet (then we try anyway with lang th-TH).
+function kpThaiVoice(){
+  try{
+    var vs=(window.speechSynthesis&&speechSynthesis.getVoices)?(speechSynthesis.getVoices()||[]):[];
+    for(var i=0;i<vs.length;i++){
+      var l=String(vs[i].lang||'').toLowerCase().replace('_','-');
+      if(l==='th'||l==='th-th'||l.indexOf('th-')===0) return vs[i];
+    }
+    return vs.length ? null : undefined;
+  }catch(e){ return undefined; }
+}
+try{ if(window.speechSynthesis && speechSynthesis.getVoices) speechSynthesis.getVoices(); }catch(e){}  // warm the voice list up
+// Say "<amount> baht" in Thai, then cb() — also on error, no voice, or timeout.
+function kpSayBaht(amt, cb){
+  cb=cb||function(){};
+  var said=false, fin=function(){ if(said) return; said=true; try{ cb(); }catch(e){} };
+  if(!kpSlipSoundOn() || !window.speechSynthesis || !window.SpeechSynthesisUtterance){ fin(); return; }
+  var v=kpThaiVoice();
+  if(v===null){ fin(); return; }                    // device has voices, none Thai
+  try{
+    var txt=kpThaiBaht(amt);
+    var u=new SpeechSynthesisUtterance(txt);
+    u.lang='th-TH'; if(v) u.voice=v; u.rate=0.95; u.volume=1;
+    u.onend=fin; u.onerror=fin;
+    try{ speechSynthesis.cancel(); }catch(e){}
+    speechSynthesis.speak(u);
+    setTimeout(fin, 1500 + txt.length*180);         // onend does not fire on every device
+  }catch(e){ fin(); }
+}
+// Read the amount off a slip picture. Fast path = action 'slipread'; if that
+// action is not deployed yet it falls back to the CT reader (same picture in
+// both slots) so this works on an older /exec too. cb(amount) — 0 = unknown.
+function kpSlipAmount(dataUrl, cb){
+  var done=false, fin=function(a){ if(done) return; done=true; try{ cb(a||0); }catch(e){} };
+  if(!KP_CT_OCR_URL || !dataUrl){ fin(0); return; }
+  // Never let the sound wait forever. Fast path ('slipread', Haiku) answers in
+  // ~2-4 s; the ctocr fallback (Opus, used until ct-recon.gs is redeployed)
+  // took ~15 s in testing, hence the generous cap.
+  setTimeout(function(){ fin(0); }, 35000);
+  var ask=function(body, next){
+    try{
+      fetch(KP_CT_OCR_URL,{ method:'POST', body:JSON.stringify(body) })
+        .then(function(r){ return r.json(); })
+        .then(function(j){ next(j||{}); })
+        .catch(function(){ next({}); });
+    }catch(e){ next({}); }
+  };
+  var amtOf=function(j){ var a=parseFloat(j&&(j.amount!=null?j.amount:(j.slip&&j.slip.amount))); return (a>0)?a:0; };
+  ask({action:'slipread', slip:dataUrl}, function(j){
+    var a=amtOf(j);
+    if(a){ window._kpSlipReadOk=true; fin(a); return; }
+    if(window._kpSlipReadOk){ fin(0); return; }     // reader works — this picture just had no number
+    ask({action:'ctocr', sheet:dataUrl, slip:dataUrl}, function(j2){ fin(amtOf(j2)); });
+  });
+}
+// The whole thing: amount → banner + Thai voice → cash sound.
+// knownAmt>0 skips the AI read (the driver flow already has the QR amount).
+function kpSlipCelebrate(dataUrl, knownAmt, orderId){
+  if(!kpSlipSoundOn()) return;
+  var ring=function(a){
+    if(a>0){
+      try{ kpNotifText('💰 '+Math.round(a).toLocaleString('en-US')+' ฿'+(orderId?' · '+orderId:'')); }catch(e){}
+      kpSayBaht(a, kpPlayCash);
+    } else kpPlayCash();
+  };
+  var k=parseFloat(knownAmt)||0;
+  if(k>0){ ring(k); return; }
+  // The AI read takes a few seconds — say so, so nobody wonders why it is quiet.
+  try{ kpNotifText('🤖 อ่านสลิป… / reading slip…'); }catch(e){}
+  kpSlipAmount(dataUrl, function(a){ ring(a); });
+}
+// Banner text without the notification beep (the voice is the signal here).
+function kpNotifText(text){
+  var b=document.getElementById('notif-banner'), t=document.getElementById('notif-text');
+  if(!b||!t) return;
+  t.textContent=text; b.className='notif-banner'; b.style.display='flex';
+  if(typeof notifTimeout!=='undefined' && notifTimeout) clearTimeout(notifTimeout);
+  notifTimeout=setTimeout(function(){ b.style.display='none'; }, 6000);
+}
+
 // ── PAYMENT-SLIP QR CHECK (online payments) ──────────────────────────────
 // Decodes the QR on a Thai bank-transfer slip and sanity-checks it (EMVCo
 // format + CRC + amount). This is a FORMAT/amount check done on-device — it is
@@ -17142,6 +17275,9 @@ function _slipPhotoOne(f, done){
           if(prog) prog.style.display='none';
           dlSlipRefresh();
           try{ syncOrders(); }catch(e){}
+          // Say the amount out loud + cash sound. The QR rarely carries the
+          // amount, so 0 here means the AI reader gets it off the picture.
+          if(ok){ try{ kpSlipCelebrate(dataUrl, (v&&v.amount)||0, _deliveryId); }catch(e){} }
           // Real bank verification (if the SlipOK proxy is configured) — upgrades
           // the on-device format check to an authoritative verdict.
           if(ok && KP_SLIPOK_URL && qr){
@@ -18227,19 +18363,20 @@ function picsAddPhoto(sid, input){
   var oid = idxE.id || ((typeof orders!=='undefined' ? (orders.find(function(x){return safeOrderId(x.id)===sid;})||{}) : {}).id) || sid;
   var by = (staffList.find(function(x){return x.id===currentStaffId;})||{}).name || 'Office';
   input.value = '';
-  var total=files.length, ok=0;
+  var total=files.length, ok=0, lastSlip='', tab=picsTab;
   // Upload one at a time (sequential) so the Firebase writes don't race each other.
   (function next(i){
     if(i>=files.length){
-      if(ok){ try{ addLog(ok+' photo'+(ok>1?'s':'')+' added to '+oid+' ('+picsTab+', by '+by+')','+'); }catch(e){} }
+      if(ok){ try{ addLog(ok+' photo'+(ok>1?'s':'')+' added to '+oid+' ('+tab+', by '+by+')','+'); }catch(e){} }
       if(ok<total){ alert('❌ '+(total-ok)+' / '+total+' Upload failed / อัปโหลดไม่สำเร็จ'); }
       picsRender();
       picsToggleOrder(sid); // reopen to show the new photos
+      if(tab==='slip' && lastSlip){ try{ kpSlipCelebrate(lastSlip, 0, oid); }catch(e){} }
       return;
     }
     compressPhotoFile(files[i], function(dataUrl){
-      addOrderPhoto(oid, picsTab, dataUrl, by, function(success){
-        if(success) ok++;
+      addOrderPhoto(oid, tab, dataUrl, by, function(success){
+        if(success){ ok++; if(tab==='slip') lastSlip=dataUrl; }
         next(i+1);
       });
     });

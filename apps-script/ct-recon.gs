@@ -24,14 +24,17 @@
  *
  * REQUEST  (POST, text/plain JSON body)
  *   { "action":"ctocr", "sheet":"<data-url or bare base64 JPEG>", "slip":"<optional>" }
+ *   { "action":"slipread", "slip":"<data-url or bare base64 JPEG>" }  ← ONE slip → amount
  *   { "text":"...", "target":"th"|"my"|"en" }                      ← chat translate
  *
  * RESPONSE
  *   { "rows":[ {...} ], "totals":{...}, "slip":{...} }   or   { "error":"..." }
+ *   slipread: { "amount":5482, "fee":0, "date":"2026-08-17", "ref":"...", "from":"...", "to":"..." }
  */
 
 var KP_TR_MODEL  = 'claude-haiku-4-5-20251001'; // chat lines: fast + cheap
 var KP_OCR_MODEL = 'claude-opus-5';             // settlement sheet: accuracy matters
+var KP_SLIP_MODEL= 'claude-haiku-4-5-20251001'; // one number off one slip: fast + cheap
 // Thinking depth for the OCR call. 'low' keeps the round trip inside Apps Script's
 // UrlFetchApp timeout; raise to 'medium' if a sheet is ever read sloppily.
 var KP_OCR_EFFORT = 'low';
@@ -50,8 +53,9 @@ function _kpHandle(e) {
       if (p.text   == null && e.parameter.text)   p.text   = e.parameter.text;
       if (p.target == null && e.parameter.target) p.target = e.parameter.target;
     }
-    if (p.action === 'ctocr') return _json(_ctOcr(p));
-    if (p.action === 'ping')  return _json({ ok: true, ctocr: true });
+    if (p.action === 'ctocr')    return _json(_ctOcr(p));
+    if (p.action === 'slipread') return _json(_slipRead(p));
+    if (p.action === 'ping')  return _json({ ok: true, ctocr: true, slipread: true });
     return _json(_translate(p));
   } catch (err) {
     return _json({ error: String(err) });
@@ -189,6 +193,65 @@ var CT_SCHEMA = {
     }
   }
 };
+
+// ── ONE TRANSFER SLIP → amount ─────────────────────────────────────────────
+// Used by the app right after a slip photo is uploaded: it reads the baht
+// amount so the app can say it out loud in Thai. Small + fast on purpose —
+// one picture, one tiny JSON, Haiku instead of Opus.
+var SLIP_SYSTEM =
+  'You read Thai bank transfer slips. You are precise with digits and never invent a number.';
+var SLIP_ASK =
+  'The picture is a Thai bank transfer slip (K PLUS, SCB Easy, Krungthai NEXT, TrueMoney, ...).\n' +
+  'Read ONLY what is printed:\n' +
+  'จำนวน / จำนวนเงิน  = the transferred amount in baht -> amount\n' +
+  'ค่าธรรมเนียม        = fee (0 when none) -> fee\n' +
+  'เลขที่รายการ / รหัสอ้างอิง = transaction reference -> ref ("" when none)\n' +
+  'the sender line -> from ; the receiver line -> to\n' +
+  'the date + time at the top -> date. Slip dates use the Buddhist era in short form\n' +
+  '("17 ส.ค. 69" = 17 August 2569 BE = 2026-08-17): subtract 543 and output ISO yyyy-mm-dd.\n' +
+  'Amounts print a comma as thousands separator and a dot as decimal point\n' +
+  '("5,482.00" = 5482.00) — return a plain number without separators.\n' +
+  'If the picture is not a transfer slip, or the amount is unreadable, return amount 0.';
+var SLIP_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['amount', 'fee', 'date', 'ref', 'from', 'to'],
+  properties: { amount: _num, fee: _num, date: _str, ref: _str, from: _str, to: _str }
+};
+
+function _slipRead(p) {
+  var key = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
+  if (!key) return { error: 'ANTHROPIC_API_KEY not set' };
+
+  var img = _imgBlock(p.slip || p.img || p.sheet);
+  if (!img) return { error: 'no slip image' };
+
+  var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
+    method: 'post',
+    contentType: 'application/json',
+    muteHttpExceptions: true,
+    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    payload: JSON.stringify({
+      model: KP_SLIP_MODEL,
+      max_tokens: 512,
+      system: SLIP_SYSTEM,
+      // No `effort` here on purpose: Haiku 4.5 rejects the effort parameter,
+      // it only accepts the json_schema format.
+      output_config: { format: { type: 'json_schema', schema: SLIP_SCHEMA } },
+      messages: [{ role: 'user', content: [img, { type: 'text', text: SLIP_ASK }] }]
+    })
+  });
+
+  var code = res.getResponseCode();
+  var body = {};
+  try { body = JSON.parse(res.getContentText() || '{}'); } catch (err) { body = {}; }
+  if (code !== 200) return { error: 'api ' + code + ': ' + ((body.error && body.error.message) || '') };
+  if (body.stop_reason === 'refusal') return { error: 'refused' };
+
+  var out = _joinText(body);
+  if (!out) return { error: 'empty answer' };
+  try { return JSON.parse(out); } catch (err) { return { error: 'bad json from model' }; }
+}
 
 // ── CHAT TRANSLATE (unchanged behaviour of the old translate.gs) ───────────
 function _translate(p) {
