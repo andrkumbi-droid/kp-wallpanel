@@ -2662,7 +2662,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         <div class="cashfeed-total" style="font-size:34px;font-weight:800;color:#16a34a;line-height:1.05">0 ฿</div>
         <div class="cashfeed-sub" style="font-size:12px;color:var(--text2)"></div>
       </div>
-      <button type="button" class="btnsm cashfeed-arm" onclick="kpCashArm()" title="เปิด/ปิดเสียง / sound on this device">🔔 เปิดเสียง / sound on</button>
+      <button type="button" class="btnsm cashfeed-arm" onclick="kpCashArm()" title="เปิด/ปิดเสียง / sound on this device">🔔 เสียงเปิด / sound ON</button>
       <button type="button" class="btnsm" onclick="cashFeedRender()" title="Refresh"><i class="ti ti-refresh"></i></button>
     </div>
     <div class="cashfeed-list"></div>
@@ -3503,6 +3503,9 @@ function kpTile(k, opt){
 function kpRenderMenu(){
   var g=document.getElementById('menu-grid'); if(!g) return;
   var u=kpUser, sub=document.getElementById('menu-sub-txt'), h='';
+  // Money announcements should not depend on standing in the Office section: once
+  // somebody with the 💰 flag is logged in, the feed is listened to from the hub on.
+  if(u && u.cashFeedAccess){ try{ kpPayFeedListen(); }catch(e){} }
   var dot='<span id="menu-office-alert" class="alert-dot menu-dot" title="Packing problem / แพ็คไม่ได้"></span>';
   if(!u){
     h = kpTile('office',{badge:dot}) + kpTile('warehouse') + kpTile('driver');
@@ -7418,7 +7421,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817024;
+var KP_BUILD = 20260817026;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17019,7 +17022,11 @@ function kpPlayCash(){
     if(!_kpCashAudio){ _kpCashAudio=new Audio(KP_CASH_SND); _kpCashAudio.preload='auto'; }
     try{ _kpCashAudio.pause(); _kpCashAudio.currentTime=0; }catch(e){}
     _kpCashAudio.volume=1;
-    var pr=_kpCashAudio.play(); if(pr&&pr.catch) pr.catch(function(){});
+    // A refused play() is the one case where the user has to act (a screen that
+    // was reloaded and never touched). Say it on the button instead of staying mute.
+    var pr=_kpCashAudio.play();
+    if(pr&&pr.catch) pr.catch(function(){ window._kpAudioBlocked=true; try{ kpCashArmLabel(); }catch(e){} });
+    else window._kpAudioBlocked=false;
   }catch(e){}
 }
 // Whole baht → Thai words. 5482 → 'ห้าพันสี่ร้อยแปดสิบสอง'  (10 = สิบ, 21 = ยี่สิบเอ็ด)
@@ -17348,7 +17355,11 @@ function kpCashThenSay(amt, label){
 //  already played it locally) — hence the per-tab KP_DEV_ID.
 // ══════════════════════════════════════════════════════════════════════════
 var KP_DEV_ID='dev'+Math.random().toString(36).slice(2,9)+Date.now().toString(36);
-var _cashFeed=[], _cashRef=null, _cashStart=0, _cashArmed=false, _cashTrimmed=false;
+// Sound is ON by default. It used to be opt-in per page load, which meant the
+// office heard nothing until somebody found the 🔔 button — the whole point is to
+// hear it without knowing about a button. Where the browser still refuses to play
+// (a screen reloaded and never touched since), the monitor says so and one tap fixes it.
+var _cashFeed=[], _cashRef=null, _cashStart=0, _cashArmed=true, _cashTrimmed=false;
 function kpMeName(){
   try{ if(typeof ofWho==='function'){ var n=ofWho(); if(n) return n; } }catch(e){}
   try{ if(typeof drWho==='function'){ var d=drWho(); if(d) return d; } }catch(e){}
@@ -17392,14 +17403,22 @@ function kpPayFeedListen(){
 }
 // The browser only lets a page make noise after somebody has touched it, so a
 // monitor needs one tap after every reload. The same button is the on/off switch.
-function kpCashArm(){
-  _cashArmed=!_cashArmed;
+function kpCashArmLabel(){
   Array.prototype.forEach.call(document.querySelectorAll('.cashfeed-arm'), function(b){
-    b.textContent=_cashArmed?'🔔 เสียงเปิด / sound ON':'🔕 เสียงปิด / sound off';
-    b.style.background=_cashArmed?'#dcfce7':'';
-    b.style.color=_cashArmed?'#166534':'';
+    var blocked=_cashArmed && window._kpAudioBlocked;
+    b.textContent = blocked ? '🔇 แตะเพื่อเปิดเสียง / tap for sound'
+                  : (_cashArmed ? '🔔 เสียงเปิด / sound ON' : '🔕 เสียงปิด / sound off');
+    b.style.background = blocked ? '#fee2e2' : (_cashArmed?'#dcfce7':'');
+    b.style.color      = blocked ? '#991b1b' : (_cashArmed?'#166534':'');
   });
-  if(_cashArmed) try{ kpPlayCash(); }catch(e){}   // also unlocks audio for later
+}
+function kpCashArm(){
+  // A refused play() left the sound "on" but silent — tapping then means "try
+  // again", not "switch off".
+  if(_cashArmed && window._kpAudioBlocked) window._kpAudioBlocked=false;
+  else _cashArmed=!_cashArmed;
+  if(_cashArmed) try{ kpPlayCash(); }catch(e){}   // the tap also unlocks audio for later
+  kpCashArmLabel();
   try{ cashFeedRender(); }catch(e){}
 }
 // Keep the node from growing forever. Push keys are chronological, so the oldest
@@ -17426,13 +17445,26 @@ function cashFeedRender(){
   var holders=document.querySelectorAll('.cashfeed-list'); if(!holders.length) return;
   var rows=_cashFeed.slice().sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
   var t0=new Date(); t0.setHours(0,0,0,0); var today=t0.getTime();
-  var sum=0, n=0;
-  rows.forEach(function(v){ if((v.ts||0)>=today){ sum+=parseFloat(v.amt)||0; n++; } });
+  // One payment can legitimately raise TWO events: the driver photographs the slip
+  // and then confirms the delivery — same order, same amount, one lot of money. Both
+  // rows stay (they did both happen), but the day's total counts it once, or the
+  // number on the wall is wrong. Different amounts on one order (a deposit, then the
+  // rest) are different money and both count.
+  var sum=0, n=0, dup={}, ndup=0, seen={};
+  rows.slice().reverse().forEach(function(v){          // oldest first: the first one counts
+    if((v.ts||0)<today) return;
+    var amt=parseFloat(v.amt)||0, key=(v.id||'')+'|'+Math.round(amt);
+    if(v.id && seen[key]){ dup[v._k||v.ts]=true; ndup++; return; }
+    if(v.id) seen[key]=true;
+    sum+=amt; n++;
+  });
   Array.prototype.forEach.call(document.querySelectorAll('.cashfeed-total'), function(el){
     el.textContent=Math.round(sum).toLocaleString('en-US')+' ฿';
   });
   Array.prototype.forEach.call(document.querySelectorAll('.cashfeed-sub'), function(el){
-    el.textContent=n+' รายการ / payments'+(_cashArmed?'':'  ·  🔕 เสียงปิด / sound off');
+    el.textContent=n+' รายการ / payments'
+      +(ndup?('  ·  ↺ '+ndup+' เงินเดิม / same money, not counted twice'):'')
+      +(_cashArmed?'':'  ·  🔕 เสียงปิด / sound off');
   });
   if(!rows.length){
     Array.prototype.forEach.call(holders, function(el){ el.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">ยังไม่มีรายการ / nothing yet</div>'; });
@@ -17449,8 +17481,11 @@ function cashFeedRender(){
       +st.split('|')[0]+'">'+st.split('|')[1]+'</span>';
     // Classes, not just inline styles: the monitor (#cashdisplay) restyles these
     // for reading across a room — see the #kp-kiosk block in kpCashKioskInit.
-    return '<div class="cf-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);'
-      +'border-radius:var(--rs);background:var(--bg);margin-bottom:6px">'
+    var isDup=!!dup[v._k||v.ts];
+    return '<div class="cf-row" title="'+(isDup?'เงินเดิม นับครั้งเดียว / same money as the row above — counted once':'')+'"'
+      +' style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);'
+      +'border-radius:var(--rs);background:var(--bg);margin-bottom:6px'+(isDup?';opacity:.55':'')+'">'
+      +(isDup?'<div style="font-size:13px;color:var(--text2)" title="นับแล้ว / already counted">↺</div>':'')
       +'<div class="cf-amt" style="font-size:22px;font-weight:800;color:#16a34a;min-width:120px;text-align:right">'
         +Math.round(parseFloat(v.amt)||0).toLocaleString('en-US')+' ฿</div>'
       +'<div style="flex:1;min-width:0">'
@@ -17512,7 +17547,7 @@ function kpCashKioskInit(){
           +'<div class="cashfeed-sub" style="font-size:14px;color:#94a3b8"></div>'
         +'</div>'
         +'<button type="button" class="cashfeed-arm" onclick="kpCashArm()" style="padding:12px 16px;border-radius:12px;'
-          +'border:1.5px solid #334155;background:#111827;color:#e5e7eb;font-size:14px;font-weight:700;cursor:pointer">🔔 เปิดเสียง / sound on</button>'
+          +'border:1.5px solid #334155;background:#111827;color:#e5e7eb;font-size:14px;font-weight:700;cursor:pointer">🔔 เสียงเปิด / sound ON</button>'
         +'<button type="button" id="kp-kiosk-full" onclick="kpCashFull()" title="เต็มจอ / fullscreen" style="padding:12px 16px;border-radius:12px;'
           +'border:1.5px solid #334155;background:#111827;color:#e5e7eb;font-size:14px;font-weight:700;cursor:pointer">⛶ เต็มจอ / fullscreen</button>'
         +'<button type="button" onclick="kpCashKioskOut()" title="ออก / leave this screen" style="padding:12px 14px;border-radius:12px;'
