@@ -7388,7 +7388,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817016;
+var KP_BUILD = 20260817017;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17147,6 +17147,33 @@ try{ if(window.speechSynthesis && speechSynthesis.getVoices) speechSynthesis.get
 // Google refuses the same request straight from a browser). Amounts repeat, so
 // keep what we got. cb(true) = it was spoken, cb(false) = not available.
 var _kpSayMp3={};
+// Fetch only (no playback) — cb(base64|null). Called ahead of time so the
+// recording is already in hand by the time the cash sound has finished.
+function kpSayFetch(amt, cb){
+  cb=cb||function(){};
+  var key=Math.round(Math.abs(Number(amt)||0)*100);
+  if(_kpSayMp3[key]){ cb(_kpSayMp3[key]); return; }
+  // An /exec without the 'say' action answers, just without an mp3. Asking it
+  // again on every amount would put a pointless second in front of each
+  // announcement, so remember it for this session.
+  if(window._kpSayRelayOff || !KP_CT_OCR_URL || !window.fetch){ cb(null); return; }
+  var done=false, fin=function(b64){ if(done) return; done=true; cb(b64); };
+  setTimeout(function(){ fin(null); }, 7000);             // don't hold the voice up
+  try{
+    // `say`, not `text` — an /exec that predates this action then answers
+    // {error:'no text'} at once instead of paying for a chat translation.
+    fetch(KP_CT_OCR_URL,{ method:'POST', body:JSON.stringify({action:'say', say:kpThaiBaht(amt)+'ค่ะ'}) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j && j.mp3){ _kpSayMp3[key]=j.mp3; fin(j.mp3); return; }
+        if(j) window._kpSayRelayOff=true;      // answered, but knows no 'say' → stop asking
+        fin(null);
+      })
+      .catch(function(){ fin(null); });
+  }catch(e){ fin(null); }
+}
+// Start the fetch now so the voice can follow the sound without a gap.
+function kpSayPrefetch(amt){ try{ kpSayFetch(amt, function(){}); }catch(e){} }
 function kpSayRelay(amt, cb){
   var key=Math.round(Math.abs(Number(amt)||0)*100);
   var play=function(b64){
@@ -17161,25 +17188,7 @@ function kpSayRelay(amt, cb){
       setTimeout(function(){ done(true); }, 9000);       // 'ended' is not guaranteed
     }catch(e){ done(false); }
   };
-  if(_kpSayMp3[key]){ play(_kpSayMp3[key]); return; }
-  // An /exec without the 'say' action answers, just without an mp3. Asking it
-  // again on every amount would put a pointless second in front of each
-  // announcement, so remember it for this session.
-  if(window._kpSayRelayOff || !KP_CT_OCR_URL || !window.fetch){ cb(false); return; }
-  var done=false, fin=function(b64){ if(done) return; done=true; if(b64) play(b64); else cb(false); };
-  setTimeout(function(){ fin(null); }, 7000);            // don't hold the sound up
-  try{
-    // `say`, not `text` — an /exec that predates this action then answers
-    // {error:'no text'} at once instead of paying for a chat translation.
-    fetch(KP_CT_OCR_URL,{ method:'POST', body:JSON.stringify({action:'say', say:kpThaiBaht(amt)+'ค่ะ'}) })
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if(j && j.mp3){ _kpSayMp3[key]=j.mp3; fin(j.mp3); return; }
-        if(j) window._kpSayRelayOff=true;      // answered, but knows no 'say' → stop asking
-        fin(null);
-      })
-      .catch(function(){ fin(null); });
-  }catch(e){ fin(null); }
+  kpSayFetch(amt, function(b64){ if(b64) play(b64); else cb(false); });
 }
 // Say "<amount> baht kha" in Thai, then cb() — also on error or timeout.
 // Route, best first: a FEMALE Thai voice on the device (Android — natural and
@@ -17273,6 +17282,7 @@ function kpCashThenSay(amt, label){
   var a=parseFloat(amt)||0;
   if(!(a>0)) return;
   try{ kpNotifText('💰 '+Math.round(a).toLocaleString('en-US')+' ฿'+(label?' · '+label:'')); }catch(e){}
+  kpSayPrefetch(a);          // load the recording WHILE the sound plays, so there is no gap
   kpPlayCash();
   var said=false, say=function(){ if(said) return; said=true; kpSayBaht(a); };
   // Let the sound finish before talking over it; 'ended' does not fire on every
