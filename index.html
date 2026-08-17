@@ -17085,6 +17085,29 @@ function kpSlipCelebrate(dataUrl, knownAmt, orderId){
   try{ kpNotifText('🤖 อ่านสลิป… / reading slip…'); }catch(e){}
   kpSlipAmount(dataUrl, function(a){ ring(a); });
 }
+// Delivery confirmed → ring the till FIRST, then say the collected amount in
+// Thai (the reverse order of kpSlipCelebrate, on purpose). Silent when the
+// driver collected nothing (pays at the office / already paid) — there is no
+// amount to announce then.
+function kpCashThenSay(amt, label){
+  if(!kpSlipSoundOn()) return;
+  var a=parseFloat(amt)||0;
+  if(!(a>0)) return;
+  try{ kpNotifText('💰 '+Math.round(a).toLocaleString('en-US')+' ฿'+(label?' · '+label:'')); }catch(e){}
+  kpPlayCash();
+  var said=false, say=function(){ if(said) return; said=true; kpSayBaht(a); };
+  // Let the sound finish before talking over it; 'ended' does not fire on every
+  // device, so the timer (sound length, or 2.6 s if unknown) is the safety net.
+  try{
+    if(_kpCashAudio){
+      _kpCashAudio.addEventListener('ended', say, {once:true});
+      var d=(_kpCashAudio.duration>0?_kpCashAudio.duration:2.4)*1000+200;
+      setTimeout(say, d);
+      return;
+    }
+  }catch(e){}
+  setTimeout(say, 2600);
+}
 // Banner text without the notification beep (the voice is the signal here).
 function kpNotifText(text){
   var b=document.getElementById('notif-banner'), t=document.getElementById('notif-text');
@@ -19964,6 +19987,9 @@ function confirmDelivery(){
   closeDeliveryModal();
   drDoDeliver(id, null);
   try{ syncOrders(); }catch(e){}
+  // Money the driver actually collected on this stop: cash sound, then the
+  // amount in Thai. Nothing collected (pay at office / already paid) = silent.
+  if(!payOffice && !paidAlready){ try{ kpCashThenSay(cash+online, id); }catch(e){} }
 }
 
 function drDeliver(id){
