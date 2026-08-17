@@ -17012,21 +17012,37 @@ function kpThaiBaht(amt){
   if(st>0) t+=kpThaiNum(st)+'สตางค์';
   return t;
 }
-// A Thai TTS voice, if the device has one. Returns null = voices known but no
-// Thai one (then we stay silent — an English voice reading Thai is gibberish),
-// undefined = list not loaded yet (then we try anyway with lang th-TH).
+// Female Thai voices we know by name, so a device that has several picks the
+// right one. Windows: Premwadee/Achara are female, Pattara/Niwat male. iOS: Kanya.
+// Android/Google usually ships one Thai voice (female) with no name to match on.
+var KP_TH_FEM = ['premwadee','achara','kanya','narisa','somsri','sarinya','waranya','female','ผู้หญิง'];
+// A Thai TTS voice, female if one can be identified. Returns null = voices known
+// but no Thai one (then we stay silent — an English voice reading Thai is
+// gibberish), undefined = list not loaded yet (then we try anyway with th-TH).
 function kpThaiVoice(){
   try{
     var vs=(window.speechSynthesis&&speechSynthesis.getVoices)?(speechSynthesis.getVoices()||[]):[];
+    var thai=[];
     for(var i=0;i<vs.length;i++){
       var l=String(vs[i].lang||'').toLowerCase().replace('_','-');
-      if(l==='th'||l==='th-th'||l.indexOf('th-')===0) return vs[i];
+      if(l==='th'||l==='th-th'||l.indexOf('th-')===0) thai.push(vs[i]);
     }
-    return vs.length ? null : undefined;
+    if(!thai.length) return vs.length ? null : undefined;
+    for(var j=0;j<thai.length;j++){
+      var nm=String(thai[j].name||'').toLowerCase();
+      for(var k=0;k<KP_TH_FEM.length;k++){ if(nm.indexOf(KP_TH_FEM[k])>=0) return thai[j]; }
+    }
+    return thai[0];                                  // no female one identified
   }catch(e){ return undefined; }
 }
+function kpVoiceIsFemale(v){
+  var nm=String((v&&v.name)||'').toLowerCase();
+  for(var k=0;k<KP_TH_FEM.length;k++){ if(nm.indexOf(KP_TH_FEM[k])>=0) return true; }
+  return false;
+}
 try{ if(window.speechSynthesis && speechSynthesis.getVoices) speechSynthesis.getVoices(); }catch(e){}  // warm the voice list up
-// Say "<amount> baht" in Thai, then cb() — also on error, no voice, or timeout.
+// Say "<amount> baht kha" in Thai — soft and unhurried, female where the device
+// has such a voice. Then cb() — also on error, no voice, or timeout.
 function kpSayBaht(amt, cb){
   cb=cb||function(){};
   var said=false, fin=function(){ if(said) return; said=true; try{ cb(); }catch(e){} };
@@ -17034,13 +17050,18 @@ function kpSayBaht(amt, cb){
   var v=kpThaiVoice();
   if(v===null){ fin(); return; }                    // device has voices, none Thai
   try{
-    var txt=kpThaiBaht(amt);
+    var txt=kpThaiBaht(amt)+'ค่ะ';                   // ...บาทค่ะ — polite, female speaker
     var u=new SpeechSynthesisUtterance(txt);
-    u.lang='th-TH'; if(v) u.voice=v; u.rate=0.95; u.volume=1;
+    u.lang='th-TH'; if(v) u.voice=v;
+    u.rate=0.88; u.volume=0.9;                      // slower + a touch quieter = gentler
+    // A brighter pitch is what makes it sound soft/female. Only nudge it a
+    // little on a voice that is female anyway; lift it more when we ended up
+    // on a male voice (Windows' Pattara) as the closest we can get.
+    u.pitch=kpVoiceIsFemale(v)?1.12:1.25;
     u.onend=fin; u.onerror=fin;
     try{ speechSynthesis.cancel(); }catch(e){}
     speechSynthesis.speak(u);
-    setTimeout(fin, 1500 + txt.length*180);         // onend does not fire on every device
+    setTimeout(fin, 1800 + txt.length*200);         // onend does not fire on every device
   }catch(e){ fin(); }
 }
 // Read the amount off a slip picture. Fast path = action 'slipread'; if that
