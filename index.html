@@ -7306,7 +7306,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817010;
+var KP_BUILD = 20260817011;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9873,6 +9873,16 @@ function ofOrderCard(o, sfx){
   s += noteHTML;
   var _shownTotal=(ofCanonTotal(o)!=null?ofCanonTotal(o).toLocaleString()+' ฿':o.total);
   s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><span style="font-size:14px;font-weight:700">'+_shownTotal+'</span><span style="font-size:13.5px;font-weight:700;color:var(--text2)">'+fmtD(o.date)+'</span></div>';
+  // Carrier order with a collection fee: the total above is what the customer pays,
+  // not what reaches us. The line below says so right where the number is read.
+  (function(){
+    var _f=0; try{ _f=shipFeeOf(o); }catch(e){}
+    if(!(_f>0)) return;
+    var _t=0; try{ _t=ofOrderTotalNum(o)||0; }catch(e){}
+    s += '<div style="font-size:11.5px;margin-top:2px;color:#92400e;font-weight:700">'
+      +'💸 ค่าเก็บเงิน / fee '+_f.toLocaleString()+' ฿'
+      +(_t>0?' → รับจริง / we get <b>'+Math.max(0,_t-_f).toLocaleString()+' ฿</b>':'')+'</div>';
+  })();
   var _exLi=(o.lineItems||[]).filter(function(i){return i.type==='extra';});
   if(_exLi.length){ var _exTot=_exLi.reduce(function(a,i){return a+(parseFloat(i.amount)||0);},0); s += '<div style="font-size:12px;margin-top:2px;color:#15803d">➕ '+(_exLi[0].code||'Extra')+': <b>'+_exTot.toLocaleString()+' ฿</b></div>'; }
   var _depN=parseFloat(o.deposit)||0;
@@ -27209,9 +27219,25 @@ function _billShipRowHTML(r,idx,amber){
     '<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px">'+
       '<span style="min-width:0;flex:1"><b>'+_esc(o.id)+'</b> <span style="color:var(--text2)">'+_esc(o.customer||'')+(o.zone?' · '+_esc(o.zone):'')+'</span>'+
         (line?'<div style="font-size:11px;color:'+col+';margin-top:2px">'+line+'</div>':'')+'</span>'+
-      (amt>0?'<span style="font-weight:800;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'
-            :free?'<span style="font-size:11px;font-weight:800;color:#16a34a;background:#dcfce7;border-radius:8px;padding:1px 7px;white-space:nowrap">ฟรี / free</span>'
-            :'<span style="font-size:11px;font-weight:700;color:'+col+';white-space:nowrap">'+(amber?'บนทัวร์ / on tour':'⚠️ ยังไม่ใส่ / no cost')+'</span>')+
+      // Right-hand cell, ONE decision — otherwise the shipping cost would appear
+      // twice, once inside the breakdown and once as the old bold figure.
+      // With a collection fee the order is written out: what the customer owes, the
+      // carrier's cut, the shipping bill, and in bold the sum of the two costs —
+      // that sum is what this order contributes to Bills.
+      ((function(){
+        var _f=0; try{ _f=shipFeeOf(o); }catch(e){}
+        if(_f>0){
+          var _tot=0; try{ _tot=ofOrderTotalNum(o)||0; }catch(e){}
+          return '<span style="text-align:right;white-space:nowrap;font-size:10.5px;color:var(--text2);flex-shrink:0">'
+            +(_tot>0?'ยอด / value '+_tot.toLocaleString()+'<br>':'')
+            +'💸 fee '+_f.toLocaleString()+'<br>'
+            +'ค่าส่ง / ship '+(amt>0?amt.toLocaleString():(free?'ฟรี / free':'—'))
+            +'<br><b style="font-size:12.5px;color:var(--text)">'+(amt+_f).toLocaleString()+' ฿</b></span>';
+        }
+        return amt>0?'<span style="font-weight:800;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'
+             :free?'<span style="font-size:11px;font-weight:800;color:#16a34a;background:#dcfce7;border-radius:8px;padding:1px 7px;white-space:nowrap">ฟรี / free</span>'
+             :'<span style="font-size:11px;font-weight:700;color:'+col+';white-space:nowrap">'+(amber?'บนทัวร์ / on tour':'⚠️ ยังไม่ใส่ / no cost')+'</span>';
+      })())+
     '</div>'+
     '<div style="margin-top:5px">'+(function(){ try{ return shipCtrlHtml(o); }catch(e){ return ''; } })()+'</div>'+
     '<div style="display:flex;gap:6px;margin-top:5px;flex-wrap:wrap">'+
@@ -27863,10 +27889,12 @@ function costsRender(){
               (rows.length?' <span style="color:var(--text2);font-size:11px;font-weight:400">('+rows.length+')</span>':'')+
               (miss?' <span title="no cost entered / ยังไม่ได้ใส่ค่าส่ง" style="font-size:11px;font-weight:800;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px">⚠️ '+miss+'</span>':'')+'</span>'+
             // Two costs, one company: the shipping bill and the cut kept for
-            // collecting. Split out so the office sees which is which, then the sum.
+            // collecting. Labelled rather than left as bare numbers, so the header
+            // reads as the statement it is — what we paid this carrier this month.
             '<span style="text-align:right;white-space:nowrap;flex-shrink:0">'+
               ((c.fees>0)
-                ? '<span style="font-size:10.5px;color:var(--text2)">'+c.cost.toLocaleString()+' + 💸 '+c.fees.toLocaleString()+'</span><br>'
+                ? '<span style="font-size:10.5px;color:var(--text2)">💸 fee '+c.fees.toLocaleString()
+                    +'<br>ค่าส่ง / ship '+c.cost.toLocaleString()+'</span><br>'
                 : '')+
               '<span style="font-size:13px;font-weight:800">'+c.total.toLocaleString()+' ฿</span>'+
             '</span>'+
