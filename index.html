@@ -7421,7 +7421,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817026;
+var KP_BUILD = 20260817027;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17372,7 +17372,7 @@ function kpPayFeedAdd(o){
     if(!window.fbDB || !o) return;
     var amt=parseFloat(o.amt)||0; if(!(amt>0)) return;
     var ord=(typeof orders!=='undefined' && o.id) ? (orders.find(function(x){return x.id===o.id;})||{}) : {};
-    window.fbDB.ref('payFeed').push({
+    var rec={
       amt: Math.round(amt*100)/100,
       id: String(o.id||''),
       cust: String(o.cust||ord.customer||''),
@@ -17381,7 +17381,26 @@ function kpPayFeedAdd(o){
       by: String(o.by||kpMeName()||''),
       dev: KP_DEV_ID,
       ts: Date.now()
-    });
+    };
+    // Same order, same amount, same day = the SAME money reported twice — the driver
+    // photographs the slip and then confirms the delivery. Update that record instead
+    // of adding a second one, so the screen shows one line per payment. (An update
+    // fires child_changed, not child_added, so it does not announce the money again —
+    // it was already announced seconds ago.) A deposit and the rest of an order have
+    // different amounts and are therefore separate payments, as they should be.
+    if(!rec.id){ window.fbDB.ref('payFeed').push(rec); return; }
+    var key=rec.id+'|'+Math.round(rec.amt);
+    var t0=new Date(); t0.setHours(0,0,0,0);
+    window.fbDB.ref('payFeed').limitToLast(40).once('value', function(s){
+      var hit=null;
+      s.forEach(function(c){
+        var v=c.val()||{};
+        if(!v.id || (v.ts||0)<t0.getTime()) return;
+        if(String(v.id)+'|'+Math.round(parseFloat(v.amt)||0)===key) hit=c;
+      });
+      if(hit) try{ hit.ref.update({ kind:rec.kind, by:rec.by||(hit.val()||{}).by||'' }); }catch(e){}
+      else    try{ window.fbDB.ref('payFeed').push(rec); }catch(e){}
+    }, function(){ try{ window.fbDB.ref('payFeed').push(rec); }catch(e){} });
   }catch(e){}
 }
 // Attach once per session (from _enterOffice, for staff who may see it).
@@ -17397,8 +17416,15 @@ function kpPayFeedListen(){
     try{ cashFeedBadge(); }catch(e){}
     if((v.ts||0) <= _cashStart) return;   // backlog that was already there
     if(v.dev===KP_DEV_ID) return;         // this device announced it itself
-    if(!_cashArmed) return;               // sound not switched on here
+    if(!_cashArmed) return;               // sound switched off here
     try{ kpCashThenSay(v.amt, v.id||''); }catch(e){}
+  });
+  // A slip record that later becomes "delivered" is an update, not a new payment:
+  // keep the row truthful, stay silent.
+  _cashRef.on('child_changed', function(snap){
+    var v=snap.val()||{}; v._k=snap.key;
+    for(var i=0;i<_cashFeed.length;i++){ if(_cashFeed[i]._k===snap.key){ _cashFeed[i]=v; break; } }
+    try{ cashFeedRender(); }catch(e){}
   });
 }
 // The browser only lets a page make noise after somebody has touched it, so a
@@ -17443,28 +17469,28 @@ function cashFeedBadge(){
 // full-screen monitor (#cashdisplay) share one feed and one renderer.
 function cashFeedRender(){
   var holders=document.querySelectorAll('.cashfeed-list'); if(!holders.length) return;
-  var rows=_cashFeed.slice().sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
   var t0=new Date(); t0.setHours(0,0,0,0); var today=t0.getTime();
-  // One payment can legitimately raise TWO events: the driver photographs the slip
-  // and then confirms the delivery — same order, same amount, one lot of money. Both
-  // rows stay (they did both happen), but the day's total counts it once, or the
-  // number on the wall is wrong. Different amounts on one order (a deposit, then the
-  // rest) are different money and both count.
-  var sum=0, n=0, dup={}, ndup=0, seen={};
-  rows.slice().reverse().forEach(function(v){          // oldest first: the first one counts
-    if((v.ts||0)<today) return;
-    var amt=parseFloat(v.amt)||0, key=(v.id||'')+'|'+Math.round(amt);
-    if(v.id && seen[key]){ dup[v._k||v.ts]=true; ndup++; return; }
+  // One payment used to be able to appear twice — the driver photographs the slip and
+  // then confirms the delivery, same order, same amount, one lot of money. New records
+  // are merged when they are written; these lines drop the ones already in the feed
+  // from before that, so a payment is shown (and counted) exactly once. Same order +
+  // same amount on a DIFFERENT day, or a different amount (deposit, then the rest),
+  // stays separate — that is different money.
+  var seen={}, keep=[];
+  _cashFeed.slice().sort(function(a,b){ return (a.ts||0)-(b.ts||0); }).forEach(function(v){
+    var key=(v.id||'')+'|'+Math.round(parseFloat(v.amt)||0)+'|'+new Date(v.ts||0).toDateString();
+    if(v.id && seen[key]) return;
     if(v.id) seen[key]=true;
-    sum+=amt; n++;
+    keep.push(v);
   });
+  var rows=keep.reverse();                       // newest first
+  var sum=0, n=0;
+  rows.forEach(function(v){ if((v.ts||0)>=today){ sum+=parseFloat(v.amt)||0; n++; } });
   Array.prototype.forEach.call(document.querySelectorAll('.cashfeed-total'), function(el){
     el.textContent=Math.round(sum).toLocaleString('en-US')+' ฿';
   });
   Array.prototype.forEach.call(document.querySelectorAll('.cashfeed-sub'), function(el){
-    el.textContent=n+' รายการ / payments'
-      +(ndup?('  ·  ↺ '+ndup+' เงินเดิม / same money, not counted twice'):'')
-      +(_cashArmed?'':'  ·  🔕 เสียงปิด / sound off');
+    el.textContent=n+' รายการ / payments'+(_cashArmed?'':'  ·  🔕 เสียงปิด / sound off');
   });
   if(!rows.length){
     Array.prototype.forEach.call(holders, function(el){ el.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">ยังไม่มีรายการ / nothing yet</div>'; });
@@ -17481,11 +17507,8 @@ function cashFeedRender(){
       +st.split('|')[0]+'">'+st.split('|')[1]+'</span>';
     // Classes, not just inline styles: the monitor (#cashdisplay) restyles these
     // for reading across a room — see the #kp-kiosk block in kpCashKioskInit.
-    var isDup=!!dup[v._k||v.ts];
-    return '<div class="cf-row" title="'+(isDup?'เงินเดิม นับครั้งเดียว / same money as the row above — counted once':'')+'"'
-      +' style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);'
-      +'border-radius:var(--rs);background:var(--bg);margin-bottom:6px'+(isDup?';opacity:.55':'')+'">'
-      +(isDup?'<div style="font-size:13px;color:var(--text2)" title="นับแล้ว / already counted">↺</div>':'')
+    return '<div class="cf-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);'
+      +'border-radius:var(--rs);background:var(--bg);margin-bottom:6px">'
       +'<div class="cf-amt" style="font-size:22px;font-weight:800;color:#16a34a;min-width:120px;text-align:right">'
         +Math.round(parseFloat(v.amt)||0).toLocaleString('en-US')+' ฿</div>'
       +'<div style="flex:1;min-width:0">'
