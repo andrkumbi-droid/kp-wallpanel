@@ -5827,6 +5827,10 @@ function ofStockValueSum(items){ return (items||[]).reduce(function(a,s){ return
 // and count per row — because only they know what was cut. Always visible (unlike a
 // number that hides at 0) so nobody cuts a fresh panel for something already lying
 // on the pile.
+// A full wall panel is 290 cm. Only used to SUGGEST how many panels a cut costs —
+// the number that is actually booked is always the one typed into the form, so a
+// product with a different length cannot cause a wrong deduction here.
+var PANEL_FULL_CM = 290;
 function _pcEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function ofPrecutBox(){
   var host=document.getElementById('of-precut-box'); if(!host) return;
@@ -5851,15 +5855,17 @@ function ofPrecutBox(){
         +'<div style="width:92px"><label class="fl" style="margin-top:0">ยาว / Length</label>'
           +'<input type="number" id="pc-len" min="1" max="600" placeholder="95" style="width:100%;box-sizing:border-box"></div>'
         +'<div style="width:88px"><label class="fl" style="margin-top:0">จำนวน / Qty</label>'
-          +'<input type="number" id="pc-qty" min="1" placeholder="0" style="width:100%;box-sizing:border-box"></div>'
+          +'<input type="number" id="pc-qty" min="1" placeholder="0" oninput="pcSuggest()" style="width:100%;box-sizing:border-box"></div>'
+        // How many FULL panels the cut costs is TYPED, not guessed. A 290 cm panel
+        // yields three 95 cm pieces, so 4 pieces cost 2 panels, not 4 — and off-cuts
+        // or leftovers from an earlier cut mean only the person at the saw knows the
+        // real number. Pre-filled with the arithmetic, freely overwritten, 0 for
+        // panels that arrived already cut.
+        +'<div style="width:104px"><label class="fl" style="margin-top:0">หักจาก A / from A</label>'
+          +'<input type="number" id="pc-froma" min="0" placeholder="0" oninput="this.dataset.touched=\'1\'" style="width:100%;box-sizing:border-box"></div>'
         +'<button type="button" onclick="pcAdd()" style="flex-shrink:0;padding:9px 13px;border:none;border-radius:var(--rs);background:#6d28d9;color:#fff;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> เพิ่ม / Add</button>'
-        // flex:0 0 100% — not flex-basis alone, which lets the label shrink into the
-        // gap beside the button instead of wrapping onto its own line.
-        +'<label style="flex:0 0 100%;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text2);cursor:pointer;margin-top:4px">'
-          // The global rule is input{width:100%} — without a fixed size the checkbox
-          // eats the whole line and squeezes its own label off the edge.
-          +'<input type="checkbox" id="pc-fromA" checked style="flex:0 0 16px;width:16px;height:16px;padding:0;margin:0">'
-          +'<span>ตัดจากเกรด A / cut from Grade A</span></label>'
+        +'<div style="flex:0 0 100%;font-size:11.5px;color:var(--text2);margin-top:4px">'
+          +'แผ่นเต็ม = '+PANEL_FULL_CM+' ซม. / full panel = '+PANEL_FULL_CM+' cm · ใส่ 0 ถ้ามาตัดสำเร็จแล้ว / enter 0 if it arrived already cut</div>'
       +'</div>'
       : '')
     +(rows.length
@@ -5880,37 +5886,51 @@ function ofPrecutBox(){
     +'</div>';
 }
 // Adding a pre-cut row normally means somebody took a full panel and cut it, so
-// Grade A goes down by the same amount — otherwise the same panel would be counted
-// twice. Unticking the box covers the other case: panels that arrived already cut.
+// How many full panels a cut costs is never inferred from the piece count: one
+// 290 cm panel yields three 95 cm pieces, so 4 pieces cost 2 panels, not 4. The
+// arithmetic is only a suggestion — waste, off-cuts and leftovers from an earlier
+// cut mean the number has to come from whoever stood at the saw.
+function pcPerPanel(len){ var n=parseInt(len)||0; return n>0 ? Math.max(1, Math.floor(PANEL_FULL_CM/n)) : 1; }
+function pcSuggestN(qty, len){ var q=parseInt(qty)||0; return q>0 ? Math.ceil(q/pcPerPanel(len)) : 0; }
+function pcSuggest(){
+  var f=document.getElementById('pc-froma'); if(!f) return;
+  // Never overwrite a number the user typed — only fill the box while it is empty.
+  if(f.dataset.touched==='1' && f.value!=='') return;
+  var n=pcSuggestN((document.getElementById('pc-qty')||{}).value, (document.getElementById('pc-len')||{}).value);
+  f.value = n>0 ? n : '';
+}
 function pcAdd(){
   var code=(document.getElementById('pc-code').value||'').trim().toUpperCase();
   var len=parseInt(document.getElementById('pc-len').value)||0;
   var qty=parseInt(document.getElementById('pc-qty').value)||0;
-  var fromA=!!(document.getElementById('pc-fromA')||{}).checked;
+  var takeA=parseInt(document.getElementById('pc-froma').value)||0;
   if(!code){ alert('รุ่น? / Which model?'); return; }
   if(len<=0){ alert('ยาวกี่ ซม.? / Length in cm?'); return; }
   if(qty<=0){ alert('จำนวน? / How many?'); return; }
+  if(takeA<0){ alert('หักจาก A ไม่ถูกต้อง / Invalid "from A"'); return; }
   var st=_stockFind(code);
   if(!st){ alert('ไม่พบรุ่นนี้ในสต็อก / No stock item with code '+code); return; }
-  if(fromA && (parseInt(st.qty)||0) < qty){
+  if(takeA > (parseInt(st.qty)||0)){
     alert('สต็อก A ไม่พอ / Not enough Grade A ('+(parseInt(st.qty)||0).toLocaleString()+' pcs)'); return;
   }
-  if(fromA){
+  if(takeA>0){
     var a0=parseInt(st.qty)||0;
-    st.qty=a0-qty;
-    stAudit('cut', code, qty+' pcs Grade A → pre-cut '+len+' cm', {qty:qty, aFrom:a0, aTo:st.qty, len:len});
-    addLog(code+' '+qty+' pcs A→C '+len+'cm / ตัดแล้ว','-');
+    st.qty=a0-takeA;
+    stAudit('cut', code, takeA+' full panels → '+qty+' pcs pre-cut '+len+' cm', {qty:takeA, aFrom:a0, aTo:st.qty, len:len, pieces:qty});
+    addLog(code+' -'+takeA+' pcs → '+qty+' pcs pre-cut '+len+'cm / ตัดแล้ว','-');
     syncStockItems();
   } else {
-    stAudit('add', code, qty+' pcs pre-cut '+len+' cm added (not from Grade A)', {qty:qty, len:len});
+    stAudit('add', code, qty+' pcs pre-cut '+len+' cm added (not taken from Grade A)', {qty:qty, len:len});
     addLog(code+' +'+qty+' pcs pre-cut '+len+'cm','+');
   }
   // Same model AND same length is the same pile — top it up instead of a second row.
+  // fromA accumulates what Grade A has paid for this pile, so deleting it can offer
+  // the right number back instead of guessing.
   var p=precutFind(code, len);
-  if(p) p.qty=(parseInt(p.qty)||0)+qty;
-  else precutItems.push({id:'pc'+Date.now()+Math.floor(Math.random()*1000), code:code, len:len, qty:qty, notes:''});
+  if(p){ p.qty=(parseInt(p.qty)||0)+qty; p.fromA=(parseInt(p.fromA)||0)+takeA; }
+  else precutItems.push({id:'pc'+Date.now()+Math.floor(Math.random()*1000), code:code, len:len, qty:qty, fromA:takeA, notes:''});
   precutRollup(); syncPrecut();
-  document.getElementById('pc-code').value=''; document.getElementById('pc-len').value=''; document.getElementById('pc-qty').value='';
+  ['pc-code','pc-len','pc-qty','pc-froma'].forEach(function(x){ var e=document.getElementById(x); if(e){ e.value=''; if(e.dataset) e.dataset.touched=''; } });
   ofPrecutBox(); try{ ofStockCatalog(); }catch(e){} try{ mgRender(); }catch(e){}
 }
 function pcEdit(id){
@@ -5926,11 +5946,36 @@ function pcEdit(id){
   addLog(p.code+' pre-cut '+(parseInt(p.len)||0)+'cm '+was+'→'+n+' pcs', n>was?'+':'-');
   precutRollup(); syncPrecut(); ofPrecutBox(); try{ ofStockCatalog(); }catch(e){} try{ mgRender(); }catch(e){}
 }
+// Deleting a row used to make the panels vanish: Grade A had paid for them and got
+// nothing back. Now it asks how many full panels return to Grade A — pre-filled with
+// what the remaining pieces are worth, capped at what this pile ever took from A,
+// and 0 for a row that never came out of Grade A. Typed, because a wrongly entered
+// row gives everything back while a genuinely cut pile gives back nothing.
 function pcDel(id){
   var p=(precutItems||[]).find(function(x){ return x.id===id; }); if(!p) return;
-  if(!confirm('ลบ / Delete '+p.code+' '+(parseInt(p.len)||0)+'cm × '+(parseInt(p.qty)||0)+'?')) return;
-  stAudit('delete', p.code, 'Pre-cut row removed · was '+(parseInt(p.len)||0)+' cm × '+(parseInt(p.qty)||0)+' pcs', {qty:-(parseInt(p.qty)||0), len:p.len});
-  addLog(p.code+' pre-cut '+(parseInt(p.len)||0)+'cm removed','-');
+  var len=parseInt(p.len)||0, qty=parseInt(p.qty)||0, paid=parseInt(p.fromA)||0;
+  if(!confirm('ลบ / Delete '+p.code+' '+len+'cm × '+qty+'?')) return;
+  var back=0;
+  if(paid>0){
+    var suggest=Math.min(paid, pcSuggestN(qty, len));
+    var v=prompt('คืนเข้าเกรด A กี่แผ่น? / Return how many FULL panels to Grade A?\n'
+      +p.code+' · '+qty+' pcs × '+len+'cm · เคยหักไป / taken from A: '+paid, String(suggest));
+    if(v===null) return;                    // cancel means cancel — the row stays
+    back=parseInt(v)||0;
+    if(back<0){ alert('จำนวนไม่ถูกต้อง / Invalid number'); return; }
+  }
+  if(back>0){
+    var st=_stockFind(p.code);
+    if(st){
+      var a0=parseInt(st.qty)||0;
+      st.qty=a0+back;
+      stAudit('edit', p.code, 'Pre-cut row deleted · '+back+' full panels returned to Grade A', {qty:back, aFrom:a0, aTo:st.qty, len:len});
+      addLog(p.code+' +'+back+' pcs back to Grade A (pre-cut row deleted)','+');
+      syncStockItems();
+    }
+  }
+  stAudit('delete', p.code, 'Pre-cut row removed · was '+len+' cm × '+qty+' pcs'+(back>0?' · '+back+' returned to A':' · nothing returned'), {qty:-qty, len:len});
+  addLog(p.code+' pre-cut '+len+'cm removed','-');
   precutItems=precutItems.filter(function(x){ return x.id!==id; });
   precutRollup(); syncPrecut(); ofPrecutBox(); try{ ofStockCatalog(); }catch(e){} try{ mgRender(); }catch(e){}
 }
@@ -7251,7 +7296,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817004;
+var KP_BUILD = 20260817005;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
