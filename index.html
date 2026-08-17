@@ -953,6 +953,16 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{if(document.getElementById('s-manager').classList.contains('active'))mgStock();}catch(e){}
         try{ofRenderStock();}catch(e){}
       });
+      // Pre-cut panels (Grade C). Own list rather than a number on the stock item,
+      // because a pre-cut panel is only identified by model AND length — 20 pieces
+      // of KP058 mean nothing until you know whether they are 95 or 120 cm.
+      db.ref('precutItems').on('value', function(snap) {
+        precutItems = snap.val() ? Object.values(snap.val()) : [];
+        try{ fbSeedSnap('precutItems', snap.val()); }catch(e){}
+        try{ precutRollup(); }catch(e){}
+        try{ ofPrecutBox(); }catch(e){}
+        try{ if(document.getElementById('s-manager').classList.contains('active')) mgStock(); }catch(e){}
+      });
       db.ref('incomingItems').on('value', function(snap) {
         incomingItems = snap.val() ? Object.values(snap.val()) : [];
         try{ fbSeedSnap('incomingItems', snap.val()); }catch(e){}
@@ -3072,12 +3082,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <button type="button" class="btnsm" style="padding:8px 12px;white-space:nowrap" onclick="smMoveToB()"><i class="ti ti-arrow-down"></i> A→B</button>
   </div>
   <div id="sm-move-note" style="display:none;font-size:11px;font-weight:700;color:var(--green);background:var(--green-bg);border-radius:var(--rs);padding:6px 9px;margin-top:5px"></div>
-  <label class="fl">Grade C Stock / เกรด C – ตัดแล้ว ~95 cm (pcs)</label><input type="number" id="sm-precut" min="0" placeholder="0">
-  <div id="sm-cut-row" style="display:flex;gap:6px;align-items:flex-end;margin-top:6px;background:var(--bg2);border-radius:var(--rs);padding:8px">
-    <div style="flex:1"><label class="fl" style="margin-top:0">Cut A→C / ตัดเป็นเกรด C (pcs)</label><input type="number" id="sm-cut" min="0" placeholder="pcs"></div>
-    <button type="button" class="btnsm" style="padding:8px 12px;white-space:nowrap" onclick="smMoveToC()"><i class="ti ti-scissors"></i> A→C</button>
-  </div>
-  <div id="sm-cut-note" style="display:none;font-size:11px;font-weight:700;color:var(--green);background:var(--green-bg);border-radius:var(--rs);padding:6px 9px;margin-top:5px"></div>
+  <!-- Grade C is NOT edited here. It lives in the pre-cut area of the Stock tab,
+       one row per model AND length — a single number could not tell 95 from 120 cm.
+       A field here would also be overwritten by the next roll-up. -->
+  <div id="sm-precut-info" style="display:none;font-size:11.5px;font-weight:700;color:#6d28d9;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:var(--rs);padding:7px 9px;margin-top:8px"></div>
   <label class="fl">Notes <span style="font-size:11px;color:var(--text2)">(color, size, supplier...)</span></label><input type="text" id="sm-notes" placeholder="e.g. Beige, 195*14*2900">
   <button type="button" class="btn btng" style="margin-top:14px" onclick="saveSM()"><i class="ti ti-check"></i> Save</button>
   <button type="button" class="btn btnr" id="sm-del" style="display:none;margin-top:6px" onclick="delSM()"><i class="ti ti-trash"></i> Delete</button>
@@ -3928,6 +3936,7 @@ function fbSyncList(node, arr, keyOf){
 
 // Firebase sync wrappers - called after local state changes
 function syncStockItems() { fbSyncList('stockItems', stockItems, function(s){ return s.code; }); }
+function syncPrecut() { fbSyncList('precutItems', precutItems, function(p){ return p.id; }); }
 function syncIncoming() { fbSyncList('incomingItems', incomingItems, function(s){ return s.id; }); }
 function syncDrivers() { fbSyncList('drivers', drivers, function(d){ return d.id; }); }
 // Per-order UPDATE (not a wholesale .set of the whole node). A wholesale set
@@ -4219,7 +4228,7 @@ function printPayInfo(){
 // Esc closes the overlay
 document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ var o=document.getElementById('payinfo-overlay'); if(o&&o.style.display==='flex') closePayInfo(); } });
 
-let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[],claims=[];
+let orders=[],wOrders=[],stockItems=[],incomingItems=[],drivers=[],activeTours=[],revOrders=[],stockLog=[],claims=[],precutItems=[];
 var soldOut={};
 var qtCatalog={}; // extra products added via the in-app "Add product" form (Firebase 'catalog')
 var recentlyDeleted={}; // orderId(sanitized) -> ts; blocks mirror re-adding a just-deleted order
@@ -5614,7 +5623,7 @@ function mgRevenue(){
 function selM(m){selMonth=m;mgRevenue();}
 
 function smGuessType(code){code=(code||'').toUpperCase();if(code.indexOf('K-PVC')===0)return 'pvc';if(code.indexOf('KP')===0)return 'panel';if(code.indexOf('L-P')===0)return 'lcorner';if(code.charAt(0)==='T')return 'ttrim';if(code.charAt(0)==='U')return 'utrim';if(code.charAt(0)==='L')return 'lcorner';return 'panel';}
-function openSM(code){const s=code?stockItems.find(x=>x.code===code):null;editSM=s?code:null;document.getElementById('sm-title').textContent=s?'Edit stock':'Add stock';document.getElementById('sm-del').style.display=s?'flex':'none';if(s){document.getElementById('sm-code').value=s.code;document.getElementById('sm-code').disabled=true;document.getElementById('sm-type').value=s.type||((s.code==='T07'||s.code==='T08')?'ttrim':'panel');document.getElementById('sm-qty').value=s.qty;document.getElementById('sm-dmg').value=s.damaged;document.getElementById('sm-precut').value=(parseInt(s.precut)||0);document.getElementById('sm-notes').value=s.notes||'';document.getElementById('sm-ctn-per').value=(s.pcsPerCtn||'');}else{document.getElementById('sm-code').value=(code||'');document.getElementById('sm-code').disabled=false;document.getElementById('sm-type').value=smGuessType(code);['sm-qty','sm-dmg','sm-precut','sm-notes','sm-ctn-per'].forEach(x=>document.getElementById(x).value='');}document.getElementById('sm-ctn').value='';var _cr=document.getElementById('sm-ctn-res');if(_cr)_cr.textContent='0';document.getElementById('sm-move').value='';var _mn=document.getElementById('sm-move-note');if(_mn)_mn.style.display='none';document.getElementById('sm-move-row').style.display=s?'flex':'none';var _ct=document.getElementById('sm-cut');if(_ct)_ct.value='';var _cn=document.getElementById('sm-cut-note');if(_cn)_cn.style.display='none';var _cr2=document.getElementById('sm-cut-row');if(_cr2)_cr2.style.display=s?'flex':'none';document.getElementById('sm-modal').classList.add('open');}
+function openSM(code){const s=code?stockItems.find(x=>x.code===code):null;editSM=s?code:null;document.getElementById('sm-title').textContent=s?'Edit stock':'Add stock';document.getElementById('sm-del').style.display=s?'flex':'none';if(s){document.getElementById('sm-code').value=s.code;document.getElementById('sm-code').disabled=true;document.getElementById('sm-type').value=s.type||((s.code==='T07'||s.code==='T08')?'ttrim':'panel');document.getElementById('sm-qty').value=s.qty;document.getElementById('sm-dmg').value=s.damaged;document.getElementById('sm-notes').value=s.notes||'';document.getElementById('sm-ctn-per').value=(s.pcsPerCtn||'');}else{document.getElementById('sm-code').value=(code||'');document.getElementById('sm-code').disabled=false;document.getElementById('sm-type').value=smGuessType(code);['sm-qty','sm-dmg','sm-notes','sm-ctn-per'].forEach(x=>document.getElementById(x).value='');}document.getElementById('sm-ctn').value='';var _cr=document.getElementById('sm-ctn-res');if(_cr)_cr.textContent='0';document.getElementById('sm-move').value='';var _mn=document.getElementById('sm-move-note');if(_mn)_mn.style.display='none';document.getElementById('sm-move-row').style.display=s?'flex':'none';try{smPrecutInfo(s?s.code:'');}catch(e){}document.getElementById('sm-modal').classList.add('open');}
 // Count by CTN → auto-fill Grade A (pcs = CTN × pcs/CTN). pcs/CTN is remembered per product.
 function smCtnCalc(){
   var ctn=parseFloat((document.getElementById('sm-ctn')||{}).value)||0;
@@ -5651,36 +5660,18 @@ function smMoveToB(){
   mgRender(); syncStockItems(); try{ ofStockCatalog(); }catch(e){}
   smMoveNote('✓ '+n.toLocaleString()+' pcs moved to Grade B / ย้ายแล้ว — A '+(a-n).toLocaleString()+' · B '+(b+n).toLocaleString(), true);
 }
-// Cutting a full panel to length is the mirror image of declaring one damaged: one
-// piece leaves Grade A and appears in Grade C. Same booking, same audit trail — the
-// only difference is that C stays sellable at full value, B does not.
-function smMoveToC(){
-  var n=parseInt(document.getElementById('sm-cut').value)||0;
-  if(n<=0){ alert('Enter amount / ใส่จำนวน'); return; }
-  var a=parseInt(document.getElementById('sm-qty').value)||0, c=parseInt(document.getElementById('sm-precut').value)||0;
-  if(n>a){ alert('Not enough Grade A stock ('+a.toLocaleString()+' pcs) / สต็อก A ไม่พอ'); return; }
-  document.getElementById('sm-qty').value=a-n;
-  document.getElementById('sm-precut').value=c+n;
-  document.getElementById('sm-cut').value='';
-  var s=editSM ? stockItems.find(function(x){return x.code===editSM;}) : null;
-  if(!s){ smCutNote(n.toLocaleString()+' pcs → Grade C. Press Save to book it. / กด Save', false); return; }
-  s.qty=a-n; s.precut=c+n;
-  // Same trap as A→B: a carton count left in the box would recompute Grade A on the
-  // next keystroke and quietly undo the booking.
-  var _c=document.getElementById('sm-ctn'); if(_c) _c.value='';
-  var _cr=document.getElementById('sm-ctn-res'); if(_cr) _cr.textContent='0';
-  addLog(s.code+' '+n+' pcs A→C (pre-cut) / ตัดเป็นเกรด C','-');
-  stAudit('cut', s.code, n+' pcs Grade A → Grade C (pre-cut)',
-    {qty:n, aFrom:a, aTo:a-n, cFrom:c, cTo:c+n});
-  mgRender(); syncStockItems(); try{ ofStockCatalog(); }catch(e){}
-  smCutNote('✓ '+n.toLocaleString()+' pcs cut / ตัดแล้ว — A '+(a-n).toLocaleString()+' · C '+(c+n).toLocaleString(), true);
-}
-function smCutNote(txt, ok){
-  var el=document.getElementById('sm-cut-note'); if(!el) return;
-  el.textContent=txt;
-  el.style.color = ok ? 'var(--green)' : 'var(--orange)';
-  el.style.background = ok ? 'var(--green-bg)' : '#fff7ed';
+// Cutting used to live here as "A→C". It moved to the pre-cut area of the Stock tab,
+// because a cut is only meaningful together with its length — and the length cannot
+// be captured in a single number on the stock item. What is left here is a read-only
+// hint so anyone opening a stock item still sees what is lying cut.
+function smPrecutInfo(code){
+  var el=document.getElementById('sm-precut-info'); if(!el) return;
+  var rows=(precutItems||[]).filter(function(p){ return precutNorm(p.code)===precutNorm(code) && (parseInt(p.qty)||0)>0; })
+    .sort(function(a,b){ return (parseInt(a.len)||0)-(parseInt(b.len)||0); });
+  if(!code || !rows.length){ el.style.display='none'; el.textContent=''; return; }
   el.style.display='block';
+  el.textContent='✂ ตัดแล้ว / Pre-cut: '+rows.map(function(p){ return (parseInt(p.len)||0)+'cm × '+(parseInt(p.qty)||0); }).join(' · ')
+    +' — แก้ไขในแท็บ Stock / edit in the Stock tab';
 }
 function smMoveNote(txt, ok){
   var el=document.getElementById('sm-move-note'); if(!el) return;
@@ -5743,15 +5734,20 @@ function stLogRender(){
       +'</div></div>';
   }).join('');
 }
-function saveSM(){const code=document.getElementById('sm-code').value.trim().toUpperCase();if(!code){alert('Enter a code');return;}const qty=parseInt(document.getElementById('sm-qty').value)||0,dmg=parseInt(document.getElementById('sm-dmg').value)||0,pct=parseInt(document.getElementById('sm-precut').value)||0,type=document.getElementById('sm-type').value,notes=document.getElementById('sm-notes').value,pcsPerCtn=parseInt(document.getElementById('sm-ctn-per').value)||0;if(editSM){const s=stockItems.find(x=>x.code===editSM);const _aQty=parseInt(s.qty)||0,_aDmg=parseInt(s.damaged)||0,_aPct=parseInt(s.precut)||0;const d=qty-_aQty;const db=dmg-_aDmg;const dc=pct-_aPct;s.qty=qty;s.damaged=dmg;s.precut=pct;s.type=type;s.notes=notes;if(pcsPerCtn>0)s.pcsPerCtn=pcsPerCtn;if(d!==0)addLog(code+' '+(d>0?'+'+d:d)+' pcs',d>0?'+':'-');if(db!==0)addLog(code+' Grade B '+(db>0?'+'+db:db)+' pcs',db>0?'+':'-');if(dc!==0)addLog(code+' Grade C '+(dc>0?'+'+dc:dc)+' pcs',dc>0?'+':'-');
+function saveSM(){const code=document.getElementById('sm-code').value.trim().toUpperCase();if(!code){alert('Enter a code');return;}const qty=parseInt(document.getElementById('sm-qty').value)||0,dmg=parseInt(document.getElementById('sm-dmg').value)||0,type=document.getElementById('sm-type').value,notes=document.getElementById('sm-notes').value,pcsPerCtn=parseInt(document.getElementById('sm-ctn-per').value)||0;if(editSM){const s=stockItems.find(x=>x.code===editSM);const _aQty=parseInt(s.qty)||0,_aDmg=parseInt(s.damaged)||0;const d=qty-_aQty;const db=dmg-_aDmg;s.qty=qty;s.damaged=dmg;s.type=type;s.notes=notes;if(pcsPerCtn>0)s.pcsPerCtn=pcsPerCtn;if(d!==0)addLog(code+' '+(d>0?'+'+d:d)+' pcs',d>0?'+':'-');if(db!==0)addLog(code+' Grade B '+(db>0?'+'+db:db)+' pcs',db>0?'+':'-');
     // One audit line per save, saying what actually changed and by how much.
-    if(d!==0||db!==0||dc!==0) stAudit('edit', code,
+    // Grade C is not here on purpose — it is edited in the Stock tab's pre-cut area.
+    if(d!==0||db!==0) stAudit('edit', code,
       [d!==0?('Grade A '+_aQty+' → '+qty+' ('+(d>0?'+'+d:d)+')'):'',
-       db!==0?('Grade B '+_aDmg+' → '+dmg+' ('+(db>0?'+'+db:db)+')'):'',
-       dc!==0?('Grade C '+_aPct+' → '+pct+' ('+(dc>0?'+'+dc:dc)+')'):''].filter(Boolean).join(' · '),
-      {aFrom:_aQty, aTo:qty, bFrom:_aDmg, bTo:dmg, cFrom:_aPct, cTo:pct, qty:d});
-  }else{if(stockItems.find(x=>x.code.toUpperCase()===code.toUpperCase())){alert('Code already exists: '+code);return;}var _ni={code,type,qty,damaged:dmg,precut:pct,notes};if(pcsPerCtn>0)_ni.pcsPerCtn=pcsPerCtn;stockItems.push(_ni);addLog(code+' added: '+qty+' pcs','+');stAudit('add',code,'New product · Grade A '+qty+(dmg?' · Grade B '+dmg:'')+(pct?' · Grade C '+pct:''),{aTo:qty,bTo:dmg,cTo:pct,qty:qty});}closeSM();mgRender();syncStockItems();try{ ofStockCatalog(); }catch(e){}}
-function delSM(){if(!confirm('Delete '+editSM+'?'))return;var _d=stockItems.find(x=>x.code===editSM)||{};stockItems=stockItems.filter(x=>x.code!==editSM);addLog(editSM+' removed','-');stAudit('delete',editSM,'Product removed · was Grade A '+(parseInt(_d.qty)||0)+' · Grade B '+(parseInt(_d.damaged)||0)+' · Grade C '+(parseInt(_d.precut)||0),{aFrom:parseInt(_d.qty)||0,bFrom:parseInt(_d.damaged)||0,cFrom:parseInt(_d.precut)||0});closeSM();mgRender();syncStockItems();try{ ofStockCatalog(); }catch(e){}}
+       db!==0?('Grade B '+_aDmg+' → '+dmg+' ('+(db>0?'+'+db:db)+')'):''].filter(Boolean).join(' · '),
+      {aFrom:_aQty, aTo:qty, bFrom:_aDmg, bTo:dmg, qty:d});
+  }else{if(stockItems.find(x=>x.code.toUpperCase()===code.toUpperCase())){alert('Code already exists: '+code);return;}var _ni={code,type,qty,damaged:dmg,precut:0,notes};if(pcsPerCtn>0)_ni.pcsPerCtn=pcsPerCtn;stockItems.push(_ni);addLog(code+' added: '+qty+' pcs','+');stAudit('add',code,'New product · Grade A '+qty+(dmg?' · Grade B '+dmg:''),{aTo:qty,bTo:dmg,qty:qty});}closeSM();mgRender();syncStockItems();try{ ofStockCatalog(); }catch(e){}}
+function delSM(){if(!confirm('Delete '+editSM+'?'))return;var _d=stockItems.find(x=>x.code===editSM)||{};stockItems=stockItems.filter(x=>x.code!==editSM);
+  // Its pre-cut rows go with it, otherwise they would linger as stock of a product
+  // that no longer exists and the roll-up would have nothing to write onto.
+  var _pcGone=(precutItems||[]).filter(function(p){ return precutNorm(p.code)===precutNorm(editSM); }).length;
+  if(_pcGone){ precutItems=precutItems.filter(function(p){ return precutNorm(p.code)!==precutNorm(editSM); }); syncPrecut(); try{ ofPrecutBox(); }catch(e){} }
+  addLog(editSM+' removed'+(_pcGone?' (incl. '+_pcGone+' pre-cut rows)':''),'-');stAudit('delete',editSM,'Product removed · was Grade A '+(parseInt(_d.qty)||0)+' · Grade B '+(parseInt(_d.damaged)||0)+' · Grade C '+(parseInt(_d.precut)||0),{aFrom:parseInt(_d.qty)||0,bFrom:parseInt(_d.damaged)||0,cFrom:parseInt(_d.precut)||0});closeSM();mgRender();syncStockItems();try{ ofStockCatalog(); }catch(e){}}
 
 
 
@@ -5827,38 +5823,116 @@ function ofStockPrice(s){
 function ofStockValue(s){ return ofStockPrice(s) * ((parseInt(s.qty)||0)+(parseInt(s.precut)||0)); }
 function ofStockValueSum(items){ return (items||[]).reduce(function(a,s){ return a+ofStockValue(s); }, 0); }
 
-// Office → Stock tab: what is already cut and waiting, at the top of the tab so
-// nobody cuts a fresh panel for something that is lying there. Hidden completely
-// while nothing is pre-cut — the tab stays quiet for anyone who never cuts.
-// Note: the bucket counts PIECES, not lengths. If pre-cutting ever happens in more
-// than one length, this box (and st.precut itself) has to grow a per-length split.
+// Office → Stock tab: the pre-cut area. Staff keep this themselves — model, length
+// and count per row — because only they know what was cut. Always visible (unlike a
+// number that hides at 0) so nobody cuts a fresh panel for something already lying
+// on the pile.
+function _pcEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function ofPrecutBox(){
   var host=document.getElementById('of-precut-box'); if(!host) return;
-  var items=(stockItems||[]).filter(function(s){ return (parseInt(s.precut)||0)>0; })
-    .sort(function(a,b){ return (parseInt(b.precut)||0)-(parseInt(a.precut)||0); });
-  if(!items.length){ host.style.display='none'; host.innerHTML=''; return; }
-  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
-  var prod=function(code){ return (window.QT_PRODUCTS||[]).find(function(p){ return p.code===code; }) || {}; };
-  var total=items.reduce(function(a,s){ return a+(parseInt(s.precut)||0); }, 0);
   var canEdit=!!window.ofStockEdit;
+  var prod=function(code){ return (window.QT_PRODUCTS||[]).find(function(p){ return precutNorm(p.code)===precutNorm(code); }) || {}; };
+  var rows=(precutItems||[]).slice().sort(function(a,b){
+    var c=precutNorm(a.code).localeCompare(precutNorm(b.code));
+    return c || ((parseInt(a.len)||0)-(parseInt(b.len)||0));
+  });
+  var total=rows.reduce(function(a,p){ return a+(parseInt(p.qty)||0); }, 0);
   host.style.display='block';
   host.innerHTML='<div class="card" style="border:1px solid #ddd6fe;background:#faf8ff">'
-    +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">'
+    +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">'
       +'<span style="font-size:14px;font-weight:800;color:#6d28d9">✂ ตัดแล้ว / Pre-cut · Grade C</span>'
-      +'<span style="font-size:11px;color:var(--text2)">'+items.length+' รายการ / items</span>'
+      +'<span style="font-size:11px;color:var(--text2)">'+rows.length+' รายการ / items</span>'
       +'<span style="margin-left:auto;font-size:16px;font-weight:800;color:#6d28d9">'+total.toLocaleString()+' pcs</span>'
     +'</div>'
-    +'<div style="display:flex;flex-wrap:wrap;gap:7px">'
-    +items.map(function(s){
-      var p=prod(s.code), n=parseInt(s.precut)||0;
-      return '<div'+(canEdit?' onclick="openSM(\''+esc(s.code)+'\')" style="cursor:pointer;':' style="')
-        +'display:flex;align-items:center;gap:7px;background:var(--bg);border:1px solid #ddd6fe;border-radius:var(--rs);padding:6px 10px">'
-        +'<span style="font-size:13px;font-weight:800">'+esc(s.code)+'</span>'
-        +(p.name?'<span style="font-size:11px;color:#b45309;font-weight:700">'+esc(p.name)+'</span>':'')
-        +'<span style="font-size:14px;font-weight:800;color:#6d28d9">'+n.toLocaleString()+'</span>'
-      +'</div>';
-    }).join('')
-    +'</div></div>';
+    +(canEdit
+      ? '<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;background:var(--bg);border:1px dashed #c4b5fd;border-radius:var(--rs);padding:8px 9px;margin-bottom:10px">'
+        +'<div style="flex:1;min-width:110px"><label class="fl" style="margin-top:0">รุ่น / Model</label>'
+          +'<input type="text" id="pc-code" placeholder="KP058" oninput="this.value=this.value.toUpperCase()" style="width:100%;box-sizing:border-box"></div>'
+        +'<div style="width:92px"><label class="fl" style="margin-top:0">ยาว / Length</label>'
+          +'<input type="number" id="pc-len" min="1" max="600" placeholder="95" style="width:100%;box-sizing:border-box"></div>'
+        +'<div style="width:88px"><label class="fl" style="margin-top:0">จำนวน / Qty</label>'
+          +'<input type="number" id="pc-qty" min="1" placeholder="0" style="width:100%;box-sizing:border-box"></div>'
+        +'<button type="button" onclick="pcAdd()" style="flex-shrink:0;padding:9px 13px;border:none;border-radius:var(--rs);background:#6d28d9;color:#fff;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> เพิ่ม / Add</button>'
+        // flex:0 0 100% — not flex-basis alone, which lets the label shrink into the
+        // gap beside the button instead of wrapping onto its own line.
+        +'<label style="flex:0 0 100%;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text2);cursor:pointer;margin-top:4px">'
+          // The global rule is input{width:100%} — without a fixed size the checkbox
+          // eats the whole line and squeezes its own label off the edge.
+          +'<input type="checkbox" id="pc-fromA" checked style="flex:0 0 16px;width:16px;height:16px;padding:0;margin:0">'
+          +'<span>ตัดจากเกรด A / cut from Grade A</span></label>'
+      +'</div>'
+      : '')
+    +(rows.length
+      ? '<div style="display:flex;flex-wrap:wrap;gap:7px">'
+        +rows.map(function(p){
+          var n=parseInt(p.qty)||0, len=parseInt(p.len)||0, nm=prod(p.code).name||'';
+          return '<div style="display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid #ddd6fe;border-radius:var(--rs);padding:6px 10px'+(n<=0?';opacity:.5':'')+'">'
+            +'<span style="font-size:13px;font-weight:800">'+_pcEsc(p.code)+'</span>'
+            +(nm?'<span style="font-size:11px;color:#b45309;font-weight:700">'+_pcEsc(nm)+'</span>':'')
+            +'<span style="font-size:12px;font-weight:800;color:#6d28d9">'+(len>0?len+'cm':'—')+'</span>'
+            +'<span style="font-size:14px;font-weight:800">'+n.toLocaleString()+'</span>'
+            +(canEdit?'<button type="button" onclick="pcEdit(\''+_pcEsc(p.id)+'\')" title="แก้ไข / Edit" style="border:none;background:none;color:var(--text2);cursor:pointer;padding:0 2px"><i class="ti ti-pencil"></i></button>'
+                     +'<button type="button" onclick="pcDel(\''+_pcEsc(p.id)+'\')" title="ลบ / Delete" style="border:none;background:none;color:#dc2626;cursor:pointer;padding:0 2px"><i class="ti ti-trash"></i></button>':'')
+          +'</div>';
+        }).join('')
+        +'</div>'
+      : '<div class="empty" style="padding:.7rem;font-size:12.5px">ยังไม่มีแผ่นตัดแล้ว / nothing pre-cut yet</div>')
+    +'</div>';
+}
+// Adding a pre-cut row normally means somebody took a full panel and cut it, so
+// Grade A goes down by the same amount — otherwise the same panel would be counted
+// twice. Unticking the box covers the other case: panels that arrived already cut.
+function pcAdd(){
+  var code=(document.getElementById('pc-code').value||'').trim().toUpperCase();
+  var len=parseInt(document.getElementById('pc-len').value)||0;
+  var qty=parseInt(document.getElementById('pc-qty').value)||0;
+  var fromA=!!(document.getElementById('pc-fromA')||{}).checked;
+  if(!code){ alert('รุ่น? / Which model?'); return; }
+  if(len<=0){ alert('ยาวกี่ ซม.? / Length in cm?'); return; }
+  if(qty<=0){ alert('จำนวน? / How many?'); return; }
+  var st=_stockFind(code);
+  if(!st){ alert('ไม่พบรุ่นนี้ในสต็อก / No stock item with code '+code); return; }
+  if(fromA && (parseInt(st.qty)||0) < qty){
+    alert('สต็อก A ไม่พอ / Not enough Grade A ('+(parseInt(st.qty)||0).toLocaleString()+' pcs)'); return;
+  }
+  if(fromA){
+    var a0=parseInt(st.qty)||0;
+    st.qty=a0-qty;
+    stAudit('cut', code, qty+' pcs Grade A → pre-cut '+len+' cm', {qty:qty, aFrom:a0, aTo:st.qty, len:len});
+    addLog(code+' '+qty+' pcs A→C '+len+'cm / ตัดแล้ว','-');
+    syncStockItems();
+  } else {
+    stAudit('add', code, qty+' pcs pre-cut '+len+' cm added (not from Grade A)', {qty:qty, len:len});
+    addLog(code+' +'+qty+' pcs pre-cut '+len+'cm','+');
+  }
+  // Same model AND same length is the same pile — top it up instead of a second row.
+  var p=precutFind(code, len);
+  if(p) p.qty=(parseInt(p.qty)||0)+qty;
+  else precutItems.push({id:'pc'+Date.now()+Math.floor(Math.random()*1000), code:code, len:len, qty:qty, notes:''});
+  precutRollup(); syncPrecut();
+  document.getElementById('pc-code').value=''; document.getElementById('pc-len').value=''; document.getElementById('pc-qty').value='';
+  ofPrecutBox(); try{ ofStockCatalog(); }catch(e){} try{ mgRender(); }catch(e){}
+}
+function pcEdit(id){
+  var p=(precutItems||[]).find(function(x){ return x.id===id; }); if(!p) return;
+  var v=prompt('จำนวน / Qty — '+p.code+' '+(parseInt(p.len)||0)+'cm', String(parseInt(p.qty)||0));
+  if(v===null) return;
+  var n=parseInt(v); if(isNaN(n)||n<0){ alert('จำนวนไม่ถูกต้อง / Invalid number'); return; }
+  var was=parseInt(p.qty)||0;
+  if(n===was) return;
+  p.qty=n;
+  // Corrections are counted, not silently applied — same as any other stock edit.
+  stAudit('edit', p.code, 'Pre-cut '+(parseInt(p.len)||0)+' cm: '+was+' → '+n+' pcs', {qty:n-was, len:p.len});
+  addLog(p.code+' pre-cut '+(parseInt(p.len)||0)+'cm '+was+'→'+n+' pcs', n>was?'+':'-');
+  precutRollup(); syncPrecut(); ofPrecutBox(); try{ ofStockCatalog(); }catch(e){} try{ mgRender(); }catch(e){}
+}
+function pcDel(id){
+  var p=(precutItems||[]).find(function(x){ return x.id===id; }); if(!p) return;
+  if(!confirm('ลบ / Delete '+p.code+' '+(parseInt(p.len)||0)+'cm × '+(parseInt(p.qty)||0)+'?')) return;
+  stAudit('delete', p.code, 'Pre-cut row removed · was '+(parseInt(p.len)||0)+' cm × '+(parseInt(p.qty)||0)+' pcs', {qty:-(parseInt(p.qty)||0), len:p.len});
+  addLog(p.code+' pre-cut '+(parseInt(p.len)||0)+'cm removed','-');
+  precutItems=precutItems.filter(function(x){ return x.id!==id; });
+  precutRollup(); syncPrecut(); ofPrecutBox(); try{ ofStockCatalog(); }catch(e){} try{ mgRender(); }catch(e){}
 }
 // Office → Stock tab: quotation-style catalog (image, code, price, size) + Grade A/B
 function ofStockCatalog(){
@@ -7177,7 +7251,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817003;
+var KP_BUILD = 20260817004;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9372,7 +9446,7 @@ function ofCreate(){
     if(_dsNum>0){ try{ revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt:_dsNum,date:_dsToday,zone:o.zone,month:mkey(new Date().toISOString())}); addLog('Instore sale '+o.id+': '+_dsNum.toLocaleString()+' ฿','+'); syncRevOrders(); }catch(e){} }
     _insPayId=no; _insPayTotal=_dsNum;
   }
-  {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;stockBucketDeduct(li.code,_q,li.grade);addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
+  {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;stockBucketDeduct(li.code,_q,li.grade,li.cutLen);addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
   var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';ofUpdPrioCnt();addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order'});}catch(e){}
   ['of-no','of-cust','of-phone','of-province','of-loc','of-contact-ch','of-contact-name','of-deliveround','of-reqdate','of-reqnote','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
   if(_ofPriority){ try{ pushSend('warehouse','⭐ Priority order: '+no, _ofPriorityReason||'Important order', {tag:'priority'}); }catch(e){} }
@@ -19116,21 +19190,55 @@ function mirrorToAppOrder(g){
 // (defekt, sellable as seconds). Grade-B order lines move stock in/out of the
 // Grade-B bucket so the two stocks never mix.
 //
-// st.precut = Grade C (pre-cut, ~95 cm). Filled by cutting Grade A down (smMoveToC),
-// sold like Grade A. The three buckets never mix: a Grade-C order line can only ever
-// take pre-cut pieces, and runs to 0 rather than eating into full-length stock.
+// Grade C (pre-cut) does NOT live on the stock item. It is its own list, because a
+// pre-cut panel is only identified by model AND length: "20 pcs of KP058" says
+// nothing until you know whether they are 95 or 120 cm. st.precut is kept as a
+// roll-up of that list (precutRollup) purely so the stock rows, the value, the count
+// sheets and the landed-cost totals can go on reading one number per code.
 function _stockFind(code){ return stockItems.find(function(x){ return (x.code||'').toUpperCase()===(code||'').toUpperCase().trim(); }); }
-function stockBucketDeduct(code, qty, grade){
-  var st=_stockFind(code); if(!st) return;
-  if(grade==='B')      st.damaged=Math.max(0,(parseInt(st.damaged)||0)-qty);
-  else if(grade==='C') st.precut =Math.max(0,(parseInt(st.precut)||0)-qty);
-  else                 st.qty    =Math.max(0,(parseInt(st.qty)||0)-qty);
+function precutNorm(c){ return ofNormCode(String(c||'').toUpperCase().trim()); }
+function precutFind(code, len){
+  var c=precutNorm(code), n=parseInt(len)||0;
+  return (precutItems||[]).find(function(p){ return precutNorm(p.code)===c && (parseInt(p.len)||0)===n; });
 }
-function stockBucketAdd(code, qty, grade){
+// st.precut mirrors the list. Called after every change and after every load, so a
+// stale number can never survive: it is recomputed from scratch, never adjusted.
+function precutRollup(){
+  var by={};
+  (precutItems||[]).forEach(function(p){
+    var c=precutNorm(p.code), q=parseInt(p.qty)||0;
+    if(!c||q<=0) return;
+    by[c]=(by[c]||0)+q;
+  });
+  (stockItems||[]).forEach(function(s){ s.precut = by[precutNorm(s.code)] || 0; });
+}
+function stockBucketDeduct(code, qty, grade, cutLen){
+  // Grade C comes off the matching pre-cut entry (code + length). No match means
+  // the office sold a length the warehouse never cut — nothing is deducted rather
+  // than silently taking it off a different length or off full-length stock.
+  if(grade==='C'){
+    var p=precutFind(code, cutLen); if(!p) return;
+    p.qty=Math.max(0,(parseInt(p.qty)||0)-qty);
+    precutRollup(); syncPrecut();
+    return;
+  }
   var st=_stockFind(code); if(!st) return;
-  if(grade==='B')      st.damaged=(parseInt(st.damaged)||0)+qty;
-  else if(grade==='C') st.precut =(parseInt(st.precut)||0)+qty;
-  else                 st.qty    =(parseInt(st.qty)||0)+qty;
+  if(grade==='B') st.damaged=Math.max(0,(parseInt(st.damaged)||0)-qty);
+  else            st.qty    =Math.max(0,(parseInt(st.qty)||0)-qty);
+}
+function stockBucketAdd(code, qty, grade, cutLen){
+  if(grade==='C'){
+    var p=precutFind(code, cutLen);
+    // A cancelled/returned Grade-C line puts the pieces back. If the entry was
+    // deleted meanwhile, recreate it — the panels physically exist again.
+    if(!p){ p={id:'pc'+Date.now()+Math.floor(Math.random()*1000), code:String(code||'').toUpperCase().trim(), len:parseInt(cutLen)||0, qty:0, notes:''}; precutItems.push(p); }
+    p.qty=(parseInt(p.qty)||0)+qty;
+    precutRollup(); syncPrecut();
+    return;
+  }
+  var st=_stockFind(code); if(!st) return;
+  if(grade==='B') st.damaged=(parseInt(st.damaged)||0)+qty;
+  else            st.qty    =(parseInt(st.qty)||0)+qty;
 }
 function deductOrderStock(o){
   if(!o || !o.lineItems || o._stockDeducted || typeof stockItems==='undefined') return;
@@ -19140,7 +19248,7 @@ function deductOrderStock(o){
     var code=(li.code||'').toUpperCase().trim();
     var qty=parseInt(li.qty)||0;
     if(!code||!qty) return;
-    stockBucketDeduct(code, qty, li.grade);
+    stockBucketDeduct(code, qty, li.grade, li.cutLen);
   });
   o._stockDeducted = true; // mark so it's never deducted twice
 }
@@ -19168,7 +19276,7 @@ function addOrderStock(o){
     if(!PRODUCT[li.type]) return;
     var code=(li.code||'').toUpperCase().trim(); var qty=parseInt(li.qty)||0;
     if(!code||!qty) return;
-    stockBucketAdd(code, qty, li.grade);
+    stockBucketAdd(code, qty, li.grade, li.cutLen);
   });
 }
 // Signature of an order's product/financial data — to detect sheet changes.
@@ -25047,8 +25155,8 @@ function saveReplacement(){
   }
 
   // Stock: the goods going out are deducted once; broken goods return only if ticked.
-  items.forEach(function(it){ if(it.type==='extra') return; try{ stockBucketDeduct(it.code, it.qty); }catch(e){} addLog(it.code+' -'+it.qty+' pcs (claim '+repId+')','-'); });
-  if(restock) broken.forEach(function(b){ try{ stockBucketAdd(b.code, b.qty, b.grade); }catch(e){} addLog(b.code+' +'+b.qty+' pcs (returned '+repId+')','+'); });
+  items.forEach(function(it){ if(it.type==='extra') return; try{ stockBucketDeduct(it.code, it.qty, it.grade, it.cutLen); }catch(e){} addLog(it.code+' -'+it.qty+' pcs (claim '+repId+')','-'); });
+  if(restock) broken.forEach(function(b){ try{ stockBucketAdd(b.code, b.qty, b.grade, b.cutLen); }catch(e){} addLog(b.code+' +'+b.qty+' pcs (returned '+repId+')','+'); });
   try{ syncStockItems(); }catch(e){}
 
   // Keep a claim record in the database (history / reporting), linked to the new order.
