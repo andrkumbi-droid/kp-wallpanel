@@ -2016,6 +2016,32 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       </div>
       <div class="sumrow" id="of-sexrow" style="display:none"><span style="color:var(--green)" id="of-sexlbl">Extra / เพิ่มเติม</span><span id="of-sex" style="color:var(--green)">—</span></div>
       <div class="sumrow sumtot"><span>Grand total / รวมทั้งหมด</span><span id="of-st">0 ฿</span></div>
+      <!-- Prepayment taken while the order is being written. It does NOT change the
+           grand total — that stays what the customer owes in all — it is money
+           already received, so the row below it shows what is still open. The method
+           is picked, never guessed: a wrong guess books cash as a transfer. -->
+      <div class="sumrow" style="align-items:center;margin-top:6px">
+        <span style="color:var(--green)">💰 มัดจำ / Prepaid</span>
+        <div style="display:flex;align-items:center;gap:4px">
+          <input type="number" id="of-prepaid" placeholder="0" min="0" oninput="ofCalc()" style="width:90px;padding:4px 8px;border:1px solid #86efac;border-radius:var(--rs);font-size:13px;text-align:right;color:#15803d">
+          <span style="color:var(--green)">฿</span>
+        </div>
+      </div>
+      <div class="sumrow" id="of-prepaid-extra" style="display:none;align-items:center;margin-top:4px">
+        <span style="font-size:12px;color:var(--text2)">ชำระโดย / Paid by</span>
+        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:flex-end">
+          <select id="of-prepaid-method" style="width:auto;padding:4px 6px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px">
+            <option value="cash">💵 เงินสด / Cash</option>
+            <option value="online">🏦 โอน / Online</option>
+          </select>
+          <input type="file" id="of-slip-cam" accept="image/*" capture="environment" style="display:none" onchange="ofPreSlipUpload(this)">
+          <input type="file" id="of-slip-file" accept="image/*" multiple style="display:none" onchange="ofPreSlipUpload(this)">
+          <button type="button" class="btnsm" onclick="document.getElementById('of-slip-cam').click()">📷</button>
+          <button type="button" class="btnsm" onclick="document.getElementById('of-slip-file').click()">🧾 สลิป / Slip</button>
+        </div>
+      </div>
+      <div id="of-slip-thumbs" style="display:none;gap:6px;flex-wrap:wrap;margin-top:6px"></div>
+      <div class="sumrow sumtot" id="of-openrow" style="display:none"><span>ค้างชำระ / Still open</span><span id="of-open">0 ฿</span></div>
     </div>
     <div class="sumbox" id="of-sum-dummy" style="display:none">
     </div>
@@ -7306,7 +7332,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817011;
+var KP_BUILD = 20260817012;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9123,6 +9149,21 @@ function ofCalc(){
     const delivery=parseInt(document.getElementById('of-delivery')?document.getElementById('of-delivery').value:0)||0;
     const grandFinal=Math.max(0,grand-discount+delivery);
     document.getElementById('of-st').textContent=grandFinal.toLocaleString('en-US')+' ฿';
+    // Prepayment: the grand total above stays what the customer owes in all — this
+    // only says how much of it is already in. Method picker, slip buttons and the
+    // "still open" line appear together with an amount and vanish with it, so an
+    // untouched form looks exactly as it did before.
+    (function(){
+      var pEl=document.getElementById('of-prepaid'); if(!pEl) return;
+      var pre=Math.max(0, parseFloat(pEl.value)||0);
+      var xr=document.getElementById('of-prepaid-extra');
+      var orow=document.getElementById('of-openrow'), oval=document.getElementById('of-open');
+      var th=document.getElementById('of-slip-thumbs');
+      if(xr) xr.style.display = pre>0 ? 'flex' : 'none';
+      if(th) th.style.display = (pre>0 && _ofPreSlips.length) ? 'flex' : 'none';
+      if(orow) orow.style.display = pre>0 ? 'flex' : 'none';
+      if(oval) oval.textContent = Math.max(0, grandFinal-pre).toLocaleString('en-US')+' ฿';
+    })();
     // Total clips = auto free + gift clips (packs don't count as individual clips)
     const totalClips = freeAuto + freeGift;
     const stcEl = document.getElementById('of-stc');
@@ -9508,7 +9549,27 @@ function ofCreate(){
   const o={id:no,receiptNum:assignedReceiptNum,date:document.getElementById('of-date').value||new Date().toISOString().split('T')[0],zone,customer:document.getElementById('of-cust').value||'—',phone:document.getElementById('of-phone').value||'—',address:document.getElementById('of-addr').value||'—',province:(document.getElementById('of-province').value||'').trim(),location:document.getElementById('of-loc').value||'',panels:panStr,lcorner:lcStr,clips,boxes:Math.max(1,Math.ceil(tq/10)),total:grand,status:'new',notes:'',contact:ofContactVal(),deliveryRound:document.getElementById('of-deliveround').value||'',reqDate:document.getElementById('of-reqdate').value||'',reqNote:(document.getElementById('of-reqnote').value||'').trim(),custRaw:((document.getElementById('of-paste')||{}).value||'').trim(),createdBy,editedBy:'',lineItems,_stockDeducted:true,_editTs:Date.now(),
   priority:_ofPriority,priorityReason:_ofPriorityReason,priorityBy:_ofPriority?createdBy:'',priorityAt:_ofPriority?Date.now():0,
   statusLog:[{status:'new',time:ts,by:createdBy}]};
+  // Prepayment taken while writing the order: money already in, so it lands as
+  // paidAmount with the method that was PICKED — never a default, because a guessed
+  // 'cash' on a bank transfer is exactly the kind of error nobody spots later. Covers
+  // the full total → the order counts as paid; less → a deposit, still open.
+  (function(){
+    var pe=document.getElementById('of-prepaid'); if(!pe) return;
+    var pre=Math.max(0, parseFloat(pe.value)||0); if(!(pre>0)) return;
+    var pm=(document.getElementById('of-prepaid-method')||{}).value==='online'?'online':'cash';
+    o.paidAmount=pre;
+    o.payDate=kpTodayStr(); o.paidBy=createdBy;
+    if(pre>=grand){ o.payMethod=pm; o.payMethodPartial=''; }
+    else          { o.payMethod='';  o.payMethodPartial=pm; }
+    if(pm==='online'){ o.paidOnline=pre; o.paidCash=0; } else { o.paidCash=pre; o.paidOnline=0; }
+    try{ addLog('Order '+no+' prepaid '+pre.toLocaleString()+' ฿ ('+pm+')','+'); }catch(e){}
+  })();
   orders.unshift(o);wOrders.unshift({id:no,zone,boxes:o.boxes,panels:panStr,lcorner:lcStr,clips,packed:false,packedAt:null});
+  // The slips were held in memory because the order had no id yet — attach them now.
+  if(_ofPreSlips.length){
+    _ofPreSlips.forEach(function(d){ try{ addOrderPhoto(no,'slip',d,createdBy,function(){}); }catch(e){} });
+    _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}
+  }
   try{ picsSeedSlots(o); }catch(e){}   // show the order (empty) in all Pictures tabs right away
   // Instore walk-in sale → PAID immediately (cash at the counter), but goes to PACKING —
   // not delivered — so the warehouse still records who packed it, a photo, CTN count etc.
@@ -9536,7 +9597,11 @@ function ofCreate(){
   }
   {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;stockBucketDeduct(li.code,_q,li.grade,li.cutLen);addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
   var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';ofUpdPrioCnt();addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order'});}catch(e){}
-  ['of-no','of-cust','of-phone','of-province','of-loc','of-contact-ch','of-contact-name','of-deliveround','of-reqdate','of-reqnote','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
+  ['of-no','of-cust','of-phone','of-province','of-loc','of-contact-ch','of-contact-name','of-deliveround','of-reqdate','of-reqnote','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';
+  // A prepayment left in the box would silently attach itself to the NEXT order.
+  var _pp=document.getElementById('of-prepaid'); if(_pp) _pp.value='';
+  var _pm=document.getElementById('of-prepaid-method'); if(_pm) _pm.value='cash';
+  _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
   if(_ofPriority){ try{ pushSend('warehouse','⭐ Priority order: '+no, _ofPriorityReason||'Important order', {tag:'priority'}); }catch(e){} }
   _ofPriority=false;_ofPriorityReason='';try{ofUpdatePriorityBtn();}catch(e){}
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
@@ -18308,6 +18373,30 @@ var poEditId=null;
 // in memory and are written once it is saved. Stored under their own photo type
 // ('preslip') so they don't show up as phantom orders in Pictures → Slips; on convert
 // they are copied onto the real order.
+// New Order has no order id yet, so a prepayment slip is held in memory and attached
+// the moment the order is written — same trick the pre-order form uses.
+var _ofPreSlips=[];
+function ofPreSlipUpload(input){
+  var files=input&&input.files?Array.prototype.slice.call(input.files):[];
+  input.value='';
+  if(!files.length) return;
+  files.forEach(function(f){
+    compressPhotoFile(f, function(dataUrl){
+      if(!dataUrl) return;
+      _ofPreSlips.push(dataUrl);
+      ofPreSlipRender(); try{ ofCalc(); }catch(e){}
+    });
+  });
+}
+function ofPreSlipDrop(i){ _ofPreSlips.splice(i,1); ofPreSlipRender(); try{ ofCalc(); }catch(e){} }
+function ofPreSlipRender(){
+  var box=document.getElementById('of-slip-thumbs'); if(!box) return;
+  box.innerHTML=_ofPreSlips.map(function(src,i){
+    return '<div style="position:relative"><img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:52px;height:52px;object-fit:cover;border-radius:6px;border:1px solid #86efac;cursor:pointer">'
+      +'<span onclick="ofPreSlipDrop('+i+')" title="Remove / ลบ" style="position:absolute;top:-6px;right:-6px;background:#dc2626;color:#fff;border-radius:50%;width:18px;height:18px;font-size:11px;line-height:18px;text-align:center;cursor:pointer">×</span></div>';
+  }).join('');
+  box.style.display=_ofPreSlips.length?'flex':'none';
+}
 var _poSlipPending=[];
 function poSlipUpload(input){
   var files=input&&input.files?Array.prototype.slice.call(input.files):[];
