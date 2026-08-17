@@ -7296,7 +7296,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817007;
+var KP_BUILD = 20260817008;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -8697,7 +8697,7 @@ function openTourDetail(ti) {
           </div>
           <div style="font-size:13px;color:var(--text);margin-bottom:2px"><i class="ti ti-user" style="font-size:12px;vertical-align:-1px"></i> ${o.customer} · ${o.zone}</div>
           <div style="font-size:12px;color:var(--text2);margin-bottom:4px">${o.panels}${o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:''}${o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':''}</div>
-          <div style="font-size:12px;font-weight:600;color:#1d4ed8;margin-bottom:4px">🚚 ${(o.shipper && o.shipper!=='ส่งเอง') ? o.shipper : 'ส่งเอง / self'+(o.driver?' ('+o.driver+')':'')}</div>
+          <div style="font-size:12px;font-weight:600;color:#1d4ed8;margin-bottom:4px">🚚 ${(o.shipper && o.shipper!=='ส่งเอง') ? o.shipper : 'ส่งเอง / self'+((t.driverName||o.driver)?' ('+(t.driverName||o.driver)+')':'')}</div>
           <a href="${mapsUrl}" target="_blank" style="font-size:12px;color:var(--blue);text-decoration:none"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> ${o.address}</a>
           ${o.contact?'<div style="font-size:12px;color:var(--text2);margin-top:2px"><i class="ti ti-message-circle" style="font-size:12px;vertical-align:-1px"></i> '+o.contact+'</div>':''}
           ${ofDelNoteHTML(o,'margin-top:4px;font-size:12.5px')}
@@ -8882,7 +8882,10 @@ function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
     var contact = o.contact ? ('💬 '+esc(o.contact)) : '';
     var addr = (o.address&&o.address!=='—') ? esc(o.address) : '';
     // Shipper/carrier for this stop — carrier company, else self-delivery (with driver name).
-    var shipTxt = (o.shipper && o.shipper!=='ส่งเอง') ? ('🚚 '+esc(o.shipper)) : ('🚚 ส่งเอง / self'+(o.driver?' ('+esc(o.driver)+')':''));
+    // The driver of THIS tour wins over the name stamped on the order: the stamp can
+    // lag behind a driver swap, the tour cannot — it is the sheet being printed.
+    var _selfDrv = driver || o.driver || '';
+    var shipTxt = (o.shipper && o.shipper!=='ส่งเอง') ? ('🚚 '+esc(o.shipper)) : ('🚚 ส่งเอง / self'+(_selfDrv?' ('+esc(_selfDrv)+')':''));
     // Date the order was created (sheet-report basis) + the per-stop delivery note
     // (entered on the tour-detail stop card, separate from the office-only Notes).
     var createdStr = o.date ? (function(){ try{ return fmtD(o.date); }catch(e){ return String(o.date); } })() : '';
@@ -14347,7 +14350,7 @@ function ofAddConfirm(){
     try{ if(!dAllOrders.find(function(x){return x.id===o.id;})){ dAllOrders.push({id:o.id,customer:o.customer,phone:o.phone,address:o.address,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:o.clips,ctn:o.ctn,bundle:o.bundle}); dAllOrders.sort(function(a,b){return reg(a.id).s-reg(b.id).s;}); } }catch(e){}
     try{ dStatus[o.id]=newSt; }catch(e){}
     var d = drivers.find(function(x){return x.id===t.driverId;});
-    if(d){ o.deliveredBy=d.name; }
+    if(d){ o.deliveredBy=d.name; stampSelfDriver(o, d.name); }
     try{ sheetsSyncOrder(o); }catch(e){}
     try{ pushSend('driver_'+t.driverId,'➕ Order added to your tour / เพิ่มออเดอร์', o.id+' — '+(o.customer||''), {tag:'tour'}); }catch(e){}
     try{ addLog('Order '+o.id+' added to '+t.driverName+"'s tour",'+'); }catch(e){}
@@ -14394,6 +14397,16 @@ function ofRenderSwapDrvList(){
   }).join('');
 }
 function closeTourDrv(){ var m=document.getElementById('tour-drv-modal'); if(m) m.classList.remove('open'); ofSwapTourId=null; }
+// The stop card and the delivery sheet print "ส่งเอง / self (<name>)" from o.driver.
+// That field used to be written in exactly one place — when the shipper was picked —
+// so swapping a tour's driver, adding an order to a tour or building a new tour all
+// left the old name standing on the stop. Every one of those three now stamps it.
+// A carrier shipment keeps its carrier name, but the field is still refreshed when it
+// already holds one, so switching back to self can never resurrect a stale driver.
+function stampSelfDriver(o, name){
+  if(!o || !name) return;
+  if(!o.shipper || o.shipper==='ส่งเอง' || o.driver) o.driver=name;
+}
 function ofSwapDrvPick(driverId){
   var t = activeTours.find(function(x){return x.id===ofSwapTourId;}); if(!t){ closeTourDrv(); return; }
   var d = drivers.find(function(x){return x.id===driverId;}); if(!d) return;
@@ -14407,7 +14420,7 @@ function ofSwapDrvPick(driverId){
   // "Delivered by" on every order in the tour follows the new driver (sheet col AC).
   (t.orders||[]).forEach(function(oid){
     var o=orders.find(function(x){return x.id===oid;});
-    if(o){ o.deliveredBy=d.name; try{ sheetsSyncOrder(o); }catch(e){} }
+    if(o){ o.deliveredBy=d.name; stampSelfDriver(o, d.name); try{ sheetsSyncOrder(o); }catch(e){} }
   });
   try{ tourRegUpsert(t); }catch(e){}
   auditTour('driver','🚚 '+d.name, 'เปลี่ยนคนขับ / driver changed: '+oldName+' → '+d.name+' · '+n+' order'+(n!==1?'s':'')+(n?': '+(t.orders||[]).join(', '):''));
@@ -15095,7 +15108,7 @@ function ofCreateTour(){
   // before it's even delivered. (Reassigning via a new tour overwrites it.)
   if(d){ ofSelOrders.forEach(function(id){
     var _od=orders.find(function(x){return x.id===id;});
-    if(_od){ _od.deliveredBy=d.name; try{ sheetsSyncOrder(_od); }catch(e){} }
+    if(_od){ _od.deliveredBy=d.name; stampSelfDriver(_od, d.name); try{ sheetsSyncOrder(_od); }catch(e){} }
   }); }
   // Tour ID: a new tour gets the next running number, an existing one keeps its own —
   // either way every order in the tour is stamped with it (searchable everywhere).
