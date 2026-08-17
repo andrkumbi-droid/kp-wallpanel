@@ -7388,7 +7388,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817015;
+var KP_BUILD = 20260817016;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17098,6 +17098,7 @@ function kpPlayThClips(amt, map, cb){
     if(audioCtx.state==='suspended' && audioCtx.resume) { try{ audioCtx.resume(); }catch(e){} }
     var toks=kpThaiTokens(amt).filter(function(t){ return map[t]; });
     if(!toks.length){ cb(); return; }
+    window._kpVoiceRoute='clips (snd/th)';
     var g=audioCtx.createGain(); g.gain.value=0.9; g.connect(audioCtx.destination);
     // Google speaks a single syllable slowly and deliberately, so played 1:1 the
     // amount comes out dictated rather than spoken. 1.15× and a little overlap
@@ -17151,6 +17152,7 @@ function kpSayRelay(amt, cb){
   var play=function(b64){
     var over=false, done=function(ok){ if(over) return; over=true; cb(ok); };
     try{
+      window._kpVoiceRoute='relay recording';
       var a=new Audio('data:audio/mpeg;base64,'+b64);
       a.volume=0.95;
       a.onended=function(){ done(true); };
@@ -17204,6 +17206,7 @@ function kpSayBahtTTS(amt, cb, v){
   if(!window.speechSynthesis || !window.SpeechSynthesisUtterance){ fin(); return; }
   if(v===undefined) v=kpThaiVoice();
   if(v===null){ fin(); return; }                    // device has voices, none Thai
+  window._kpVoiceRoute='device voice: '+((v&&v.name)||'th-TH')+(kpVoiceIsFemale(v)?' (female)':' (male, pitched up)');
   try{
     var txt=kpThaiBaht(amt)+'ค่ะ';                   // ...บาทค่ะ — polite, female speaker
     var u=new SpeechSynthesisUtterance(txt);
@@ -17284,6 +17287,39 @@ function kpCashThenSay(amt, label){
   }catch(e){}
   setTimeout(say, 2600);
 }
+// ── Voice test ────────────────────────────────────────────────────────────
+// Open the app with  #voicetest  (or #voicetest=1234 for another amount) and a
+// button appears bottom right. Tapping it plays exactly what a delivery
+// confirmation plays — the tap is also what satisfies the browser's autoplay
+// rule — and afterwards the banner names which of the four routes answered, so
+// the same URL tells you on the PC and on the phone what you are hearing.
+function kpVoiceTestButton(){
+  try{
+    if(String(location.hash||'').indexOf('voicetest')<0) return;
+    if(document.getElementById('kp-voicetest')) return;
+    var amt=parseFloat((String(location.hash).split('=')[1]||''))||5482;
+    var b=document.createElement('button');
+    b.id='kp-voicetest'; b.type='button';
+    b.textContent='🔊 Test '+amt.toLocaleString('en-US')+' ฿';
+    b.style.cssText='position:fixed;right:14px;bottom:80px;z-index:99999;padding:14px 18px;border-radius:999px;'
+      +'border:none;background:#16a34a;color:#fff;font-size:15px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.3);cursor:pointer';
+    b.onclick=function(){
+      b.disabled=true; b.textContent='🔊 …';
+      window._kpVoiceRoute='(none)';
+      var t0=Date.now();
+      kpPlayCash();
+      setTimeout(function(){
+        kpSayBaht(amt, function(){
+          var s=((Date.now()-t0)/1000).toFixed(1);
+          try{ kpNotifText('🔊 '+window._kpVoiceRoute+' · '+s+'s'); }catch(e){}
+          b.disabled=false; b.textContent='🔊 Test '+amt.toLocaleString('en-US')+' ฿';
+        });
+      }, 2600);
+    };
+    document.body.appendChild(b);
+  }catch(e){}
+}
+try{ window.addEventListener('load', kpVoiceTestButton); window.addEventListener('hashchange', kpVoiceTestButton); }catch(e){}
 // Banner text without the notification beep (the voice is the signal here).
 function kpNotifText(text){
   var b=document.getElementById('notif-banner'), t=document.getElementById('notif-text');
