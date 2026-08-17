@@ -2483,6 +2483,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" onclick="openSM('')" style="flex-shrink:0;padding:7px 11px;border:none;border-radius:var(--rs);background:#b45309;color:#fff;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-plus"></i> Add / เพิ่ม</button>
       <button type="button" onclick="stLogOpen()" style="flex-shrink:0;padding:7px 11px;border:1px solid #fcd34d;border-radius:var(--rs);background:var(--bg);color:#92400e;font-size:12px;font-weight:700;cursor:pointer"><i class="ti ti-history"></i> Log</button>
     </div>
+    <div id="of-precut-box" style="display:none;margin-bottom:12px"></div>
     <div id="of-stockcat-list"><div class="empty" style="padding:1rem;font-size:13px">No stock yet</div></div>
   </div></div>
   <div class="view" id="ofv-preorder"><div class="sec">
@@ -5826,8 +5827,42 @@ function ofStockPrice(s){
 function ofStockValue(s){ return ofStockPrice(s) * ((parseInt(s.qty)||0)+(parseInt(s.precut)||0)); }
 function ofStockValueSum(items){ return (items||[]).reduce(function(a,s){ return a+ofStockValue(s); }, 0); }
 
+// Office → Stock tab: what is already cut and waiting, at the top of the tab so
+// nobody cuts a fresh panel for something that is lying there. Hidden completely
+// while nothing is pre-cut — the tab stays quiet for anyone who never cuts.
+// Note: the bucket counts PIECES, not lengths. If pre-cutting ever happens in more
+// than one length, this box (and st.precut itself) has to grow a per-length split.
+function ofPrecutBox(){
+  var host=document.getElementById('of-precut-box'); if(!host) return;
+  var items=(stockItems||[]).filter(function(s){ return (parseInt(s.precut)||0)>0; })
+    .sort(function(a,b){ return (parseInt(b.precut)||0)-(parseInt(a.precut)||0); });
+  if(!items.length){ host.style.display='none'; host.innerHTML=''; return; }
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var prod=function(code){ return (window.QT_PRODUCTS||[]).find(function(p){ return p.code===code; }) || {}; };
+  var total=items.reduce(function(a,s){ return a+(parseInt(s.precut)||0); }, 0);
+  var canEdit=!!window.ofStockEdit;
+  host.style.display='block';
+  host.innerHTML='<div class="card" style="border:1px solid #ddd6fe;background:#faf8ff">'
+    +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">'
+      +'<span style="font-size:14px;font-weight:800;color:#6d28d9">✂ ตัดแล้ว / Pre-cut · Grade C</span>'
+      +'<span style="font-size:11px;color:var(--text2)">'+items.length+' รายการ / items</span>'
+      +'<span style="margin-left:auto;font-size:16px;font-weight:800;color:#6d28d9">'+total.toLocaleString()+' pcs</span>'
+    +'</div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:7px">'
+    +items.map(function(s){
+      var p=prod(s.code), n=parseInt(s.precut)||0;
+      return '<div'+(canEdit?' onclick="openSM(\''+esc(s.code)+'\')" style="cursor:pointer;':' style="')
+        +'display:flex;align-items:center;gap:7px;background:var(--bg);border:1px solid #ddd6fe;border-radius:var(--rs);padding:6px 10px">'
+        +'<span style="font-size:13px;font-weight:800">'+esc(s.code)+'</span>'
+        +(p.name?'<span style="font-size:11px;color:#b45309;font-weight:700">'+esc(p.name)+'</span>':'')
+        +'<span style="font-size:14px;font-weight:800;color:#6d28d9">'+n.toLocaleString()+'</span>'
+      +'</div>';
+    }).join('')
+    +'</div></div>';
+}
 // Office → Stock tab: quotation-style catalog (image, code, price, size) + Grade A/B
 function ofStockCatalog(){
+  try{ ofPrecutBox(); }catch(e){}
   var host = document.getElementById('of-stockcat-list');
   if(!host) return;
   var TRIM = ['lcorner','utrim','ttrim','pvc'];
@@ -7142,7 +7177,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817002;
+var KP_BUILD = 20260817003;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -8680,7 +8715,7 @@ function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
 
   function dsBlock(o){
     var prods = (o.lineItems||[]).filter(function(li){ return PRODT[li.type] && (parseFloat(li.qty)||0)>0; })
-      .map(function(li){ return '<div class="ds-pi"><span>'+esc(li.code)+' <b>×'+li.qty+'</b></span><span class="box"></span></div>'; }).join('');
+      .map(function(li){ return '<div class="ds-pi"><span>'+esc(li.code)+' <b>×'+li.qty+'</b>'+gradeMarkHTML(li,9)+'</span><span class="box"></span></div>'; }).join('');
     if(!prods){
       prods = '<div class="ds-pi"><span>'+esc(o.panels||'—')+'</span><span class="box"></span></div>'
         + ((o.lcorner&&o.lcorner!=='—')?'<div class="ds-pi"><span>'+esc(o.lcorner)+'</span><span class="box"></span></div>':'');
@@ -8966,6 +9001,26 @@ function gradeTag(g, cutLen){ g=gradeNorm(g);
   if(g==='A') return '';
   if(g==='C'){ var n=parseInt(cutLen)||0; return n>0 ? ' (C '+n+'cm)' : ' (C)'; }
   return ' ('+g+')'; }
+// Marker for everyone who physically handles the goods — packers, drivers, the wall
+// display. Grade A stays silent: it is the normal case, and a label on every single
+// line would drown the two that matter. B and C are called out, and C carries its
+// length, because that is what decides which stack to pick from.
+function gradeMarkTxt(li){
+  var g=gradeNorm(li && li.grade);
+  if(g==='B') return ' [B]';
+  if(g==='C'){ var n=parseInt(li.cutLen)||0; return n>0 ? ' [C '+n+'cm]' : ' [C]'; }
+  return '';
+}
+function gradeMarkHTML(li, px){
+  var g=gradeNorm(li && li.grade);
+  if(g==='A') return '';
+  var n=parseInt(li && li.cutLen)||0;
+  var txt = g==='B' ? '⚠ B' : ('✂ '+(n>0 ? n+'cm' : 'C'));
+  var col = g==='B' ? '#b45309' : '#6d28d9';
+  var bg  = g==='B' ? '#fff7ed' : '#f5f3ff';
+  return '<span style="margin-left:5px;font-size:'+(px||11)+'px;font-weight:800;color:'+col
+    +';background:'+bg+';border:1px solid '+col+';border-radius:6px;padding:0 5px;white-space:nowrap">'+txt+'</span>';
+}
 function kpGradeColor(s){
   if(!s) return;
   s.classList.toggle('gb', s.value==='B');
@@ -9889,7 +9944,7 @@ function ofCopyPack(id, btn){
   var items=(o.lineItems||[]).filter(function(li){return PRIO[li.type]!=null && (parseInt(li.qty)||0)>0;});
   if(items.length){
     items.slice().sort(function(a,b){return PRIO[a.type]-PRIO[b.type];}).forEach(function(li){
-      lines.push(String(li.code||'').toUpperCase()+' - '+(parseInt(li.qty)||0));
+      lines.push(String(li.code||'').toUpperCase()+' - '+(parseInt(li.qty)||0)+gradeMarkTxt(li));
     });
   } else {
     // Fallback for orders without lineItems: parse the panels + lcorner strings.
@@ -15343,8 +15398,8 @@ function whRender() {
       tpList.innerHTML = '<div class="empty"><i class="ti ti-checks" style="font-size:40px;display:block;margin-bottom:8px;color:var(--green)"></i>'+wtx('all_packed')+'</div>';
     } else {
       tpList.innerHTML = cancelHTML + changeHTML + toPack.map(function(o) {
-        var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
-        var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
+        var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
+        var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
         var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
         return '<div class="card"'+(o.priority?' style="border-left:5px solid #7c3aed"':'')+'>'+
           (o.priority?'<div style="background:#f3e8ff;color:#7c3aed;border-radius:var(--rs);padding:4px 8px;font-size:11px;font-weight:800;margin-bottom:6px">⭐ PRIORITY / สำคัญมาก'+(o.priorityReason?' — <span style="font-weight:600">'+o.priorityReason+'</span>':'')+'</div>':'')+
@@ -15378,8 +15433,8 @@ function whRender() {
     } else {
       pkList.innerHTML = recentPacked.map(function(o) {
         var pcnt = (typeof orderPhotoCount==='function')?orderPhotoCount(o.id,'warehouse'):0;
-        var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
-        var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
+        var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
+        var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
         var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
         return '<div class="card card-done">'+
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
@@ -15432,8 +15487,8 @@ function whUnpack(id){const o=wOrders.find(x=>x.id===id);if(!o)return;o.packed=f
 // on the physical goods. mode: 'accept' (was packed → move to Packing to unpack),
 // 'unpack' (in Packing → confirm unpacked), 'seen' (never packed → just acknowledge).
 function whCancelCard(o, mode){
-  var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
-  var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
+  var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
+  var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
   var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
   var note = (mode==='seen') ? wtx('cancel_note_new') : wtx('cancel_note_packed');
   var bStyle = 'background:#dc2626;color:#fff;border:none;margin-top:10px;width:100%;min-height:52px;font-size:15px;font-weight:700;-webkit-tap-highlight-color:transparent;touch-action:manipulation';
@@ -19782,8 +19837,8 @@ function whRenderPacking() {
 
   var cancelUnpackHTML = cancelUnpack.map(function(o){ return whCancelCard(o, 'unpack'); }).join('');
   el.innerHTML = cancelUnpackHTML + packingOrders.map(function(o) {
-    var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
-    var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty;}).join(', ')||'—';
+    var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
+    var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
     var totalClips = ((o.lineItems||[]).filter(function(i){return i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips';}).reduce(function(a,i){return a+(parseInt(i.qty)||0);},0)) || (parseInt(o.clips)||0);
     var pcnt = orderPhotoCount(o.id,'warehouse');
     return '<div class="card" style="margin-bottom:12px'+(o.cantFinish?';background:#fef2f2;border:1.5px solid #fca5a5':'')+'">'+
