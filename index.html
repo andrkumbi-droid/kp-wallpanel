@@ -17619,6 +17619,17 @@ function kpPayFeedAdd(o){
     if(!window.fbDB || !o) return;
     var amt=parseFloat(o.amt)||0; if(!(amt>0)) return;
     var ord=(typeof orders!=='undefined' && o.id) ? (orders.find(function(x){return x.id===o.id;})||{}) : {};
+    // The figure on a slip is what a reader made of a photograph, and it is often not
+    // this order's money at all: net of the carrier's cut, a misread digit, or one
+    // transfer that covers several orders (#202 is a 784 ฿ order whose slip read
+    // 12,000 ฿). What the order itself says is the truth, so a slip only ever reports
+    // the booked amount — the photo and its own reading stay on the order untouched.
+    if((o.kind||'slip')==='slip' && ord && ord.id){
+      var _booked=parseFloat(ord.paidAmount)||0;
+      var _tot=0; try{ _tot=ofOrderTotalNum(ord)||0; }catch(e){}
+      var _use=_booked>0?_booked:_tot;
+      if(_use>0) amt=_use;
+    }
     var rec={
       amt: Math.round(amt*100)/100,
       id: String(o.id||''),
@@ -17664,7 +17675,7 @@ function kpPayFeedListen(){
     // open all day next to other work — it SHOWS the money, it does not announce it.
     if(!kpCashKioskOn()) return;
     if(!_cashArmed) return;               // sound switched off on the monitor
-    try{ kpCashThenSay(v.amt, v.id||''); }catch(e){}
+    try{ kpCashThenSay(kpFeedNet(v).net, v.id||''); }catch(e){}
   });
   // A slip record that later becomes "delivered" is an update, not a new payment:
   // keep the row truthful, stay silent.
@@ -17739,6 +17750,23 @@ function kpPayFeedTrim(){
     });
   }catch(e){}
 }
+// The customer pays the order in full, but a carrier that collects the money keeps a
+// percentage of it — that cut is a cost we carry, it never reaches the account. So the
+// monitor shows what ARRIVES and names the deduction underneath; the day's total is the
+// sum of those net amounts, not of the invoices.
+// Read from the ORDER every time (not stored on the feed record) so a corrected fee or
+// a corrected total is reflected the moment it is typed.
+function kpFeedNet(v){
+  var amt=Math.abs(parseFloat(v&&v.amt)||0);
+  var o=null;
+  try{ o=(typeof orders!=='undefined'?orders:[]).find(function(x){ return String(x.id)===String(v&&v.id); }); }catch(e){}
+  var fee=0;
+  try{ fee=o?(shipFeeOf(o)||0):(parseFloat(v&&v.fee)||0); }catch(e){}
+  if(!(fee>0)) return {amt:amt, fee:0, net:amt, shipper:''};
+  // A part payment can never carry more fee than it is worth.
+  fee=Math.min(fee, amt);
+  return {amt:amt, fee:Math.round(fee*100)/100, net:Math.max(0, Math.round((amt-fee)*100)/100), shipper:(o&&o.shipper)||''};
+}
 function cashFeedBadge(){
   var el=document.getElementById('oft-cash-cnt'); if(!el) return;
   var t0=new Date(); t0.setHours(0,0,0,0);
@@ -17767,7 +17795,7 @@ function cashFeedRender(){
   });
   var rows=keep.reverse();                       // newest first
   var sum=0, n=0;
-  rows.forEach(function(v){ if((v.ts||0)>=today){ sum+=parseFloat(v.amt)||0; n++; } });
+  rows.forEach(function(v){ if((v.ts||0)>=today){ sum+=kpFeedNet(v).net; n++; } });
   Array.prototype.forEach.call(document.querySelectorAll('.cashfeed-total'), function(el){
     el.textContent=Math.round(sum).toLocaleString('en-US')+' ฿';
   });
@@ -17785,6 +17813,7 @@ function cashFeedRender(){
   var fresh=!!(topKey && window._cashTopKey && topKey!==window._cashTopKey);
   window._cashTopKey=topKey;
   var html=rows.map(function(v,i){
+    var nf=kpFeedNet(v);
     var d=new Date(v.ts||0);
     var hh=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
     var day=(v.ts||0)>=today ? '' : (d.getDate()+'.'+(d.getMonth()+1)+'. ');
@@ -17799,10 +17828,15 @@ function cashFeedRender(){
     return '<div class="'+cls+'" style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);'
       +'border-radius:var(--rs);background:var(--bg);margin-bottom:6px">'
       +'<div class="cf-amt" style="font-size:22px;font-weight:800;color:#16a34a;min-width:120px;text-align:right">'
-        +Math.round(parseFloat(v.amt)||0).toLocaleString('en-US')+' ฿</div>'
+        +Math.round(nf.net).toLocaleString('en-US')+' ฿</div>'
       +'<div style="flex:1;min-width:0">'
         +'<div class="cf-main" style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
           +kpcEsc(v.id||'')+(v.cust?' · '+kpcEsc(v.cust):'')+'</div>'
+        +(nf.fee>0
+          ? '<div class="cf-fee" style="font-size:11px;color:#92400e;font-weight:700">'
+              +Math.round(nf.amt).toLocaleString('en-US')+' − '+Math.round(nf.fee).toLocaleString('en-US')+' ฿ 💸'
+              +(nf.shipper?' '+kpcEsc(nf.shipper):'')+'</div>'
+          : '')
         +'<div class="cf-meta" style="font-size:11px;color:var(--text2)">'+tag+' '+day+hh+(v.by?' · '+kpcEsc(v.by):'')+'</div>'
       +'</div></div>';
   }).join('');
