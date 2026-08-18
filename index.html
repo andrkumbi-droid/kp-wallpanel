@@ -7431,7 +7431,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817039;
+var KP_BUILD = 20260817040;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9474,6 +9474,7 @@ function insPayDone(){
   var o=(orders||[]).find(function(x){return String(x.id)===String(_insPayId);});
   if(!o || !_insPayMethod){ insPayClose(); return; }
   var by=ofWho(), today=kpTodayStr();
+  var _insPrevPaid=parseFloat(o.paidAmount)||0;
   o.payMethod=_insPayMethod;
   o.paidAmount=_insPayTotal;
   o.payDate=today;
@@ -9485,7 +9486,9 @@ function insPayDone(){
     detail:'🏪 ขายหน้าร้าน / instore · '+(_insPayMethod==='cash'?'💵 เงินสด / cash':'🏦 โอน / online')+' '+_insPayTotal.toLocaleString()+' ฿'
       +(_insPaySlips.length?' · 🧾 '+_insPaySlips.length:(o.slipLater?' · สลิปตามมา / slip later':''))}); }catch(e){}
   var slips=_insPaySlips.slice(), oid=o.id;
-  try{ kpPayFeedAdd({amt:_insPayTotal, id:oid, kind:'office', by:by}); }catch(e){}   // → the 💰 Live monitor
+  // Only the difference: a prepayment typed while writing the order has already
+  // been reported, and booking the sale here must not report it a second time.
+  if(_insPayTotal-_insPrevPaid>0) try{ kpPayFeedAdd({amt:_insPayTotal-_insPrevPaid, id:oid, kind:'office', by:by}); }catch(e){}
   slips.forEach(function(d){ try{ addOrderPhoto(oid,'slip',d,by,function(){}); }catch(e){} });
   _insPaySlips=[]; _insPayMethod=''; _insPayLater=false;
   syncOrders();
@@ -17419,6 +17422,19 @@ function kpMeName(){
 }
 // One record per incoming payment. Wrapped in try/catch on purpose: a feed entry
 // must never be able to break an upload or a delivery confirmation.
+// Is an existing record and a new one the SAME money reported twice, rather than
+// two payments that happen to be equal? Only across DIFFERENT channels and close
+// together in time: the driver photographs the slip and then confirms the delivery,
+// or the office books an amount and uploads the slip for it. Two bookings of the
+// same size through the SAME channel are two payments — a customer paying 5,000
+// twice on one order in a day must show up twice, or the screen lies about the day.
+function kpPayFeedSame(v, rec){
+  if(!v || !rec || !v.id || !rec.id) return false;
+  if(String(v.id)!==String(rec.id)) return false;
+  if(Math.round(parseFloat(v.amt)||0)!==Math.round(rec.amt)) return false;
+  if((v.kind||"")===(rec.kind||"")) return false;              // same channel = separate payments
+  return Math.abs((rec.ts||0)-(v.ts||0)) < 2*3600*1000;        // reported within two hours
+}
 function kpPayFeedAdd(o){
   try{
     if(!window.fbDB || !o) return;
@@ -17441,15 +17457,9 @@ function kpPayFeedAdd(o){
     // it was already announced seconds ago.) A deposit and the rest of an order have
     // different amounts and are therefore separate payments, as they should be.
     if(!rec.id){ window.fbDB.ref('payFeed').push(rec); return; }
-    var key=rec.id+'|'+Math.round(rec.amt);
-    var t0=new Date(); t0.setHours(0,0,0,0);
     window.fbDB.ref('payFeed').limitToLast(40).once('value', function(s){
       var hit=null;
-      s.forEach(function(c){
-        var v=c.val()||{};
-        if(!v.id || (v.ts||0)<t0.getTime()) return;
-        if(String(v.id)+'|'+Math.round(parseFloat(v.amt)||0)===key) hit=c;
-      });
+      s.forEach(function(c){ if(kpPayFeedSame(c.val()||{}, rec)) hit=c; });
       if(hit) try{ hit.ref.update({ kind:rec.kind, by:rec.by||(hit.val()||{}).by||'' }); }catch(e){}
       else    try{ window.fbDB.ref('payFeed').push(rec); }catch(e){}
     }, function(){ try{ window.fbDB.ref('payFeed').push(rec); }catch(e){} });
@@ -17561,11 +17571,11 @@ function cashFeedRender(){
   // from before that, so a payment is shown (and counted) exactly once. Same order +
   // same amount on a DIFFERENT day, or a different amount (deposit, then the rest),
   // stays separate — that is different money.
-  var seen={}, keep=[];
+  var keep=[];
   _cashFeed.slice().sort(function(a,b){ return (a.ts||0)-(b.ts||0); }).forEach(function(v){
-    var key=(v.id||'')+'|'+Math.round(parseFloat(v.amt)||0)+'|'+new Date(v.ts||0).toDateString();
-    if(v.id && seen[key]) return;
-    if(v.id) seen[key]=true;
+    // Same rule as when writing (kpPayFeedSame): one payment reported through two
+    // channels collapses, two genuine payments of equal size do not.
+    for(var i=0;i<keep.length;i++){ if(kpPayFeedSame(keep[i], v)) return; }
     keep.push(v);
   });
   var rows=keep.reverse();                       // newest first
