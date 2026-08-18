@@ -4120,6 +4120,38 @@ function kpFlushRenders(){
   if(kpModalOpen()) return;
   keys.forEach(function(k){ var fn=_kpRenderPending[k]; delete _kpRenderPending[k]; try{ fn(); }catch(e){} });
 }
+// Typing an amount only stuck when Enter was pressed first, and this is why: every
+// change anywhere in the office (any device) re-renders these lists, and a rebuilt
+// innerHTML replaces the very box being typed in. The half-typed value went with it,
+// so leaving the field afterwards had nothing left to save. Enter fires `change`
+// immediately, which is what made it look like Enter was required.
+// While one of a list's own fields has the focus, its rebuild waits and runs once the
+// field is left — by then `change` has already booked the amount.
+var _kpTypeHold={};
+function _kpTypingIn(c){
+  var a=document.activeElement;
+  if(!c || !a || a===document.body || !c.contains(a)) return false;
+  var t=(a.tagName||'').toLowerCase();
+  return t==='input' || t==='textarea' || t==='select';
+}
+function kpHoldWhileTyping(cid, again){
+  var c=document.getElementById(cid);
+  if(!c || !_kpTypingIn(c)) return false;
+  if(_kpTypeHold[cid]) return true;                 // a rebuild is already waiting
+  _kpTypeHold[cid]=true;
+  // Watched rather than hooked to blur: a field that is removed while it still has
+  // the focus fires no blur at all, and the list would then never rebuild again.
+  // The 20 s ceiling is the same safety net for anything else that goes wrong.
+  var t0=Date.now();
+  var iv=setInterval(function(){
+    var cc=document.getElementById(cid);
+    if(cc && _kpTypingIn(cc) && (Date.now()-t0)<20000) return;
+    clearInterval(iv);
+    _kpTypeHold[cid]=false;
+    try{ again(); }catch(e){}
+  }, 400);
+  return true;
+}
 function kpSafeRender(key, sig, fn){
   if(sig!=null && _kpRenderSig[key]===sig) return;   // nothing changed → keep the DOM
   if(sig!=null) _kpRenderSig[key]=sig;
@@ -10463,6 +10495,7 @@ function ofPayMethodPartialSel(id, m){
 function ofUpdPrioCnt(){try{var el=document.getElementById('of-prio-cnt');if(!el)return;var n=orders.filter(function(o){return o.priority&&(o.status==='new'||o.status==='packing');}).length;if(n>0){el.textContent='⭐'+n;el.style.display='';}else{el.style.display='none';}}catch(e){}}
 
 function ofRenderOrders(){
+  if(kpHoldWhileTyping('of-olist', ofRenderOrders)) return;
   try{ fataxProbe(); }catch(e){}   // once per session; re-renders when the relay says ok
   var activeOrders = orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});
   var cntEl = document.getElementById('of-cnt');
@@ -10884,6 +10917,7 @@ function _tourMiniBtn(id,folded){
 }
 function ofRenderTour(){
   if(_kmDragRow) return;
+  if(kpHoldWhileTyping('of-active-tours', ofRenderTour)) return;
   ofUpdTourDot();
   try{ ofBackfillTourDrivers(); }catch(e){}
   // Tour IDs: tours created before this feature (or while offline) get their number now.
@@ -21907,6 +21941,7 @@ function payOrderCard(o) {
 }
 
 function _payRenderNow() {
+  if(kpHoldWhileTyping('pay-list', _payRenderNow)) return;
   payUpdateBadge();
   var list = document.getElementById('pay-list');
   if(!list) return;
@@ -22158,6 +22193,7 @@ function chaseGoPay(){
 }
 function chaseRenderPanel(list){
   var el=document.getElementById('pay-chase'); if(!el) return;
+  if(kpHoldWhileTyping('pay-chase', chaseRenderPanel)) return;
   list=list||chaseList();
   var due=list.filter(function(x){ return x.c.due; }), later=list.filter(function(x){ return !x.c.due; });
   if(!due.length && !later.length){ el.innerHTML=''; return; }
@@ -27300,6 +27336,7 @@ function ofAttRender(){ pgRender(); }
 // position is captured and put back, the same way the day strip already keeps its
 // horizontal scroll.
 function pgRender(){
+  if(kpHoldWhileTyping('pg-body', pgRender)) return;
   var host=document.getElementById('pg-body'); if(!host) return;
   var _sy=window.pageYOffset||document.documentElement.scrollTop||0;
   var _back=function(){ if(_sy) try{ window.scrollTo(0,_sy); }catch(e){} };
@@ -29093,6 +29130,7 @@ function ctrBillsHtml(mk){
 }
 
 function costsRender(){
+  if(kpHoldWhileTyping('bills-costs', costsRender)) return;
   var el=document.getElementById('bills-costs'); if(!el) return;
   var mk=_costMonthKey();
   // Carryover: seed the CURRENT month's fixed costs from the latest previous month if still empty.
@@ -31575,6 +31613,7 @@ function finSumRender(){
     + (dual ? row('= คงเหลือทั้งหมด / Result incl.',resA,resA<0?'#dc2626':'var(--text3)','var(--bg2)',true) : '');
 }
 function finRender(){
+  if(kpHoldWhileTyping('fin-tree', finRender)) return;
   try{ if(!document.getElementById('fin-e-section')) finEntryRender(); }catch(e){}
   var tree=document.getElementById('fin-tree'); if(!tree) return;
   // Month list: last 6 months + every month that actually holds a payment.
