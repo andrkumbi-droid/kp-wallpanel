@@ -1806,6 +1806,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" class="fbtn" onclick="auditFilt('tour',this)">Tour</button>
       <button type="button" class="fbtn" onclick="auditFilt('payment',this)">Payment</button>
       <button type="button" class="fbtn" onclick="auditFilt('payroll',this)">💰 Payroll</button>
+      <button type="button" class="fbtn" onclick="auditFilt('photo',this)">📷 Photos</button>
       <button type="button" class="fbtn" onclick="auditFilt('delete',this)">Deleted</button>
       <button type="button" class="fbtn" onclick="auditFilt('claim',this)">Claims</button>
     </div>
@@ -11787,7 +11788,9 @@ function ofLalaUploadCarPhoto(input,ti){
     var t=activeTours[ti]; if(!t){ return; }
     if(!t.carPhotos) t.carPhotos=[];
     t.carPhotos.push(dataUrl);
-    syncTours(); ofRenderLala(); try{ ofRenderTour(); }catch(e){}
+    syncTours();
+    try{ auditPhoto('🚚 รูปรถ / Car photo', _tourLbl(t), _photoWho(), {area:'tour', detail:'Lalamove'}); }catch(e){}
+    ofRenderLala(); try{ ofRenderTour(); }catch(e){}
   });
   input.value='';
 }
@@ -11810,6 +11813,7 @@ function ofLalaUploadCarFeeSlip(input,ti){
     if(!t.carFeeSlips) t.carFeeSlips=[];
     t.carFeeSlips.push(dataUrl);
     syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){}
+    try{ auditPhoto('🧾 สลิปค่ารถ / Car-fee slip', _tourLbl(t), _photoWho(), {area:'tour', detail:'Lalamove'}); }catch(e){}
     ofRenderLala(); try{ ofRenderTour(); }catch(e){}
   });
   input.value='';
@@ -13909,7 +13913,11 @@ function ofTourAddLoadPhoto(input, tourId){
   files.forEach(function(f){
     compressPhotoFile(f, function(dataUrl){
       t.carPhotos.push(dataUrl); done++;
-      if(done===total){ syncTours(); try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){} }
+      if(done===total){
+        syncTours();
+        try{ auditPhoto('🚚 รูปรถ / Tour load photo', _tourLbl(t), _photoWho(), {area:'tour', n:total}); }catch(e){}
+        try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){}
+      }
     });
   });
   input.value='';
@@ -13930,7 +13938,11 @@ function ofTourAddSlip(input, tourId){
   files.forEach(function(f){
     compressPhotoFile(f, function(dataUrl){
       t.carFeeSlips.push(dataUrl); done++;
-      if(done===total){ syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){} try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){} }
+      if(done===total){
+        syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){}
+        try{ auditPhoto('🧾 สลิปค่ารถ / Car-fee slip', _tourLbl(t), _photoWho(), {area:'tour', n:total}); }catch(e){}
+        try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){}
+      }
     });
   });
   input.value='';
@@ -14106,12 +14118,14 @@ function ofDrvAddTourPhoto(input, driverKey, tourKey, tourId){
       if(!at.carPhotos) at.carPhotos=[];
       at.carPhotos.push(dataUrl);
       syncTours();
+      try{ auditPhoto('🚚 รูปทัวร์ / Tour photo', _tourLbl(at), _photoWho(), {area:'tour'}); }catch(e){}
       try{ ofDriversRender(); }catch(e){}
     } else if(window.fbDB && driverKey && tourKey){
       var ref=window.fbDB.ref('tourHistory/'+driverKey+'/'+tourKey+'/carPhotos');
       ref.once('value', function(s){
         var arr=s.val(); if(!Array.isArray(arr)) arr=arr?Object.keys(arr).map(function(k){return arr[k];}):[];
         arr.push(dataUrl); ref.set(arr);   // listener re-renders
+        try{ auditPhoto('🚚 รูปทัวร์ / Tour photo', '🚚 '+(tourId||tourKey||''), _photoWho(), {area:'tour', detail:'ประวัติ / history'}); }catch(e){}
       });
     }
   });
@@ -16490,6 +16504,7 @@ function drKmSave(){
   var arr=kmLogOf(t);
   // .photo stays filled with the first shot so anything still reading the old field works.
   arr.push({ km:km, photo:(_kmM.photos||[])[0]||'', photos:(_kmM.photos||[]).slice(), orderId:_kmM.orderId||'', ts:Date.now(), by:drName });
+  try{ if((_kmM.photos||[]).length) auditPhoto('🛣️ รูปเลขไมล์ / Odometer photo', _tourLbl(t), drName, {area:'tour', n:(_kmM.photos||[]).length, detail:kmFmt(km)+' กม.'}); }catch(e){}
   t.kmLog=arr;
   if(t.kmRate==null||t.kmRate==='') t.kmRate=KM_RATE_DEFAULT;
   syncTours();
@@ -16994,6 +17009,7 @@ function dlKmCommit(orderId){
   var drName=((typeof currentDriverId!=='undefined' ? (drivers.find(function(d){return d.id===currentDriverId;})||{}).name : '')||'Driver');
   var arr=kmLogOf(t);
   arr.push({ km:v, photo:_dlKmPhotos[0]||'', photos:_dlKmPhotos.slice(), orderId:orderId||'', ts:Date.now(), by:drName });
+  try{ if(_dlKmPhotos.length) auditPhoto('🛣️ รูปเลขไมล์ / Odometer photo', _tourLbl(t), drName, {area:'tour', n:_dlKmPhotos.length, detail:kmFmt(v)+' กม.'}); }catch(e){}
   t.kmLog=arr;
   if(t.kmRate==null||t.kmRate==='') t.kmRate=KM_RATE_DEFAULT;
   _dlKmPhotos=[];
@@ -18084,7 +18100,10 @@ function addSlipPhoto(orderId, dataUrl, by, verify, done){
     window.fbDB.ref('photoIndex/slip/'+sid).transaction(function(cur){
       cur=cur||{id:orderId,n:0}; cur.id=orderId; cur.n=(parseInt(cur.n)||0)+1; cur.ts=Date.now();
       cur.zone=ord.zone||cur.zone||''; cur.customer=ord.customer||cur.customer||''; return cur;
-    }, function(){ if(done) done(true, ref.key); });
+    }, function(){
+      try{ auditPhoto(_photoWhere('slip'), orderId, by, {area:'order', detail:'คนขับ / driver'}); }catch(e){}
+      if(done) done(true, ref.key);
+    });
   });
 }
 // Several slips can be uploaded at once (two transfers, or a re-shot photo). They are
@@ -18940,7 +18959,10 @@ function addOrderPhoto(orderId, type, dataUrl, by, done){
       cur.id = orderId; cur.n = (parseInt(cur.n)||0) + 1; cur.ts = Date.now();
       cur.zone = ord.zone||cur.zone||''; cur.customer = ord.customer||cur.customer||'';
       return cur;
-    }, function(){ if(done) done(true); });
+    }, function(){
+      try{ auditPhoto(_photoWhere(type), orderId, by, {area:'order'}); }catch(e){}
+      if(done) done(true);
+    });
   });
 }
 
@@ -26239,6 +26261,46 @@ function auditTour(action, label, detail, by){
   }catch(e){}
 }
 
+// ── WHO PUT WHICH PICTURE WHERE ───────────────────────────────────────
+// Pictures always carried a name on the thumbnail, but nothing in the Audit Log
+// said that a picture had been added at all. Every upload path reports here now.
+// Uploads are batched per place + reference + person: picking five files writes
+// ONE line ("+5"), not five — the log keeps only the last 200 entries, and a
+// photo burst would push the order history straight out of the window.
+var KP_PHOTO_WHERE={
+  warehouse  :'📦 คลัง / Warehouse',
+  delivery   :'🚚 ส่งของ / Delivery',
+  slip       :'💳 สลิปโอน / Transfer slip',
+  shipreceipt:'🧾 ใบเสร็จค่าส่ง / Shipping receipt',
+  preslip    :'💳 สลิปมัดจำ / Pre-order slip'
+};
+function _photoWhere(t){ return KP_PHOTO_WHERE[t] || ('📷 '+(t||'photo')); }
+function _photoWho(){
+  try{
+    var st=(typeof staffList!=='undefined'?staffList:[]).find(function(x){return x.id===currentStaffId;});
+    if(st && st.name) return st.name;
+  }catch(e){}
+  if(typeof currentStaffName!=='undefined' && currentStaffName) return currentStaffName;
+  return 'Office';
+}
+function _tourLbl(t){ return t ? ('🚚 '+(t.driverName||t.driver||t.id||'Tour')) : '🚚 Tour'; }
+var _photoAuditPend={};
+function auditPhoto(where, refId, by, opts){
+  try{
+    opts = opts || {};
+    var key = where+'|'+(refId||'')+'|'+(by||'');
+    var p = _photoAuditPend[key];
+    if(!p) p = _photoAuditPend[key] = {n:0, timer:null};
+    p.n += (opts.n || 1);
+    if(p.timer) clearTimeout(p.timer);
+    p.timer = setTimeout(function(){
+      var n = p.n; delete _photoAuditPend[key];
+      auditAdd({ type:'photo', where:where, n:n, area:opts.area||'',
+                 orderId:refId||'', by:by||'—', detail:opts.detail||'' });
+    }, 3500);
+  }catch(e){}
+}
+
 function auditFilt(type, btn) {
   _auditFilt = type;
   document.querySelectorAll('#audit-filter-bar .fbtn').forEach(function(b){ b.classList.remove('active'); });
@@ -26643,6 +26705,9 @@ function _auditRenderNow() {
     else if(_auditFilt === 'payroll') { if(e.type !== 'payroll' && e.area !== 'payroll') return false; }
     else if(_auditFilt === 'delete') { if(e.type !== 'delete') return false; }
     else if(_auditFilt === 'tour') { if(e.type !== 'tour') return false; }
+    // Photos: the new upload lines plus the file/photo entries that Bills, Finance
+    // and the container screen were already writing under their own type.
+    else if(_auditFilt === 'photo') { if(!(e.type === 'photo' || e.area === 'container' || /file|invoice|photo|slip/i.test(String(e.action||'')))) return false; }
     else if(_auditFilt === 'claim') { if(e.type !== 'claim') return false; }
     // Free-text search across order id + staff name + detail (case-insensitive).
     // The detail matters: a tour entry is labelled with the DRIVER ("🚚 Go") and lists
@@ -26659,9 +26724,9 @@ function _auditRenderNow() {
       + (_auditSearch ? 'No entries for "'+_esc(_auditSearch)+'" / ไม่พบ' : 'No entries yet') + '</div>';
     return;
   }
-  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', edit:'<i class="ti ti-pencil" style="color:var(--blue)"></i>', tour:'<i class="ti ti-map-route" style="color:#7c3aed"></i>', preorder:'<i class="ti ti-bookmark" style="color:#0891b2"></i>', 'change-request':'<i class="ti ti-edit" style="color:var(--orange)"></i>', 'change-confirmed':'<i class="ti ti-check" style="color:var(--green)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>', food:'🍜', payroll:'<i class="ti ti-coin" style="color:#0d9488"></i>', cancel:'<i class="ti ti-ban" style="color:var(--red)"></i>'};
-  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', edit:'var(--blue-l)', tour:'#f3e8ff', preorder:'#cffafe', 'change-request':'var(--orange-l)', 'change-confirmed':'var(--green-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2', food:'#fef3c7', payroll:'#ccfbf1', cancel:'var(--red-l)'};
-  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', edit:'var(--blue-t)', tour:'#7c3aed', preorder:'#0e7490', 'change-request':'var(--orange-t)', 'change-confirmed':'var(--green-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b', food:'#92400e', payroll:'#0f766e', cancel:'var(--red-t)'};
+  var typeIcon = {create:'<i class="ti ti-plus" style="color:var(--blue)"></i>', status:'<i class="ti ti-refresh" style="color:var(--orange)"></i>', edit:'<i class="ti ti-pencil" style="color:var(--blue)"></i>', tour:'<i class="ti ti-map-route" style="color:#7c3aed"></i>', preorder:'<i class="ti ti-bookmark" style="color:#0891b2"></i>', 'change-request':'<i class="ti ti-edit" style="color:var(--orange)"></i>', 'change-confirmed':'<i class="ti ti-check" style="color:var(--green)"></i>', payment:'<i class="ti ti-cash" style="color:var(--green)"></i>', delete:'<i class="ti ti-trash" style="color:var(--red)"></i>', claim:'<i class="ti ti-alert-triangle" style="color:#ef4444"></i>', food:'🍜', payroll:'<i class="ti ti-coin" style="color:#0d9488"></i>', cancel:'<i class="ti ti-ban" style="color:var(--red)"></i>', photo:'<i class="ti ti-camera" style="color:#4f46e5"></i>'};
+  var typeBg = {create:'var(--blue-l)', status:'var(--orange-l)', edit:'var(--blue-l)', tour:'#f3e8ff', preorder:'#cffafe', 'change-request':'var(--orange-l)', 'change-confirmed':'var(--green-l)', payment:'var(--green-l)', delete:'var(--red-l)', claim:'#fee2e2', food:'#fef3c7', payroll:'#ccfbf1', cancel:'var(--red-l)', photo:'#e0e7ff'};
+  var typeText = {create:'var(--blue-t)', status:'var(--orange-t)', edit:'var(--blue-t)', tour:'#7c3aed', preorder:'#0e7490', 'change-request':'var(--orange-t)', 'change-confirmed':'var(--green-t)', payment:'var(--green-t)', delete:'var(--red-t)', claim:'#991b1b', food:'#92400e', payroll:'#0f766e', cancel:'var(--red-t)', photo:'#4338ca'};
   list.innerHTML = filtered.map(function(e) {
     var icon = typeIcon[e.type] || '<i class="ti ti-info-circle"></i>';
     var bg = typeBg[e.type] || 'var(--bg2)';
@@ -26680,8 +26745,15 @@ function _auditRenderNow() {
     else if(e.type === 'claim') detail = '⚠️ Claim filed';
     else if(e.type === 'food') detail = e.detail || 'Food';
     else if(e.type === 'payroll') detail = e.detail || 'Payroll';
+    else if(e.type === 'photo') detail = '📷 ' + (e.where||'Photo') + ' · +' + (e.n||1) + (e.detail?' · '+e.detail:'');
     else if(e.detail) detail = e.detail;
-    return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)">'
+    // A photo line on an order is the shortest way to the pictures themselves.
+    var _open='', _cur='';
+    if(e.type === 'photo' && e.area === 'order' && e.orderId && typeof ofPhotosAll === 'function'){
+      _open = ' onclick="ofPhotosAll(&quot;'+String(e.orderId).replace(/[^A-Za-z0-9_.#-]/g,'')+'&quot;)" title="ดูรูป / open the pictures"';
+      _cur = ';cursor:pointer';
+    }
+    return '<div'+_open+' style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)'+_cur+'">'
       + '<div style="width:32px;height:32px;border-radius:50%;background:'+bg+';display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px">'+icon+'</div>'
       + '<div style="flex:1;min-width:0">'
       + '<div style="display:flex;justify-content:space-between;align-items:center">'
@@ -29441,6 +29513,7 @@ function billAddPhoto(inp){
     var cur=Array.isArray(b.photos)?b.photos.slice():[];
     cur.push(url); b.photos=cur;
     if(window.fbDB) window.fbDB.ref('bills/'+id+'/photos').set(cur);
+    try{ auditPhoto('🧾 บิล / Bill receipt', 'Bills: '+(b.what||b.label||b.cat||id), _photoWho(), {area:'bills'}); }catch(e){}
     inp.value=''; billDetailRender(); try{ billsRender(); }catch(e){}
   }
   if(window.fbStorage){
