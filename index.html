@@ -771,9 +771,14 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     // starts before the App Check token exists is the one request that gets denied.
     const fbAuthReady = fbAppCheckReady
       .then(function(){ return firebase.auth().signInAnonymously(); })
-      .then(function(){ return true; })
+      .then(function(){ window._kpAuthOk=true; return true; })
       .catch(function(e){
         console.error('[FB] anonymous sign-in failed — DB access will be denied:', e && e.code, e && e.message);
+        // Kept for the screens: a monitor on a wall has no console, and "no data"
+        // on its own tells nobody whether the sign-in was refused or the network is
+        // simply down. See kpCashDiag().
+        window._kpAuthOk=false;
+        window._kpAuthErr=(e && (e.code||e.message))||'failed';
         return false;
       });
     window.fbAuthReady = fbAuthReady;
@@ -17956,6 +17961,20 @@ function kpCashKioskInit(){
   if(saved) kpCashKioskWait(saved);
   else if(inp) try{ inp.focus(); }catch(e){}
 }
+// "Check the connection" is not something anybody standing in front of a TV can act
+// on. This says WHICH piece is missing — read it off the screen and you know whether
+// the Firebase library never loaded (browser too old / CDN blocked), the anonymous
+// sign-in was refused, or the box is simply offline.
+function kpCashDiag(){
+  var b=[];
+  b.push('SDK:'+((typeof firebase!=='undefined' && firebase)?'ok':'MISSING'));
+  b.push('DB:'+(window.fbDB?'ok':'MISSING'));
+  b.push('login:'+(window._kpAuthOk===true?'ok':(window._kpAuthOk===false?('DENIED '+(window._kpAuthErr||'')):'waiting')));
+  b.push('appcheck:'+(window.fbAppCheckSkipped?'skipped':(window.fbAppCheckOn?'on':'off')));
+  b.push('net:'+((navigator.onLine===false)?'OFFLINE':'online'));
+  var ua=String(navigator.userAgent||'').replace(/^Mozilla\/[0-9.]+ /,'').slice(0,64);
+  return b.join(' · ')+'\n'+ua;
+}
 // staffList arrives from Firebase a moment after load, so a saved unlock has to
 // wait for it before it can be checked (and re-checked: a flag taken away must
 // close this screen too).
@@ -17992,7 +18011,10 @@ function kpCashKioskLogin(retry){
       }); }catch(e){}
     }
     if(retry>40){   // ~20 s
-      if(m) m.textContent='ไม่ได้ข้อมูลพนักงาน — เช็คอินเทอร์เน็ต / no staff data, check the connection';
+      if(m){
+        m.style.whiteSpace='pre-line';
+        m.textContent='ไม่ได้ข้อมูลพนักงาน / no staff data\n'+kpCashDiag();
+      }
       return;
     }
     if(m) m.textContent='กำลังโหลด… / loading'+new Array((retry%4)+1).join('.');
