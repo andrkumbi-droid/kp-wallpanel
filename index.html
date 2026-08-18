@@ -7431,7 +7431,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817033;
+var KP_BUILD = 20260817034;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17692,11 +17692,30 @@ function kpCashKioskWait(id, tries){
     if(m) m.textContent='สิทธิ์ถูกยกเลิก / access was removed — ask for the 💰 Live flag';
   }
 }
-function kpCashKioskLogin(){
+function kpCashKioskLogin(retry){
   var inp=document.getElementById('kp-kiosk-pin'), m=document.getElementById('kp-kiosk-msg');
   var pin=String((inp&&inp.value)||'').trim();
+  if(!pin){ if(m) m.textContent='ใส่ PIN ก่อน / enter the PIN first'; return; }
   var list=(typeof staffList!=='undefined' && staffList) ? staffList : [];
-  if(!list.length){ if(m) m.textContent='กำลังโหลด… / still loading, try again in a moment'; return; }
+  // The staff list arrives from Firebase a moment after the page loads. Telling
+  // somebody standing in front of a screen "try again in a moment" was the wrong
+  // answer — wait for it here, fetch it ourselves if the app's own listener has not
+  // fired, and only give up (with a reason) when it really is not coming.
+  if(!list.length){
+    retry=retry||0;
+    if(retry===0 && window.fbDB){
+      try{ window.fbDB.ref('staffList').once('value', function(s){
+        var v=s.val(); if(v && (typeof staffList==='undefined' || !staffList || !staffList.length)) staffList=Object.values(v);
+      }); }catch(e){}
+    }
+    if(retry>40){   // ~20 s
+      if(m) m.textContent='ไม่ได้ข้อมูลพนักงาน — เช็คอินเทอร์เน็ต / no staff data, check the connection';
+      return;
+    }
+    if(m) m.textContent='กำลังโหลด… / loading'+new Array((retry%4)+1).join('.');
+    setTimeout(function(){ kpCashKioskLogin(retry+1); }, 500);
+    return;
+  }
   var s=list.find(function(x){ return x && x.pin && String(x.pin)===pin && x.cashFeedAccess; });
   if(!s){
     if(m) m.textContent='PIN ไม่ถูกต้อง หรือไม่มีสิทธิ์ 💰 Live / wrong PIN, or no 💰 Live access';
