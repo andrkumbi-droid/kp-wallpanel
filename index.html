@@ -7431,7 +7431,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817038;
+var KP_BUILD = 20260817039;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9485,6 +9485,7 @@ function insPayDone(){
     detail:'🏪 ขายหน้าร้าน / instore · '+(_insPayMethod==='cash'?'💵 เงินสด / cash':'🏦 โอน / online')+' '+_insPayTotal.toLocaleString()+' ฿'
       +(_insPaySlips.length?' · 🧾 '+_insPaySlips.length:(o.slipLater?' · สลิปตามมา / slip later':''))}); }catch(e){}
   var slips=_insPaySlips.slice(), oid=o.id;
+  try{ kpPayFeedAdd({amt:_insPayTotal, id:oid, kind:'office', by:by}); }catch(e){}   // → the 💰 Live monitor
   slips.forEach(function(d){ try{ addOrderPhoto(oid,'slip',d,by,function(){}); }catch(e){} });
   _insPaySlips=[]; _insPayMethod=''; _insPayLater=false;
   syncOrders();
@@ -9662,6 +9663,9 @@ function ofCreate(){
     else          { o.payMethod='';  o.payMethodPartial=pm; }
     if(pm==='online'){ o.paidOnline=pre; o.paidCash=0; } else { o.paidCash=pre; o.paidOnline=0; }
     try{ addLog('Order '+no+' prepaid '+pre.toLocaleString()+' ฿ ('+pm+')','+'); }catch(e){}
+    // → the 💰 Live monitor. Customer and zone are passed explicitly: the order is
+    // not in `orders` yet at this point, so the feed cannot look them up.
+    try{ kpPayFeedAdd({amt:pre, id:no, cust:o.customer, zone:o.zone, kind:'office', by:createdBy}); }catch(e){}
   })();
   orders.unshift(o);wOrders.unshift({id:no,zone,boxes:o.boxes,panels:panStr,lcorner:lcStr,clips,packed:false,packedAt:null});
   // The slips were held in memory because the order had no id yet — attach them now.
@@ -22161,6 +22165,7 @@ function chaseDone(id){
   var total=ofOrderTotalNum(o);
   if(!(total>0)){ alert('ออเดอร์นี้ไม่มียอดเงิน / This order has no total'); return; }
   if(!confirm('บันทึกว่าได้รับเงินครบ '+total.toLocaleString('en-US')+' ฿ ('+(m==='cash'?'💵 เงินสด':'🏦 โอน')+') ?\nMark '+id+' fully paid by '+m+'?')) return;
+  var _prevPaid=parseFloat(o.paidAmount)||0;   // only what is NEW is money arriving
   o.paidAmount=total; o.payMethod=m; o.payMethodPartial='';
   if(m==='online'){ o.paidOnline=total; o.paidCash=0; } else { o.paidCash=total; o.paidOnline=0; }
   if(!o.payDate) o.payDate=kpTodayStr();
@@ -22169,6 +22174,9 @@ function chaseDone(id){
   o.paidBy=chaseBy();
   delete o.payAtOffice;
   delete _chaseMth[id];
+  // → the 💰 Live monitor. A deposit was already reported when it was booked,
+  // so only the rest that arrives now counts as new money.
+  if(total-_prevPaid>0) kpPayFeedAdd({amt:total-_prevPaid, id:id, kind:'office', by:o.paidBy||''});
   try{ syncOrders(); }catch(e){}
   try{ sheetsSyncOrder(o); }catch(e){}
   try{ auditAdd({type:'payment', area:'chase', orderId:id, method:m,
