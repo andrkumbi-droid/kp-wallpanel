@@ -7431,7 +7431,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817030;
+var KP_BUILD = 20260817031;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17463,13 +17463,32 @@ function kpCashArm(){
 function kpCashTest(){
   if(!_cashArmed){ _cashArmed=true; kpCashArmLabel(); }
   window._kpAudioBlocked=false;
-  try{ kpCashThenSay(1234, 'ทดสอบ / test'); }catch(e){}
+  var say=function(t){ try{ kpNotifText(t); }catch(e){} };
+  say('▶ ทดสอบ / test …');
+  var a=null;
+  try{
+    if(!_kpCashAudio){ _kpCashAudio=new Audio(KP_CASH_SND); _kpCashAudio.preload='auto'; }
+    a=_kpCashAudio;
+    try{ a.pause(); a.currentTime=0; }catch(e){}
+    a.muted=false; a.volume=1;
+    var p=a.play();
+    if(p && p.catch) p.catch(function(err){ window._kpAudioBlocked=true; kpCashArmLabel();
+      say('🔇 '+(err&&err.name||'blocked')+' — เบราว์เซอร์ปิดกั้นเสียง แตะหน้าจอแล้วลองใหม่ / the browser blocked it, tap the screen and retry'); });
+  }catch(e){ say('🔇 '+(e&&e.message||e)); return; }
+  // Whether it PLAYED is not the same question as whether it was allowed to start:
+  // a moving currentTime means the browser is producing sound, and anything still
+  // missing is speakers, the tab's own mute, or the volume mixer — worth saying,
+  // because that is not something the app can fix.
   setTimeout(function(){
-    if(window._kpAudioBlocked){
-      try{ kpNotifText('🔇 เบราว์เซอร์ปิดเสียงไว้ — แตะหน้าจอแล้วลองใหม่ / the browser blocked audio, tap the screen and retry'); }catch(e){}
+    if(!a) return;
+    if((a.currentTime||0) > 0.05){
+      say('✅ เสียงกำลังเล่น / audio is playing ('+a.currentTime.toFixed(2)+' s) — ถ้ายังไม่ได้ยิน: ลำโพง, แท็บถูกปิดเสียง (คลิกขวาที่แท็บ) หรือ Volume Mixer / if you still hear nothing: speakers, tab muted (right-click the tab), or the volume mixer');
+      setTimeout(function(){ try{ kpSayBaht(1234); }catch(e){} }, 300);
+    } else if(!window._kpAudioBlocked){
+      say('🔇 ไม่เล่น / not playing — error='+((a.error&&a.error.code)||'–')+' ready='+a.readyState+' muted='+a.muted+' vol='+a.volume);
       kpCashArmLabel();
     }
-  }, 900);
+  }, 800);
 }
 // Keep the node from growing forever. Push keys are chronological, so the oldest
 // records come first — no index needed for this.
@@ -17602,6 +17621,8 @@ function kpCashKioskInit(){
         +'<button type="button" onclick="kpCashKioskOut()" title="ออก / leave this screen" style="padding:12px 14px;border-radius:12px;'
           +'border:1.5px solid #334155;background:#111827;color:#94a3b8;font-size:14px;cursor:pointer">✕</button>'
       +'</div>'
+      +'<div id="kp-kiosk-msg2" style="display:none;font-size:14px;font-weight:700;background:#111827;border:1px solid #334155;'
+        +'border-radius:10px;padding:9px 12px;margin-bottom:12px;color:#e5e7eb"></div>'
       +'<div class="cashfeed-list" style="font-size:15px"></div>'
     +'</div>';
   document.body.appendChild(d);
@@ -17739,7 +17760,16 @@ function kpVoiceTestButton(){
 }
 try{ window.addEventListener('load', kpVoiceTestButton); window.addEventListener('hashchange', kpVoiceTestButton); }catch(e){}
 // Banner text without the notification beep (the voice is the signal here).
+// On the money monitor the app's banner sits UNDERNEATH the full-screen layer, so
+// every message there was invisible — announcements included. Write into the
+// monitor's own line when it is up.
 function kpNotifText(text){
+  var km=document.getElementById('kp-kiosk-msg2');
+  if(km && document.getElementById('kp-kiosk')){
+    km.style.display='block'; km.textContent=text;
+    if(window._kpKioskMsgT) clearTimeout(window._kpKioskMsgT);
+    window._kpKioskMsgT=setTimeout(function(){ km.style.display='none'; }, 12000);
+  }
   var b=document.getElementById('notif-banner'), t=document.getElementById('notif-text');
   if(!b||!t) return;
   t.textContent=text; b.className='notif-banner'; b.style.display='flex';
