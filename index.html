@@ -706,6 +706,18 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       });
     }
     const fbAppCheckReady = new Promise(function(resolve){
+      // This device already proved that it cannot do App Check: the sign-in was
+      // refused with it on (see the catch below), so it is off here for good. An
+      // old TV WebView never finishes reCAPTCHA — the token never arrives, Auth
+      // answers auth/network-request-failed and the screen sits there with no data
+      // at all. Enforcement lives on the server; skipping the client half gives a
+      // device nothing the server was actually checking for.
+      var _acOff=false; try{ _acOff=localStorage.getItem('kpAcOff')==='1'; }catch(e){}
+      if (_acOff) {
+        console.warn('[FB] App Check off on this device — sign-in had been refused with it on');
+        window.fbAppCheckSkipped=true; window.fbAppCheckOffHere=true;
+        resolve(false); return;
+      }
       if (!APPCHECK_SITE_KEY) { resolve(false); return; }
       function go(){
         try {
@@ -779,6 +791,18 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         // simply down. See kpCashDiag().
         window._kpAuthOk=false;
         window._kpAuthErr=(e && (e.code||e.message))||'failed';
+        // Refused while App Check was on → App Check is what refused it. Switch it
+        // off for THIS device and reload once (guarded by sessionStorage, so a
+        // genuine outage can never turn this into a reload loop). The TV keeps the
+        // flag, so it comes up working after every power cut from now on.
+        try{
+          if(window.fbAppCheckOn && !sessionStorage.getItem('kpAcRetry')){
+            sessionStorage.setItem('kpAcRetry','1');
+            localStorage.setItem('kpAcOff','1');
+            console.warn('[FB] retrying without App Check');
+            setTimeout(function(){ location.reload(); }, 400);
+          }
+        }catch(e2){}
         return false;
       });
     window.fbAuthReady = fbAuthReady;
@@ -17970,7 +17994,7 @@ function kpCashDiag(){
   b.push('SDK:'+((typeof firebase!=='undefined' && firebase)?'ok':'MISSING'));
   b.push('DB:'+(window.fbDB?'ok':'MISSING'));
   b.push('login:'+(window._kpAuthOk===true?'ok':(window._kpAuthOk===false?('DENIED '+(window._kpAuthErr||'')):'waiting')));
-  b.push('appcheck:'+(window.fbAppCheckSkipped?'skipped':(window.fbAppCheckOn?'on':'off')));
+  b.push('appcheck:'+(window.fbAppCheckOffHere?'off-here':(window.fbAppCheckSkipped?'skipped':(window.fbAppCheckOn?'on':'off'))));
   b.push('net:'+((navigator.onLine===false)?'OFFLINE':'online'));
   var ua=String(navigator.userAgent||'').replace(/^Mozilla\/[0-9.]+ /,'').slice(0,64);
   return b.join(' · ')+'\n'+ua;
