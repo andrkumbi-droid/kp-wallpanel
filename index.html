@@ -7431,7 +7431,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260817040;
+var KP_BUILD = 20260817041;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17431,9 +17431,23 @@ function kpMeName(){
 function kpPayFeedSame(v, rec){
   if(!v || !rec || !v.id || !rec.id) return false;
   if(String(v.id)!==String(rec.id)) return false;
-  if(Math.round(parseFloat(v.amt)||0)!==Math.round(rec.amt)) return false;
   if((v.kind||"")===(rec.kind||"")) return false;              // same channel = separate payments
-  return Math.abs((rec.ts||0)-(v.ts||0)) < 2*3600*1000;        // reported within two hours
+  if(Math.abs((rec.ts||0)-(v.ts||0)) >= 2*3600*1000) return false;   // reported within two hours
+  // Not exactly equal: the slip figure is read off a photograph and a digit can go
+  // wrong — order 1-086 was booked as 6,567 and read as 6,557 one second later, and
+  // the screen then showed the same money twice. Within 1% (at least 20 ฿) of each
+  // other, across two different channels on one order, it is one payment.
+  var a=Math.abs(parseFloat(v.amt)||0), b=Math.abs(parseFloat(rec.amt)||0);
+  return Math.abs(a-b) <= Math.max(20, Math.max(a,b)*0.01);
+}
+// Which of two reports of the same money to believe: an amount somebody booked
+// (delivery confirmation, office entry) is checked against the order total; a slip
+// amount is what the reader made of a photo. So the booked one wins, and between
+// two of the same kind the later one does.
+function kpPayFeedBetter(a, b){
+  var ax=(a&&a.kind)==='slip', bx=(b&&b.kind)==='slip';
+  if(ax!==bx) return ax ? b : a;
+  return ((b&&b.ts)||0) >= ((a&&a.ts)||0) ? b : a;
 }
 function kpPayFeedAdd(o){
   try{
@@ -17460,7 +17474,10 @@ function kpPayFeedAdd(o){
     window.fbDB.ref('payFeed').limitToLast(40).once('value', function(s){
       var hit=null;
       s.forEach(function(c){ if(kpPayFeedSame(c.val()||{}, rec)) hit=c; });
-      if(hit) try{ hit.ref.update({ kind:rec.kind, by:rec.by||(hit.val()||{}).by||'' }); }catch(e){}
+      if(hit) try{
+        var keepIt=kpPayFeedBetter(hit.val()||{}, rec);
+        hit.ref.update({ amt:keepIt.amt, kind:keepIt.kind, by:keepIt.by||rec.by||(hit.val()||{}).by||'' });
+      }catch(e){}
       else    try{ window.fbDB.ref('payFeed').push(rec); }catch(e){}
     }, function(){ try{ window.fbDB.ref('payFeed').push(rec); }catch(e){} });
   }catch(e){}
@@ -17575,7 +17592,9 @@ function cashFeedRender(){
   _cashFeed.slice().sort(function(a,b){ return (a.ts||0)-(b.ts||0); }).forEach(function(v){
     // Same rule as when writing (kpPayFeedSame): one payment reported through two
     // channels collapses, two genuine payments of equal size do not.
-    for(var i=0;i<keep.length;i++){ if(kpPayFeedSame(keep[i], v)) return; }
+    for(var i=0;i<keep.length;i++){
+      if(kpPayFeedSame(keep[i], v)){ keep[i]=kpPayFeedBetter(keep[i], v); return; }
+    }
     keep.push(v);
   });
   var rows=keep.reverse();                       // newest first
