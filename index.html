@@ -22306,9 +22306,10 @@ function chaseCardHtml(x){
       // right under the amount, because that is the figure being chased.
       +'<span>'+'<span style="font-size:15px;font-weight:800;color:#dc2626">'+chaseAmount(o).toLocaleString('en-US')+' ฿</span>'
         +(function(){ var f=0; try{ f=shipFeeOf(o); }catch(e){}
-          if(!(f>0)) return '';
-          return '<br><span style="font-size:10.5px;color:#92400e;font-weight:700">💸 −'+f.toLocaleString('en-US')
-            +' → <b>'+Math.max(0,chaseAmount(o)-f).toLocaleString('en-US')+' ฿</b></span>'; })()
+          return '<span data-chasefee="'+_esc(o.id)+'">'
+            +(f>0?('<br><span style="font-size:10.5px;color:#92400e;font-weight:700">💸 −'+f.toLocaleString('en-US')
+              +' → <b>'+Math.max(0,chaseAmount(o)-f).toLocaleString('en-US')+' ฿</b></span>'):'')
+          +'</span>'; })()
       +'</span>'
       +'<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">'
         // Shipper receipt photos from Pictures (🚚 Shipper) right on the chase card —
@@ -22321,6 +22322,9 @@ function chaseCardHtml(x){
         +'<button type="button" class="btnsm btnsmp" onclick="chaseOpen(\''+eid+'\')">📞 ตามแล้ว / Chased</button>'
       +'</div>'
     +'</div>'
+    // % and ฿ right here: the carrier's cut is agreed per consignment, and this is
+    // the card where that money is being chased.
+    +_shipFeeCtrl(o, true)
     +(nShip>0?'<div id="'+phId+'" data-type="" style="display:none;margin-top:6px"></div>':'')
     +'<input type="file" accept="image/*" multiple id="chslip_'+phId+'" style="display:none" onchange="chaseSlipUpload(this,\''+eid+'\')">'
     // Same paid row as the order card — ticking it (or typing the full amount)
@@ -22598,24 +22602,67 @@ function shipCtrlHtml(o){
 // It stays out of the way for self-delivery and for carriers without a rate, and
 // spells the money out in full — total, the carrier's cut, what actually reaches
 // us — because that subtraction is the whole point of the field.
-function _shipFeeCtrl(o){
+// `always` = show the row even for a carrier that has no rate of its own: on the
+// chase card the percentage is typed per case (1 %, 3 %, 4 % — it differs from one
+// consignment to the next), so the boxes have to be there before any rate exists.
+function _shipFeeCtrl(o, always){
   if(!billsShipIsCarrier(o)) return '';
   var cfg=shipFeeCfg(o.shipper);
   var manual=(o.shipFee!=null && o.shipFee!=='');
-  if(!cfg && !manual) return '';
+  if(!cfg && !manual && !always) return '';
   var fee=shipFeeOf(o), tot=0; try{ tot=ofOrderTotalNum(o)||0; }catch(e){}
   var net=Math.max(0, tot-fee);
-  return '<div style="flex:0 0 100%;display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;'
+  // What stands in the % box: the percentage typed for THIS order, otherwise the
+  // carrier's own rate as long as nothing was typed over it.
+  var pct=(o.shipFeePct!=null && o.shipFeePct!=='') ? o.shipFeePct
+        : ((!manual && cfg && cfg.type==='pct') ? cfg.val : '');
+  return '<div data-shipfee="'+_esc(o.id)+'" style="flex:0 0 100%;display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;'
       +'background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:5px 8px">'
     +'<span style="font-size:11px;font-weight:700;color:#92400e;white-space:nowrap">💸 ค่าเก็บเงิน / fee'
       +(cfg?' <span style="font-weight:800">'+_esc(shipFeeLabel(o.shipper))+'</span>':'')+'</span>'
-    +'<input type="number" min="0" step="0.01" value="'+(manual?o.shipFee:'')+'" placeholder="'+(Math.round(fee*100)/100)+'" '
-      +'title="ว่าง = ตามอัตราขนส่ง / empty = the carrier\'s rate · 0 = ไม่มี / none" '
+    +'<input class="sf-pct" type="number" min="0" step="0.01" value="'+pct+'" placeholder="%" '
+      +'title="กี่ % ของยอด / per cent of the order total — 3 = 3 %" '
+      +'onchange="setShipFeePct(\''+o.id+'\',this.value)" '
+      +'style="width:58px;padding:4px 6px;border:1px solid #fcd34d;border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px">'
+    +'<span style="font-size:11px;font-weight:800;color:#92400e">%</span>'
+    +'<input class="sf-amt" type="number" min="0" step="0.01" value="'+(manual?o.shipFee:'')+'" placeholder="'+(Math.round(fee*100)/100)+'" '
+      +'title="ยอดเป๊ะ ๆ / the exact amount · ว่าง = ตามอัตรา / empty = by rate · 0 = ไม่มี / none" '
       +'onchange="setShipFee(\''+o.id+'\',this.value)" '
       +'style="width:76px;padding:4px 6px;border:1px solid #fcd34d;border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px">'
-    +'<span style="font-size:11px;color:#92400e;white-space:nowrap">'
+    +'<span style="font-size:11px;font-weight:800;color:#92400e">฿</span>'
+    +'<span class="sf-sum" style="font-size:11px;color:#92400e;white-space:nowrap">'
       +tot.toLocaleString()+' − '+fee.toLocaleString()+' = <b style="font-size:12.5px">'+net.toLocaleString()+' ฿</b></span>'
   +'</div>';
+}
+// The fee row lives in three places at once (order window, Pay tab, chase card).
+// After a change they are all corrected in place instead of re-rendering the lists:
+// a rebuild on change swallows the click the user is making next (that is why
+// _shipRefreshViews defers everything) and would throw away the box being typed in.
+function _shipFeeSync(o){
+  if(!o) return;
+  var fee=shipFeeOf(o), tot=0; try{ tot=ofOrderTotalNum(o)||0; }catch(e){}
+  var net=Math.max(0, tot-fee);
+  var manual=(o.shipFee!=null && o.shipFee!=='');
+  var cfg=shipFeeCfg(o.shipper);
+  var pct=(o.shipFeePct!=null && o.shipFeePct!=='') ? o.shipFeePct
+        : ((!manual && cfg && cfg.type==='pct') ? cfg.val : '');
+  Array.prototype.forEach.call(document.querySelectorAll('[data-shipfee]'), function(box){
+    if(box.getAttribute('data-shipfee')!==String(o.id)) return;
+    var p=box.querySelector('.sf-pct'), a=box.querySelector('.sf-amt'), sm=box.querySelector('.sf-sum');
+    if(p && document.activeElement!==p) p.value=(pct===''?'':pct);
+    if(a && document.activeElement!==a) a.value=(manual?o.shipFee:'');
+    if(a) a.placeholder=String(Math.round(fee*100)/100);
+    if(sm) sm.innerHTML=tot.toLocaleString()+' − '+fee.toLocaleString()+' = <b style="font-size:12.5px">'+net.toLocaleString()+' ฿</b>';
+  });
+  // …and the line under the chased amount, which is the figure being asked for.
+  Array.prototype.forEach.call(document.querySelectorAll('[data-chasefee]'), function(el){
+    if(el.getAttribute('data-chasefee')!==String(o.id)) return;
+    var amt=0; try{ amt=chaseAmount(o); }catch(e){}
+    el.innerHTML = fee>0
+      ? '<br><span style="font-size:10.5px;color:#92400e;font-weight:700">💸 −'+fee.toLocaleString('en-US')
+        +' → <b>'+Math.max(0,amt-fee).toLocaleString('en-US')+' ฿</b></span>'
+      : '';
+  });
 }
 // Empty box = follow the carrier's rate. A typed number — including 0 — overrules it
 // for this one order, which is how a prepaid order gets no fee at all.
@@ -22624,9 +22671,32 @@ function setShipFee(id,val){
   var raw=String(val==null?'':val).trim();
   if(raw===''){ delete o.shipFee; }
   else o.shipFee=Math.max(0, parseFloat(raw.replace(/[^0-9.]/g,''))||0);
+  delete o.shipFeePct;              // an exact amount is not a percentage any more
   syncOrders(); try{sheetsSyncOrder(o);}catch(e){}
   try{ auditAdd({type:'payment', area:'ship', orderId:id, method:'ship-fee',
         note:'💸 ค่าเก็บเงินขนส่ง / carrier fee: '+(raw===''?'ตามอัตรา / by rate':raw+' ฿'), by:(typeof chaseBy==='function'?chaseBy():'Office')}); }catch(e){}
+  try{ _shipFeeSync(o); }catch(e){}
+  _shipRefreshViews(id);
+}
+// The percentage typed on the order itself — it differs from consignment to
+// consignment, so the carrier's standing rate is only the starting point. What is
+// stored is the AMOUNT (o.shipFee): a rate change later must never rewrite what was
+// already settled. o.shipFeePct only remembers what was typed, so the box still
+// shows "3" and not just the 214.50 ฿ it came to.
+function setShipFeePct(id,val){
+  var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  var raw=String(val==null?'':val).trim();
+  if(raw===''){ delete o.shipFeePct; delete o.shipFee; }   // back to the carrier's rate
+  else {
+    var p=Math.max(0, parseFloat(raw.replace(/[^0-9.]/g,''))||0);
+    var tot=0; try{ tot=ofOrderTotalNum(o)||0; }catch(e){}
+    o.shipFeePct=p;
+    o.shipFee=Math.round(tot*p)/100;
+  }
+  syncOrders(); try{sheetsSyncOrder(o);}catch(e){}
+  try{ auditAdd({type:'payment', area:'ship', orderId:id, method:'ship-fee',
+        note:'💸 ค่าเก็บเงินขนส่ง / carrier fee: '+(raw===''?'ตามอัตรา / by rate':(raw+' % = '+(o.shipFee||0).toLocaleString('en-US')+' ฿')), by:(typeof chaseBy==='function'?chaseBy():'Office')}); }catch(e){}
+  try{ _shipFeeSync(o); }catch(e){}
   _shipRefreshViews(id);
 }
 // Free delivery: settled at 0 ฿. Clears any amount that was typed before, because
