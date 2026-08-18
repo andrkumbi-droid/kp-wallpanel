@@ -24872,7 +24872,7 @@ function buildCustomers() {
   orders.forEach(function(o){
     var key = normPhone(o.phone);
     if(!key) return;
-    if(!map[key]) map[key] = { phone:key, name:'', address:'', loc:'', orders:[], lastDate:'' };
+    if(!map[key]) map[key] = { phone:key, name:'', address:'', loc:'', province:'', orders:[], lastDate:'' };
     var c = map[key];
     c.orders.push(o);
     // latest non-empty values win
@@ -24881,6 +24881,7 @@ function buildCustomers() {
       if(o.customer && o.customer!=='—') c.name = o.customer;
       if(o.address && o.address!=='—') c.address = o.address;
       if(o.location) c.loc = o.location;
+      if(o.province) c.province = o.province;
     }
   });
   return map;
@@ -24891,13 +24892,16 @@ function getCustomer(phone) {
   var key = normPhone(phone);
   if(!key) return null;
   var all = buildCustomers();
-  var base = all[key] || { phone:key, name:'', address:'', loc:'', orders:[], lastDate:'' };
+  var base = all[key] || { phone:key, name:'', address:'', loc:'', province:'', orders:[], lastDate:'' };
   var meta = customerMeta[key] || {};
   return {
     phone: key,
     name:    meta.name    || base.name,
     address: meta.address || base.address,
     loc:     meta.loc     || base.loc,
+    // Province: what the office set on the last order wins; otherwise read it
+    // out of the saved address, so old orders without the field still resolve.
+    province: meta.province || base.province || kpExtractProvince(meta.address || base.address || ''),
     note:    meta.note    || '',
     geo:     (meta.geo && typeof meta.geo.lat==='number') ? meta.geo : null,
     blocked: !!meta.blocked,
@@ -25074,6 +25078,17 @@ function ofLookupCustomer() {
   if(nameEl && !nameEl.value && c.name) nameEl.value = c.name;
   if(addrEl && !addrEl.value && c.address) addrEl.value = c.address;
   if(locEl  && !locEl.value  && c.loc)  locEl.value  = c.loc;
+  // Province as well — without it the zone buttons stay unset and the order
+  // ends up on no tour. Filling it fires the same auto-zone as typing it by
+  // hand; skipped for in-store sales, where the zone is a deliberate choice.
+  var pvEl = document.getElementById('of-province');
+  if(pvEl && !pvEl.value && c.province){
+    pvEl.value = c.province;
+    var _zEl = document.getElementById('of-zone');
+    if(!window.ofInstoreOnly && !(_zEl && _zEl.value==='Instore')){
+      try{ ofProvinceAutoZone(); }catch(e){}
+    }
+  }
   try{ ofCalc(); }catch(e){}
 
   panel.style.display = 'block';
