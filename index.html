@@ -4127,6 +4127,75 @@ function kpFlushRenders(){
 // immediately, which is what made it look like Enter was required.
 // While one of a list's own fields has the focus, its rebuild waits and runs once the
 // field is left — by then `change` has already booked the amount.
+// ── AN AMOUNT IS ONLY BOOKED ONCE IT IS CONFIRMED ─────────────────────
+// A money box used to save whatever stood in it the moment the focus left. Typing
+// the 3 of "346" and then clicking somewhere by accident booked a payment of 3 ฿ —
+// straight into the live feed, under the name of whoever was at the keyboard.
+// Every field marked class="kpamt" now needs Enter, or the ✓ that appears beside it
+// while the value is unsaved (phone number keypads have no return key). Clicking
+// away puts the stored value back and says so: nothing is written by accident.
+function _kpAmtBtn(el){
+  if(el._kpOkBtn && el._kpOkBtn.parentNode) return el._kpOkBtn;
+  var b=document.createElement('button');
+  b.type='button'; b.textContent='✓'; b.title='บันทึก / save';
+  b.style.cssText='margin-left:4px;padding:4px 9px;border-radius:var(--rs);border:1px solid #16a34a;'
+    +'background:#16a34a;color:#fff;font-weight:800;font-size:12px;line-height:1;cursor:pointer;display:none';
+  // The press must not take the focus away first — that blur would revert exactly
+  // the value it is about to save.
+  b.addEventListener('mousedown', function(ev){ ev.preventDefault(); });
+  b.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); kpAmtConfirm(el); });
+  if(el.parentNode) el.parentNode.insertBefore(b, el.nextSibling);
+  el._kpOkBtn=b;
+  return b;
+}
+function kpAmtConfirm(el){
+  if(!el) return;
+  el.setAttribute('data-amt-ok','1');
+  try{ el.dispatchEvent(new Event('change',{bubbles:true})); }catch(e){}
+  el.setAttribute('data-amt-orig', el.value);   // the browser's own change on blur
+  el.removeAttribute('data-amt-ok');            // then has nothing new to report
+  var b=el._kpOkBtn; if(b) b.style.display='none';
+  el.style.borderColor='';
+  try{ el.blur(); }catch(e){}
+}
+function _kpIsAmt(el){ return !!(el && el.classList && el.classList.contains('kpamt')); }
+document.addEventListener('focusin', function(e){
+  if(!_kpIsAmt(e.target)) return;
+  e.target.setAttribute('data-amt-orig', e.target.value);
+}, true);
+document.addEventListener('input', function(e){
+  var el=e.target; if(!_kpIsAmt(el)) return;
+  var b=_kpAmtBtn(el);
+  if(b) b.style.display = (String(el.value)!==String(el.getAttribute('data-amt-orig')||'')) ? '' : 'none';
+}, true);
+document.addEventListener('keydown', function(e){
+  var el=e.target; if(!_kpIsAmt(el)) return;
+  if(e.key==='Enter'){ e.preventDefault(); kpAmtConfirm(el); }
+  else if(e.key==='Escape'){
+    el.value=el.getAttribute('data-amt-orig')||'';
+    var b=el._kpOkBtn; if(b) b.style.display='none';
+    try{ el.blur(); }catch(e2){}
+  }
+}, true);
+// The gate itself: an unconfirmed change never reaches the field's own onchange —
+// caught in the capture phase, so the handler that would write the money never runs.
+document.addEventListener('change', function(e){
+  var el=e.target; if(!_kpIsAmt(el)) return;
+  var orig=el.getAttribute('data-amt-orig');
+  if(el.getAttribute('data-amt-ok')==='1'){        // Enter / ✓ → let it through
+    el.removeAttribute('data-amt-ok');
+    el.setAttribute('data-amt-orig', el.value);
+    return;
+  }
+  e.stopImmediatePropagation();
+  if(orig!=null && String(el.value)===String(orig)) return;   // nothing new — stay quiet
+  el.value=(orig==null?'':orig);
+  var b=el._kpOkBtn; if(b) b.style.display='none';
+  el.style.borderColor='#dc2626';
+  setTimeout(function(){ try{ el.style.borderColor=''; }catch(e2){} }, 1600);
+  try{ showNotif('⏎ ยังไม่บันทึก / not saved — กด Enter หรือ ✓ / press Enter or ✓'); }catch(e2){}
+}, true);
+
 var _kpTypeHold={};
 function _kpTypingIn(c){
   var a=document.activeElement;
@@ -10146,7 +10215,7 @@ function ofOrderCard(o, sfx){
   } else {
   s += '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:7px 9px;border-radius:var(--rs);background:'+(_payFull?'#dcfce7':_payPart?'#fef9c3':'#fee2e2')+'">'
     +'<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:'+(_payFull?'#166534':_payPart?'#854d0e':'#991b1b')+';cursor:pointer;white-space:nowrap"><input type="checkbox" onchange="ofPaidToggle(\''+o.id+'\',this.checked)" '+(_payFull?'checked':'')+' style="width:16px;height:16px;cursor:pointer"> Paid / ชำระ</label>'
-    +'<input type="number" min="0" value="'+(_paidAmt||'')+'" placeholder="฿ paid" onchange="ofPaidAmt(\''+o.id+'\',this.value)" style="width:88px;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
+    +'<input type="number" class="kpamt" min="0" value="'+(_paidAmt||'')+'" placeholder="฿ paid" onchange="ofPaidAmt(\''+o.id+'\',this.value)" style="width:88px;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
     +((_payFull||_payPart)?'<select onchange="'+_pmFn+'(\''+o.id+'\',this.value)" style="padding:4px 6px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text);cursor:pointer"><option value="cash"'+(_pmVal!=='online'?' selected':'')+'>💵 Cash</option><option value="online"'+(_pmVal==='online'?' selected':'')+'>🏦 Online</option></select>':'')
     +'<span style="font-size:11px;font-weight:700;margin-left:auto;white-space:nowrap;color:'+(_payFull?'#166534':_payPart?'#854d0e':'#991b1b')+'">'+(_payFull?'✓ Fully paid':_payPart?('ค้าง '+_payOut.toLocaleString()+' ฿'):'Unpaid')+'</span>'
     +'</div>';
@@ -11367,12 +11436,12 @@ function ofRenderTour(){
       '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">'+
         (isL ? '' : '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'+
         '<span style="font-size:12px;color:var(--text2);white-space:nowrap">💰 Tour pay / ค่าทัวร์:</span>'+
-        '<input type="number" min="0" value="'+(t.driverPay!=null&&t.driverPay!==''?t.driverPay:(ofIsLala(t)&&t.carFee?t.carFee:''))+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourPay(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
+        '<input type="number" class="kpamt" min="0" value="'+(t.driverPay!=null&&t.driverPay!==''?t.driverPay:(ofIsLala(t)&&t.carFee?t.carFee:''))+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourPay(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
         '<span style="font-size:12px;color:var(--text2)">฿</span>'+
         '</div>'+
         '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'+
         '<span style="font-size:12px;color:var(--text2);white-space:nowrap">🤝 Advance / เบิกก่อนออกทัวร์:</span>'+
-        '<input type="number" min="0" value="'+(t.driverAdvance!=null&&t.driverAdvance!==''?t.driverAdvance:'')+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourAdvance(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
+        '<input type="number" class="kpamt" min="0" value="'+(t.driverAdvance!=null&&t.driverAdvance!==''?t.driverAdvance:'')+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourAdvance(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
         '<span style="font-size:12px;color:var(--text2)">฿</span>'+
         '</div>')+
         (!isL&&(parseFloat(t.driverAdvance)||0)>0&&(parseFloat(t.driverPay)||0)>0?'<div style="font-size:11px;color:var(--text2);margin:-4px 0 8px;text-align:right">คงเหลือจ่ายท้ายทัวร์ / Pay at end: <b style="color:var(--green)">'+tourNetPay(t).toLocaleString()+' ฿</b></div>':'')+
@@ -22367,7 +22436,7 @@ function chaseCardHtml(x){
     // marks the order paid, which drops it off this list on the next render.
     +'<div style="display:flex;align-items:center;gap:8px;margin-top:7px;padding:7px 9px;border-radius:var(--rs);background:#fee2e2">'
       +'<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:#991b1b;cursor:pointer;white-space:nowrap"><input type="checkbox" onchange="chasePaidToggle(\''+eid+'\',this.checked)" style="width:16px;height:16px;cursor:pointer"> Paid / ชำระ</label>'
-      +'<input type="number" min="0" value="'+(part>0?part:'')+'" placeholder="฿ paid" onchange="chasePaidAmt(\''+eid+'\',this.value)" style="width:88px;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
+      +'<input type="number" class="kpamt" min="0" value="'+(part>0?part:'')+'" placeholder="฿ paid" onchange="chasePaidAmt(\''+eid+'\',this.value)" style="width:88px;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">'
       +'<span style="font-size:11px;font-weight:700;margin-left:auto;white-space:nowrap;color:#991b1b">'+(part>0?'มัดจำ/partial '+part.toLocaleString('en-US')+' ฿':'Unpaid')+'</span>'
     +'</div>'
     // Method + Done: pick how the money came in, then ✓ books the full total and
@@ -22625,7 +22694,7 @@ function shipCtrlHtml(o){
       +'<option value="">— shipper —</option>'
       +shippers.map(function(s){return '<option value="'+_esc(s)+'"'+(o.shipper===s?' selected':'')+'>'+_esc(s)+'</option>';}).join('')
     +'</select>'
-    +'<input type="number" min="0" value="'+sc+'" placeholder="฿ ค่าส่ง"'+(o.shipFree?' disabled':'')+' onchange="setShipCost(\''+oid+'\',this.value)" style="width:78px;padding:5px 7px;border-radius:var(--rs);border:1px solid #d1d5db;background:var(--bg);font-size:12px;color:var(--text)'+(o.shipFree?';opacity:.5':'')+'">'
+    +'<input type="number" class="kpamt" min="0" value="'+sc+'" placeholder="฿ ค่าส่ง"'+(o.shipFree?' disabled':'')+' onchange="setShipCost(\''+oid+'\',this.value)" style="width:78px;padding:5px 7px;border-radius:var(--rs);border:1px solid #d1d5db;background:var(--bg);font-size:12px;color:var(--text)'+(o.shipFree?';opacity:.5':'')+'">'
     // Not every delivery costs something — dropped off at a neighbour, customer picked
     // it up. Ticking this says "settled, nothing to pay" so it stops being flagged red.
     +'<label title="Delivered for free — no carrier bill / ส่งฟรี ไม่มีค่าส่ง" style="display:flex;align-items:center;gap:3px;font-size:11px;font-weight:700;color:'+(o.shipFree?'#16a34a':'#6b7280')+';white-space:nowrap;flex-shrink:0;cursor:pointer">'
@@ -22656,12 +22725,12 @@ function _shipFeeCtrl(o, always){
       +'background:#fffbeb;border:1px solid #fde68a;border-radius:var(--rs);padding:5px 8px">'
     +'<span style="font-size:11px;font-weight:700;color:#92400e;white-space:nowrap">💸 ค่าเก็บเงิน / fee'
       +(cfg?' <span style="font-weight:800">'+_esc(shipFeeLabel(o.shipper))+'</span>':'')+'</span>'
-    +'<input class="sf-pct" type="number" min="0" step="0.01" value="'+pct+'" placeholder="%" '
+    +'<input class="sf-pct kpamt" type="number" min="0" step="0.01" value="'+pct+'" placeholder="%" '
       +'title="กี่ % ของยอด / per cent of the order total — 3 = 3 %" '
       +'onchange="setShipFeePct(\''+o.id+'\',this.value)" '
       +'style="width:58px;padding:4px 6px;border:1px solid #fcd34d;border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px">'
     +'<span style="font-size:11px;font-weight:800;color:#92400e">%</span>'
-    +'<input class="sf-amt" type="number" min="0" step="0.01" value="'+(manual?o.shipFee:'')+'" placeholder="'+(Math.round(fee*100)/100)+'" '
+    +'<input class="sf-amt kpamt" type="number" min="0" step="0.01" value="'+(manual?o.shipFee:'')+'" placeholder="'+(Math.round(fee*100)/100)+'" '
       +'title="ยอดเป๊ะ ๆ / the exact amount · ว่าง = ตามอัตรา / empty = by rate · 0 = ไม่มี / none" '
       +'onchange="setShipFee(\''+o.id+'\',this.value)" '
       +'style="width:76px;padding:4px 6px;border:1px solid #fcd34d;border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px">'
