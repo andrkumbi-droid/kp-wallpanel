@@ -9551,6 +9551,19 @@ function ofCreate(){
     var _first=document.getElementById(_missing[0].el); if(_first){ try{_first.focus();}catch(e){} }
     return;
   }
+  // Phone must be a complete 10-digit number — a 9-digit typo means the driver
+  // cannot reach the customer and the order is stuck on the road.
+  var _phVal = String((document.getElementById('of-phone')||{}).value||'').trim();
+  if(_phVal){
+    var _phBad = kpPhoneBad(_phVal);
+    if(_phBad.length){
+      alert('เบอร์โทรต้องมี 10 หลัก / Phone number must have 10 digits\n\n'
+        +'ไม่ถูกต้อง / not valid:\n• '+_phBad.join('\n• '));
+      var _phEl=document.getElementById('of-phone');
+      if(_phEl){ try{ ofPhoneMark(_phEl); _phEl.focus(); }catch(e){} }
+      return;
+    }
+  }
   // Province vs. address: the quick-paste parser never overwrites a province that was
   // typed first, so a province picked before pasting survives even when the address says
   // something else (order #131 went out as นครพนม with an อยุธยา address — the driver
@@ -24807,6 +24820,34 @@ function deleteShipper(idx) {
 // ── CUSTOMER CRM (phone-based) ──────────────────────────────────────
 // Normalise a phone number to a comparable key: digits only, +66 → 0,
 // strip leading 66. Returns '' if it doesn't look like a phone number.
+// A phone number is only usable if it has all 10 digits (0XXXXXXXXX). Half-typed
+// numbers made orders undeliverable, so New Order refuses to create with one.
+// Several numbers may be given separated by / , ; or newline — each is checked.
+function kpPhoneList(str){
+  return String(str||'').split(/[\/,;\n]+/).map(function(x){return x.trim();}).filter(Boolean);
+}
+function kpPhoneDigits(p){
+  return String(p||'').replace(/[^\d+]/g,'').replace(/^\+?66/,'0').replace(/\D/g,'');
+}
+// Returns the numbers that are NOT exactly 10 digits (empty array = all fine).
+function kpPhoneBad(str){
+  return kpPhoneList(str).filter(function(p){ return kpPhoneDigits(p).length!==10; });
+}
+// Live feedback while typing in the New Order phone field.
+function ofPhoneMark(el){
+  el = el || document.getElementById('of-phone'); if(!el) return;
+  var v = String(el.value||'').trim();
+  var bad = !!(v && kpPhoneBad(v).length);
+  el.style.borderColor = bad ? '#dc2626' : '';
+  var h = document.getElementById('of-phone-hint');
+  if(!h && el.parentNode){
+    h = document.createElement('div'); h.id='of-phone-hint';
+    h.style.cssText='font-size:11px;color:#dc2626;font-weight:700;margin:-4px 0 6px';
+    h.textContent='เบอร์โทรต้องมี 10 หลัก / phone needs 10 digits';
+    el.parentNode.insertBefore(h, el.nextSibling);
+  }
+  if(h) h.style.display = bad ? 'block' : 'none';
+}
 function normPhone(p) {
   // If several numbers are given (separated by / , ; or newline), key by the first one.
   var s = String(p||'').split(/[\/,;\n]/)[0].replace(/[^\d+]/g,'');
@@ -25018,7 +25059,9 @@ function ofQuickParse(){
 function ofLookupCustomer() {
   var phoneEl = document.getElementById('of-phone');
   var panel = document.getElementById('of-cust-lookup');
-  if(!phoneEl || !panel) return;
+  if(!phoneEl) return;
+  try{ ofPhoneMark(phoneEl); }catch(e){}
+  if(!panel) return;
   var c = getCustomer(phoneEl.value);
   if(!c || (c.orders.length===0 && !customerMeta[normPhone(phoneEl.value)])) {
     panel.style.display = 'none';
