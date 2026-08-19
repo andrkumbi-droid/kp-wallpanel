@@ -17911,7 +17911,8 @@ function kpCashKioskInit(){
     // Read-across-the-room styling. The rows themselves are built by
     // cashFeedRender() for the office tab; here they get bigger and darker.
     '<style>'
-      +'#kp-kiosk-body{max-width:980px;margin:0 auto}'
+      +'#kp-kiosk-body{max-width:980px;margin:0 auto;position:relative;z-index:1}'
+      +'#kp-kiosk-gate{position:relative;z-index:1}'
       +'#kp-kiosk .cf-row{background:#111827 !important;border-color:#334155 !important;padding:14px 16px !important;margin-bottom:8px !important}'
       +'#kp-kiosk .cf-amt{font-size:32px !important;min-width:180px !important}'
       +'#kp-kiosk .cf-main{font-size:18px !important;color:#f1f5f9 !important}'
@@ -17980,6 +17981,9 @@ function kpCashKioskInit(){
       +'</div>'
       +'<div id="kp-kiosk-msg2" style="display:none;font-size:14px;font-weight:700;background:#111827;border:1px solid #334155;'
         +'border-radius:10px;padding:9px 12px;margin-bottom:12px;color:#e5e7eb"></div>'
+      // Tiny, and the only place the screen can be asked how it is doing: a TV has no
+      // console, so this is how "is anything keeping it awake?" gets answered.
+      +'<div id="kp-kiosk-diag" style="font-size:11px;color:#475569;margin:-8px 0 10px;letter-spacing:.3px"></div>'
       +'<div class="cashfeed-list" style="font-size:15px"></div>'
     +'</div>';
   document.body.appendChild(d);
@@ -18088,31 +18092,58 @@ document.addEventListener('visibilitychange', function(){
 // up. No file to load, no autoplay prompt (muted video is always allowed), and one
 // frame a second costs nothing. This is the belt to the wake lock's braces — the
 // lock is the clean way, this works even where the browser has never heard of it.
-var _kpKeepVid=null, _kpKeepTimer=null;
+var _kpKeepVid=null, _kpKeepTimer=null, _kpKeepAC=null;
 function kpKeepPlaying(){
   try{
     if(_kpKeepVid || !kpCashKioskOn()) return;
-    var c=document.createElement('canvas'); c.width=2; c.height=2;
+    // 2 px at 1 % opacity was not enough: a browser only keeps the screen awake for a
+    // video it considers VISIBLE, and the set showed its screensaver anyway. So the
+    // video now fills the screen behind the numbers, fully opaque, painted in the
+    // monitor's own background colour — invisible to the eye, unmissable to the TV.
+    var c=document.createElement('canvas'); c.width=160; c.height=90;
     if(!c.captureStream) return;                       // nothing to lose, nothing gained
     var ctx=c.getContext('2d'); if(!ctx) return;
-    var st=c.captureStream(1);
+    var st=c.captureStream(2);
+    // A silent audio track on top: some sets only count "media with sound" as playback.
+    // Gain 0 means nothing is ever heard.
+    try{
+      var AC=window.AudioContext||window.webkitAudioContext;
+      if(AC){
+        var ac=new AC(), osc=ac.createOscillator(), g=ac.createGain(), dest=ac.createMediaStreamDestination();
+        g.gain.value=0; osc.connect(g); g.connect(dest); osc.start();
+        dest.stream.getAudioTracks().forEach(function(t){ st.addTrack(t); });
+        _kpKeepAC=ac;
+      }
+    }catch(e){}
     var v=document.createElement('video');
     v.muted=true; v.defaultMuted=true; v.setAttribute('muted','');
     v.autoplay=true; v.loop=true;
     v.playsInline=true; v.setAttribute('playsinline','');
     v.setAttribute('disablepictureinpicture','');
-    v.style.cssText='position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:0';
+    v.style.cssText='position:fixed;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;z-index:0';
     try{ v.srcObject=st; }catch(e){ return; }
     document.body.appendChild(v);
     _kpKeepVid=v;
     var flip=false;
     _kpKeepTimer=setInterval(function(){
       // A changing frame keeps the track alive; a stalled stream is not "playing".
-      flip=!flip; ctx.fillStyle=flip?'#000000':'#010101'; ctx.fillRect(0,0,2,2);
+      flip=!flip; ctx.fillStyle=flip?'#0b1220':'#0b1221'; ctx.fillRect(0,0,160,90);
       if(v.paused){ var r=v.play(); if(r&&r.catch) r.catch(function(){}); }
     }, 1000);
     var p=v.play(); if(p&&p.catch) p.catch(function(){});
   }catch(e){}
+}
+// Refreshes the little line under the header every 5 s while the monitor is up.
+var _kpDiagTimer=null;
+function kpKioskDiagTick(){
+  if(_kpDiagTimer) return;
+  var paint=function(){
+    var el=document.getElementById('kp-kiosk-diag');
+    if(!el){ clearInterval(_kpDiagTimer); _kpDiagTimer=null; return; }
+    el.textContent=String(kpCashDiag()).split('\n')[0];
+  };
+  paint();
+  _kpDiagTimer=setInterval(paint, 5000);
 }
 function kpKeepStop(){
   try{ if(_kpKeepTimer) clearInterval(_kpKeepTimer); }catch(e){}
@@ -18125,6 +18156,8 @@ function kpKeepStop(){
     }
   }catch(e){}
   _kpKeepVid=null;
+  try{ if(_kpKeepAC && _kpKeepAC.close) _kpKeepAC.close(); }catch(e){}
+  _kpKeepAC=null;
 }
 function kpCashKioskShow(s){
   var g=document.getElementById('kp-kiosk-gate'), b=document.getElementById('kp-kiosk-body');
@@ -18135,6 +18168,7 @@ function kpCashKioskShow(s){
   try{ kpPayFeedTrim(); }catch(e){}
   try{ kpKeepAwake(); }catch(e){}
   try{ kpKeepPlaying(); }catch(e){}
+  try{ kpKioskDiagTick(); }catch(e){}
   // The PIN we just typed is the gesture the browser wants for audio, so ring the
   // till once: that is the monitor saying out loud that it can be heard. Silence
   // here means the sound is off or blocked — which is exactly what you want to
