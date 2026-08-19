@@ -18009,7 +18009,7 @@ function kpCashDiag(){
   b.push('net:'+((navigator.onLine===false)?'OFFLINE':'online'));
   // Whether this browser can keep the screen on at all — on a TV that decides
   // whether the app has any chance against the set's own screensaver.
-  b.push('wake:'+(navigator.wakeLock?(_kpWake?'held':'idle'):'unsupported'));
+  b.push('wake:'+(navigator.wakeLock?(_kpWake?'held':(_kpWakeErr?('no/'+_kpWakeErr):'idle')):'unsupported'));
   b.push('vid:'+(_kpKeepVid?((_kpKeepVid.paused?'paused':'playing')):'none'));
   var ua=String(navigator.userAgent||'').replace(/^Mozilla\/[0-9.]+ /,'').slice(0,64);
   return b.join(' · ')+'\n'+ua;
@@ -18073,19 +18073,31 @@ function kpCashKioskLogin(retry){
 // that (TV browsers and Chrome both honour it), and the lock is lost whenever the
 // page is hidden — so it is taken again as soon as it comes back. The TV's OWN
 // screensaver is a separate thing and still has to be switched off in its settings.
-var _kpWake=null;
+var _kpWake=null, _kpWakeErr='';
 function kpKeepAwake(){
   try{
-    if(!navigator.wakeLock || !kpCashKioskOn()) return;
+    if(!navigator.wakeLock || !kpCashKioskOn() || _kpWake) return;
+    if(document.visibilityState!=='visible') return;      // a hidden page is never granted one
     navigator.wakeLock.request('screen').then(function(w){
-      _kpWake=w;
+      _kpWake=w; _kpWakeErr='';
       try{ w.addEventListener('release', function(){ _kpWake=null; }); }catch(e){}
-    }).catch(function(){});
-  }catch(e){}
+    }).catch(function(e){ _kpWakeErr=(e && (e.name||e.message)) || 'failed'; });
+  }catch(e){ _kpWakeErr='throw'; }
 }
 document.addEventListener('visibilitychange', function(){
   if(document.visibilityState==='visible' && !_kpWake) kpKeepAwake();
 });
+// The TV reported wake:idle — asked for once at startup, refused, never asked again.
+// Some browsers only hand a wake lock to a page that has been interacted with, and a
+// lock is dropped whenever the page is hidden. So: ask again every half minute, and
+// on the first touch of the remote. The reason for a refusal goes into the status
+// line, otherwise "idle" says nothing about why.
+try{
+  setInterval(function(){ if(kpCashKioskOn() && !_kpWake) kpKeepAwake(); }, 30000);
+  ['click','keydown','touchstart'].forEach(function(ev){
+    document.addEventListener(ev, function(){ if(kpCashKioskOn() && !_kpWake) kpKeepAwake(); }, true);
+  });
+}catch(e){}
 // Google TV has no "screensaver off" switch any more — but a TV never starts one
 // while a video is playing. So the monitor plays one: a 2x2 canvas captured as a
 // video stream, invisible in a corner, muted, running for as long as the screen is
