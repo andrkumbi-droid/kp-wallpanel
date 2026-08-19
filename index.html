@@ -17606,33 +17606,40 @@ function kpMeName(){
 }
 // One record per incoming payment. Wrapped in try/catch on purpose: a feed entry
 // must never be able to break an upload or a delivery confirmation.
-// Is an existing record and a new one the SAME money reported twice, rather than
-// two payments that happen to be equal? Only across DIFFERENT channels and close
-// together in time: the driver photographs the slip and then confirms the delivery,
-// or the office books an amount and uploads the slip for it. Two bookings of the
-// same size through the SAME channel are two payments — a customer paying 5,000
-// twice on one order in a day must show up twice, or the screen lies about the day.
+// Is an existing record and a new one the SAME money reported twice, or a second
+// payment? One question, asked in one place — both the writer above and the renderer
+// below use this, so anything that slips past the writer still collapses on screen.
+//
+// On one order:
+//   · the same figure again within a quarter of an hour  → one payment, two reports
+//   · two DIFFERENT channels within ten minutes          → one payment, two reports,
+//                                                          whatever the amounts say
+//   · two different channels up to two hours apart and
+//     the amounts within 1 % (at least 20 ฿)             → one payment, reported late
+//   · anything else                                      → a second payment
+//
+// Everything in the first three lines has actually happened here:
+//   2-170  two driver phones on one tour confirmed the same stop a minute apart,
+//          22,125 ฿ twice, both as "delivered" — the same channel, which an earlier
+//          version of this rule refused to merge on principle.
+//   2-135  booked 7,562 ฿, its slip read 7,335 ฿ — the carrier's 3 % cut, taken off
+//          before the customer transferred.
+//   #202   a 784 ฿ order whose slip read 12,000 ฿ — one transfer covering more than
+//          this order. A slip figure is read off a photograph; it is not evidence.
+//   1-086  booked 6,567 ฿, read as 6,557 ฿ one second later — a misread digit.
+// A real second payment (a deposit, then the rest) is hours apart, not seconds — and
+// two payments of the identical size on one order land hours apart too.
 function kpPayFeedSame(v, rec){
   if(!v || !rec || !v.id || !rec.id) return false;
   if(String(v.id)!==String(rec.id)) return false;
-  if((v.kind||"")===(rec.kind||"")) return false;              // same channel = separate payments
   var gap=Math.abs((rec.ts||0)-(v.ts||0));
-  if(gap >= 2*3600*1000) return false;                         // reported within two hours
-  // Minutes apart on ONE order through two channels is one payment reported twice —
-  // whatever the two amounts say. The amount test used to decide this, and that is
-  // what put the same money on the screen twice: a slip figure is read off a
-  // photograph and is often not the order total at all.
-  //   2-135  booked 7,562 ฿, slip read 7,335 ฿  → the carrier's 3 % cut, deducted
-  //          before the customer transferred.
-  //   #202   a 784 ฿ order whose slip read 12,000 ฿ → one transfer covering more
-  //          than this order.
-  // Both were 2–4 seconds apart and both were counted twice in the day's total.
-  if(gap <= 10*60*1000) return true;
-  // Further apart, the amount is the only thing left to go on: near-equal is the same
-  // money reported late (a digit misread — 1-086 booked 6,567, read as 6,557), clearly
-  // different is a second payment, e.g. a deposit and then the rest.
   var a=Math.abs(parseFloat(v.amt)||0), b=Math.abs(parseFloat(rec.amt)||0);
-  return Math.abs(a-b) <= Math.max(20, Math.max(a,b)*0.01);
+  var near=Math.abs(a-b) <= Math.max(20, Math.max(a,b)*0.01);
+  if(near && gap <= 15*60*1000) return true;                   // the same figure again
+  if((v.kind||"")===(rec.kind||"")) return false;              // same channel, other amount
+  if(gap >= 2*3600*1000) return false;                         // reported within two hours
+  if(gap <= 10*60*1000) return true;                           // slip vs booking
+  return near;
 }
 // Which of two reports of the same money to believe: an amount somebody booked
 // (delivery confirmation, office entry) is checked against the order total; a slip
