@@ -20983,9 +20983,40 @@ function mirrorImportPreview(list, totalCand, dups, updateN){
   var wrap=document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap.firstChild);
 }
 
+// One stop, one confirmation. Two phones ride most tours, and the second one still
+// had the stop on its screen after the first had finished it — 2-170 was confirmed
+// twice a minute apart and the 22,125 ฿ went into the money monitor twice. The feed
+// merges such a pair now, but the money has no business being reported twice at all.
+var _dlDone={};
 function confirmDelivery(){
   if(!_deliveryId) return;
   var id = _deliveryId;
+  // Same phone, twice within half a minute: a double tap, never two deliveries.
+  if(_dlDone[id] && (Date.now()-_dlDone[id]) < 30000){ closeDeliveryModal(); return; }
+  // The live order is the truth — the driver's own list can be a minute behind.
+  var _live=(typeof orders!=='undefined'?orders:[]).find(function(x){ return x.id===id; });
+  if(_live && (_live.status==='delivered' || _live.status==='shipped')){
+    var _who=_live.paidBy||_live.deliveredBy||'';
+    var _when=_live.paidAt||'';
+    var _money=(parseFloat(_live.paidAmount)||0)>0 || !!_live.payAtOffice;
+    if(_money){
+      // Delivered AND the money already recorded: there is nothing left to book here.
+      alert('✅ ออเดอร์นี้ยืนยันแล้ว / this stop is already confirmed'
+        +(_who?'\n'+_who:'')+(_when?' · '+_when:'')
+        +'\n\nไม่ต้องบันทึกซ้ำ / nothing left to record.');
+      _dlDone[id]=Date.now();
+      closeDeliveryModal();
+      try{ drReady(); }catch(e){}
+      try{ drTour(); }catch(e){}
+      return;
+    }
+    // Marked delivered but no money on record (office correction, mis-tap): let it
+    // through, but say out loud what is being added on top.
+    if(!confirm('⚠️ ออเดอร์นี้ถูกทำเครื่องหมายว่าส่งแล้ว / already marked as delivered'
+      +(_who?' — '+_who:'')
+      +'\n\nบันทึกการชำระเงินต่อไหม? / record the payment anyway?')) { closeDeliveryModal(); return; }
+  }
+  _dlDone[id]=Date.now();
   // Shipper handover: no payment, but proof is mandatory — a photo of the goods that
   // went to the carrier AND the receipt they handed back. The order is then marked
   // "shipped" (office finalises to delivered once the customer receives it).
