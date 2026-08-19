@@ -17697,15 +17697,27 @@ function kpPayFeedAdd(o){
     // it was already announced seconds ago.) A deposit and the rest of an order have
     // different amounts and are therefore separate payments, as they should be.
     if(!rec.id){ window.fbDB.ref('payFeed').push(rec); return; }
+    // That merge has to READ the feed first, and a read only answers when the server
+    // answers. A driver in a valley confirms the stop: the writes (order, status,
+    // photo) are queued and go out on the next bar of signal, but the read just hangs
+    // and the money never reaches the monitor — 1-095 on 19.08., delivered 17:23,
+    // 3,302 ฿ cash, no row. So the read gets four seconds; after that the record is
+    // written regardless. A push while offline queues like every other write. The
+    // worst case is a duplicate line, and the renderer collapses those anyway.
+    var _sent=false;
+    var _push=function(){ if(_sent) return; _sent=true; try{ window.fbDB.ref('payFeed').push(rec); }catch(e){} };
+    var _late=setTimeout(_push, 4000);
     window.fbDB.ref('payFeed').limitToLast(40).once('value', function(s){
+      clearTimeout(_late);
+      if(_sent) return;                       // written blind already — leave it be
       var hit=null;
       s.forEach(function(c){ if(kpPayFeedSame(c.val()||{}, rec)) hit=c; });
-      if(hit) try{
+      if(hit){ _sent=true; try{
         var keepIt=kpPayFeedBetter(hit.val()||{}, rec);
         hit.ref.update({ amt:keepIt.amt, kind:keepIt.kind, by:keepIt.by||rec.by||(hit.val()||{}).by||'' });
-      }catch(e){}
-      else    try{ window.fbDB.ref('payFeed').push(rec); }catch(e){}
-    }, function(){ try{ window.fbDB.ref('payFeed').push(rec); }catch(e){} });
+      }catch(e){} }
+      else _push();
+    }, function(){ clearTimeout(_late); _push(); });
   }catch(e){}
 }
 // Attach once per session (from _enterOffice, for staff who may see it).
@@ -22916,6 +22928,7 @@ function payConfirmAmount(id){
     +(online>0?'🏦 โอน/Online: '+online.toLocaleString()+' ฿\n':'')
     +'รวม/Sum: '+sum.toLocaleString()+' ฿';
   if(!confirm(msg)) return;
+  var _prevPaid=parseFloat(o.paidAmount)||0;   // only the DIFFERENCE is new money
   o.paidCash=cash; o.paidOnline=online;
   o.payMethod=(online>cash)?'online':'cash';   // dominant method (amounts drive ofPayCO)
   o.paidAmount=sum;
@@ -22931,6 +22944,8 @@ function payConfirmAmount(id){
   try{ofRenderRevenue();}catch(e){}
   try{mgRevenue();}catch(e){}
   try{ auditAdd({type:'payment',orderId:id,method:o.payMethod,by:o.paidBy}); }catch(e){}
+  // → 💰 Live monitor. This popup is the one payment entry that never reported itself.
+  if(sum-_prevPaid>0) kpPayFeedAdd({amt:sum-_prevPaid, id:id, kind:'office', by:o.paidBy});
 }
 
 function paySetShipper(id, shipper) {
