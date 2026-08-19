@@ -18006,6 +18006,7 @@ function kpCashDiag(){
   // Whether this browser can keep the screen on at all — on a TV that decides
   // whether the app has any chance against the set's own screensaver.
   b.push('wake:'+(navigator.wakeLock?(_kpWake?'held':'idle'):'unsupported'));
+  b.push('vid:'+(_kpKeepVid?((_kpKeepVid.paused?'paused':'playing')):'none'));
   var ua=String(navigator.userAgent||'').replace(/^Mozilla\/[0-9.]+ /,'').slice(0,64);
   return b.join(' · ')+'\n'+ua;
 }
@@ -18081,6 +18082,50 @@ function kpKeepAwake(){
 document.addEventListener('visibilitychange', function(){
   if(document.visibilityState==='visible' && !_kpWake) kpKeepAwake();
 });
+// Google TV has no "screensaver off" switch any more — but a TV never starts one
+// while a video is playing. So the monitor plays one: a 2x2 canvas captured as a
+// video stream, invisible in a corner, muted, running for as long as the screen is
+// up. No file to load, no autoplay prompt (muted video is always allowed), and one
+// frame a second costs nothing. This is the belt to the wake lock's braces — the
+// lock is the clean way, this works even where the browser has never heard of it.
+var _kpKeepVid=null, _kpKeepTimer=null;
+function kpKeepPlaying(){
+  try{
+    if(_kpKeepVid || !kpCashKioskOn()) return;
+    var c=document.createElement('canvas'); c.width=2; c.height=2;
+    if(!c.captureStream) return;                       // nothing to lose, nothing gained
+    var ctx=c.getContext('2d'); if(!ctx) return;
+    var st=c.captureStream(1);
+    var v=document.createElement('video');
+    v.muted=true; v.defaultMuted=true; v.setAttribute('muted','');
+    v.autoplay=true; v.loop=true;
+    v.playsInline=true; v.setAttribute('playsinline','');
+    v.setAttribute('disablepictureinpicture','');
+    v.style.cssText='position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:0';
+    try{ v.srcObject=st; }catch(e){ return; }
+    document.body.appendChild(v);
+    _kpKeepVid=v;
+    var flip=false;
+    _kpKeepTimer=setInterval(function(){
+      // A changing frame keeps the track alive; a stalled stream is not "playing".
+      flip=!flip; ctx.fillStyle=flip?'#000000':'#010101'; ctx.fillRect(0,0,2,2);
+      if(v.paused){ var r=v.play(); if(r&&r.catch) r.catch(function(){}); }
+    }, 1000);
+    var p=v.play(); if(p&&p.catch) p.catch(function(){});
+  }catch(e){}
+}
+function kpKeepStop(){
+  try{ if(_kpKeepTimer) clearInterval(_kpKeepTimer); }catch(e){}
+  _kpKeepTimer=null;
+  try{
+    if(_kpKeepVid){
+      var st=_kpKeepVid.srcObject;
+      if(st && st.getTracks) st.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} });
+      _kpKeepVid.remove();
+    }
+  }catch(e){}
+  _kpKeepVid=null;
+}
 function kpCashKioskShow(s){
   var g=document.getElementById('kp-kiosk-gate'), b=document.getElementById('kp-kiosk-body');
   if(g) g.style.display='none';
@@ -18089,6 +18134,7 @@ function kpCashKioskShow(s){
   try{ cashFeedRender(); }catch(e){}
   try{ kpPayFeedTrim(); }catch(e){}
   try{ kpKeepAwake(); }catch(e){}
+  try{ kpKeepPlaying(); }catch(e){}
   // The PIN we just typed is the gesture the browser wants for audio, so ring the
   // till once: that is the monitor saying out loud that it can be heard. Silence
   // here means the sound is off or blocked — which is exactly what you want to
@@ -18128,6 +18174,7 @@ try{
 }catch(e){}
 function kpCashKioskOut(){
   if(!confirm('ออกจากหน้าจอเงินเข้า? / leave the money screen on this device?')) return;
+  try{ kpKeepStop(); }catch(e){}
   try{ if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen(); }catch(e){}
   try{ localStorage.removeItem('kpCashDisp'); }catch(e){}
   try{ document.body.style.overflow=''; }catch(e){}
