@@ -7596,7 +7596,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260820003;
+var KP_BUILD = 20260820004;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17713,6 +17713,34 @@ function kpPayFeedSame(v, rec){
   if(gap <= 10*60*1000) return true;                           // slip vs booking
   return near;
 }
+// A carrier order is booked in TWO steps in the chase list: first what the carrier
+// actually transferred (the total minus its cut), then the cut itself, so the order
+// reads as settled in full. That is one payment written twice — 3-067: 2,146.20 ฿
+// arrived, 43.80 ฿ stayed with CT, 2,190 ฿ is what the customer paid — and it used to
+// stand on the monitor as two rows, with the fee counted against BOTH of them. So the
+// second booking is added to the first row instead: one row, 2,190 ฿, − 43.80 ฿ CT.
+// (An update fires child_changed, so the room does not hear the same money twice.)
+function kpFeeFor(v){
+  var o=null, f=0;
+  try{ o=(typeof orders!=='undefined'?orders:[]).find(function(x){ return String(x.id)===String(v&&v.id); }); }catch(e){}
+  try{ f=o?(shipFeeOf(o)||0):(parseFloat(v&&v.fee)||0); }catch(e){}
+  return f>0?f:0;
+}
+// Is `rec` the carrier's cut on the order `v` already has a row for, booked the same day?
+function kpPayFeedTail(v, rec){
+  if(!v || !rec || !v.id || !rec.id) return false;
+  if(String(v.id)!==String(rec.id)) return false;
+  var d1=new Date(v.ts||0), d2=new Date(rec.ts||0);
+  if(d1.toDateString()!==d2.toDateString()) return false;
+  var fee=kpFeeFor(rec)||kpFeeFor(v);
+  if(!(fee>0)) return false;
+  return Math.abs(Math.abs(parseFloat(rec.amt)||0)-fee) <= Math.max(1, fee*0.02);
+}
+function kpPayFeedJoin(a, b){          // one row carrying both bookings
+  var m={}; for(var k in a) m[k]=a[k];
+  m.amt=Math.round(((parseFloat(a.amt)||0)+(parseFloat(b.amt)||0))*100)/100;
+  return m;
+}
 // Which of two reports of the same money to believe: an amount somebody booked
 // (delivery confirmation, office entry) is checked against the order total; a slip
 // amount is what the reader made of a photo. So the booked one wins, and between
@@ -17774,11 +17802,19 @@ function kpPayFeedAdd(o){
     window.fbDB.ref('payFeed').limitToLast(40).once('value', function(s){
       clearTimeout(_late);
       if(_sent) return;                       // written blind already — leave it be
-      var hit=null;
-      s.forEach(function(c){ if(kpPayFeedSame(c.val()||{}, rec)) hit=c; });
+      var hit=null, join=null;
+      s.forEach(function(c){
+        var v=c.val()||{};
+        if(kpPayFeedSame(v, rec)) hit=c;
+        // ...or the two halves of one carrier booking, in either order.
+        else if(kpPayFeedTail(v, rec) || kpPayFeedTail(rec, v)) join=c;
+      });
       if(hit){ _sent=true; try{
         var keepIt=kpPayFeedBetter(hit.val()||{}, rec);
         hit.ref.update({ amt:keepIt.amt, kind:keepIt.kind, by:keepIt.by||rec.by||(hit.val()||{}).by||'' });
+      }catch(e){} }
+      else if(join){ _sent=true; try{
+        join.ref.update({ amt: kpPayFeedJoin(join.val()||{}, rec).amt });
       }catch(e){} }
       else _push();
     }, function(){ clearTimeout(_late); _push(); });
@@ -17931,6 +17967,9 @@ function cashFeedRender(){
     // channels collapses, two genuine payments of equal size do not.
     for(var i=0;i<keep.length;i++){
       if(kpPayFeedSame(keep[i], v)){ keep[i]=kpPayFeedBetter(keep[i], v); return; }
+      // The carrier's cut booked on top of what the carrier transferred: one payment,
+      // so one row carrying both — and the fee is then taken off it once, not twice.
+      if(kpPayFeedTail(keep[i], v) || kpPayFeedTail(v, keep[i])){ keep[i]=kpPayFeedJoin(keep[i], v); return; }
     }
     keep.push(v);
   });
@@ -23143,7 +23182,22 @@ function setShipFee(id,val){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
   var raw=String(val==null?'':val).trim();
   if(raw===''){ delete o.shipFee; }
-  else o.shipFee=Math.max(0, parseFloat(raw.replace(/[^0-9.]/g,''))||0);
+  else {
+    var _f=Math.max(0, parseFloat(raw.replace(/[^0-9.]/g,''))||0);
+    // A carrier keeps a few percent. More than half the order is not a fee, it is the
+    // amount that ARRIVED typed into the wrong box — 3-068 on 20.08.: 4,875.50 ฿
+    // entered as the fee on a 4,975 ฿ order, so the monitor read "0 ฿ arrives".
+    var _tot=0; try{ _tot=ofOrderTotalNum(o)||0; }catch(e){}
+    if(_tot>0 && _f>_tot*0.5 && !confirm(
+        '⚠ ค่าธรรมเนียมมากกว่าครึ่งของยอดออเดอร์ / the fee is more than half the order\n\n'
+        +_f.toLocaleString('en-US')+' ฿  จาก / of  '+_tot.toLocaleString('en-US')+' ฿'
+        +'  ('+Math.round(_f/_tot*100)+'%)\n\n'
+        +'ใส่ยอดที่ได้รับผิดช่องหรือเปล่า? / did the amount received go into the fee box?\n'
+        +'ตกลง = ใช่ค่าธรรมเนียมจริง / OK = it really is the fee')){
+      _shipRefreshViews(id); return;
+    }
+    o.shipFee=_f;
+  }
   delete o.shipFeePct;              // an exact amount is not a percentage any more
   syncOrders(); try{sheetsSyncOrder(o);}catch(e){}
   try{ auditAdd({type:'payment', area:'ship', orderId:id, method:'ship-fee',
