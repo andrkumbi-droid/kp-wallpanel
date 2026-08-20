@@ -17305,6 +17305,43 @@ function kpThaiBaht(amt){
   if(st>0) t+=kpThaiNum(st)+'สตางค์';
   return t;
 }
+// ── What the monitor SAYS out loud ────────────────────────────────────────
+//   "ออเดอร์ สอง, หนึ่ง หก ศูนย์, จังหวัดเพชรบูรณ์, สองพันเจ็ดร้อยแปดสิบแปดบาท, ผู้ส่ง Chan ค่ะ"
+// The amount alone made the room look up and then walk over to the screen to see
+// WHICH money had arrived. Order number, province and who collected it answer that
+// from across the room. Only the two routes that can speak free text say the whole
+// line — a female voice on the device, or the relay recording. The syllable clips
+// we ship can only count, so on a device that falls back to them it stays the
+// amount, as before.
+// An order number is read digit by digit ('2-160' → สอง, หนึ่ง หก ศูนย์): the dash
+// becomes a pause, because a Thai voice reads "2-160" as "two minus a hundred sixty".
+function kpSayOrderNo(id){
+  var D=['ศูนย์','หนึ่ง','สอง','สาม','สี่','ห้า','หก','เจ็ด','แปด','เก้า'];
+  var s=String(id||''), out='';
+  for(var i=0;i<s.length;i++){
+    var c=s.charAt(i);
+    if(c>='0'&&c<='9')                    out+=D[+c]+' ';
+    else if(c==='-'||c==='/'||c===' ')    out+=', ';
+  }
+  return out.replace(/\s*,\s*/g,', ').replace(/\s+/g,' ').replace(/(,\s*)+$/,'').replace(/^(,\s*)+/,'').trim();
+}
+// A staff name as it can be spoken: no emoji, and a pair reads as a pair.
+function kpSayName(n){
+  return String(n||'').replace(/\s*\+\s*/g,' และ ')
+                      .replace(/[^A-Za-z0-9฀-๿ .'\-]/g,' ')
+                      .replace(/\s+/g,' ').trim();
+}
+function kpSayLine(amt, info){
+  var plain=kpThaiBaht(amt)+'ค่ะ';
+  if(!info) return plain;
+  var t='';
+  var no=kpSayOrderNo(info.id);         if(no) t+='ออเดอร์ '+no+', ';
+  var pv=String(info.prov||'').trim();  if(pv) t+='จังหวัด'+pv+', ';
+  t+=kpThaiBaht(amt);
+  var who=kpSayName(info.by);           if(who) t+=', '+((info.kind==='office')?'โดย ':'ผู้ส่ง ')+who;
+  t+=(who?' ค่ะ':'ค่ะ');                // a Latin name needs the space, Thai does not
+  return (t.length>190) ? plain : t;    // the relay renders at most 200 characters
+}
 
 // ── The female Thai voice that SHIPS WITH THE APP ─────────────────────────
 // Windows has exactly one Thai TTS voice ("Microsoft Pattara") and it is male,
@@ -17442,9 +17479,11 @@ try{ if(window.speechSynthesis && speechSynthesis.getVoices) speechSynthesis.get
 var _kpSayMp3={};
 // Fetch only (no playback) — cb(base64|null). Called ahead of time so the
 // recording is already in hand by the time the cash sound has finished.
-function kpSayFetch(amt, cb){
+function kpSayFetch(amt, cb, info){
   cb=cb||function(){};
-  var key=Math.round(Math.abs(Number(amt)||0)*100);
+  // Keyed by the SENTENCE, not the amount — two payments of the same size on
+  // different orders are two different recordings now.
+  var key=kpSayLine(amt, info);
   if(_kpSayMp3[key]){ cb(_kpSayMp3[key]); return; }
   // An /exec without the 'say' action answers, just without an mp3. Asking it
   // again on every amount would put a pointless second in front of each
@@ -17455,7 +17494,7 @@ function kpSayFetch(amt, cb){
   try{
     // `say`, not `text` — an /exec that predates this action then answers
     // {error:'no text'} at once instead of paying for a chat translation.
-    fetch(KP_CT_OCR_URL,{ method:'POST', body:JSON.stringify({action:'say', say:kpThaiBaht(amt)+'ค่ะ'}) })
+    fetch(KP_CT_OCR_URL,{ method:'POST', body:JSON.stringify({action:'say', say:key}) })
       .then(function(r){ return r.json(); })
       .then(function(j){
         if(j && j.mp3){ _kpSayMp3[key]=j.mp3; fin(j.mp3); return; }
@@ -17466,43 +17505,46 @@ function kpSayFetch(amt, cb){
   }catch(e){ fin(null); }
 }
 // Start the fetch now so the voice can follow the sound without a gap.
-function kpSayPrefetch(amt){ try{ kpSayFetch(amt, function(){}); }catch(e){} }
-function kpSayRelay(amt, cb){
-  var key=Math.round(Math.abs(Number(amt)||0)*100);
+function kpSayPrefetch(amt, info){ try{ kpSayFetch(amt, function(){}, info); }catch(e){} }
+function kpSayRelay(amt, cb, info){
   var play=function(b64){
     var over=false, done=function(ok){ if(over) return; over=true; cb(ok); };
     try{
       window._kpVoiceRoute='relay recording';
       var a=new Audio('data:audio/mpeg;base64,'+b64);
       a.volume=0.95;
+      // Google reads a sentence deliberately; a whole line of it takes eleven
+      // seconds. A touch faster keeps the pitch (the browser preserves it) and
+      // gives the room the same words in nine.
+      try{ a.playbackRate=1.12; }catch(e){}
       a.onended=function(){ done(true); };
       a.onerror=function(){ done(false); };
       var pr=a.play(); if(pr&&pr.catch) pr.catch(function(){ done(false); });
-      setTimeout(function(){ done(true); }, 9000);       // 'ended' is not guaranteed
+      setTimeout(function(){ done(true); }, 15000);      // 'ended' is not guaranteed
     }catch(e){ done(false); }
   };
-  kpSayFetch(amt, function(b64){ if(b64) play(b64); else cb(false); });
+  kpSayFetch(amt, function(b64){ if(b64) play(b64); else cb(false); }, info);
 }
 // Say "<amount> baht kha" in Thai, then cb() — also on error or timeout.
 // Route, best first: a FEMALE Thai voice on the device (Android — natural and
 // instant) → the relay recording → the syllable clips we ship → whatever Thai
 // voice is installed (male on Windows, pitched up).
-function kpSayBaht(amt, cb){
+function kpSayBaht(amt, cb, info){
   cb=cb||function(){};
   var said=false, fin=function(){ if(said) return; said=true; try{ cb(); }catch(e){} };
   if(!kpSlipSoundOn()){ fin(); return; }
   var v=kpThaiVoice();
-  if(v && kpVoiceIsFemale(v)){ kpSayBahtTTS(amt, fin, v); return; }
+  if(v && kpVoiceIsFemale(v)){ kpSayBahtTTS(amt, fin, v, info); return; }
   var clips=function(){
     kpThLoadClips().then(function(map){
-      if(map) kpPlayThClips(amt, map, fin);
-      else    kpSayBahtTTS(amt, fin, v);
-    }, function(){ kpSayBahtTTS(amt, fin, v); });
+      if(map) kpPlayThClips(amt, map, fin);       // clips can only count — amount only
+      else    kpSayBahtTTS(amt, fin, v, info);
+    }, function(){ kpSayBahtTTS(amt, fin, v, info); });
   };
-  kpSayRelay(amt, function(ok){ if(ok) fin(); else clips(); });
+  kpSayRelay(amt, function(ok){ if(ok) fin(); else clips(); }, info);
 }
 // The device's own speech engine (fallback, and the fast path on Android).
-function kpSayBahtTTS(amt, cb, v){
+function kpSayBahtTTS(amt, cb, v, info){
   cb=cb||function(){};
   var said=false, fin=function(){ if(said) return; said=true; try{ cb(); }catch(e){} };
   if(!window.speechSynthesis || !window.SpeechSynthesisUtterance){ fin(); return; }
@@ -17510,7 +17552,7 @@ function kpSayBahtTTS(amt, cb, v){
   if(v===null){ fin(); return; }                    // device has voices, none Thai
   window._kpVoiceRoute='device voice: '+((v&&v.name)||'th-TH')+(kpVoiceIsFemale(v)?' (female)':' (male, pitched up)');
   try{
-    var txt=kpThaiBaht(amt)+'ค่ะ';                   // ...บาทค่ะ — polite, female speaker
+    var txt=kpSayLine(amt, info);                   // ...บาทค่ะ — polite, female speaker
     var u=new SpeechSynthesisUtterance(txt);
     u.lang='th-TH'; if(v) u.voice=v;
     u.rate=0.88; u.volume=0.9;                      // slower + a touch quieter = gentler
@@ -17561,7 +17603,8 @@ function kpSlipCelebrate(dataUrl, knownAmt, orderId){
     if(a>0){
       try{ kpNotifText('💰 '+Math.round(a).toLocaleString('en-US')+' ฿'+(orderId?' · '+orderId:'')); }catch(e){}
       kpPayFeedAdd({amt:a, id:orderId, kind:'slip'});   // → the 💰 Live monitor
-      kpSayBaht(a, kpPlayCash);
+      var _so=null; try{ _so=(typeof orders!=='undefined'?orders:[]).find(function(x){return x.id===orderId;}); }catch(e){}
+      kpSayBaht(a, kpPlayCash, {id:orderId, prov:(_so&&_so.province)||'', by:kpMeName(), kind:'slip'});
     } else kpPlayCash();
   };
   var k=parseFloat(knownAmt)||0;
@@ -17574,21 +17617,36 @@ function kpSlipCelebrate(dataUrl, knownAmt, orderId){
 // Thai (the reverse order of kpSlipCelebrate, on purpose). Silent when the
 // driver collected nothing (pays at the office / already paid) — there is no
 // amount to announce then.
-function kpCashThenSay(amt, label){
+// The banner shows at once, the voice takes its turn. A full sentence runs about
+// ten seconds, and payments do land on top of each other — a slip photographed and
+// the delivery confirmed a second later, or the office ticking off three orders in
+// a row. Two recordings playing at once are worth nothing to the room, so they
+// queue. The cap is there so a burst cannot turn into a minute of talking; what is
+// dropped is only the voice, never the row on screen.
+var _kpSayQ=[], _kpSayBusy=false;
+function kpCashThenSay(amt, label, info){
   if(!kpSlipSoundOn()) return;
   var a=parseFloat(amt)||0;
   if(!(a>0)) return;
   try{ kpNotifText('💰 '+Math.round(a).toLocaleString('en-US')+' ฿'+(label?' · '+label:'')); }catch(e){}
-  kpSayPrefetch(a);          // load the recording WHILE the sound plays, so there is no gap
+  if(_kpSayQ.length<6) _kpSayQ.push({a:a, info:info});
+  kpSayNext();
+}
+function kpSayNext(){
+  if(_kpSayBusy) return;
+  var j=_kpSayQ.shift(); if(!j) return;
+  _kpSayBusy=true;
+  var over=false, done=function(){ if(over) return; over=true; _kpSayBusy=false; setTimeout(kpSayNext, 400); };
+  setTimeout(done, 30000);    // a stuck route must never block the queue
+  kpSayPrefetch(j.a, j.info); // load the recording WHILE the sound plays, so there is no gap
   kpPlayCash();
-  var said=false, say=function(){ if(said) return; said=true; kpSayBaht(a); };
+  var said=false, say=function(){ if(said) return; said=true; kpSayBaht(j.a, done, j.info); };
   // Let the sound finish before talking over it; 'ended' does not fire on every
   // device, so the timer (sound length, or 2.6 s if unknown) is the safety net.
   try{
     if(_kpCashAudio){
       _kpCashAudio.addEventListener('ended', say, {once:true});
-      var d=(_kpCashAudio.duration>0?_kpCashAudio.duration:2.4)*1000+200;
-      setTimeout(say, d);
+      setTimeout(say, (_kpCashAudio.duration>0?_kpCashAudio.duration:2.4)*1000+200);
       return;
     }
   }catch(e){}
@@ -17685,6 +17743,8 @@ function kpPayFeedAdd(o){
       id: String(o.id||''),
       cust: String(o.cust||ord.customer||''),
       zone: String(o.zone||ord.zone||''),
+      prov: String(o.prov||ord.province||''),   // the monitor says it out loud — it has no orders of its own
+
       kind: o.kind||'slip',
       by: String(o.by||kpMeName()||''),
       dev: KP_DEV_ID,
@@ -17737,7 +17797,7 @@ function kpPayFeedListen(){
     // open all day next to other work — it SHOWS the money, it does not announce it.
     if(!kpCashKioskOn()) return;
     if(!_cashArmed) return;               // sound switched off on the monitor
-    try{ kpCashThenSay(kpFeedNet(v).amt, v.id||''); }catch(e){}
+    try{ kpCashThenSay(kpFeedNet(v).amt, v.id||'', v); }catch(e){}
   });
   // A slip record that later becomes "delivered" is an update, not a new payment:
   // keep the row truthful, stay silent.
@@ -17793,7 +17853,13 @@ function kpCashTest(){
     if(!a) return;
     if((a.currentTime||0) > 0.05){
       say('✅ เสียงกำลังเล่น / audio is playing ('+a.currentTime.toFixed(2)+' s) — ถ้ายังไม่ได้ยิน: ลำโพง, แท็บถูกปิดเสียง (คลิกขวาที่แท็บ) หรือ Volume Mixer / if you still hear nothing: speakers, tab muted (right-click the tab), or the volume mixer');
-      setTimeout(function(){ try{ kpSayBaht(1234); }catch(e){} }, 300);
+      // Say it the way a real payment sounds: the newest row if there is one,
+      // otherwise a stand-in, so the test also proves the whole sentence works.
+      setTimeout(function(){ try{
+        var last=(_cashFeed&&_cashFeed.length)?_cashFeed[_cashFeed.length-1]:null;
+        if(last) kpSayBaht(kpFeedNet(last).amt, null, last);
+        else     kpSayBaht(1234, null, {id:'1-234', prov:'เพชรบูรณ์', by:'ทดสอบ', kind:'delivered'});
+      }catch(e){} }, 300);
     } else if(!window._kpAudioBlocked){
       say('🔇 ไม่เล่น / not playing — error='+((a.error&&a.error.code)||'–')+' ready='+a.readyState+' muted='+a.muted+' vol='+a.volume);
       kpCashArmLabel();
@@ -21235,7 +21301,7 @@ function confirmDelivery(){
   // Money the driver actually collected on this stop: cash sound, then the
   // amount in Thai. Nothing collected (pay at office / already paid) = silent.
   if(!payOffice && !paidAlready){
-    try{ kpCashThenSay(cash+online, id); }catch(e){}
+    try{ kpCashThenSay(cash+online, id, {id:id, prov:(ord&&ord.province)||'', by:drName, kind:'delivered'}); }catch(e){}
     kpPayFeedAdd({amt:cash+online, id:id, kind:'delivered', by:drName});   // → the 💰 Live monitor
   }
 }
