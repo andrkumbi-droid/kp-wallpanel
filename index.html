@@ -7596,7 +7596,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260820004;
+var KP_BUILD = 20260821001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9691,6 +9691,23 @@ function ofCurrentProductItems(){
 }
 // Combine the contact-channel select + name field into one stored string,
 // e.g. "Line Pim · สมชาย" (channel only if no name, or vice versa).
+// The other direction: "Line Pim · สมชาย" back into the two fields. Old orders
+// were written by hand and use whatever separator was to hand ("Line Admin :
+// เสี่ยยา"), and plenty carry a name with no channel at all — that name still
+// belongs in the name box rather than being thrown away.
+function kpSplitContact(s){
+  var t=String(s||'').trim();
+  if(!t) return {ch:'', nm:''};
+  var sel=document.getElementById('of-contact-ch');
+  var opts=sel ? Array.prototype.map.call(sel.options, function(o){ return o.value; }).filter(Boolean) : [];
+  opts.sort(function(a,b){ return b.length-a.length; });     // "Line Official" before "Line"
+  for(var i=0;i<opts.length;i++){
+    if(t.toLowerCase().indexOf(opts[i].toLowerCase())===0){
+      return { ch:opts[i], nm:t.slice(opts[i].length).replace(/^\s*[·:\-–—,\/]+\s*/,'').trim() };
+    }
+  }
+  return {ch:'', nm:t};
+}
 function ofContactVal(){
   var ch=((document.getElementById('of-contact-ch')||{}).value||'').trim();
   var nm=((document.getElementById('of-contact-name')||{}).value||'').trim();
@@ -25530,7 +25547,7 @@ function buildCustomers() {
   orders.forEach(function(o){
     var key = normPhone(o.phone);
     if(!key) return;
-    if(!map[key]) map[key] = { phone:key, name:'', address:'', loc:'', province:'', orders:[], lastDate:'' };
+    if(!map[key]) map[key] = { phone:key, name:'', address:'', loc:'', province:'', contact:'', orders:[], lastDate:'' };
     var c = map[key];
     c.orders.push(o);
     // latest non-empty values win
@@ -25540,6 +25557,9 @@ function buildCustomers() {
       if(o.address && o.address!=='—') c.address = o.address;
       if(o.location) c.loc = o.location;
       if(o.province) c.province = o.province;
+      // Where this customer reaches us — the same person writes from the same
+      // Line account every time, so it does not want typing in again.
+      if(o.contact) c.contact = o.contact;
     }
   });
   return map;
@@ -25550,7 +25570,7 @@ function getCustomer(phone) {
   var key = normPhone(phone);
   if(!key) return null;
   var all = buildCustomers();
-  var base = all[key] || { phone:key, name:'', address:'', loc:'', province:'', orders:[], lastDate:'' };
+  var base = all[key] || { phone:key, name:'', address:'', loc:'', province:'', contact:'', orders:[], lastDate:'' };
   var meta = customerMeta[key] || {};
   return {
     phone: key,
@@ -25560,6 +25580,7 @@ function getCustomer(phone) {
     // Province: what the office set on the last order wins; otherwise read it
     // out of the saved address, so old orders without the field still resolve.
     province: meta.province || base.province || kpExtractProvince(meta.address || base.address || ''),
+    contact: meta.contact || base.contact || '',
     note:    meta.note    || '',
     geo:     (meta.geo && typeof meta.geo.lat==='number') ? meta.geo : null,
     blocked: !!meta.blocked,
@@ -25739,6 +25760,16 @@ function ofLookupCustomer() {
   // Province as well — without it the zone buttons stay unset and the order
   // ends up on no tour. Filling it fires the same auto-zone as typing it by
   // hand; skipped for in-store sales, where the zone is a deliberate choice.
+  // How this customer contacts us, split back into the channel + the chat name.
+  // Both boxes empty is the test, not each on its own: a channel picked without a
+  // name yet is somebody in the middle of typing, and their choice stands.
+  var chEl = document.getElementById('of-contact-ch');
+  var cnEl = document.getElementById('of-contact-name');
+  if(chEl && cnEl && !chEl.value && !cnEl.value && c.contact){
+    var sp = kpSplitContact(c.contact);
+    if(sp.ch) chEl.value = sp.ch;
+    if(sp.nm) cnEl.value = sp.nm;
+  }
   var pvEl = document.getElementById('of-province');
   if(pvEl && !pvEl.value && c.province){
     pvEl.value = c.province;
