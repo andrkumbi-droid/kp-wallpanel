@@ -4334,6 +4334,7 @@ function kpToursSig(){
     return (activeTours||[]).map(function(t){
       return [t.id,(t.orders||[]).join(','),JSON.stringify(t.status||{}),t.driving?1:0,t.departedAt||'',t.backAt||'',
         t.driverPay,t.driverAdvance,t.payMethodTour||'',(t.carPhotos||[]).length,(t.carFeeSlips||[]).length,
+        JSON.stringify(t.adj||null),
         t.kmMode?1:0,t.kmRate,(t.kmLog?(Array.isArray(t.kmLog)?t.kmLog.length:Object.keys(t.kmLog).length):0),
         t.lalaDriver||'',t.plate||''].join('|');
     }).join('~');
@@ -11543,7 +11544,7 @@ function ofRenderTour(){
       return '<div class="kmrow" data-oid="'+id+'" style="padding:4px 0;min-width:0">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;flex-wrap:wrap;gap:4px 8px;min-width:0">'+
         kmMove+
-        '<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/[\'\\]/g,'')+'\')" title="Order info / ข้อมูลออเดอร์" style="font-weight:600;cursor:pointer;min-width:0;flex:1 1 auto">'+(_kmOn?'<b style="color:#1d4ed8">'+(_oi+1)+'.</b> ':'')+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+kmChip+conflictChip+(ro?'':' <span onclick="event.stopPropagation();ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="color:var(--text2);font-size:12px;cursor:pointer;padding:0 3px">▾</span>')+'</span>'+
+        '<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/[\'\\]/g,'')+'\')" title="Order info / ข้อมูลออเดอร์" style="font-weight:600;cursor:pointer;min-width:0;flex:1 1 auto">'+(_kmOn?'<b style="color:#1d4ed8">'+(_oi+1)+'.</b> ':'')+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+kmChip+conflictChip+tourAdjChip(t,id)+(ro?'':' <span onclick="event.stopPropagation();ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="color:var(--text2);font-size:12px;cursor:pointer;padding:0 3px">▾</span>'+(tourAdjOf(t,id).length?'':' <span onclick="event.stopPropagation();ofTourAdjOpen(\''+t.id+'\',\''+String(id).replace(/[\'"\\]/g,'')+'\')" title="หัก / เพิ่ม ค่าทัวร์ — เช่น ของเสียหาย, ค่าเรือ / deduct from or add to the tour pay — e.g. damage, ferry" style="font-size:12px;cursor:pointer;padding:0 3px;opacity:.55">💸</span>'))+'</span>'+
         '<div style="display:flex;align-items:center;gap:4px 6px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;min-width:0">'+
         '<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+(ord?((ord.province||'').trim()||ord.zone||''):'')+'</span>'+
         payInline+
@@ -11569,6 +11570,7 @@ function ofRenderTour(){
         '</div>'+
         '</div>'+
         ofDelNoteHTML(ord,'margin-top:3px')+
+        tourAdjRowsHTML(t, id, ro)+
         (ro?'':'<div id="'+wrapId+'" style="display:none;margin-top:5px">'+
           '<select onchange="ofTourSetShipper(\''+String(id).replace(/['\\]/g,'')+'\',\''+driverEsc+'\',this.value)" style="width:100%;padding:6px 8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;cursor:pointer">'+
             shipOpts+
@@ -11691,7 +11693,10 @@ function ofRenderTour(){
         '<input type="number" class="kpamt" min="0" value="'+(t.driverAdvance!=null&&t.driverAdvance!==''?t.driverAdvance:'')+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourAdvance(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
         '<span style="font-size:12px;color:var(--text2)">฿</span>'+
         '</div>')+
-        (!isL&&(parseFloat(t.driverAdvance)||0)>0&&(parseFloat(t.driverPay)||0)>0?'<div style="font-size:11px;color:var(--text2);margin:-4px 0 8px;text-align:right">คงเหลือจ่ายท้ายทัวร์ / Pay at end: <b style="color:var(--green)">'+tourNetPay(t).toLocaleString()+' ฿</b></div>':'')+
+        // What was deducted or added on individual stops, with the reason — right
+        // above the amount that is actually handed over at the end of the tour.
+        tourAdjSummaryHTML(t)+
+        (!isL&&(parseFloat(t.driverPay)||0)>0&&((parseFloat(t.driverAdvance)||0)>0||tourAdjTotal(t)!==0)?'<div style="font-size:11px;color:var(--text2);margin:-4px 0 8px;text-align:right">คงเหลือจ่ายท้ายทัวร์ / Pay at end: <b style="color:var(--green)">'+tourNetPay(t).toLocaleString()+' ฿</b></div>':'')+
         // Cash + slip side by side, same size: cash = tap the button, transfer = upload
         // the slip. Both mark the tour as paid; the thumbnails open under the row.
         (isL ? '' : (function(){
@@ -12313,11 +12318,18 @@ function archiveTour(t){
   // The tour ID (T001…) is burnt now: the number stays in the registry as "ended".
   try{ if(tidOk(t.tid)) tourRegMark(t.tid,'ended',{ tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
     departedDate:t.departedDate||'', departedAt:t.departedAt||'', backDate:t.backDate||'', backAt:t.backAt||'',
-    orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length, driverPay:parseFloat(t.driverPay)||0 }); }catch(e){}
+    orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length,
+    // Net, for the same reason as in tourRegUpsert: this is the number the payout
+    // flow hands over. Base + adjustments stay beside it.
+    driverPay:Math.max(0,(parseFloat(t.driverPay)||0)+tourAdjTotal(t)),
+    payBase:parseFloat(t.driverPay)||0, adjTotal:tourAdjTotal(t) }); }catch(e){}
   var rec={ tid:t.tid||'', tourNo:existing+1, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
     created:t.created||'', tourDay:t.tourDay||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'', backDate:t.backDate||'', backAt:t.backAt||'',
     endedDate:now.toISOString().slice(0,10), endedAt:String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0'),
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0, driverPayNet:tourNetPay(t),
+    // Deductions/extras with their reasons travel INTO the record — the Drivers tab
+    // has to show them next to the orders long after the tour is closed.
+    adj:tourAdjArr(t), adjTotal:tourAdjTotal(t),
     carPhotoN:(t.carPhotos||[]).length, carSlipN:(t.carFeeSlips||[]).length, lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0, carFeeByCustomer:!!t.carFeeByCustomer,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
     payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
@@ -13581,7 +13593,15 @@ function tourRegUpsert(t){
     endedDate:old.endedDate||'', endedAt:old.endedAt||'',
     state:(old.state==='deleted'?'deleted':(old.state==='ended'?'ended':'active')),
     orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length,
-    driverPay:parseFloat(t.driverPay)||0,
+    // driverPay in the REGISTRY is what actually has to be paid out for this tour,
+    // i.e. base pay ± the per-order adjustments. Everything downstream (the unpaid
+    // list, the payout modal, the day totals, the reports) reads this one number, so
+    // a deduction booked on a stop reaches the transfer to an outside/Lalamove driver
+    // as well — those are never in staffList and get no payroll line at all.
+    // payBase/adjTotal keep the two halves readable.
+    driverPay:(function(){ try{ return Math.max(0,(parseFloat(t.driverPay)||0)+tourAdjTotal(t)); }catch(e){ return parseFloat(t.driverPay)||0; } })(),
+    payBase:parseFloat(t.driverPay)||0,
+    adjTotal:(function(){ try{ return tourAdjTotal(t); }catch(e){ return 0; } })(),
     // payVoid must survive the upsert — dropping it would let a slip sitting on the
     // tour mark a day paid again that the office had explicitly unticked.
     paid:!!old.paid, payVoid:!!old.payVoid, paidBy:old.paidBy||'', paidAt:old.paidAt||0, ts:old.ts||Date.now() };
@@ -14336,7 +14356,214 @@ function ofSetTourAdvance(tourId, val){
   try{ ofRenderTour(); }catch(e){}
 }
 // Remaining tour pay after the start-of-tour advance (never below 0).
-function tourNetPay(t){ return Math.max(0, (parseFloat(t.driverPay)||0) - (parseFloat(t.driverAdvance)||0)); }
+// ══════════════════════════════════════════════════════════════════════
+//  PER-ORDER PAY ADJUSTMENTS (หักเงิน / เพิ่มเงิน)
+//  Something went wrong on a stop — goods damaged by careless handling, and the
+//  driver carries part of it — or the driver had a cost of his own (ferry, toll,
+//  extra carry). The office writes WHY on that order's row and whether the money
+//  comes OFF the tour pay (−) or is added to it (+). Several lines per order are
+//  allowed, each with its own note.
+//  Stored as a flat ARRAY on the tour, never an object keyed by the order id: a
+//  Bangkok order id ("#123") is not a legal Firebase key and would fail to write.
+//  Entry: {id, oid, sign:-1|0|1, amt, note, by, ts}   sign 0 = written down but
+//  not counted yet, so nothing is booked before the office has decided.
+// ══════════════════════════════════════════════════════════════════════
+function tourAdjArr(t){
+  if(!t || !t.adj) return [];
+  var a=t.adj;
+  // Firebase hands an array back as an object as soon as one entry was removed.
+  if(!Array.isArray(a)) a=Object.keys(a).map(function(k){ return a[k]; });
+  return a.filter(function(e){ return e && e.id; });
+}
+function tourAdjOf(t, oid){ return tourAdjArr(t).filter(function(e){ return String(e.oid)===String(oid); }); }
+function tourAdjSign(e){ var s=parseInt(e&&e.sign,10); return (s===-1||s===1)?s:0; }
+function tourAdjVal(e){ return tourAdjSign(e) * Math.abs(parseFloat(e&&e.amt)||0); }
+function tourAdjTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+tourAdjVal(e); },0); }
+// Same for an archived record (Drivers tab) — it carries its own copy.
+function recAdjArr(r){ return tourAdjArr(r); }
+function recAdjOf(r, oid){ return tourAdjOf(r, oid); }
+function recAdjTotal(r){ return tourAdjTotal(r); }
+function tourAdjFmt(v){ return (v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString()+' ฿'; }
+// What is actually handed over at the end of the tour: earned − advance ± adjustments.
+function tourNetPay(t){ return Math.max(0, (parseFloat(t.driverPay)||0) - (parseFloat(t.driverAdvance)||0) + tourAdjTotal(t)); }
+function _tourAdjSave(t, rerender){
+  if(!t) return;
+  t.adj=tourAdjArr(t);
+  try{ syncTours(); }catch(e){}
+  // The tour-ID registry carries the amount the payout flow actually hands over —
+  // it has to learn about a new deduction right away, not only at tour end.
+  try{ if(tidOk(t.tid)) tourRegUpsert(t); }catch(e){}
+  try{ ofRenderTourIds(); }catch(e){}
+  if(rerender!==false){ try{ ofRenderTour(); }catch(e){} }
+}
+function _tourAdjFind(tourId, adjId){
+  var t=(activeTours||[]).find(function(x){return x.id===tourId;}); if(!t) return null;
+  var e=tourAdjArr(t).find(function(y){return y.id===adjId;});
+  return e?{t:t,e:e}:null;
+}
+function ofTourAdjAdd(tourId, oid){
+  if(window.ofReadOnly) return;
+  var t=(activeTours||[]).find(function(x){return x.id===tourId;}); if(!t) return;
+  var arr=tourAdjArr(t);
+  // Starts neutral on purpose: nothing is counted until the office picks − or +.
+  arr.push({ id:'adj'+Date.now()+'_'+Math.floor(Math.random()*1000), oid:String(oid),
+             sign:0, amt:0, note:'', by:ofWho(), ts:Date.now() });
+  t.adj=arr;
+  _tourAdjSave(t);
+  // The block must stay open across the re-render, or the new line is invisible.
+  try{ var w=document.getElementById('tadj_'+t.id+'_'+safeOrderId(oid)); if(w) w.style.display='block'; }catch(e){}
+}
+// 0 → − → + → 0. One button, three states, no dropdown.
+function ofTourAdjSign(tourId, adjId){
+  if(window.ofReadOnly) return;
+  var h=_tourAdjFind(tourId, adjId); if(!h) return;
+  var s=tourAdjSign(h.e), was=tourAdjVal(h.e);
+  h.e.sign = (s===0) ? -1 : (s===-1 ? 1 : 0);
+  h.e.by=ofWho(); h.e.ts=Date.now();
+  _tourAdjSave(h.t);
+  // Flipping the sign on a filled-in line moves real money — that belongs on the
+  // record just as much as typing the amount does.
+  if(Math.abs(parseFloat(h.e.amt)||0)>0){
+    try{ auditTour('adjust','🚚 '+(h.t.driverName||''),
+      '💸 '+(h.e.oid||'')+' · '+tourAdjFmt(was)+' → '+(tourAdjSign(h.e)===0?'ยังไม่คิด / not counted':tourAdjFmt(tourAdjVal(h.e)))
+      +(h.e.note?' · '+h.e.note:'')); }catch(e){}
+  }
+}
+function ofTourAdjNote(tourId, adjId, val){
+  if(window.ofReadOnly) return;
+  var h=_tourAdjFind(tourId, adjId); if(!h) return;
+  h.e.note=String(val||'').slice(0,300); h.e.by=ofWho(); h.e.ts=Date.now();
+  // NO re-render here: this fires on blur, i.e. exactly when the finger is already
+  // on its way to the − / + / amount / ✕ next to it. Rebuilding the list under that
+  // tap swallows it, and the office has to aim twice for every line.
+  _tourAdjSave(h.t, false);
+}
+function ofTourAdjAmt(tourId, adjId, val){
+  if(window.ofReadOnly) return;
+  var h=_tourAdjFind(tourId, adjId); if(!h) return;
+  var was=Math.abs(parseFloat(h.e.amt)||0);
+  h.e.amt=Math.abs(parseFloat(val)||0); h.e.by=ofWho(); h.e.ts=Date.now();
+  _tourAdjSave(h.t);
+  // Money changing hands goes on the record — same as every other amount in the app.
+  // A line still on 0 prints its raw amount, never a misleading "0 ฿".
+  if(was!==h.e.amt){
+    try{ auditTour('adjust','🚚 '+(h.t.driverName||''),
+      '💸 '+(h.e.oid||'')+' · '+(tourAdjSign(h.e)===0
+        ? h.e.amt.toLocaleString()+' ฿ (ยังไม่คิด / not counted yet)'
+        : tourAdjFmt(tourAdjVal(h.e)))
+      +(h.e.note?' · '+h.e.note:'')+(was?' (was '+was.toLocaleString()+')':'')); }catch(e){}
+  }
+}
+function ofTourAdjDel(tourId, adjId){
+  if(window.ofReadOnly) return;
+  var h=_tourAdjFind(tourId, adjId); if(!h) return;
+  var v=tourAdjVal(h.e);
+  if(!confirm('ลบรายการนี้? / delete this adjustment?\n'+(h.e.oid||'')+' · '+(h.e.note||'—')+' · '+tourAdjFmt(v))) return;
+  h.t.adj=tourAdjArr(h.t).filter(function(y){ return y.id!==adjId; });
+  _tourAdjSave(h.t);
+  try{ auditTour('adjust','🚚 '+(h.t.driverName||''), '🗑 ลบรายการปรับ / adjustment removed · '+(h.e.oid||'')+' · '+tourAdjFmt(v)+(h.e.note?' · '+h.e.note:'')); }catch(e){}
+}
+// Tapping 💸 on an order that has nothing yet goes straight to an empty line —
+// opening a block whose only content is an "add" button is one tap too many.
+function ofTourAdjOpen(tourId, oid){
+  var t=(activeTours||[]).find(function(x){return x.id===tourId;}); if(!t) return;
+  if(!tourAdjOf(t,oid).length){ if(window.ofReadOnly) return; ofTourAdjAdd(tourId,oid); return; }
+  try{ ofToggleMore('tadj_'+t.id+'_'+safeOrderId(oid)); }catch(e){}
+}
+// The compact chip on the order row: shows the net effect, opens the editor.
+function tourAdjChip(t, oid){
+  var list=tourAdjOf(t,oid); if(!list.length) return '';
+  var v=list.reduce(function(a,e){ return a+tourAdjVal(e); },0);
+  var pend=list.filter(function(e){ return tourAdjSign(e)===0; }).length;
+  var bg=v<0?'#fee2e2':v>0?'#dcfce7':'var(--bg2)', c=v<0?'#b91c1c':v>0?'#166534':'var(--text2)';
+  return ' <span onclick="event.stopPropagation();ofTourAdjOpen(\''+String(t.id).replace(/['"\\]/g,'')+'\',\''+String(oid).replace(/['"\\]/g,'')+'\')"'
+    +' title="ปรับค่าทัวร์ / pay adjustment — tap to open" style="font-size:10px;font-weight:800;color:'+c+';background:'+bg+';border-radius:8px;padding:1px 6px;white-space:nowrap;cursor:pointer">💸 '
+    +(v===0?'0 ฿':tourAdjFmt(v))+(pend?' ⏳'+pend:'')+'</span>';
+}
+// Editor block under one order row: note · 0/−/+ · amount · ✕, plus "add another".
+function tourAdjRowsHTML(t, oid, ro){
+  var wrapId='tadj_'+t.id+'_'+safeOrderId(oid);
+  var oidJs=String(oid).replace(/['"\\]/g,'');
+  var tidJs=String(t.id).replace(/['"\\]/g,'');
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+  var SG={'-1':{t:'−',bg:'#fee2e2',c:'#b91c1c',b:'#fecaca',ti:'หักจากค่าทัวร์ / deduct from the tour pay'},
+          '0':{t:'0',bg:'var(--bg2)',c:'var(--text2)',b:'var(--border)',ti:'ยังไม่คิด — แตะเพื่อเลือก − หรือ + / not counted yet — tap for − or +'},
+          '1':{t:'+',bg:'#dcfce7',c:'#166534',b:'#bbf7d0',ti:'เพิ่มให้คนขับ / extra payment to the driver'}};
+  var rows=tourAdjOf(t,oid).map(function(e){
+    var s=tourAdjSign(e), m=SG[String(s)];
+    var aid=String(e.id).replace(/['"\\]/g,'');
+    var who=(e.by?e.by:'')+(e.ts?' · '+new Date(e.ts).toISOString().slice(0,10):'');
+    if(ro){
+      return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11.5px">'
+        +'<span style="font-weight:800;color:'+m.c+';white-space:nowrap">'+m.t+'</span>'
+        +'<span style="flex:1;min-width:0;color:var(--text)">'+esc(e.note||'—')+'</span>'
+        +'<span style="font-weight:800;color:'+m.c+';white-space:nowrap">'+tourAdjFmt(tourAdjVal(e))+'</span>'
+        +'</div>';
+    }
+    return '<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;min-width:0" onclick="event.stopPropagation()">'
+      +'<input type="text" value="'+esc(e.note)+'" placeholder="เหตุผล / reason — e.g. เสียหายจากการขนส่ง, ค่าเรือ"'
+        +' onchange="ofTourAdjNote(\''+tidJs+'\',\''+aid+'\',this.value)" title="'+esc(who)+'"'
+        +' style="flex:1 1 90px;min-width:0;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11.5px">'
+      +'<button type="button" onclick="event.stopPropagation();ofTourAdjSign(\''+tidJs+'\',\''+aid+'\')" title="'+m.ti+'"'
+        +' style="flex-shrink:0;width:30px;height:29px;padding:0;border:1px solid '+m.b+';background:'+m.bg+';color:'+m.c+';border-radius:var(--rs);font-size:15px;font-weight:900;cursor:pointer;line-height:1">'+m.t+'</button>'
+      +'<input type="number" class="kpamt" min="0" value="'+(parseFloat(e.amt)>0?Math.abs(parseFloat(e.amt)):'')+'" placeholder="0"'
+        +' onchange="ofTourAdjAmt(\''+tidJs+'\',\''+aid+'\',this.value)"'
+        +' style="flex:0 0 72px;width:72px;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:12px;font-weight:700;text-align:right">'
+      +'<span style="flex-shrink:0;font-size:11px;color:var(--text2)">฿</span>'
+      +'<button type="button" onclick="event.stopPropagation();ofTourAdjDel(\''+tidJs+'\',\''+aid+'\')" title="ลบ / delete"'
+        +' style="flex-shrink:0;width:24px;height:29px;padding:0;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);font-size:12px;cursor:pointer;line-height:1">✕</button>'
+      +'</div>';
+  }).join('');
+  var addBtn = ro ? '' :
+    '<button type="button" onclick="event.stopPropagation();ofTourAdjAdd(\''+tidJs+'\',\''+oidJs+'\')"'
+    +' title="เพิ่มอีกรายการ / add another line" style="font-size:10.5px;padding:3px 9px;border:1px dashed var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);cursor:pointer;font-weight:700">➕ เพิ่มรายการ / add</button>';
+  return '<div id="'+wrapId+'" style="display:none;margin-top:5px;padding:6px 8px;background:var(--bg2);border-radius:var(--rs)">'
+    +'<div style="font-size:10px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px">💸 หัก / เพิ่ม ค่าทัวร์ · pay adjustment</div>'
+    +rows+addBtn+'</div>';
+}
+// The adjustment block in the tour's pay box: one line per entry, then the total.
+function tourAdjSummaryHTML(t){
+  var list=tourAdjArr(t); if(!list.length) return '';
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  var tot=tourAdjTotal(t);
+  var onTour={}; (t.orders||[]).forEach(function(id){ onTour[String(id)]=1; });
+  var rows=list.map(function(e){
+    var v=tourAdjVal(e), s=tourAdjSign(e);
+    var c=v<0?'#b91c1c':v>0?'#166534':'var(--text2)';
+    // An entry whose order has left the tour has no row of its own any more — without
+    // a delete button here it would keep changing the pay with no way to reach it.
+    var orphan=!onTour[String(e.oid)];
+    return '<div style="display:flex;gap:6px;align-items:baseline;font-size:11px;padding:1px 0">'
+      +'<span style="font-weight:700;white-space:nowrap">'+esc(e.oid||'')+(orphan?' <span title="ออเดอร์ไม่อยู่ในทัวร์แล้ว / order is no longer on this tour" style="color:#b45309">⚠️</span>':'')+'</span>'
+      +'<span style="flex:1;min-width:0;color:var(--text2)">'+esc(e.note||'—')+(s===0?' <span style="color:#b45309;font-weight:700">⏳ ยังไม่คิด / not counted</span>':'')+'</span>'
+      +'<span style="font-weight:800;color:'+c+';white-space:nowrap">'+(s===0?'—':tourAdjFmt(v))+'</span>'
+      +((orphan&&!window.ofReadOnly)?'<button type="button" onclick="event.stopPropagation();ofTourAdjDel(\''+String(t.id).replace(/['"\\]/g,'')+'\',\''+String(e.id).replace(/['"\\]/g,'')+'\')" title="ลบ / delete" style="flex-shrink:0;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);font-size:10px;line-height:1;padding:2px 5px;cursor:pointer">✕</button>':'')
+      +'</div>';
+  }).join('');
+  return '<div style="margin:-2px 0 8px;padding:7px 9px;background:var(--bg2);border-radius:var(--rs)">'
+    +'<div style="font-size:10px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:3px">💸 หัก / เพิ่ม · adjustments</div>'
+    +rows
+    +'<div style="display:flex;justify-content:space-between;font-size:11.5px;font-weight:800;border-top:1px solid var(--border);margin-top:4px;padding-top:3px">'
+      +'<span>รวม / total</span><span style="color:'+(tot<0?'#b91c1c':tot>0?'#166534':'var(--text2)')+'">'+tourAdjFmt(tot)+'</span>'
+    +'</div></div>';
+}
+// Read-only version for an archived tour record (Drivers tab), filtered to one order.
+function recAdjHTML(rec, oid){
+  var list=oid!=null?recAdjOf(rec,oid):recAdjArr(rec);
+  if(!list.length) return '';
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  var rows=list.map(function(e){
+    var v=tourAdjVal(e), c=v<0?'#b91c1c':v>0?'#166534':'var(--text2)';
+    return '<div style="display:flex;gap:6px;align-items:baseline;padding:1px 0">'
+      +(oid==null?'<span style="font-weight:700;white-space:nowrap">'+esc(e.oid||'')+'</span>':'')
+      +'<span style="flex:1;min-width:0;color:var(--text2)">📝 '+esc(e.note||'—')+'</span>'
+      +'<span style="font-weight:800;color:'+c+';white-space:nowrap">'+(tourAdjSign(e)===0?'—':tourAdjFmt(v))+'</span>'
+      +'</div>';
+  }).join('');
+  return '<div style="margin-top:4px;padding:5px 7px;background:var(--bg2);border-radius:var(--rs);font-size:11px">'
+    +'<div style="font-size:10px;font-weight:800;color:var(--text2);text-transform:uppercase;margin-bottom:2px">💸 หัก / เพิ่ม ค่าทัวร์ · adjustments</div>'
+    +rows+'</div>';
+}
 // Confirm-dialog line. Payroll always books the FULL tour pay (what the driver earned);
 // the advance was already paid at the start, so only the remainder is handed over at end.
 // Warning line for the end-tour dialog. An order that is neither delivered, handed to a
@@ -14384,10 +14611,26 @@ function tourEndShipWarn(t){
     +'ใส่ทีหลังได้ที่ บิล → ค่าส่ง (จะขึ้นสีแดง)';
 }
 function tourEndPaySummary(t){
-  var tp=parseFloat(t.driverPay)||0, ad=parseFloat(t.driverAdvance)||0;
-  if(tp<=0) return '';
-  var s='\nTour pay '+tp.toLocaleString()+' ฿ → payroll';
+  var tp=parseFloat(t.driverPay)||0, ad=parseFloat(t.driverAdvance)||0, aj=tourAdjTotal(t);
+  if(tp<=0 && aj===0) return '';
+  var s='\nTour pay '+tp.toLocaleString()+' ฿';
+  // The office must see WHAT is being deducted or added before it closes the tour.
+  if(aj!==0){
+    tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).forEach(function(e){
+      s+='\n  '+tourAdjFmt(tourAdjVal(e))+' · '+(e.oid||'')+(e.note?' · '+e.note:'');
+    });
+    s+='\n  = '+Math.max(0,tp+aj).toLocaleString()+' ฿ → payroll';
+  } else { s+=' → payroll'; }
   if(ad>0) s+='\n(advance '+ad.toLocaleString()+' ฿ paid at start · hand over at end: '+tourNetPay(t).toLocaleString()+' ฿)';
+  else if(aj!==0) s+='\n(hand over at end: '+tourNetPay(t).toLocaleString()+' ฿)';
+  // Lines still on 0 count for nothing and can no longer be changed once the tour is
+  // archived — say so now, while it can still be fixed.
+  var pend=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)===0 && Math.abs(parseFloat(e.amt)||0)>0; });
+  if(pend.length){
+    s+='\n\n⚠️ ยังไม่ได้เลือก − หรือ + '+pend.length+' รายการ — จะไม่ถูกคิด และแก้ไม่ได้อีก';
+    s+='\n'+pend.length+' adjustment'+(pend.length!==1?'s are':' is')+' still on 0 — they will NOT be counted and cannot be edited after the tour is closed:';
+    pend.forEach(function(e){ s+='\n  '+(e.oid||'')+' · '+(parseFloat(e.amt)||0).toLocaleString()+' ฿'+(e.note?' · '+e.note:''); });
+  }
   return s;
 }
 // ── The day a tour's PAY belongs to ──────────────────────────────────────
@@ -14420,7 +14663,10 @@ function payTourCatKey(){ try{ var c=payCats().find(function(x){ return x.key===
 // so it does NOT reduce the payroll total, only the cash handed over at tour end.
 function endTourPayroll(t){
   if(!t) return;
-  var amt=parseFloat(t.driverPay)||0; if(amt<=0) return;
+  // Deductions and extras booked on single stops change what the driver EARNED, so
+  // they belong in the payroll figure — not only in the cash handed over at the end.
+  var _base=parseFloat(t.driverPay)||0, _adjT=tourAdjTotal(t);
+  var amt=Math.max(0, _base+_adjT); if(amt<=0) return;
   var adv=parseFloat(t.driverAdvance)||0;
   var s=(staffList||[]).find(function(x){return x.driverId && x.driverId===t.driverId;})
        || (staffList||[]).find(function(x){return x.name===t.driverName;});
@@ -14432,7 +14678,11 @@ function endTourPayroll(t){
   var rec={ id:'pl-'+Date.now(), who:'staff:'+s.id, whoName:s.name, cat:payTourCatKey(), amount:amt,
     tid:tourPayTid(t),
     date: tourPayDate(t), ts:Date.now(),
-    note:'Tour'+(t.created?' '+t.created:'')+(adv>0?' (incl. advance '+adv.toLocaleString()+' paid at start, '+tourNetPay(t).toLocaleString()+' at end)':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
+    note:'Tour'+(t.created?' '+t.created:'')
+      +(_adjT!==0?' · '+_base.toLocaleString()+' '+(_adjT<0?'−':'+')+' '+Math.abs(_adjT).toLocaleString()+' ('
+        +tourAdjArr(t).filter(function(e){return tourAdjSign(e)!==0;})
+          .map(function(e){ return (e.oid||'')+' '+tourAdjFmt(tourAdjVal(e))+(e.note?' '+e.note:''); }).join('; ')+')':'')
+      +(adv>0?' (incl. advance '+adv.toLocaleString()+' paid at start, '+tourNetPay(t).toLocaleString()+' at end)':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
   // Money landing in payroll must be visible in the Payroll filter of the audit
   // log too — not only under Tour, where nobody looks for a wage.
@@ -14475,6 +14725,7 @@ function ofActiveTourRec(t){
   return { tourNo:null, tid:t.tid||'', tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
     created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'', backDate:t.backDate||'', backAt:t.backAt||'',
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0,
+    adj:tourAdjArr(t), adjTotal:tourAdjTotal(t),
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0, carFeeByCustomer:!!t.carFeeByCustomer,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
     payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
@@ -14527,19 +14778,27 @@ function ofDrvSaveTourPay(driverKey, tourKey, tourId, val){
   if(!window.fbDB){ alert('Offline — try again / ออฟไลน์'); return; }
   var old=parseFloat(rec.driverPay)||0;
   if(Math.abs(amt-old)<0.5) return;
-  var diff=amt-old;
+  // What endTourPayroll actually booked was max(0, base + adjustments) — not the bare
+  // base. Taking the delta from the base alone over-pays whenever the clamp bit (a
+  // deduction bigger than the pay, or the very common "pay forgotten at End tour",
+  // where base was 0 and nothing was booked at all).
+  var _adjT=0; try{ _adjT=recAdjTotal(rec); }catch(e){}
+  var _wasBooked=Math.max(0, old+_adjT), _nowBooked=Math.max(0, amt+_adjT);
+  var diff=_nowBooked-_wasBooked;
   if(!confirm('ค่าทัวร์ / Tour pay '+(rec.driverName||'')+(rec.tourNo?' · Tour '+rec.tourNo:'')+':\n'
     +old.toLocaleString()+' ฿ → '+amt.toLocaleString()+' ฿\n'
+    +(_adjT!==0?'หัก/เพิ่ม / adjustments: '+tourAdjFmt(_adjT)+' → '+_nowBooked.toLocaleString()+' ฿\n':'')
     +(diff>0?'+':'')+diff.toLocaleString()+' ฿ → payroll / เงินเดือน')) return;
   var adv=parseFloat(rec.driverAdvance)||0;
-  var upd={ driverPay:amt, driverPayNet:Math.max(0, amt-adv) };
+  var upd={ driverPay:amt, driverPayNet:Math.max(0, amt-adv+_adjT) };
   if(rec.lalaDriver||rec.plate) upd.carFee=amt;   // Lalamove: tour pay and car fee are the same money
   window.fbDB.ref('tourHistory/'+driverKey+'/'+tourKey).update(upd);   // listener re-renders
   // Keep the tour-ID card's day total in sync with the corrected pay.
   try{
     var _rid=rec.tid||tourRegFindByTourId(rec.tourId);
     var _rr=_rid?tourRegRec(_rid):null;
-    if(_rr){ _rr.driverPay=amt; tourReg[_rid]=_rr; window.fbDB.ref('tourReg/'+_rid).set(_rr); ofRenderTourIds(); }
+    // Registry holds the payable NET (see tourRegUpsert) — the payout flow reads it.
+    if(_rr){ _rr.driverPay=_nowBooked; _rr.payBase=amt; _rr.adjTotal=_adjT; tourReg[_rid]=_rr; window.fbDB.ref('tourReg/'+_rid).set(_rr); ofRenderTourIds(); }
   }catch(e){}
   ofDrvBookPayDelta(rec, diff);
   try{ addLog('Tour pay '+(rec.driverName||'')+(rec.tourNo?' #'+rec.tourNo:'')+': '+old.toLocaleString()+' → '+amt.toLocaleString()+' ฿ (added later)','~'); }catch(e){}
@@ -14645,6 +14904,9 @@ function ofDriversRender(){
             +(o.phone&&o.phone!=='—'?'<div style="color:var(--text2);margin-top:1px">📞 '+o.phone+'</div>':'')
             +(o.address&&o.address!=='—'?'<div style="color:var(--text2);margin-top:1px">📍 '+o.address+'</div>':'')
           +'</div>'
+          // Deductions/extras stay visible on the order itself, with the reason —
+          // that is the record of why a driver was paid less (or more) for this tour.
+          +recAdjHTML(t, o.id)
           +'<div id="'+rowId+'_det" style="display:none;margin-top:6px">'+ofDrvOrderDetail(o, rowId)+'</div>'
           +'</div>';
       }).join('')||'<div style="font-size:11px;color:var(--text2);padding:6px 0">No orders</div>';
@@ -14691,19 +14953,31 @@ function ofDriversRender(){
         +'<span style="font-size:11px;color:var(--text2)">฿</span>'
         +'<button type="button" onclick="event.stopPropagation();ofDrvSaveTourPay(\''+key+'\',\''+t._k+'\',\''+(t.tourId||'')+'\',(document.getElementById(\''+payInpId+'\')||{}).value)" style="flex-shrink:0;padding:6px 11px;border:none;border-radius:var(--rs);background:var(--blue);color:#fff;font-size:11px;font-weight:700;cursor:pointer">Save</button>'
         +'</div>';
+      // Whole-tour view of what was deducted or added, and what the driver was
+      // actually paid for the tour after those lines.
+      var adjHTML=(function(){
+        if(!recAdjArr(t).length) return '';
+        var tot=recAdjTotal(t), base=Number(t.driverPay)||0;
+        return recAdjHTML(t)
+          +'<div style="font-size:11px;font-weight:800;text-align:right;padding:3px 0 6px">'
+            +'ค่าทัวร์สุทธิ / net tour pay: '+Math.max(0, base+tot).toLocaleString()+' ฿'
+            +'<span style="font-weight:600;color:var(--text2)"> ('+base.toLocaleString()+' '+(tot<0?'−':'+')+' '+Math.abs(tot).toLocaleString()+')</span>'
+          +'</div>';
+      })();
       return '<div style="border:1px solid '+(t._active?'#16a34a':'var(--border)')+';'+(t._active?'background:#f0fdf4;':'')+'border-radius:var(--rs);margin-bottom:6px">'
         +'<div onclick="ofToggleMore(\''+otid+'\')" style="padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">'
           +'<span style="font-weight:700">'+(tidOk(t.tid)?'<span title="Tour ID / รหัสทัวร์" style="font-size:11px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:1px 6px;margin-right:5px">'+t.tid+'</span>':'')+(t._active?'🚚 On tour / กำลังส่ง':'🚚 Tour '+(t.tourNo||'?'))+' <span style="font-size:11px;color:var(--text2);font-weight:500">· '+dateStr+(t.departedAt?' '+t.departedAt:'')+'</span></span>'
-          +'<span style="font-size:11px;color:var(--text2)">'+(t.orderCount||(t.orders||[]).length)+' orders'+(t.driverPay>0?' · 💰'+t.driverPay.toLocaleString():'')+(t.kmMode?' · 🛣️'+kmFmt(kmTotal(t))+'กม.':'')+' ▾</span>'
+          +'<span style="font-size:11px;color:var(--text2)">'+(t.orderCount||(t.orders||[]).length)+' orders'+(t.driverPay>0?' · 💰'+t.driverPay.toLocaleString():'')+(recAdjTotal(t)!==0?' · <b style="color:'+(recAdjTotal(t)<0?'#b91c1c':'#166534')+'">💸'+tourAdjFmt(recAdjTotal(t))+'</b>':'')+(t.kmMode?' · 🛣️'+kmFmt(kmTotal(t))+'กม.':'')+' ▾</span>'
         +'</div>'
-        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+payHTML+photoHTML+uploadHTML+printHTML+payEditHTML+((t.kmMode||kmLogOf(t).length)?kmSummaryHTML(t):'')+ordersHtml+'</div>'
+        +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+payHTML+photoHTML+uploadHTML+printHTML+payEditHTML+adjHTML+((t.kmMode||kmLogOf(t).length)?kmSummaryHTML(t):'')+ordersHtml+'</div>'
         +'</div>';
     };
     // Month split: the running month is listed flat (starts empty on the 1st),
     // every finished month becomes its own dropdown. A tour that is still on the
     // road always counts towards the current month.
     var curMK=kpNowMK();
-    var tourPay=function(t){ return Number(t.driverPay)||0; };
+    // Net, so the month total agrees with the "net tour pay" shown inside each card.
+    var tourPay=function(t){ return Math.max(0, (Number(t.driverPay)||0) + recAdjTotal(t)); };
     var cur=[], past={};
     hist.forEach(function(t){
       var mk=t._active?curMK:(kpMKey(tourCountDate(t))||kpMKey(t.ts));
@@ -14844,6 +15118,26 @@ function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.
   t.orders = t.orders.filter(function(id){return id!==orderId;});
   delete t.status[orderId];
   auditTour('remove', orderId, 'Removed from '+(t.driverName||'tour')+"'s tour");
+  // A deduction/extra booked on this stop must not keep changing the driver's pay
+  // for a stop he no longer has — it would be invisible (no row to show it on) and
+  // still count. Ask, because the office may have meant to keep the deduction.
+  try{
+    var _adj=tourAdjOf(t, orderId);
+    if(_adj.length){
+      var _sum=_adj.reduce(function(a,e){ return a+tourAdjVal(e); },0);
+      var _keep=confirm('⚠️ ออเดอร์นี้มีรายการหัก/เพิ่มค่าทัวร์ '+tourAdjFmt(_sum)+'\n'
+        +_adj.map(function(e){ return '  '+tourAdjFmt(tourAdjVal(e))+(e.note?' · '+e.note:''); }).join('\n')+'\n\n'
+        +'This order carries a pay adjustment.\n\n'
+        +'OK = เก็บไว้ในทัวร์ / keep it on the tour (still counts)\n'
+        +'Cancel = ลบทิ้ง / remove it too');
+      if(!_keep){
+        t.adj=tourAdjArr(t).filter(function(e){ return String(e.oid)!==String(orderId); });
+        auditTour('adjust','🚚 '+(t.driverName||''), '🗑 ลบรายการปรับพร้อมออเดอร์ / adjustments removed with the order · '+orderId+' · '+tourAdjFmt(_sum));
+      } else {
+        auditTour('adjust','🚚 '+(t.driverName||''), '⚠️ ออเดอร์ออกจากทัวร์ แต่รายการปรับยังอยู่ / order left the tour, adjustment kept · '+orderId+' · '+tourAdjFmt(_sum));
+      }
+    }
+  }catch(e){}
   // Back to ready — but ONLY for an order that really is packed. An order still in
   // new/packing keeps its own status (assigning it to a tour left it there on purpose,
   // so pulling it off the tour must not claim it is suddenly packed).
@@ -16810,6 +17104,8 @@ function drPayRender(){
       +'<span style="font-size:14px;font-weight:800;color:var(--text)">💰 ค่าทัวร์ / Tour pay</span>'
       +'<span style="font-size:15px;font-weight:800;color:var(--green)">'+pay.toLocaleString()+' ฿</span>'
     +'</div>'
+    // Deliberately NOT shown here: the reasons behind a deduction stay with the
+    // office (tour card + Drivers tab). The driver app never lists them.
     +(adv?'<div style="font-size:12px;color:var(--text2);margin-top:2px">🤝 เบิกก่อน / advance: '+adv.toLocaleString()+' ฿ · คงเหลือ / left: <b>'+tourNetPay(t).toLocaleString()+' ฿</b></div>':'')
     +'<div style="margin-top:6px">'+(st.paid?tourPayBadgeHTML(t):'<span style="font-size:11px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:2px 7px">⏳ ยังไม่จ่าย / not paid yet</span>')+'</div>'
     +(slips.length?'<div style="margin-top:8px"><div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:4px">🧾 สลิปโอนเงิน / transfer slip ('+slips.length+')</div>'
