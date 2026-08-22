@@ -141,6 +141,85 @@ function migrateTourPhotos() {
   return out;
 }
 
+/**
+ * SECOND PASS: the odometer photographs.
+ *
+ * Every km reading a driver enters is photographed, and that picture sat inside the
+ * tour record's km log — twice over, because it was written to .photo AND .photos.
+ * One tour of Aoo + Waen's came to 5 MB that way, and every device downloaded it to
+ * show a column of numbers. Same treatment as the car photos: the pictures move to
+ * tourPhotos/<driver>/<record>/km/<row>, the log keeps kmPhotoN, and the app fetches
+ * them when somebody taps the 📷 button.
+ *
+ * Same rules as before: write the pictures, read them back, and only then rewrite the
+ * log without them. Stops itself at five minutes — run again until FINISHED.
+ */
+function migrateKmPhotos() {
+  var t0 = new Date().getTime();
+  var props = PropertiesService.getScriptProperties();
+  var moved = parseInt(props.getProperty('kmm_moved') || '0', 10);
+  var failed = [];
+
+  var drivers = _get('/tourHistory', true) || {};
+  var dks = Object.keys(drivers).sort();
+
+  for (var i = 0; i < dks.length; i++) {
+    var dk = dks[i];
+    var recs = _get('/tourHistory/' + dk, true) || {};
+    var rks = Object.keys(recs).sort();
+
+    for (var j = 0; j < rks.length; j++) {
+      if (new Date().getTime() - t0 > TIME_BUDGET_MS) {
+        props.setProperty('kmm_moved', String(moved));
+        Logger.log('PAUSED after ' + moved + ' tours — press Run again to continue.');
+        return 'PAUSED · ' + moved + ' moved so far — press Run again';
+      }
+      var rk = rks[j];
+      var base = '/tourHistory/' + dk + '/' + rk;
+
+      var log = _get(base + '/kmLog');
+      if (!log) continue;
+      var rows = _arr(log);
+      var hasPics = false;
+      for (var r = 0; r < rows.length; r++) {
+        if ((rows[r] && rows[r].photo) || (rows[r] && rows[r].photos)) { hasPics = true; break; }
+      }
+      if (!hasPics) continue;
+
+      try {
+        // Pull the pictures out of the rows, keeping the row itself intact.
+        var pics = {}, clean = [];
+        for (var k = 0; k < rows.length; k++) {
+          var e = rows[k] || {};
+          var arr = _arr(e.photos);
+          if (e.photo && arr.indexOf(e.photo) < 0) arr.unshift(e.photo);
+          var c = {};
+          for (var f in e) { if (f !== 'photo' && f !== 'photos') c[f] = e[f]; }
+          if (arr.length) { pics[String(k)] = arr; c.kmPhotoN = arr.length; }
+          clean.push(c);
+        }
+
+        _put('/tourPhotos/' + dk + '/' + rk + '/km', pics);
+
+        // Count the rows back before rewriting the log.
+        var okRows = _count(_get('/tourPhotos/' + dk + '/' + rk + '/km', true));
+        if (okRows !== Object.keys(pics).length) throw new Error('copy mismatch ' + okRows);
+
+        _put(base + '/kmLog', clean);
+        moved++;
+      } catch (err) {
+        failed.push(dk + '/' + rk + ': ' + err.message);
+      }
+    }
+  }
+
+  props.deleteProperty('kmm_moved');
+  var out = 'FINISHED · ' + moved + ' km logs cleaned'
+          + (failed.length ? ' · ' + failed.length + ' failed:\n' + failed.join('\n') : '');
+  Logger.log(out);
+  return out;
+}
+
 /** Emergency undo: put the pictures back into the records. Same guarantees, reversed. */
 function undoTourPhotoMigration() {
   var drivers = _get('/tourPhotos', true) || {};
@@ -150,8 +229,14 @@ function undoTourPhotoMigration() {
     Object.keys(recs).forEach(function (rk) {
       var v = _get('/tourPhotos/' + dk + '/' + rk) || {};
       var ph = _arr(v.carPhotos), sl = _arr(v.carFeeSlips);
-      if (!ph.length && !sl.length) return;
-      _patch('/tourHistory/' + dk + '/' + rk, { carPhotos: ph, carFeeSlips: sl });
+      if (ph.length || sl.length) _patch('/tourHistory/' + dk + '/' + rk, { carPhotos: ph, carFeeSlips: sl });
+      // ...and the odometer shots back into their rows.
+      if (v.km) {
+        var rows = _arr(_get('/tourHistory/' + dk + '/' + rk + '/kmLog'));
+        Object.keys(v.km).forEach(function (idx) { if (rows[idx]) rows[idx].photos = _arr(v.km[idx]); });
+        if (rows.length) _put('/tourHistory/' + dk + '/' + rk + '/kmLog', rows);
+      }
+      if (!ph.length && !sl.length && !v.km) return;
       back++;
     });
   });

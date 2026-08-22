@@ -7632,7 +7632,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260822001;
+var KP_BUILD = 20260822002;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -10489,6 +10489,26 @@ function kpTourPhotoHTML(dropId, dk, rk, arr, count, label, icon){
     : '<button type="button" class="btnsm" onclick="kpTourPhotosLoad(\''+dk+'\',\''+rk+'\',this)"><i class="ti ti-download"></i> ดูรูป / show '+n+'</button>';
   return kpPhotoDrop(dropId, n, inner, label, icon);
 }
+// The odometer shots of one archived tour, fetched in one go and dropped back into
+// the record in memory so the km block simply draws them next time round.
+function kpKmPhotosLoad(dk, rk, btn){
+  if(!window.fbDB || !dk || !rk) return;
+  if(btn){ btn.disabled=true; btn.textContent='…'; }
+  window.fbDB.ref('tourPhotos/'+dk+'/'+rk+'/km').once('value', function(s){
+    var v=s.val()||{};
+    try{
+      var rec=((tourHistory||{})[dk]||{})[rk];
+      var log=rec&&rec.kmLog;
+      if(log) Object.keys(v).forEach(function(i){
+        var arr=v[i]; if(!Array.isArray(arr)) arr=Object.keys(arr||{}).map(function(k){ return arr[k]; });
+        if(log[i]) log[i].photos=arr;
+      });
+    }catch(e){}
+    try{ if(document.getElementById('ofv-drivers') && document.getElementById('ofv-drivers').classList.contains('active')) ofDriversRender(); }catch(e){}
+    try{ if(document.getElementById('ofv-lala') && document.getElementById('ofv-lala').classList.contains('active')) ofRenderLala(); }catch(e){}
+    if(btn && !Object.keys(v).length){ btn.disabled=false; btn.textContent='—'; }
+  }, function(){ if(btn){ btn.disabled=false; btn.textContent='↻'; } });
+}
 function kpTourPhotosLoad(dk, rk, btn){
   if(!window.fbDB || !dk || !rk) return;
   if(btn){ btn.disabled=true; btn.textContent='…'; }
@@ -11980,7 +12000,7 @@ function ofLalaHistoryHTML(){
   var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
   var lalaDrv=(drivers||[]).find(function(d){return /lalamove/i.test(d.name||'');});
   var key=lalaDrv?String(lalaDrv.id||'').replace(/[^a-zA-Z0-9_-]/g,'_'):'';
-  var arr=(key && tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).map(function(k){var r=tourHistory[key][k]||{}; r._k=k; return r;}) : [];
+  var arr=(key && tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).map(function(k){var r=tourHistory[key][k]||{}; r._k=k; r._dk=key; return r;}) : [];
   if(!arr.length) return kpTourHistBanner();
   arr.sort(function(a,b){return (b.ts||0)-(a.ts||0);});
   var renderRow=function(t){
@@ -12302,11 +12322,21 @@ function archiveTour(t){
     payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now() };
   // The photographs go BESIDE the record (see kpTourPhotoHTML): a tour record must stay
-  // small enough that every device can hold the whole history without noticing.
+  // small enough that every device can hold the whole history without noticing. That
+  // goes for the odometer shots in the km log too — one tour of Aoo + Waen's carried
+  // 5 MB of them, and every device downloaded it to show a list of numbers.
   try{
+    var _kmPh={};
+    rec.kmLog=(rec.kmLog||[]).map(function(e,i){
+      var ph=kmPhotosOf(e), c={};
+      for(var k in e){ if(k!=='photo' && k!=='photos') c[k]=e[k]; }
+      if(ph.length){ _kmPh[i]=ph; c.kmPhotoN=ph.length; }
+      return c;
+    });
     var _ref=window.fbDB.ref('tourHistory/'+key).push(rec);
     var _ph=(t.carPhotos||[]), _sl=(t.carFeeSlips||[]);
-    if((_ph.length||_sl.length) && _ref && _ref.key) window.fbDB.ref('tourPhotos/'+key+'/'+_ref.key).set({ carPhotos:_ph, carFeeSlips:_sl });
+    if((_ph.length||_sl.length||Object.keys(_kmPh).length) && _ref && _ref.key)
+      window.fbDB.ref('tourPhotos/'+key+'/'+_ref.key).set({ carPhotos:_ph, carFeeSlips:_sl, km:_kmPh });
   }catch(e){ console.error('archiveTour failed',e); }
 }
 // Tour pay the drivers get for this tour. Stored on the tour for now; not yet
@@ -12537,12 +12567,18 @@ function kmSummaryHTML(t, opts){
   var rows=log.map(function(e,i){
     var d=(i===0)?null:(legs[i-1]?legs[i-1].dist:0);
     var ph=kmPhotosOf(e);
+    // An archived tour keeps the count, not the picture (see archiveTour). One tap
+    // fetches the whole tour's odometer shots — nobody wants them until they look.
+    var _n=ph.length||parseInt(e.kmPhotoN)||0;
+    var _can=(!ph.length && _n>0 && t && t._dk && t._k);
     return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--border);font-size:11px">'
       +(ph.length
         ? '<span style="display:flex;gap:3px;flex-shrink:0">'+ph.map(function(src){
             return '<img src="'+src+'" onclick="event.stopPropagation();openPhotoLightbox(this.src)" style="width:38px;height:38px;object-fit:cover;border-radius:var(--rs);border:1px solid var(--border);cursor:pointer">';
           }).join('')+'</span>'
-        : '<span style="width:38px;text-align:center;flex-shrink:0">—</span>')
+        : (_can
+          ? '<button type="button" onclick="event.stopPropagation();kpKmPhotosLoad(\''+t._dk+'\',\''+t._k+'\',this)" title="ดูรูปเลขไมล์ / show odometer photo" style="width:38px;height:38px;flex-shrink:0;border:1px solid var(--border);background:var(--bg2);border-radius:var(--rs);cursor:pointer;font-size:11px;font-weight:700;color:var(--blue);padding:0">📷'+_n+'</button>'
+          : '<span style="width:38px;text-align:center;flex-shrink:0">—</span>'))
       +'<span style="flex:1;min-width:0">'+(i===0?'🏁 Start':('📍 '+(e.orderId||'—')))+'</span>'
       +'<span style="font-weight:700;white-space:nowrap">'+kmFmt(e.km)+' กม.</span>'
       +'<span style="color:var(--text2);white-space:nowrap;width:56px;text-align:right">'+(d==null?'0':'+'+kmFmt(d))+'</span>'
@@ -14586,7 +14622,7 @@ function ofDriversRender(){
   el.innerHTML = kpTourHistBanner() + drv.map(function(d){
     var key=String(d.id||'').replace(/[^a-zA-Z0-9_-]/g,'_');
     var esc=function(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
-    var hist=(tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).map(function(k){var t=tourHistory[key][k]||{}; t._k=k; return t;}) : [];
+    var hist=(tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).map(function(k){var t=tourHistory[key][k]||{}; t._k=k; t._dk=key; return t;}) : [];
     hist.sort(function(a,b){return (b.ts||0)-(a.ts||0);});
     // Departed-but-not-yet-ended tours for this driver show live at the top.
     var active=(activeTours||[]).filter(function(t){return t&&t.driving&&t.driverId===d.id;})
@@ -16845,8 +16881,11 @@ function drKmSave(){
   if(!(_kmM.photos||[]).length && !confirm('ยังไม่มีรูปเลขไมล์ — บันทึกเลย?\nNo odometer photo yet. Save anyway?')) return;
   var drName=((typeof currentDriverId!=='undefined' ? (drivers.find(function(d){return d.id===currentDriverId;})||{}).name : '')||'Driver');
   var arr=kmLogOf(t);
-  // .photo stays filled with the first shot so anything still reading the old field works.
-  arr.push({ km:km, photo:(_kmM.photos||[])[0]||'', photos:(_kmM.photos||[]).slice(), orderId:_kmM.orderId||'', ts:Date.now(), by:drName });
+  // The picture is written ONCE. It used to go into .photo AND .photos — the same
+  // 100 KB twice per odometer reading, which is half of why one tour record grew to
+  // 5 MB. Everything that reads it goes through kmPhotosOf(), which still understands
+  // the old .photo on records written before this.
+  arr.push({ km:km, photos:(_kmM.photos||[]).slice(), orderId:_kmM.orderId||'', ts:Date.now(), by:drName });
   try{ if((_kmM.photos||[]).length) auditPhoto('🛣️ รูปเลขไมล์ / Odometer photo', _tourLbl(t), drName, {area:'tour', n:(_kmM.photos||[]).length, detail:kmFmt(km)+' กม.'}); }catch(e){}
   t.kmLog=arr;
   if(t.kmRate==null||t.kmRate==='') t.kmRate=KM_RATE_DEFAULT;
@@ -17351,7 +17390,7 @@ function dlKmCommit(orderId){
   if(!isFinite(v)) return;
   var drName=((typeof currentDriverId!=='undefined' ? (drivers.find(function(d){return d.id===currentDriverId;})||{}).name : '')||'Driver');
   var arr=kmLogOf(t);
-  arr.push({ km:v, photo:_dlKmPhotos[0]||'', photos:_dlKmPhotos.slice(), orderId:orderId||'', ts:Date.now(), by:drName });
+  arr.push({ km:v, photos:_dlKmPhotos.slice(), orderId:orderId||'', ts:Date.now(), by:drName });   // once, not twice (see drKmSave)
   try{ if(_dlKmPhotos.length) auditPhoto('🛣️ รูปเลขไมล์ / Odometer photo', _tourLbl(t), drName, {area:'tour', n:_dlKmPhotos.length, detail:kmFmt(v)+' กม.'}); }catch(e){}
   t.kmLog=arr;
   if(t.kmRate==null||t.kmRate==='') t.kmRate=KM_RATE_DEFAULT;
