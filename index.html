@@ -995,6 +995,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow();}catch(e){}
         try{if(document.getElementById('ofv-sales')&&document.getElementById('ofv-sales').classList.contains('active'))ofDailyRender();}catch(e){}
         try{sheetsAutoSyncInit();}catch(e){} // start mirror auto-sync once orders are loaded
+        // The orders are in — now the fat nodes may have the line (see kpHeavyListeners).
+        try{ setTimeout(window.kpHeavyListeners, 800); }catch(e){}
         try{updatePackingAlert();}catch(e){}
         try{if(document.getElementById('whv-packing')&&document.getElementById('whv-packing').classList.contains('active'))whRenderPacking();}catch(e){}
         try{if(document.getElementById('s-warehouse')&&document.getElementById('s-warehouse').classList.contains('active'))whRender();}catch(e){}
@@ -1071,11 +1073,33 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{if(document.getElementById('s-driver').classList.contains('active'))drLoginRender();}catch(e){}
         try{if(document.getElementById('s-driver-tour').classList.contains('active')){drRenderTourSwitch();drReady();drKmSyncSeq();drKmRender();drPayRender();}}catch(e){}
       });
-      db.ref('tourHistory').on('value', function(snap) {
-        tourHistory = snap.val() || {};
-        try{ if(document.getElementById('ofv-drivers') && document.getElementById('ofv-drivers').classList.contains('active')) ofDriversRender(); }catch(e){}
-        try{ if(document.getElementById('ofv-lala') && document.getElementById('ofv-lala').classList.contains('active')) ofRenderLala(); }catch(e){}
-      });
+      // ── THE TWO FAT NODES ───────────────────────────────────────────────────
+      // Every device shares ONE socket with the database, and whatever is asked for
+      // first is served first. tourHistory carries the car photo of every tour ever
+      // archived (58 MB on 21.08.2026 — a single record measured 398 KB, of which
+      // 396 KB was the photo) and bills the photographed receipts (17 MB). Asking for
+      // those at boot put 75 MB in front of the stock list: Management opened on
+      // "None yet" and was still empty three quarters of a minute later, which is
+      // what it looked like from the office — "the data won't load".
+      // They are asked for once the orders are in, so the screens people open first
+      // have their data; any view that needs them sooner calls kpHeavyListeners().
+      // The real cure is to stop archiving photographs into the history at all —
+      // this only keeps them out of everybody's way.
+      var _heavyOn = false;
+      window.kpHeavyListeners = function(){
+        if(_heavyOn) return;
+        _heavyOn = true;
+        db.ref('tourHistory').on('value', function(snap) {
+          tourHistory = snap.val() || {};
+          try{ if(document.getElementById('ofv-drivers') && document.getElementById('ofv-drivers').classList.contains('active')) ofDriversRender(); }catch(e){}
+          try{ if(document.getElementById('ofv-lala') && document.getElementById('ofv-lala').classList.contains('active')) ofRenderLala(); }catch(e){}
+        });
+        db.ref('bills').on('value', function(snap) {
+          bills = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}) : [];
+          try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
+          try{ if(document.getElementById('ofv-food')&&document.getElementById('ofv-food').classList.contains('active')) foodListRender(); }catch(e){}
+        });
+      };
       // Tour-ID registry (T001…): running numbers incl. ended/deleted ones.
       db.ref('tourReg').on('value', function(snap) {
         tourReg = snap.val() || {};
@@ -1222,11 +1246,6 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       });
       db.ref('receiptNum').on('value', function(snap) {
         if(snap.val() && snap.val().num) currentReceiptNum = snap.val().num;
-      });
-      db.ref('bills').on('value', function(snap) {
-        bills = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}) : [];
-        try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
-        try{ if(document.getElementById('ofv-food')&&document.getElementById('ofv-food').classList.contains('active')) foodListRender(); }catch(e){}
       });
       // Filed CT settlements (one per sheet+slip the carrier sends us). Small
       // metadata records only — the two pictures live under ctReconImg/<id> and
@@ -7607,7 +7626,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260821003;
+var KP_BUILD = 20260821004;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -11761,6 +11780,7 @@ function ofLalaProdSummary(o){
     +(o.bundle&&o.bundle>0?' · 🧶 '+o.bundle+' มัด':'');
 }
 function ofRenderLala(){
+  try{ if(window.kpHeavyListeners) window.kpHeavyListeners(); }catch(e){}   // this view needs the heavy node
   ofLalaUpdBadge();
   var el=document.getElementById('of-lala-list'); if(!el) return;
   var list=ofLalaTours();
@@ -14436,6 +14456,7 @@ function kpScheduleMidnight(){
 kpScheduleMidnight();
 
 function ofDriversRender(){
+  try{ if(window.kpHeavyListeners) window.kpHeavyListeners(); }catch(e){}   // this view needs the heavy node
   var el=document.getElementById('of-drivers-list'); if(!el) return;
   var drv=(drivers||[]);
   if(!drv.length){ el.innerHTML='<div class="empty" style="padding:1rem">No drivers / ยังไม่มีคนขับ</div>'; return; }
@@ -29988,6 +30009,7 @@ function costsRender(){
 }
 
 function billsRender(){
+  try{ if(window.kpHeavyListeners) window.kpHeavyListeners(); }catch(e){}   // this view needs the heavy node
   try{ if(!document.getElementById('bills-e-section')) billsEntryRender(); }catch(e){}
   // Never swallow this one silently — a throw in here empties the whole cost
   // dashboard and the tab just looks "gone" (06.08.2026).
@@ -30745,6 +30767,7 @@ function foodSubmit(){
   });
 }
 function foodListRender(){
+  try{ if(window.kpHeavyListeners) window.kpHeavyListeners(); }catch(e){}   // this view needs the heavy node
   var el=document.getElementById('food-list'); if(!el) return;
   var mk=_nowMonthKey();
   var rows=(typeof bills!=='undefined'?bills:[]).filter(function(b){ return b && b.section==='food' && billsMKey(b.date)===mk; })
