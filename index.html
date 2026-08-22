@@ -26278,13 +26278,24 @@ function _tmapZoneOf(o){
   return p?(kpProvinceZone(p)||''):'';
 }
 // Where to draw an order: exact pin/link first, province capital as fallback.
+// An exact pin FAR from the address's province is flagged as suspect — the main
+// source is a delivery-photo EXIF pin taken somewhere else entirely (line ~19048
+// stores photo GPS as the customer pin), which then wins over everything.
 function _tmapPos(o){
-  var c=orderLatLng(o);
-  if(c) return {lat:c.lat,lng:c.lng,approx:false};
   var p=kpCanonProvince(((o&&o.province)||'').trim()||kpExtractProvince((o&&o.address)||''));
   var g=p?KP_PROV_GEO[p]:null;
   // Province typed in English ("Lampang") — same path kpProvinceZone supports.
   if(!g&&p){ var th=(window.KP_PROV_EN2TH||{})[String(p).toLowerCase().replace(/[\s\-\.]/g,'')]; if(th&&KP_PROV_GEO[th]){ p=th; g=KP_PROV_GEO[th]; } }
+  var c=orderLatLng(o);
+  if(c){
+    var res={lat:c.lat,lng:c.lng,approx:false};
+    if(g){
+      var dLat=c.lat-g[0], dLng=(c.lng-g[1])*Math.cos(c.lat*Math.PI/180);
+      var km=Math.sqrt(dLat*dLat+dLng*dLng)*111;
+      if(km>150){ res.suspect=Math.round(km); res.prov=p; }
+    }
+    return res;
+  }
   return g?{lat:g[0],lng:g[1],approx:true,prov:p}:null;
 }
 // Free orders worth showing next to this tour: not on ANY active tour, still
@@ -26322,9 +26333,11 @@ function _tmapCard(o,t,x){
     +'<div style="color:#555;margin-top:2px">'+esc(ofLalaProdSummary(o))+'</div>'
     +'<div style="font-weight:800;margin-top:2px">💰 '+esc(amt)+'</div>'
     +(x.approx?'<div style="color:#b45309;margin-top:2px">⚠️ ตำแหน่งโดยประมาณ (จ.'+esc(x.prov||'')+') / approx. — no exact pin</div>':'')
+    +(x.suspect?'<div style="color:#dc2626;font-weight:700;margin-top:2px">⚠️ หมุดห่างจาก จ.'+esc(x.prov||'')+' ~'+x.suspect+' กม. — พิกัดอาจผิด (เช่น GPS จากรูปถ่าย) / pin ~'+x.suspect+' km from the address province — probably wrong (e.g. photo GPS)</div>':'')
     +'<div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
       +'<a href="'+esc(url)+'" target="_blank" style="color:#1d4ed8;font-weight:700;text-decoration:none">🗺️ Google Maps</a>'
       +(x.free&&!window.ofReadOnly?'<button type="button" onclick="ofTourMapAdd(\''+tidJs+'\',\''+oidJs+'\')" style="border:none;background:#f97316;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer">➕ เพิ่มเข้าทัวร์ / add</button>':'')
+      +(x.suspect&&!window.ofReadOnly?'<button type="button" onclick="ofTourMapClearPin(\''+oidJs+'\')" style="border:none;background:#dc2626;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer">🗑 ลบหมุดผิด / clear pin</button>':'')
     +'</div>'
   +'</div>';
 }
@@ -26372,7 +26385,7 @@ function _tmapRender(){
   if(!t||!_tmapMap||!window.L) return;
   if(_tmapLayer){ try{ _tmapMap.removeLayer(_tmapLayer); }catch(e){} }
   _tmapLayer=L.layerGroup().addTo(_tmapMap);
-  var seen={}, bounds=[], noPos=[], seqPts=[];
+  var seen={}, bounds=[], noPos=[], seqPts=[], nSuspect=0;
   var place=function(o,label,color,x){
     var p=_tmapPos(o);
     if(!p){ noPos.push(o); return null; }
@@ -26380,8 +26393,9 @@ function _tmapRender(){
     // later pins in a small ring so every one stays hover- and clickable.
     var key=p.lat.toFixed(4)+','+p.lng.toFixed(4);
     var n=seen[key]||0; seen[key]=n+1;
-    if(n>0){ var r=p.approx?0.035:0.0007, a=n*2.4; p={lat:p.lat+r*Math.cos(a),lng:p.lng+r*Math.sin(a),approx:p.approx,prov:p.prov}; }
-    x.approx=p.approx; x.prov=p.prov;
+    if(n>0){ var r=p.approx?0.035:0.0007, a=n*2.4; p={lat:p.lat+r*Math.cos(a),lng:p.lng+r*Math.sin(a),approx:p.approx,prov:p.prov,suspect:p.suspect}; }
+    x.approx=p.approx; x.prov=p.prov; x.suspect=p.suspect;
+    if(p.suspect){ nSuspect++; color='#dc2626'; }
     var html=_tmapCard(o,t,x);
     L.marker([p.lat,p.lng],{icon:_tmapIcon(label,color,p.approx),zIndexOffset:x.free?0:1000})
       .bindTooltip(html,{direction:'top',opacity:1,className:'tmap-tip'})
@@ -26404,13 +26418,24 @@ function _tmapRender(){
     var p=place(o,String(seq),done?'#16a34a':'#2563eb',{seq:seq,free:false});
     if(p) seqPts.push([p.lat,p.lng]);
   });
+  // The shop is where every tour starts — draw it and let the route line begin there.
+  if(window.homeLoc && geoSane(homeLoc.lat,homeLoc.lng)){
+    L.marker([homeLoc.lat,homeLoc.lng],{zIndexOffset:2000,icon:L.divIcon({className:'',iconSize:[30,30],iconAnchor:[15,15],tooltipAnchor:[0,-16],popupAnchor:[0,-16],
+      html:'<div style="width:30px;height:30px;border-radius:50%;background:#111827;border:2.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1">🏪</div>'})})
+      .bindTooltip('🏪 ร้าน/คลัง — จุดเริ่มต้นทัวร์ / shop — tour start',{direction:'top',opacity:1})
+      .addTo(_tmapLayer);
+    bounds.push([homeLoc.lat,homeLoc.lng]);
+    if(seqPts.length) seqPts.unshift([homeLoc.lat,homeLoc.lng]);
+  }
   if(seqPts.length>1) L.polyline(seqPts,{color:'#2563eb',weight:2.5,opacity:.5,dashArray:'6 7'}).addTo(_tmapLayer);
   _tmapFreeOrders(t).forEach(function(o){ nFree++; place(o,'+','#f97316',{free:true}); });
   var lg=document.getElementById('tourmap-legend');
   if(lg) lg.innerHTML=
-    '<span><span style="color:#2563eb;font-weight:800">●</span> ในทัวร์ ตามลำดับส่ง / tour stops ('+nTour+')</span>'
+    '<span>🏪 ร้าน / start</span>'
+    +'<span><span style="color:#2563eb;font-weight:800">●</span> ในทัวร์ ตามลำดับส่ง / tour stops ('+nTour+')</span>'
     +'<span><span style="color:#16a34a;font-weight:800">●</span> ส่งแล้ว / done ('+nDone+')</span>'
     +'<span><span style="color:#f97316;font-weight:800">●</span> ว่าง เพิ่มได้ / free in zone ('+nFree+')</span>'
+    +(nSuspect?'<span><span style="color:#dc2626;font-weight:800">●</span> หมุดอาจผิด / suspect pin ('+nSuspect+')</span>':'')
     +'<span style="opacity:.65">จาง = ประมาณจากจังหวัด / faded = province only</span>';
   var ms=document.getElementById('tourmap-missing');
   if(ms) ms.innerHTML=noPos.length
@@ -26418,6 +26443,22 @@ function _tmapRender(){
     : '';
   if(bounds.length && !_tmapFitted){ _tmapFitted=true; try{ _tmapMap.fitBounds(bounds,{padding:[40,40],maxZoom:12}); }catch(e){} }
   else if(!bounds.length){ try{ _tmapMap.setView([13.75,100.5],6); }catch(e){} }
+}
+// 🗑 from a suspect-pin popup: drop the customer's saved GPS pin (usually a wrong
+// photo-EXIF pin) so the order falls back to its province position. Same removal
+// the Customers tab's "Remove pin" does; the order's own link/_geo stays untouched.
+function ofTourMapClearPin(oid){
+  if(window.ofReadOnly) return;
+  var o=orders.find(function(x){return x.id===oid;}); if(!o) return;
+  var k=normPhone(o.phone); if(!k){ alert('ไม่มีเบอร์ลูกค้า / order has no phone number'); return; }
+  var g=custGeoGet(o.phone);
+  if(!confirm('🗑 ลบหมุด GPS ของ '+(o.customer||oid)+'?\n'
+    +(g?('ที่มา / source: '+(g.src==='exif'?'GPS จากรูปถ่าย / photo EXIF':g.src||'?')+(g.at?' · '+String(g.at).split('T')[0]:'')+'\n'):'')
+    +'แผนที่จะใช้ตำแหน่งจังหวัดแทน / the map falls back to the province position')) return;
+  if(customerMeta[k]) delete customerMeta[k].geo;
+  if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').remove();
+  try{ auditAdd({type:'edit',orderId:oid,by:(typeof ofWho==='function'?ofWho():'Office'),detail:'🗑 ลบหมุด GPS ผิด / wrong GPS pin removed (tour map)'}); }catch(e){}
+  _tmapRender();
 }
 // ➕ from the map popup — reuses the full add pipeline (status, audit, push, sync).
 // A Leaflet popup can sit open for minutes while Firebase keeps updating the data
