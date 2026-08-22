@@ -7632,7 +7632,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260821006;
+var KP_BUILD = 20260822001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -24086,11 +24086,44 @@ function qtItemChange(id, field, val) {
         priceInp.style.color = item.customPrice < p.price ? 'var(--green)' : '';
         priceInp.style.fontWeight = item.customPrice < p.price ? '700' : '';
       }
+      // Same idea for the warehouse figure: repaint it in place, so the box the
+      // office is typing in keeps the cursor.
+      if(field==='qty'){
+        var n=qtStockNote(p, item.qty);
+        var sEl=document.getElementById('qt-stock-'+id);
+        if(sEl && n.stk!==null){ sEl.setAttribute('style', qtStockLineCSS(n)); sEl.innerHTML=qtStockLineTxt(n,p); }
+        var qInp=document.getElementById('qt-qty-'+id);
+        if(qInp){
+          if(n.over){ qInp.style.borderColor='#dc2626'; qInp.style.background='#fee2e2'; qInp.style.color='#991b1b'; qInp.style.fontWeight='700'; }
+          else { qInp.style.borderColor=''; qInp.style.background=''; qInp.style.color=''; qInp.style.fontWeight=''; }
+        }
+      }
     }
   }
   qtRenderResult();
 }
 
+// What the warehouse actually holds, right under the number being quoted. Promising
+// 40 pieces of something there are 12 of is how an order goes out short and the
+// customer is called back — so the figure sits next to the quantity, and the box
+// turns red the moment the quote passes it. A product the warehouse does not track
+// (a made-to-order item) says nothing rather than a misleading zero.
+var QT_OVER_CSS='border-color:#dc2626;background:#fee2e2;color:#991b1b;font-weight:700';
+function qtStockNote(p, qty){
+  var stk=(typeof qtStockQty==='function')?qtStockQty(p):null;
+  if(stk===null || stk===undefined) return {stk:null, over:false};
+  return { stk:stk, over:(parseInt(qty)||0)>stk };
+}
+function qtStockLineHTML(p, item){
+  var n=qtStockNote(p, item.qty);
+  if(n.stk===null) return '';
+  return '<div id="qt-stock-'+item.id+'" style="'+qtStockLineCSS(n)+'">'+qtStockLineTxt(n,p)+'</div>';
+}
+function qtStockLineCSS(n){ return 'font-size:10px;font-weight:700;margin-top:3px;color:'+((n.over||n.stk<=0)?'#dc2626':'#166534'); }
+function qtStockLineTxt(n,p){
+  return '📦 คงเหลือ / stock: '+Number(n.stk).toLocaleString()+' '+((typeof unitFor==='function')?unitFor(p.code):'')
+    +(n.over?' · ไม่พอ / not enough':'');
+}
 function qtRenderItems() {
   var el = document.getElementById('qt-items');
   if(!el) return;
@@ -24104,7 +24137,9 @@ function qtRenderItems() {
       +'<div style="font-size:13px;font-weight:700">'+p.code+' <span style="font-weight:400;color:var(--text2)">'+p.name+'</span></div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;align-items:end">'
       +'<div><label class="fl" style="margin-bottom:2px">Qty / จำนวน</label>'
-      +'<input type="number" min="1" id="qt-qty-'+item.id+'" value="'+item.qty+'" oninput="qtItemChange('+item.id+',\'qty\',this.value)" class="finp" style="padding:5px 8px"></div>'
+      +'<input type="number" min="1" id="qt-qty-'+item.id+'" value="'+item.qty+'" oninput="qtItemChange('+item.id+',\'qty\',this.value)" class="finp" style="padding:5px 8px'+(qtStockNote(p,item.qty).over?';'+QT_OVER_CSS:'')+'">'
+      +qtStockLineHTML(p, item)
+      +'</div>'
       +'<div><label class="fl" style="margin-bottom:2px">Price / ราคา (฿) <span style="color:var(--text2);font-weight:400;font-size:10px">(ปกติ '+p.price+'฿)</span></label>'
       +'<input type="number" min="0" id="qt-price-'+item.id+'" value="'+item.customPrice+'" oninput="qtItemChange('+item.id+',\'customPrice\',this.value)" class="finp" style="padding:5px 8px;'+(hasDiscount?'color:var(--green);font-weight:700':'')+'"></div>'
       +'</div>'
@@ -25791,9 +25826,14 @@ function kpParseCustomer(text){
   var mm=work.match(/https?:\/\/[^\s]+/i);
   if(mm){ out.maps=mm[0].replace(/[)\].,]+$/,''); work=work.replace(mm[0],' '); }
   var nameGuess='';
-  var pm=work.match(/0\d[\d\s\-]{7,}\d/);
+  // A telephone number does not run across a line break, and it does not have
+  // thirteen digits: "0826255994" with "174หมู่7 ตำบล…" on the next line was read as
+  // one number, house number and all. Spaces and dashes inside it are fine, a newline
+  // is not — and anything past the tenth digit is not part of the number.
+  var pm=work.match(/0\d[\d \-.]{7,}\d/);
   if(pm){
-    out.phone=pm[0].replace(/[^\d]/g,'');
+    var _dig=pm[0].replace(/[^\d]/g,'');
+    out.phone=_dig.length>10?_dig.slice(0,10):_dig;
     var after=work.slice(work.indexOf(pm[0])+pm[0].length).split('\n')[0].trim();
     if(after && after.length<=30 && !ADDR_RE.test(after)) nameGuess=after;
     work=work.replace(pm[0],' ');
