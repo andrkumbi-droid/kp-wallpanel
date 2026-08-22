@@ -1091,6 +1091,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         _heavyOn = true;
         db.ref('tourHistory').on('value', function(snap) {
           tourHistory = snap.val() || {};
+          window.kpTourHistReady = true;   // "0 tours" now means none, not "still coming"
           try{ if(document.getElementById('ofv-drivers') && document.getElementById('ofv-drivers').classList.contains('active')) ofDriversRender(); }catch(e){}
           try{ if(document.getElementById('ofv-lala') && document.getElementById('ofv-lala').classList.contains('active')) ofRenderLala(); }catch(e){}
         });
@@ -7631,7 +7632,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260821005;
+var KP_BUILD = 20260821006;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -10470,6 +10471,16 @@ function ofToggleMore(id){ var el=document.getElementById(id); if(el) el.style.d
 // live under tourPhotos/<driverKey>/<recordKey>; the record keeps only how many
 // there are, and they are fetched when somebody actually wants to look.
 // Records written before this still carry their own arrays — those simply show.
+// While the tour history is still on its way, an empty list is not an answer —
+// "0 tours" reads as "the app is broken". Say what is happening instead; the
+// listener re-renders these views the moment the data lands.
+function kpTourHistLoading(){ return !window.kpTourHistReady; }
+function kpTourHistBanner(){
+  if(!kpTourHistLoading()) return '';
+  return '<div style="display:flex;align-items:center;gap:8px;padding:9px 11px;margin-bottom:8px;border:1px solid var(--blue-l);background:var(--blue-bg);color:var(--blue-t);border-radius:var(--rs);font-size:12px;font-weight:700">'
+    +'<i class="ti ti-loader-2"></i> กำลังโหลดประวัติทัวร์… / loading tour history…'
+    +'<span style="font-weight:500;opacity:.8">— รอสักครู่ / one moment</span></div>';
+}
 function kpTourPhotoHTML(dropId, dk, rk, arr, count, label, icon){
   var n=(arr&&arr.length)?arr.length:(parseInt(count)||0);
   if(!n) return '';
@@ -11970,7 +11981,7 @@ function ofLalaHistoryHTML(){
   var lalaDrv=(drivers||[]).find(function(d){return /lalamove/i.test(d.name||'');});
   var key=lalaDrv?String(lalaDrv.id||'').replace(/[^a-zA-Z0-9_-]/g,'_'):'';
   var arr=(key && tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).map(function(k){var r=tourHistory[key][k]||{}; r._k=k; return r;}) : [];
-  if(!arr.length) return '';
+  if(!arr.length) return kpTourHistBanner();
   arr.sort(function(a,b){return (b.ts||0)-(a.ts||0);});
   var renderRow=function(t){
     var bid='lalah_'+t._k;
@@ -14572,7 +14583,7 @@ function ofDriversRender(){
   var drv=(drivers||[]);
   if(!drv.length){ el.innerHTML='<div class="empty" style="padding:1rem">No drivers / ยังไม่มีคนขับ</div>'; return; }
   var _openDrv=kpOpenIds('of-drivers-list');
-  el.innerHTML = drv.map(function(d){
+  el.innerHTML = kpTourHistBanner() + drv.map(function(d){
     var key=String(d.id||'').replace(/[^a-zA-Z0-9_-]/g,'_');
     var esc=function(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;');};
     var hist=(tourHistory && tourHistory[key]) ? Object.keys(tourHistory[key]).map(function(k){var t=tourHistory[key][k]||{}; t._k=k; return t;}) : [];
@@ -14663,7 +14674,8 @@ function ofDriversRender(){
     });
     var curPay=cur.reduce(function(a,t){return a+tourPay(t);},0);
     var curHTML=cur.length ? cur.map(renderTour).join('')
-      : '<div style="font-size:12px;color:var(--text2);padding:6px 2px">No tours this month / ยังไม่มีทัวร์เดือนนี้</div>';
+      : (kpTourHistLoading() ? '<div style="font-size:12px;color:var(--text2);padding:6px 2px">⏳ กำลังโหลด… / loading…</div>'
+         : '<div style="font-size:12px;color:var(--text2);padding:6px 2px">No tours this month / ยังไม่มีทัวร์เดือนนี้</div>');
     var pastHTML=Object.keys(past).sort().reverse().map(function(mk){
       var g=past[mk], gid='drvm_'+key+'_'+mk.replace(/-/g,'_');
       var gp=g.reduce(function(a,t){return a+tourPay(t);},0);
@@ -14681,7 +14693,7 @@ function ofDriversRender(){
     return '<div class="card" style="margin-bottom:8px">'
       +'<div onclick="ofToggleMore(\''+wid+'\')" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">'
         +'<div style="font-weight:700;font-size:15px"><i class="ti ti-truck" style="color:var(--blue);vertical-align:-2px"></i> '+(d.name||'')+'</div>'
-        +'<span style="font-size:12px;color:var(--text2);text-align:right">'+cur.length+' tour'+(cur.length!==1?'s':'')+(curPay>0?' · 💰'+curPay.toLocaleString()+' ฿':'')+' <span style="font-size:10px;opacity:.75">'+kpMLabel(curMK)+'</span> ▾</span>'
+        +'<span style="font-size:12px;color:var(--text2);text-align:right">'+(kpTourHistLoading()?'… ':cur.length+' tour'+(cur.length!==1?'s':''))+(curPay>0?' · 💰'+curPay.toLocaleString()+' ฿':'')+' <span style="font-size:10px;opacity:.75">'+kpMLabel(curMK)+'</span> ▾</span>'
       +'</div>'
       +'<div id="'+wid+'" style="display:none;margin-top:10px">'+toursHtml+'</div>'
       +'</div>';
