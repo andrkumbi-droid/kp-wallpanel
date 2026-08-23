@@ -18960,7 +18960,7 @@ function kpCashKioskShow(s){
 //  Read-only — nothing here writes, it is a wall display.
 // ════════════════════════════════════════════════════════════════════════
 var KP_TOURCOL=['#38bdf8','#f472b6','#fbbf24','#a78bfa','#34d399','#fb923c','#60a5fa','#f87171','#2dd4bf','#c084fc','#facc15','#4ade80'];
-var _lmMap=null,_lmLayer=null,_lmTimer=null,_lmOn=false,_lmFitted=false;
+var _lmMap=null,_lmLayer=null,_lmTimer=null,_lmOn=false,_lmFitted=false,_lmRetry=null,_lmTiles=null;
 function kpLiveMapOn(){ try{ return localStorage.getItem('kpLiveMap')==='1'; }catch(e){ return false; } }
 function kpLiveMapToggle(){
   _lmOn=!_lmOn;
@@ -18974,12 +18974,18 @@ function kpLiveMapApply(){
     k.classList.add('mapon');
     if(btn){ btn.textContent='🗺️ ปิดแผนที่ / map off'; btn.style.background='#16a34a'; btn.style.borderColor='#16a34a'; btn.style.color='#fff'; }
     loadLeaflet(function(){
+      if(!_lmOn) return;          // switched off again while the library was loading
       setTimeout(function(){
+        if(!_lmOn) return;
         if(!_lmMap){
           _lmMap=L.map('kp-livemap',{zoomControl:true,attributionControl:false});
           // Dark tiles: a white map inside a black wall display is a lamp.
-          L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+          _lmTiles=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
             {subdomains:'abcd',maxZoom:19}).addTo(_lmMap);
+          // Leaflet marks a failed tile as done and never asks again, so a screen that
+          // was offline for the half second the map was built would show coloured dots
+          // on an empty rectangle for days. Redraw when the box is back online.
+          try{ window.addEventListener('online', function(){ if(_lmTiles){ try{ _lmTiles.redraw(); }catch(e){} } }); }catch(e){}
           _lmMap.fitBounds([[5.6,97.3],[20.5,105.7]]);   // Thailand, until the stops are known
         }
         _lmFitted=false;            // switching the map on re-frames it on the stops
@@ -18988,12 +18994,31 @@ function kpLiveMapApply(){
         if(_lmTimer) clearInterval(_lmTimer);
         _lmTimer=setInterval(kpLiveMapRender, 20000);   // a wall screen has to keep itself current
       },80);
-    });
+    }, kpLiveMapFailed);
   } else {
     k.classList.remove('mapon');
     if(btn){ btn.textContent='🗺️ แผนที่ / Live map'; btn.style.background='#111827'; btn.style.borderColor='#334155'; btn.style.color='#e5e7eb'; }
     var w=document.getElementById('kp-livemap-wrap'); if(w) w.style.display='none';
     if(_lmTimer){ clearInterval(_lmTimer); _lmTimer=null; }
+  }
+}
+// The map library did not load (no internet yet after a restart, CDN blocked). Give
+// the money screen its full width back rather than leaving half the wall as an empty
+// rectangle with the figures shrunk for a map that does not exist — and try again on
+// a timer and the moment the device is back online, because a wall display has no
+// one to press a button.
+function kpLiveMapFailed(){
+  var k=document.getElementById('kp-kiosk'); if(k) k.classList.remove('mapon');
+  var w=document.getElementById('kp-livemap-wrap'); if(w) w.style.display='none';
+  if(_lmTimer){ clearInterval(_lmTimer); _lmTimer=null; }
+  var d=document.getElementById('kp-kiosk-diag');
+  if(d) d.textContent='🗺️ โหลดแผนที่ไม่ได้ — จะลองใหม่ / map could not load, retrying…';
+  if(!_lmRetry){
+    _lmRetry=setInterval(function(){
+      if(!_lmOn || window.L){ clearInterval(_lmRetry); _lmRetry=null; if(window.L&&_lmOn) kpLiveMapApply(); return; }
+      if(navigator.onLine!==false) kpLiveMapApply();
+    }, 60000);
+    try{ window.addEventListener('online', function(){ if(_lmOn && !window.L) kpLiveMapApply(); }); }catch(e){}
   }
 }
 // Give the map column exactly the width the tours' own shape needs, so the country
@@ -19018,46 +19043,78 @@ function _lmAutoWidth(bounds){
   var w=Math.max(360, Math.min(need, Math.round(total*0.72))); // never crowd the money out
   wrap.style.flex='0 0 '+w+'px';
 }
-// Which stop is the driver heading for: the first one on the tour that is neither
-// delivered, handed over nor cancelled.
+// Which stop is the driver heading for: the first one still open. An order that is
+// on the tour but NOT on the truck (still new/packing in the warehouse — the office
+// can plan a tour before the warehouse has finished) must never get the pulsing
+// marker, which is the loudest thing on the screen.
 function kpLiveNextStop(t){
   var ids=(t&&t.orders)||[];
   for(var i=0;i<ids.length;i++){
     var st=tourEffStatus(t,ids[i]);
-    if(st!=='delivered'&&st!=='shipped'&&st!=='cancelled') return ids[i];
+    if(st==='delivered'||st==='shipped'||st==='cancelled') continue;
+    if(st==='new'||st==='packing') continue;
+    return ids[i];
   }
   return null;
 }
+// Stable colour per tour: keyed on the tour's own ID, not on its position in the
+// array — otherwise every tour on the wall changes colour the moment another one is
+// finished, and the room has to relearn the map.
+function kpTourColor(t, used){
+  var key=String((t&&(t.tid||t.id))||'');
+  var h=0; for(var i=0;i<key.length;i++) h=(h*31+key.charCodeAt(i))>>>0;
+  var idx=h%KP_TOURCOL.length;
+  for(var g=0; g<KP_TOURCOL.length; g++){
+    var c=KP_TOURCOL[(idx+g)%KP_TOURCOL.length];
+    if(!used||!used[c]){ if(used) used[c]=1; return c; }
+  }
+  return KP_TOURCOL[idx];
+}
+var _lmSkips=0;
 function kpLiveMapRender(){
   if(!_lmMap||!window.L) return;
+  // Somebody is reading a stop: don't pull it out from under the pointer. Never
+  // more than a minute, so a pointer left lying on a pin cannot freeze the screen.
+  if(_lmSkips<3 && document.querySelector('#kp-livemap .leaflet-tooltip, #kp-livemap .leaflet-popup')){ _lmSkips++; return; }
+  _lmSkips=0;
   if(_lmLayer){ try{ _lmMap.removeLayer(_lmLayer); }catch(e){} }
   _lmLayer=L.layerGroup().addTo(_lmMap);
   var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
   var tours=(activeTours||[]).filter(function(t){ return t && (t.orders||[]).length; });
-  var legend=[], seen={}, bounds=[];
+  var legend=[], seen={}, bounds=[], usedCol={};
   tours.forEach(function(t, ti){
-    var col=KP_TOURCOL[ti%KP_TOURCOL.length];
-    var next=kpLiveNextStop(t), done=0, drawn=0, line=[];
+    var col=kpTourColor(t, usedCol);
+    var next=kpLiveNextStop(t), drawn=0, line=[], noPos=0;
+    // Counted over the tour's own stop list, so the figures cannot disagree with
+    // each other just because one order has not reached this device yet.
+    var stops=(t.orders||[]).filter(function(id){ return tourEffStatus(t,id)!=='cancelled'; });
+    var done=stops.filter(function(id){ var s=tourEffStatus(t,id); return s==='delivered'||s==='shipped'; }).length;
     (t.orders||[]).forEach(function(id){
       var o=(orders||[]).find(function(x){return x.id===id;}); if(!o) return;
       var st=tourEffStatus(t,id);
       if(st==='cancelled') return;
       var isDone=(st==='delivered'||st==='shipped');
-      if(isDone) done++;
       var p=null; try{ p=_tmapStopPos(o); }catch(e){}
-      if(!p) return;
+      if(!p){ noPos++; return; }
       // Spread stops that share a point (one depot, one province) so the wall
       // display shows how many there really are.
       var key=p.lat.toFixed(4)+','+p.lng.toFixed(4);
       var n=seen[key]||0; seen[key]=n+1;
       var lat=p.lat, lng=p.lng;
-      if(n>0){ var r=p.approx?0.03:0.006, a=n*2.4; lat+=r*Math.cos(a); lng+=r*Math.sin(a); }
-      line.push([lat,lng]); bounds.push([lat,lng]); drawn++;
+      if(n>0){ var r=p.approx?0.03:0.012, a=n*2.4; lat+=r*Math.cos(a); lng+=r*Math.sin(a); }
+      // Only the stops STILL TO COME make the route line. t.orders is not a route:
+      // the driver app moves every delivered stop to the end of that array, so
+      // drawing it whole sent the line back across the country to the stops he
+      // finished first.
+      if(!isDone) line.push([lat,lng]);
+      bounds.push([lat,lng]); drawn++;
       var tip='<div style="font-size:12px;color:#111"><b>'+esc(id)+'</b> · '+esc(o.customer||'')
         +'<div style="color:#555">'+esc(((o.province||'').trim()||o.zone||''))+'</div>'
         +'<div style="font-weight:700;color:'+(isDone?'#166534':'#b45309')+'">'+(isDone?'✓ ส่งแล้ว / delivered':'⏳ ยังไม่ส่ง / on the way')+'</div>'
         +'<div style="color:#3730a3">🚚 '+esc(t.driverName||'')+'</div>'
-        +(p.via?'<div style="color:#3730a3;font-weight:700">ท่ารถ '+esc(p.via)+' / carrier depot</div>':'')+'</div>';
+        +(p.via?'<div style="color:#3730a3;font-weight:700">ท่ารถ '+esc(p.via)+' / carrier depot</div>':'')
+        +(p.approx?'<div style="color:#b45309">◌ ตำแหน่งโดยประมาณ / approximate (province)</div>':'')
+        +(p.suspect||p.custSuspect?'<div style="color:#dc2626;font-weight:700">⚠️ พิกัดอาจผิด / pin looks wrong</div>':'')+'</div>';
       if(id===next){
         // The next stop pulses — a plain circle cannot be animated, so this one is
         // a div marker. Still the biggest dot on the map, just not by much.
@@ -19066,21 +19123,26 @@ function kpLiveMapRender(){
           .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(_lmLayer);
       } else {
         // Small on purpose: a tour has 20+ stops and they sit close together once
-        // the map is zoomed onto the run.
+        // the map is zoomed onto the run. A dashed ring means the spot is only the
+        // province, not the customer — otherwise the wall asserts a precision the
+        // data does not have.
         L.circleMarker([lat,lng],{radius:isDone?4.5:4,color:col,weight:1.5,
-            opacity:isDone?1:0.45, fillColor:col, fillOpacity:isDone?0.95:0.18})
+            opacity:isDone?1:0.45, fillColor:col, fillOpacity:isDone?0.95:0.18,
+            dashArray:p.approx?'2 2':null})
           .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(_lmLayer);
       }
     });
     if(line.length>1) L.polyline(line,{color:col,weight:2,opacity:.35,dashArray:'5 6'}).addTo(_lmLayer);
-    var tot=(t.orders||[]).filter(function(id){ return tourEffStatus(t,id)!=='cancelled'; }).length;
     legend.push('<span style="display:inline-flex;align-items:center;gap:6px;background:#111827;border:1px solid #1f2937;border-radius:999px;padding:4px 11px">'
       +'<span style="width:11px;height:11px;border-radius:50%;background:'+col+';flex-shrink:0"></span>'
       +'<b style="color:#e5e7eb">'+esc(t.driverName||'—')+'</b>'
       // One driver can be on two tours at once — without the ID the legend has two
       // identical entries in different colours.
       +(tidOk(t.tid)?'<span style="color:#64748b;font-size:11px">'+esc(t.tid)+'</span>':'')
-      +'<span style="color:#94a3b8">'+done+'/'+tot+'</span>'
+      +'<span style="color:#94a3b8">'+done+'/'+stops.length+'</span>'
+      // Stops that are on the tour but nowhere on the map must be admitted to, not
+      // silently dropped from a screen people count off.
+      +(noPos?'<span title="ไม่มีพิกัด / no location" style="color:#b45309">🚫'+noPos+'</span>':'')
       +(t.driving?'':'<span style="color:#fbbf24">⏸ ยังไม่ออก</span>')+'</span>');
   });
   // Frame the map on where the tours actually are, the way the office map does —
@@ -19096,7 +19158,11 @@ function kpLiveMapRender(){
   var lg=document.getElementById('kp-livemap-legend');
   if(lg) lg.innerHTML = legend.length
     ? legend.join('')+'<span style="color:#64748b;align-self:center">● ทึบ = ส่งแล้ว / solid = delivered · จาง = ยังไม่ส่ง / faded = still to come · กะพริบ = จุดถัดไป / pulsing = next stop</span>'
-    : '<span style="color:#94a3b8">ไม่มีทัวร์ที่กำลังวิ่ง / no tours running</span>';
+    // "No tours" and "the tours have not arrived on this device yet" look identical
+    // on a wall; saying the wrong one sends somebody looking for a problem.
+    : ((!orders||!orders.length)
+        ? '<span style="color:#94a3b8">⏳ กำลังโหลด… / loading…</span>'
+        : '<span style="color:#94a3b8">ไม่มีทัวร์ที่กำลังวิ่ง / no tours running</span>');
 }
 function kpCashFull(){
   try{
@@ -26717,10 +26783,22 @@ function custDelete(phone) {
 
 // ── OFFICE: DRAGGABLE MAP PIN EDITOR (Leaflet, lazy-loaded) ─────────
 var _geoKey=null, _geoMap=null, _geoMarker=null;
-function loadLeaflet(cb){
+// onFail is optional: a screen that nobody is standing in front of (the money
+// monitor) must NOT get a modal — alert() blocks the main thread, which would stop
+// the payment feed, the till sound and the keep-awake loop behind a dialog no one
+// can dismiss. Callers that are a click away from a person keep the dialog.
+function loadLeaflet(cb, onFail){
   if(window.L){ cb(); return; }
   if(!document.getElementById('leaflet-css')){ var css=document.createElement('link'); css.id='leaflet-css'; css.rel='stylesheet'; css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(css); }
-  var s=document.createElement('script'); s.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'; s.onload=function(){cb();}; s.onerror=function(){ alert('Could not load map (check internet) / โหลดแผนที่ไม่ได้'); }; document.head.appendChild(s);
+  var s=document.createElement('script'); s.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'; s.onload=function(){cb();};
+  s.onerror=function(){
+    // A failed <script> stays in the DOM and would never be retried; drop it so a
+    // later attempt actually re-fetches.
+    try{ s.remove(); }catch(e){}
+    if(typeof onFail==='function'){ try{ onFail(); }catch(e){} return; }
+    alert('Could not load map (check internet) / โหลดแผนที่ไม่ได้');
+  };
+  document.head.appendChild(s);
 }
 function geoUpdCoords(){ var el=document.getElementById('geo-coords'); if(el&&_geoMarker){ var p=_geoMarker.getLatLng(); el.textContent=p.lat.toFixed(6)+', '+p.lng.toFixed(6); } }
 function openGeoEditor(key){
