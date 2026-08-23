@@ -4334,7 +4334,7 @@ function kpToursSig(){
     return (activeTours||[]).map(function(t){
       return [t.id,(t.orders||[]).join(','),JSON.stringify(t.status||{}),t.driving?1:0,t.departedAt||'',t.backAt||'',
         t.driverPay,t.driverAdvance,t.payMethodTour||'',(t.carPhotos||[]).length,(t.carFeeSlips||[]).length,
-        JSON.stringify(t.adj||null),
+        JSON.stringify(t.adj||null),t.ctnCount,t.ctnRate,
         t.kmMode?1:0,t.kmRate,(t.kmLog?(Array.isArray(t.kmLog)?t.kmLog.length:Object.keys(t.kmLog).length):0),
         t.lalaDriver||'',t.plate||''].join('|');
     }).join('~');
@@ -10614,22 +10614,28 @@ function tourPayCO(t, o){
   if(!t||!o) return full;
   var dep=t.departedDate||'';
   var pd=String(o.payDate||'');
-  if(dep && pd && pd<dep){
-    // The recorded payment predates this tour. But the cash/online split is a
-    // snapshot of THAT payment, while paidAmount carries the running total — so
-    // anything above the split was paid later, i.e. on this tour. (payDate is not
-    // rewritten on a top-up, which is why the split is the better marker.)
-    var _snap=(parseFloat(o.paidCash)||0)+(parseFloat(o.paidOnline)||0);
-    var _tot=(o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):0;
-    var _pre=_snap>0?_snap:_tot;
-    var _later=Math.max(0, Math.round((_tot-_pre)*100)/100);
-    if(_later>0){
-      var _m=(o.payMethod||o.payMethodPartial||'');
-      if(_m==='online') return {cash:0, online:_later, unknown:0, pre:_pre};
-      if(_m==='cash')   return {cash:_later, online:0, unknown:0, pre:_pre};
-      return {cash:0, online:0, unknown:_later, pre:_pre};
-    }
-    return {cash:0, online:0, unknown:0, pre:_pre};
+  var snap=(parseFloat(o.paidCash)||0)+(parseFloat(o.paidOnline)||0);
+  var tot=(o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):0;
+  var later=Math.max(0, Math.round((tot-snap)*100)/100);
+  // Topped up on an order that already carried a payment: the cash/online split is
+  // a snapshot of the FIRST payment, paidAmount the running total. Whatever stands
+  // above the split came in afterwards — i.e. on this tour — and paidBy/payDate
+  // still describe the older payment, so they must not be consulted here.
+  if(later>0 && snap>0){
+    var m=(o.payMethod||o.payMethodPartial||'');
+    var r={cash:0, online:0, unknown:0, pre:snap};
+    if(m==='online') r.online=later; else if(m==='cash') r.cash=later; else r.unknown=later;
+    return r;
+  }
+  // One payment only. Anything dated before the truck left was not collected on it.
+  if(dep && pd && pd<dep) return {cash:0, online:0, unknown:0, pre:(full.cash+full.online+(full.unknown||0))};
+  // Banknotes are physical: if they were booked under someone else's name — the
+  // office counter, or the driver of an earlier run — they are not in this bag.
+  // A transfer is different, it lands in the shop account whoever records it.
+  var by=String(o.paidBy||'').trim().toLowerCase();
+  var drv=String(t.driverName||'').trim().toLowerCase();
+  if(full.cash>0 && by && drv && by.indexOf(drv)<0 && drv.indexOf(by)<0){
+    return {cash:0, online:full.online, unknown:full.unknown||0, pre:full.cash};
   }
   return full;
 }
@@ -11769,16 +11775,23 @@ function ofRenderTour(){
         // Per-carton pay: what really went out × the rate for this driver. Only when
         // the tour is NOT being paid per kilometre — the two are alternatives.
         ((isL||_kmOn) ? '' : (function(){
-          var _cr=tourCtnRate(t), _cc=tourCtnCount(t, totCtn), _sum=Math.round(_cc*_cr);
+          // Cancelled stops never went on the truck, so their cartons must not be
+          // proposed as pay (totCtn above counts every order on the tour).
+          var _ctnLoaded=(t.orders||[]).reduce(function(a,id){
+            if(tourEffStatus(t,id)==='cancelled') return a;
+            var o=orders.find(function(x){return x.id===id;});
+            return a+(parseInt(o&&o.ctn)||0);
+          },0);
+          var _cr=tourCtnRate(t), _cc=tourCtnCount(t, _ctnLoaded), _sum=Math.round(_cc*_cr);
           var _inp='padding:6px 7px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:right;background:var(--bg);color:var(--text);min-width:0';
           return '<div style="display:flex;align-items:center;gap:5px;margin-bottom:8px;flex-wrap:wrap">'
             +'<span style="font-size:12px;color:var(--text2);white-space:nowrap">📦 CTN:</span>'
-            +'<input type="number" class="kpamt" min="0" value="'+(t.ctnCount!=null&&t.ctnCount!==''?t.ctnCount:'')+'" placeholder="'+totCtn+'" title="จำนวน CTN จริงที่ขึ้นรถ / cartons actually loaded" onclick="event.stopPropagation()" onchange="ofSetTourCtn(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="'+_inp+';width:62px;flex:0 0 62px">'
+            +'<input type="number" class="kpamt" min="0" value="'+(t.ctnCount!=null&&t.ctnCount!==''?t.ctnCount:'')+'" placeholder="'+_ctnLoaded+'" title="จำนวน CTN จริงที่ขึ้นรถ / cartons actually loaded" onclick="event.stopPropagation()" onchange="ofSetTourCtn(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="'+_inp+';width:62px;flex:0 0 62px">'
             +'<span style="font-size:12px;color:var(--text2)">×</span>'
             +'<input type="number" class="kpamt" min="0" value="'+_cr+'" title="ค่าจ้างต่อ CTN — ปกติ 350, ภาคใต้ 400 / pay per carton" onclick="event.stopPropagation()" onchange="ofSetTourCtnRate(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="'+_inp+';width:62px;flex:0 0 62px">'
             +'<span style="font-size:12px;color:var(--text2)">฿</span>'
             +'<span style="font-size:12.5px;font-weight:800;color:var(--green);white-space:nowrap;margin-left:auto">= '+_sum.toLocaleString()+' ฿</span>'
-            +(ro?'':'<button type="button" onclick="event.stopPropagation();ofCtnUsePay(\''+t.id+'\','+totCtn+')" title="ใส่เป็นค่าทัวร์ / use as the tour pay" style="flex-shrink:0;font-size:10px;padding:3px 7px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:700">→ ค่าทัวร์</button>')
+            +(ro?'':'<button type="button" onclick="event.stopPropagation();ofCtnUsePay(\''+t.id+'\','+_ctnLoaded+')" title="ใส่เป็นค่าทัวร์ / use as the tour pay" style="flex-shrink:0;font-size:10px;padding:3px 7px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:700">→ ค่าทัวร์</button>')
             +'</div>';
         })())+
         (isL ? '' : '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'+
@@ -14506,8 +14519,16 @@ function tourSettleCalc(t){
   });
   var pay=parseFloat(t&&t.driverPay)||0, adv=parseFloat(t&&t.driverAdvance)||0, adj=0;
   try{ adj=tourAdjTotal(t); }catch(e){}
-  var driverGets=Math.max(0, pay-adv+adj);      // same figure as tourNetPay
+  // NOT clamped at zero, unlike tourNetPay: a settlement has to be able to say
+  // "he owes the shop". Clamping printed a column that did not add up (26,250
+  // − 11,500 − 20,000 above a bold "driver keeps 0") and dropped the shortfall.
+  var due=pay-adv+adj;
+  // Pay already handed over (cash button, slip, or a joint payout on the tour-ID
+  // tab)? Then nothing more comes out of the bag — otherwise he is paid twice.
+  var st={paid:false}; try{ st=tourPayState(t)||{paid:false}; }catch(e){}
+  var driverGets=st.paid?0:due;
   return { cash:cash, online:online, unknown:unknown, pay:pay, adv:adv, adj:adj,
+           due:due, alreadyPaid:!!st.paid, paidHow:st.how||'',
            driverGets:driverGets, shopGets:cash-driverGets };
 }
 // Per-carton pay (the usual way when a tour is not paid per kilometre): how many
@@ -14556,9 +14577,13 @@ function ofTourSettle(tourId){
     + (s.adv>0?row('🤝 หัก เบิกก่อนออกทัวร์ / less advance already paid', '− '+s.adv.toLocaleString()+' ฿', {col:'#b45309'}):'')
     + (s.adj!==0?row('💸 หัก / เพิ่ม · adjustments', tourAdjFmt(s.adj), {col:s.adj<0?'#b91c1c':'#166534'}):'')
     + (adjRows?'<div style="margin:-2px 0 6px;padding:5px 8px;background:var(--bg2);border-radius:var(--rs)">'+adjRows+'</div>':'')
-    + row('👤 คนขับรับ / driver keeps', s.driverGets.toLocaleString()+' ฿', {big:true, top:true, col:'#1d4ed8'})
+    + (s.alreadyPaid?'<div style="font-size:11.5px;color:#166534;background:var(--green-bg);border-radius:var(--rs);padding:6px 8px;margin-top:6px;font-weight:700">✅ ค่าทัวร์จ่ายไปแล้ว ('+(s.paidHow==='cash'?'เงินสด / cash':'โอน / transfer')+') — ไม่ต้องจ่ายจากเงินในกระเป๋าอีก<div style="font-weight:500">the tour pay is already settled, nothing more comes out of the bag</div></div>':'')
+    + (s.due<0
+        ? row('👤 คนขับต้องคืนร้าน / driver owes the shop', Math.abs(s.due).toLocaleString()+' ฿', {big:true, top:true, col:'#b91c1c'})
+        : row('👤 คนขับรับ / driver keeps', s.driverGets.toLocaleString()+' ฿'+((s.alreadyPaid&&s.due>0)?' <span style="font-size:11px;font-weight:600;color:var(--text2)">(จ่ายแล้ว / already paid '+s.due.toLocaleString()+')</span>':''), {big:true, top:true, col:'#1d4ed8'}))
     + row('🏪 ร้านรับเงินสด / shop receives in cash', (s.shopGets<0?'− ':'')+Math.abs(s.shopGets).toLocaleString()+' ฿', {big:true, col:s.shopGets<0?'#b91c1c':'#166534'})
     + (s.shopGets<0?'<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-top:4px">⚠️ เงินสดไม่พอจ่ายค่าทัวร์ — ร้านต้องจ่ายเพิ่ม '+Math.abs(s.shopGets).toLocaleString()+' ฿<div style="font-weight:500">the cash collected does not cover his pay — the shop has to add this</div></div>':'')
+    + (s.due<0?'<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-top:4px">⚠️ หัก/เบิกมากกว่าค่าทัวร์ — คนขับต้องคืนเงินส่วนนี้ด้วย<div style="font-weight:500">the deductions and the advance exceed his pay — he brings this back on top of the cash</div></div>':'')
     + (s.adv>0?'<div style="font-size:11px;color:var(--text2);margin-top:8px">🤝 เบิกก่อนออกทัวร์แล้ว '+s.adv.toLocaleString()+' ฿ — จ่ายไปแล้ว ไม่ต้องจ่ายซ้ำ / the advance was handed over before the tour, do not pay it again</div>':'');
   var html='<div id="tset-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)ofTourSettleClose()">'
     +'<div style="background:var(--bg);border-radius:14px;max-width:400px;width:100%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,0.4);max-height:92vh;overflow:auto">'
@@ -14623,18 +14648,25 @@ function ofTourSettlePrint(tourId){
     +'table.onl td,table.onl th{color:#475569}'
     +'table.unk thead tr:first-child th{background:#fef3c7;color:#92400e;font-size:12px}'
     +'.sumlbl{font-weight:800;border-top:2px solid #111;border-bottom:none;padding-top:6px}'
-    +'.sum{width:62mm;margin-left:auto}'
-    +'.sum div{display:flex;justify-content:space-between;gap:10px;padding:4px 0}'
-    +'.sum .big{border-top:2px solid #111;margin-top:5px;padding-top:7px;font-size:15px;font-weight:800}'
+    // Full width and nowrap: at 62mm every label wrapped over two lines and the
+    // amount broke away from its ฿ sign, which is unreadable on a signed sheet.
+    +'.sum{width:100%;margin-top:10px;border-top:2px solid #111;padding-top:8px}'
+    +'.sum div{display:flex;justify-content:space-between;align-items:baseline;gap:20px;padding:5px 0;font-size:13.5px;white-space:nowrap}'
+    +'.sum div span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+    +'.sum div b{white-space:nowrap;font-variant-numeric:tabular-nums}'
+    +'.sum .big{border-top:1px solid #999;margin-top:6px;padding-top:9px;font-size:18px;font-weight:900}'
+    +'.sum .neg b{color:#b91c1c}'
     +'.sig{display:flex;gap:24px;margin-top:26mm}'
     +'.sig div{flex:1;border-top:1px solid #111;padding-top:5px;font-size:11px;color:#555;text-align:center}'
     +'@page{size:A4;margin:0}@media print{body{padding:14mm}}'
     +'</style></head><body>'
     +'<h1>🧮 ปิดยอดทัวร์ / Tour settlement</h1>'
     +'<div class="sub">🚚 '+esc(t.driverName||'')+(tidOk(t.tid)?' · '+esc(t.tid):'')+(dep?' · ออกรถ / departed '+esc(dep):'')+' · พิมพ์ / printed '+esc(when)+'</div>'
-    + tbl('💵 เงินสด / CASH', 'คนขับเก็บมา / collected by the driver', cashRows, cashSum, 'รวมเงินสด / cash total', 'cash')
+    // Transfers first, cash last: the cash block is what the settlement below is
+    // about, so it sits right above the figures instead of a page away.
     + tbl('🏦 โอน / TRANSFER', 'เข้าบัญชีร้าน ไม่ผ่านมือคนขับ / straight to the shop account', onlineRows, onlineSum, 'รวมโอน / transfer total', 'onl')
     + tbl('❓ ยังไม่ระบุวิธี / METHOD NOT RECORDED', '', unkRows, unkSum, 'รวม / total', 'unk')
+    + tbl('💵 เงินสด / CASH', 'คนขับเก็บมา / collected by the driver', cashRows, cashSum, 'รวมเงินสด / cash total', 'cash')
     +(adjRows?'<table><thead><tr><th colspan="2">💸 หัก / เพิ่ม · adjustments</th><th class="r">฿</th></tr></thead><tbody>'+adjRows+'</tbody></table>':'')
     +'<div class="sum">'
       +'<div><span>💵 เงินสดที่เก็บได้ / cash collected</span><b>'+money(s.cash)+'</b></div>'
@@ -14642,9 +14674,14 @@ function ofTourSettlePrint(tourId){
       +'<div><span>💰 ค่าทัวร์ / tour pay</span><b>'+money(s.pay)+'</b></div>'
       +(s.adv?'<div><span>🤝 หัก เบิกก่อน / less advance</span><b>− '+money(s.adv)+'</b></div>':'')
       +(s.adj?'<div><span>💸 หัก / เพิ่ม</span><b>'+tourAdjFmt(s.adj)+'</b></div>':'')
-      +'<div class="big"><span>👤 คนขับรับ / driver keeps</span><b>'+money(s.driverGets)+'</b></div>'
+      +(s.alreadyPaid?'<div><span>✅ ค่าทัวร์จ่ายแล้ว / pay already settled</span><b>'+(s.paidHow==='cash'?'เงินสด':'โอน')+'</b></div>':'')
+      +(s.due<0
+        ? '<div class="big neg"><span>👤 คนขับต้องคืนร้าน / driver owes the shop</span><b>'+money(Math.abs(s.due))+'</b></div>'
+        : '<div class="big"><span>👤 คนขับรับ / driver keeps</span><b>'+money(s.driverGets)+'</b></div>')
       +'<div class="big"><span>🏪 ร้านรับเงินสด / shop receives</span><b>'+(s.shopGets<0?'− ':'')+money(Math.abs(s.shopGets))+'</b></div>'
     +'</div>'
+    +(s.due<0?'<div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:8px">⚠️ หัก/เบิกมากกว่าค่าทัวร์ — คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสด / the deductions and advance exceed his pay, he brings this back on top of the cash</div>':'')
+    +(s.alreadyPaid?'<div style="font-size:11px;color:#166534;font-weight:700;margin-top:6px">✅ ค่าทัวร์จ่ายไปแล้ว ไม่หักจากเงินในกระเป๋า / the tour pay was already settled, it is not taken out of the bag</div>':'')
     +(s.adv?'<div style="font-size:11px;color:#555;margin-top:8px">🤝 เบิกก่อนออกทัวร์ '+money(s.adv)+' จ่ายไปแล้วก่อนออกรถ / the advance was already handed over before departure</div>':'')
     +'<div class="sig"><div>ลงชื่อคนขับ / driver</div><div>ลงชื่อออฟฟิศ / office</div></div>'
     +'<script>setTimeout(function(){window.print();},250);<\/script>'
@@ -14667,8 +14704,15 @@ function ofSetTourCtnRate(tourId, val){
 }
 function ofCtnUsePay(tourId, fallbackCtn){
   var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
-  var amt=Math.round(tourCtnCount(t,fallbackCtn)*tourCtnRate(t));
+  var cnt=tourCtnCount(t,fallbackCtn), rate=tourCtnRate(t);
+  var amt=Math.round(cnt*rate);
   if(!amt){ alert('ใส่จำนวน CTN ก่อน / enter the carton count first'); return; }
+  // Pin both numbers the moment they turn into money. The rate was until now a
+  // live guess (400 in the south, else 350) recomputed on every render, so adding
+  // one order to a running tour could tip the majority and move it by 50 ฿ a
+  // carton with nobody touching the field.
+  t.ctnRate=rate; t.ctnCount=cnt;
+  try{ syncTours(); }catch(e){}
   ofSetTourPay(tourId, amt);
 }
 function _tourAdjSave(t, rerender){
