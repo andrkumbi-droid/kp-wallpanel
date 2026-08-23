@@ -18669,8 +18669,14 @@ function kpCashKioskInit(){
       +'#kp-kiosk-split{display:flex;gap:14px;align-items:stretch}'
       +'#kp-kiosk-cash{flex:1 1 auto;min-width:0}'
       +'#kp-kiosk.mapon #kp-kiosk-body{max-width:none}'
-      +'#kp-kiosk.mapon #kp-livemap-wrap{display:flex !important;flex-direction:column;flex:1 1 auto;min-width:0}'
-      +'#kp-kiosk.mapon #kp-kiosk-cash{flex:0 0 400px;max-width:400px;overflow-y:auto;max-height:calc(100vh - 190px)}'
+      // The map column takes the width its own shape needs (see _lmAutoWidth) and the
+      // money column gets the rest — Thailand is a tall country on a wide screen, so
+      // a half-half split would frame it in empty sea.
+      +'#kp-kiosk.mapon #kp-livemap-wrap{display:flex !important;flex-direction:column;flex:0 0 auto;min-width:0}'
+      +'#kp-kiosk.mapon #kp-kiosk-cash{flex:1 1 auto;min-width:320px;overflow-y:auto;max-height:calc(100vh - 190px)}'
+      // Whatever width is left over goes to the payments, but a payment card 1100px
+      // wide reads worse than one at arm's length — hold them in a readable column.
+      +'#kp-kiosk.mapon #kp-kiosk-cash > *{max-width:760px;margin-left:auto;margin-right:auto}'
       +'#kp-kiosk.mapon .cashfeed-total{font-size:44px !important}'
       +'#kp-kiosk.mapon .cf-hero .cf-amt{font-size:50px !important}'
       +'#kp-kiosk.mapon .cf-hero .cf-main{font-size:19px !important}'
@@ -18954,7 +18960,7 @@ function kpCashKioskShow(s){
 //  Read-only — nothing here writes, it is a wall display.
 // ════════════════════════════════════════════════════════════════════════
 var KP_TOURCOL=['#38bdf8','#f472b6','#fbbf24','#a78bfa','#34d399','#fb923c','#60a5fa','#f87171','#2dd4bf','#c084fc','#facc15','#4ade80'];
-var _lmMap=null,_lmLayer=null,_lmTimer=null,_lmOn=false;
+var _lmMap=null,_lmLayer=null,_lmTimer=null,_lmOn=false,_lmFitted=false;
 function kpLiveMapOn(){ try{ return localStorage.getItem('kpLiveMap')==='1'; }catch(e){ return false; } }
 function kpLiveMapToggle(){
   _lmOn=!_lmOn;
@@ -18974,8 +18980,9 @@ function kpLiveMapApply(){
           // Dark tiles: a white map inside a black wall display is a lamp.
           L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
             {subdomains:'abcd',maxZoom:19}).addTo(_lmMap);
-          _lmMap.fitBounds([[5.6,97.3],[20.5,105.7]]);   // Thailand
+          _lmMap.fitBounds([[5.6,97.3],[20.5,105.7]]);   // Thailand, until the stops are known
         }
+        _lmFitted=false;            // switching the map on re-frames it on the stops
         try{ _lmMap.invalidateSize(); }catch(e){}
         kpLiveMapRender();
         if(_lmTimer) clearInterval(_lmTimer);
@@ -18988,6 +18995,28 @@ function kpLiveMapApply(){
     var w=document.getElementById('kp-livemap-wrap'); if(w) w.style.display='none';
     if(_lmTimer){ clearInterval(_lmTimer); _lmTimer=null; }
   }
+}
+// Give the map column exactly the width the tours' own shape needs, so the country
+// fills it instead of sitting in a strip with sea on both sides. Whatever is left
+// goes to the payments — which is the other half of what this screen is for.
+function _lmAutoWidth(bounds){
+  var wrap=document.getElementById('kp-livemap-wrap'), split=document.getElementById('kp-kiosk-split'),
+      map=document.getElementById('kp-livemap');
+  if(!wrap||!split||!map||!bounds.length) return;
+  // Stacked (narrow screen): the map is full width, nothing to compute.
+  if(getComputedStyle(split).flexDirection!=='row'){ wrap.style.flex=''; return; }
+  var laMin=90,laMax=-90,loMin=180,loMax=-180;
+  bounds.forEach(function(p){
+    if(p[0]<laMin) laMin=p[0]; if(p[0]>laMax) laMax=p[0];
+    if(p[1]<loMin) loMin=p[1]; if(p[1]>loMax) loMax=p[1];
+  });
+  var h=map.getBoundingClientRect().height; if(h<80) return;
+  var latSpan=Math.max(0.4, laMax-laMin);
+  var lngSpan=Math.max(0.4, (loMax-loMin)*Math.cos((laMin+laMax)/2*Math.PI/180));
+  var need=Math.round(h*(lngSpan/latSpan))+70;                 // + the fit padding
+  var total=split.getBoundingClientRect().width;
+  var w=Math.max(360, Math.min(need, Math.round(total*0.72))); // never crowd the money out
+  wrap.style.flex='0 0 '+w+'px';
 }
 // Which stop is the driver heading for: the first one on the tour that is neither
 // delivered, handed over nor cancelled.
@@ -19005,7 +19034,7 @@ function kpLiveMapRender(){
   _lmLayer=L.layerGroup().addTo(_lmMap);
   var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
   var tours=(activeTours||[]).filter(function(t){ return t && (t.orders||[]).length; });
-  var legend=[], seen={};
+  var legend=[], seen={}, bounds=[];
   tours.forEach(function(t, ti){
     var col=KP_TOURCOL[ti%KP_TOURCOL.length];
     var next=kpLiveNextStop(t), done=0, drawn=0, line=[];
@@ -19023,7 +19052,7 @@ function kpLiveMapRender(){
       var n=seen[key]||0; seen[key]=n+1;
       var lat=p.lat, lng=p.lng;
       if(n>0){ var r=p.approx?0.03:0.006, a=n*2.4; lat+=r*Math.cos(a); lng+=r*Math.sin(a); }
-      line.push([lat,lng]); drawn++;
+      line.push([lat,lng]); bounds.push([lat,lng]); drawn++;
       var tip='<div style="font-size:12px;color:#111"><b>'+esc(id)+'</b> · '+esc(o.customer||'')
         +'<div style="color:#555">'+esc(((o.province||'').trim()||o.zone||''))+'</div>'
         +'<div style="font-weight:700;color:'+(isDone?'#166534':'#b45309')+'">'+(isDone?'✓ ส่งแล้ว / delivered':'⏳ ยังไม่ส่ง / on the way')+'</div>'
@@ -19031,12 +19060,14 @@ function kpLiveMapRender(){
         +(p.via?'<div style="color:#3730a3;font-weight:700">ท่ารถ '+esc(p.via)+' / carrier depot</div>':'')+'</div>';
       if(id===next){
         // The next stop pulses — a plain circle cannot be animated, so this one is
-        // a div marker.
-        L.marker([lat,lng],{zIndexOffset:2000,icon:L.divIcon({className:'',iconSize:[18,18],iconAnchor:[9,9],tooltipAnchor:[0,-10],
-          html:'<div class="kp-next-dot" style="width:18px;height:18px;background:'+col+';border:2.5px solid #fff;box-shadow:0 0 12px '+col+'"></div>'})})
+        // a div marker. Still the biggest dot on the map, just not by much.
+        L.marker([lat,lng],{zIndexOffset:2000,icon:L.divIcon({className:'',iconSize:[12,12],iconAnchor:[6,6],tooltipAnchor:[0,-7],
+          html:'<div class="kp-next-dot" style="width:12px;height:12px;background:'+col+';border:2px solid #fff;box-shadow:0 0 10px '+col+'"></div>'})})
           .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(_lmLayer);
       } else {
-        L.circleMarker([lat,lng],{radius:isDone?7:6,color:col,weight:2,
+        // Small on purpose: a tour has 20+ stops and they sit close together once
+        // the map is zoomed onto the run.
+        L.circleMarker([lat,lng],{radius:isDone?4.5:4,color:col,weight:1.5,
             opacity:isDone?1:0.45, fillColor:col, fillOpacity:isDone?0.95:0.18})
           .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(_lmLayer);
       }
@@ -19052,6 +19083,16 @@ function kpLiveMapRender(){
       +'<span style="color:#94a3b8">'+done+'/'+tot+'</span>'
       +(t.driving?'':'<span style="color:#fbbf24">⏸ ยังไม่ออก</span>')+'</span>');
   });
+  // Frame the map on where the tours actually are, the way the office map does —
+  // the Thailand bounding box wastes half a wide screen on Laos and Vietnam. Only
+  // on the first draw after switching on, so the 20 s refresh never yanks the view
+  // away from someone reading it, and a manual zoom sticks.
+  if(bounds.length && !_lmFitted){
+    _lmFitted=true;
+    try{ _lmAutoWidth(bounds); }catch(e){}
+    try{ _lmMap.invalidateSize(); }catch(e){}
+    try{ _lmMap.fitBounds(bounds,{padding:[24,24],maxZoom:11}); }catch(e){}
+  }
   var lg=document.getElementById('kp-livemap-legend');
   if(lg) lg.innerHTML = legend.length
     ? legend.join('')+'<span style="color:#64748b;align-self:center">● ทึบ = ส่งแล้ว / solid = delivered · จาง = ยังไม่ส่ง / faded = still to come · กะพริบ = จุดถัดไป / pulsing = next stop</span>'
