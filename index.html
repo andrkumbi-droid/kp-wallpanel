@@ -14527,9 +14527,26 @@ function tourSettleCalc(t){
   // tab)? Then nothing more comes out of the bag — otherwise he is paid twice.
   var st={paid:false}; try{ st=tourPayState(t)||{paid:false}; }catch(e){}
   var driverGets=st.paid?0:due;
+  // The card can show a pay PROPOSAL (cartons × rate, or the km calculation) that
+  // nobody has carried into driverPay yet. Settling then prints "tour pay 0" and
+  // hands the whole bag to the shop — on a page the driver signs. Report it.
+  var prop=tourPayProposal(t);
   return { cash:cash, online:online, unknown:unknown, pay:pay, adv:adv, adj:adj,
            due:due, alreadyPaid:!!st.paid, paidHow:st.how||'',
+           proposal:prop, payMissing:(pay<=0 && prop>0),
            driverGets:driverGets, shopGets:cash-driverGets };
+}
+// What the card is currently proposing as the tour pay, without writing it.
+function tourPayProposal(t){
+  try{
+    if(t&&t.kmMode) return Math.round(kmPayAmount(t)||0);
+    var loaded=((t&&t.orders)||[]).reduce(function(a,id){
+      if(tourEffStatus(t,id)==='cancelled') return a;
+      var o=(orders||[]).find(function(x){return x.id===id;});
+      return a+(parseInt(o&&o.ctn)||0);
+    },0);
+    return Math.round(tourCtnCount(t,loaded)*tourCtnRate(t));
+  }catch(e){ return 0; }
 }
 // Per-carton pay (the usual way when a tour is not paid per kilometre): how many
 // cartons actually went out × what this driver gets for one. 350 ฿ is the house
@@ -14568,7 +14585,9 @@ function ofTourSettle(tourId){
       +'<span>'+esc(e.oid||'')+' · '+esc(e.note||'—')+'</span>'
       +'<span style="font-weight:700;color:'+(v<0?'#b91c1c':'#166534')+';white-space:nowrap">'+tourAdjFmt(v)+'</span></div>';
   }).join('');
+  window._tsetShown={ id:tourId, cash:s.cash, pay:s.pay, adv:s.adv, adj:s.adj, driverGets:s.driverGets, shopGets:s.shopGets };
   var body='<div style="font-size:12px;color:var(--text2);margin-bottom:10px">🚚 '+esc(t.driverName||'')+(tidOk(t.tid)?' · '+esc(t.tid):'')+'</div>'
+    + (s.payMissing?'<div style="font-size:12px;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:var(--rs);padding:7px 9px;margin-bottom:10px;font-weight:700">⚠️ ยังไม่ได้ใส่ค่าทัวร์ — การ์ดเสนอ '+s.proposal.toLocaleString()+' ฿ กด "→ ค่าทัวร์" ก่อนปิดยอด<div style="font-weight:500">the tour pay has not been entered yet; the card proposes '+s.proposal.toLocaleString()+' ฿ — press "→ ค่าทัวร์" first, or this settles at zero</div></div>':'')
     + row('💵 เงินสดที่เก็บได้ / cash collected', s.cash.toLocaleString()+' ฿', {big:true, col:'#166534'})
     + (s.online>0?'<div style="font-size:11px;color:var(--text2);margin:-2px 0 6px">🏦 โอนเข้าบัญชีร้าน / transferred to the shop: '+s.online.toLocaleString()+' ฿ — ไม่ผ่านมือคนขับ / never in his hands</div>':'')
     + (s.unknown>0?'<div style="font-size:11px;color:#92400e;margin:-2px 0 6px">❓ จ่ายแล้ว ยังไม่ระบุวิธี / paid, method not recorded: '+s.unknown.toLocaleString()+' ฿</div>':'')
@@ -14602,8 +14621,27 @@ function ofTourSettle(tourId){
 function ofTourSettleClose(){ var m=document.getElementById('tset-modal'); if(m) m.remove(); }
 // One A4 page: the same figures, room for two signatures.
 function ofTourSettlePrint(tourId){
-  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var t=activeTours.find(function(x){return x.id===tourId;});
+  // Another tab may have ended the tour while this window stood open. Saying so
+  // beats a button that quietly does nothing.
+  if(!t){ alert('ทัวร์นี้ไม่ได้เปิดอยู่แล้ว / this tour is no longer open — it was ended somewhere else'); ofTourSettleClose(); return; }
   var s=tourSettleCalc(t);
+  // The window is a snapshot; the data behind it keeps moving (stops being ticked
+  // off from the driver app, the pay edited in another tab). Never print figures
+  // the office has not seen — show the new ones and let them look again.
+  var shown=window._tsetShown;
+  if(shown && shown.id===tourId && (shown.cash!==s.cash || shown.pay!==s.pay || shown.adv!==s.adv
+      || shown.adj!==s.adj || shown.driverGets!==s.driverGets || shown.shopGets!==s.shopGets)){
+    alert('ตัวเลขเปลี่ยนไปตั้งแต่เปิดหน้านี้ / the figures changed since this window was opened.\n\n'
+      +'เงินสด / cash: '+shown.cash.toLocaleString()+' → '+s.cash.toLocaleString()+'\n'
+      +'คนขับรับ / driver: '+shown.driverGets.toLocaleString()+' → '+s.driverGets.toLocaleString()+'\n'
+      +'ร้านรับ / shop: '+shown.shopGets.toLocaleString()+' → '+s.shopGets.toLocaleString()+'\n\n'
+      +'กรุณาตรวจอีกครั้งแล้วกดพิมพ์ / please check the updated sheet and press print again.');
+    ofTourSettleClose(); ofTourSettle(tourId); return;
+  }
+  if(s.payMissing && !confirm('⚠️ ยังไม่ได้ใส่ค่าทัวร์ — จะพิมพ์เป็น 0 ฿\n'
+      +'The tour pay has not been entered ('+s.proposal.toLocaleString()+' ฿ proposed on the card), so this sheet settles at zero.\n\n'
+      +'พิมพ์ต่อ? / print anyway?')) return;
   var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
   var money=function(n){ return Number(n||0).toLocaleString()+' ฿'; };
   var when=(function(){ try{ return fmtD(kpTodayStr()); }catch(e){ return kpTodayStr(); } })();
@@ -14680,6 +14718,7 @@ function ofTourSettlePrint(tourId){
         : '<div class="big"><span>👤 คนขับรับ / driver keeps</span><b>'+money(s.driverGets)+'</b></div>')
       +'<div class="big"><span>🏪 ร้านรับเงินสด / shop receives</span><b>'+(s.shopGets<0?'− ':'')+money(Math.abs(s.shopGets))+'</b></div>'
     +'</div>'
+    +(s.payMissing?'<div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:8px">⚠️ ยังไม่ได้ใส่ค่าทัวร์ (การ์ดเสนอ '+money(s.proposal)+') — ใบนี้ปิดยอดที่ 0 / the tour pay was never entered, this sheet settles it at zero</div>':'')
     +(s.due<0?'<div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:8px">⚠️ หัก/เบิกมากกว่าค่าทัวร์ — คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสด / the deductions and advance exceed his pay, he brings this back on top of the cash</div>':'')
     +(s.alreadyPaid?'<div style="font-size:11px;color:#166534;font-weight:700;margin-top:6px">✅ ค่าทัวร์จ่ายไปแล้ว ไม่หักจากเงินในกระเป๋า / the tour pay was already settled, it is not taken out of the bag</div>':'')
     +(s.adv?'<div style="font-size:11px;color:#555;margin-top:8px">🤝 เบิกก่อนออกทัวร์ '+money(s.adv)+' จ่ายไปแล้วก่อนออกรถ / the advance was already handed over before departure</div>':'')
