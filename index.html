@@ -26616,6 +26616,21 @@ var KP_PROV_GEO={
   'ยะลา':[6.5411,101.2803],'นราธิวาส':[6.4254,101.8253]
 };
 var _tmapMap=null,_tmapLayer=null,_tmapTid=null,_tmapFitted=false,_tmapTimer=null,_tmapMarkers={};
+// An order that goes out with a carrier is DRIVEN TO THAT CARRIER'S DEPOT, never to
+// the customer — the same rule kmRoutePoints uses for the distance. Drawing it at
+// the customer made a tour look hundreds of kilometres longer than it is.
+function _tmapVia(o){
+  var sh=((o&&o.shipper)||'').trim();
+  if(!sh || sh==='ส่งเอง') return null;
+  var c=null; try{ c=shipperLatLng(sh); }catch(e){}
+  return (c&&geoSane(c.lat,c.lng))?{lat:c.lat,lng:c.lng,via:sh}:null;
+}
+// Where the driver actually stops with this order.
+function _tmapStopPos(o){
+  var v=_tmapVia(o);
+  if(v) return {lat:v.lat,lng:v.lng,approx:false,via:v.via};
+  return _tmapPos(o);
+}
 // Clicking a row in the side list flies to that stop and opens its card.
 function tmapGoto(oid){
   var m=_tmapMarkers[String(oid)];
@@ -26637,8 +26652,9 @@ function _tmapRenderList(t){
     var st=tourEffStatus(t,id);
     var done=(st==='delivered'||st==='shipped'), can=(st==='cancelled');
     var col=can?'var(--text3)':done?'#16a34a':'#2563eb';
-    var pos=_tmapPos(o);
+    var pos=_tmapStopPos(o);
     var mark=!pos?'<span title="ไม่มีพิกัด / no location" style="color:#b45309">🚫</span>'
+             :pos.via?'<span title="ส่งที่ท่ารถ '+esc(pos.via)+' / handover at the '+esc(pos.via)+' depot" style="font-size:10px">🚚</span>'
              :pos.suspect?'<span title="หมุดอาจผิด / suspect pin" style="color:#dc2626">⚠️</span>'
              :pos.approx?'<span title="ประมาณจากจังหวัด / province only" style="opacity:.5">◌</span>':'';
     return '<div class="kmrow" data-oid="'+esc(id)+'" style="display:flex;align-items:center;gap:6px;font-size:12px;'+(can?'opacity:.5;':'')+'">'
@@ -26647,7 +26663,7 @@ function _tmapRenderList(t){
         +'<b style="flex-shrink:0;min-width:19px;text-align:right;color:'+col+'">'+(idx+1)+'.</b>'
         +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
           +'<b>'+esc(id)+'</b> '+mark
-          +'<span style="color:var(--text2)"> · '+esc(((o.province||'').trim()||o.zone||'—'))+'</span>'
+          +'<span style="color:var(--text2)"> · '+(pos&&pos.via?esc(pos.via):esc(((o.province||'').trim()||o.zone||'—')))+'</span>'
         +'</span>'
       +'</span>'
       +(done?'<span title="ส่งแล้ว / delivered" style="flex-shrink:0;color:#16a34a;font-weight:800">✓</span>':'')
@@ -26693,10 +26709,16 @@ function _tmapFreeOrders(t){
   var ST={'new':1,'packing':1,'ready':1};
   return orders.filter(function(o){ return ST[o.status] && !used[o.id] && zones[_tmapZoneOf(o)]; });
 }
-function _tmapIcon(label,color,approx){
+function _tmapIcon(label,color,approx,via){
+  // The 🚚 badge marks a stop that is a CARRIER DEPOT, not the customer's address.
+  var badge = via
+    ? '<div style="position:absolute;top:-7px;right:-9px;background:#4f46e5;border:1.5px solid #fff;border-radius:9px;padding:0 3px;font-size:9px;line-height:13px;box-shadow:0 1px 3px rgba(0,0,0,.4)">🚚</div>'
+    : '';
   return L.divIcon({className:'',iconSize:[28,28],iconAnchor:[14,28],tooltipAnchor:[0,-26],popupAnchor:[0,-26],
-    html:'<div style="width:28px;height:28px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:'+color+';border:2.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center'+(approx?';opacity:.55':'')+'">'
-      +'<span style="transform:rotate(45deg);color:#fff;font-size:11px;font-weight:800;line-height:1">'+label+'</span></div>'});
+    html:'<div style="position:relative;width:28px;height:28px">'
+      +'<div style="width:28px;height:28px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:'+color+';border:2.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center'+(approx?';opacity:.55':'')+'">'
+      +'<span style="transform:rotate(45deg);color:#fff;font-size:11px;font-weight:800;line-height:1">'+label+'</span></div>'
+      +badge+'</div>'});
 }
 // The order card shown on hover (tooltip) and on click (popup, with working buttons).
 function _tmapCard(o,t,x){
@@ -26717,6 +26739,8 @@ function _tmapCard(o,t,x){
     +(o.address&&o.address!=='—'?'<div style="color:#555">📍 '+esc(o.address)+'</div>':'')
     +'<div style="color:#555;margin-top:2px">'+esc(ofLalaProdSummary(o))+'</div>'
     +'<div style="font-weight:800;margin-top:2px">💰 '+esc(amt)+'</div>'
+    // The pin is the DEPOT — say so, or the office reads it as the delivery address.
+    +(x.via?'<div style="margin-top:3px;padding:3px 6px;background:#eef2ff;border-radius:6px;color:#3730a3;font-weight:700">🚚 ผ่านขนส่ง '+esc(x.via)+' — หมุดนี้คือท่ารถ ส่งมอบที่นี่<div style="font-weight:500;color:#4338ca">via carrier '+esc(x.via)+' — this pin is the depot, handover here; the goods travel on to the address above</div></div>':'')
     +(x.approx?'<div style="color:#b45309;margin-top:2px">⚠️ ตำแหน่งโดยประมาณ (จ.'+esc(x.prov||'')+') / approx. — no exact pin</div>':'')
     +(x.suspect?'<div style="color:#dc2626;font-weight:700;margin-top:2px">⚠️ หมุดห่างจาก จ.'+esc(x.prov||'')+' ~'+x.suspect+' กม. — พิกัดอาจผิด (เช่น GPS จากรูปถ่าย) / pin ~'+x.suspect+' km from the address province — probably wrong (e.g. photo GPS)</div>':'')
     +'<div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
@@ -26774,24 +26798,39 @@ function _tmapRender(){
   if(_tmapLayer){ try{ _tmapMap.removeLayer(_tmapLayer); }catch(e){} }
   _tmapLayer=L.layerGroup().addTo(_tmapMap);
   _tmapMarkers={};
-  var seen={}, bounds=[], noPos=[], seqPts=[], nSuspect=0;
+  var seen={}, bounds=[], noPos=[], seqPts=[], nSuspect=0, nVia=0;
+  var esc0=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
   var place=function(o,label,color,x){
-    var p=_tmapPos(o);
+    var p=_tmapStopPos(o);
     if(!p){ noPos.push(o); return null; }
-    // Same spot twice (same province fallback, same customer pin) → spread the
-    // later pins in a small ring so every one stays hover- and clickable.
+    // Same spot twice (same province fallback, same depot, same customer pin) →
+    // spread the later pins in a small ring so every one stays hover- and clickable.
     var key=p.lat.toFixed(4)+','+p.lng.toFixed(4);
     var n=seen[key]||0; seen[key]=n+1;
-    if(n>0){ var r=p.approx?0.035:0.0007, a=n*2.4; p={lat:p.lat+r*Math.cos(a),lng:p.lng+r*Math.sin(a),approx:p.approx,prov:p.prov,suspect:p.suspect}; }
-    x.approx=p.approx; x.prov=p.prov; x.suspect=p.suspect;
+    if(n>0){ var r=p.approx?0.035:0.0007, a=n*2.4; p={lat:p.lat+r*Math.cos(a),lng:p.lng+r*Math.sin(a),approx:p.approx,prov:p.prov,suspect:p.suspect,via:p.via}; }
+    x.approx=p.approx; x.prov=p.prov; x.suspect=p.suspect; x.via=p.via;
     if(p.suspect){ nSuspect++; color='#dc2626'; }
+    if(p.via) nVia++;
     var html=_tmapCard(o,t,x);
-    var mk=L.marker([p.lat,p.lng],{icon:_tmapIcon(label,color,p.approx),zIndexOffset:x.free?0:1000})
+    var mk=L.marker([p.lat,p.lng],{icon:_tmapIcon(label,color,p.approx,p.via),zIndexOffset:x.free?0:1000})
       .bindTooltip(html,{direction:'top',opacity:1,className:'tmap-tip'})
       .bindPopup(html,{maxWidth:300})
       .addTo(_tmapLayer);
     _tmapMarkers[String(o.id)]=mk;      // so the side list can fly to this stop
     bounds.push([p.lat,p.lng]);
+    // Where the goods END UP, drawn faded: the driver does not go there, so it must
+    // not look like a stop and must not drag the map's zoom across the country.
+    if(p.via){
+      var cp=_tmapPos(o);
+      // Muted, but not invisible: a pale dot on a pale map cannot be found at all.
+      if(cp) L.circleMarker([cp.lat,cp.lng],{radius:6,color:'#4f46e5',weight:2,opacity:.75,dashArray:'3 2',fillColor:'#c7d2fe',fillOpacity:.75})
+        .bindTooltip('<div style="font-size:11.5px;color:#111"><b>'+esc0(o.id)+'</b> · ปลายทางลูกค้า / final address'
+          +'<div style="color:#555">'+esc0(o.customer||'')+'</div>'
+          +'<div style="color:#3730a3;font-weight:700">🚚 ส่งต่อโดย '+esc0(p.via)+' / carried on by '+esc0(p.via)+'</div>'
+          +(cp.approx?'<div style="color:#b45309">◌ ประมาณจากจังหวัด / province only</div>':'')+'</div>',
+          {direction:'top',opacity:1,className:'tmap-tip'})
+        .addTo(_tmapLayer);
+    }
     return p;
   };
   var nTour=0, nDone=0, nFree=0;
@@ -26825,6 +26864,7 @@ function _tmapRender(){
     +'<span><span style="color:#2563eb;font-weight:800">●</span> ในทัวร์ ตามลำดับส่ง / tour stops ('+nTour+')</span>'
     +'<span><span style="color:#16a34a;font-weight:800">●</span> ส่งแล้ว / done ('+nDone+')</span>'
     +'<span><span style="color:#f97316;font-weight:800">●</span> ว่าง เพิ่มได้ / free in zone ('+nFree+')</span>'
+    +(nVia?'<span>🚚 ท่ารถขนส่ง / carrier depot ('+nVia+') <span style="opacity:.65">· ○ = ที่อยู่ลูกค้า / customer address</span></span>':'')
     +(nSuspect?'<span><span style="color:#dc2626;font-weight:800">●</span> หมุดอาจผิด / suspect pin ('+nSuspect+')</span>':'')
     +'<span style="opacity:.65">จาง = ประมาณจากจังหวัด / faded = province only</span>';
   var ms=document.getElementById('tourmap-missing');
