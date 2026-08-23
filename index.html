@@ -14583,26 +14583,46 @@ function ofTourSettlePrint(tourId){
   var money=function(n){ return Number(n||0).toLocaleString()+' ฿'; };
   var when=(function(){ try{ return fmtD(kpTodayStr()); }catch(e){ return kpTodayStr(); } })();
   var dep=(function(){ try{ return t.departedDate?fmtD(t.departedDate):''; }catch(e){ return t.departedDate||''; } })();
+  // Cash and transfers in SEPARATE tables. The cash list is the one somebody counts
+  // banknotes against — mixing the transfers into it made the page unreadable, and
+  // a stop paid partly each way belongs in both, with its own half.
   var stops=(t.orders||[]).filter(function(id){ return ((t.status||{})[id]||'')==='delivered'; });
-  var rows=stops.map(function(id){
+  var cashRows='', onlineRows='', unkRows='', cashSum=0, onlineSum=0, unkSum=0;
+  stops.forEach(function(id){
     var o=(orders||[]).find(function(x){return x.id===id;})||{id:id};
     var co=tourPayCO(t,o);
-    var amt=co.cash+co.online+(co.unknown||0);
-    if(!amt) return '';
-    return '<tr><td>'+esc(id)+'</td><td>'+esc(o.customer||'')+'</td>'
-      +'<td class="r">'+(co.cash?money(co.cash):'')+'</td>'
-      +'<td class="r">'+(co.online?money(co.online):'')+'</td></tr>';
-  }).join('');
+    var line='<td>'+esc(id)+'</td><td>'+esc(o.customer||'')+'</td>';
+    if(co.cash>0){   cashRows  +='<tr>'+line+'<td class="r">'+money(co.cash)+'</td></tr>';   cashSum+=co.cash; }
+    if(co.online>0){ onlineRows+='<tr>'+line+'<td class="r">'+money(co.online)+'</td></tr>'; onlineSum+=co.online; }
+    if((co.unknown||0)>0){ unkRows+='<tr>'+line+'<td class="r">'+money(co.unknown)+'</td></tr>'; unkSum+=co.unknown; }
+  });
+  var tbl=function(title,sub,rows,sum,label,cls){
+    if(!rows) return '';
+    return '<table class="'+(cls||'')+'"><thead><tr><th colspan="3">'+title
+      +(sub?' <span style="font-weight:400;text-transform:none;letter-spacing:0">— '+sub+'</span>':'')+'</th></tr>'
+      +'<tr><th>Order</th><th>ลูกค้า / customer</th><th class="r">฿</th></tr></thead>'
+      +'<tbody>'+rows+'</tbody>'
+      +'<tfoot><tr><td colspan="2" class="sumlbl">'+label+'</td><td class="r sumlbl">'+money(sum)+'</td></tr></tfoot></table>';
+  };
   var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
-    return '<tr><td>'+esc(e.oid||'')+'</td><td>'+esc(e.note||'')+'</td><td class="r" colspan="2">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
+    return '<tr><td>'+esc(e.oid||'')+'</td><td>'+esc(e.note||'')+'</td><td class="r">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
   }).join('');
   var html='<!DOCTYPE html><html><head><meta charset="utf-8"><title>ปิดยอดทัวร์ '+esc(t.tid||'')+'</title><style>'
     +'*{box-sizing:border-box}body{font-family:"Prompt","Sarabun","Segoe UI",sans-serif;margin:0;padding:16mm;color:#111;font-size:12px}'
     +'h1{font-size:19px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin-bottom:14px}'
-    +'table{width:100%;border-collapse:collapse;margin-bottom:12px}'
+    +'table{width:100%;border-collapse:collapse;margin-bottom:14px;page-break-inside:auto}'
     +'th,td{padding:4px 6px;border-bottom:1px solid #ddd;text-align:left}'
     +'th{background:#f3f4f6;font-size:11px;text-transform:uppercase;letter-spacing:.03em}'
+    +'tr{page-break-inside:avoid}'
     +'.r{text-align:right;white-space:nowrap}'
+    // The cash block is the one being counted, so it carries the weight; the
+    // transfers sit back a step — same page, clearly a different pile of money.
+    +'table.cash th:first-child,table.cash thead tr:first-child th{background:#dcfce7;color:#14532d;font-size:12px}'
+    +'table.cash td{font-weight:600}'
+    +'table.onl thead tr:first-child th{background:#e0e7ff;color:#312e81;font-size:12px}'
+    +'table.onl td,table.onl th{color:#475569}'
+    +'table.unk thead tr:first-child th{background:#fef3c7;color:#92400e;font-size:12px}'
+    +'.sumlbl{font-weight:800;border-top:2px solid #111;border-bottom:none;padding-top:6px}'
     +'.sum{width:62mm;margin-left:auto}'
     +'.sum div{display:flex;justify-content:space-between;gap:10px;padding:4px 0}'
     +'.sum .big{border-top:2px solid #111;margin-top:5px;padding-top:7px;font-size:15px;font-weight:800}'
@@ -14612,8 +14632,10 @@ function ofTourSettlePrint(tourId){
     +'</style></head><body>'
     +'<h1>🧮 ปิดยอดทัวร์ / Tour settlement</h1>'
     +'<div class="sub">🚚 '+esc(t.driverName||'')+(tidOk(t.tid)?' · '+esc(t.tid):'')+(dep?' · ออกรถ / departed '+esc(dep):'')+' · พิมพ์ / printed '+esc(when)+'</div>'
-    +(rows?'<table><thead><tr><th>Order</th><th>ลูกค้า / customer</th><th class="r">💵 เงินสด</th><th class="r">🏦 โอน</th></tr></thead><tbody>'+rows+'</tbody></table>':'')
-    +(adjRows?'<table><thead><tr><th colspan="2">💸 หัก / เพิ่ม · adjustments</th><th class="r" colspan="2">฿</th></tr></thead><tbody>'+adjRows+'</tbody></table>':'')
+    + tbl('💵 เงินสด / CASH', 'คนขับเก็บมา / collected by the driver', cashRows, cashSum, 'รวมเงินสด / cash total', 'cash')
+    + tbl('🏦 โอน / TRANSFER', 'เข้าบัญชีร้าน ไม่ผ่านมือคนขับ / straight to the shop account', onlineRows, onlineSum, 'รวมโอน / transfer total', 'onl')
+    + tbl('❓ ยังไม่ระบุวิธี / METHOD NOT RECORDED', '', unkRows, unkSum, 'รวม / total', 'unk')
+    +(adjRows?'<table><thead><tr><th colspan="2">💸 หัก / เพิ่ม · adjustments</th><th class="r">฿</th></tr></thead><tbody>'+adjRows+'</tbody></table>':'')
     +'<div class="sum">'
       +'<div><span>💵 เงินสดที่เก็บได้ / cash collected</span><b>'+money(s.cash)+'</b></div>'
       +(s.online?'<div><span>🏦 โอนเข้าบัญชี / transferred</span><b>'+money(s.online)+'</b></div>':'')
