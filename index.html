@@ -11766,6 +11766,21 @@ function ofRenderTour(){
       '</div>'+
       // ── BOTTOM (pinned): tour pay · advance · slips ──
       '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">'+
+        // Per-carton pay: what really went out × the rate for this driver. Only when
+        // the tour is NOT being paid per kilometre — the two are alternatives.
+        ((isL||_kmOn) ? '' : (function(){
+          var _cr=tourCtnRate(t), _cc=tourCtnCount(t, totCtn), _sum=Math.round(_cc*_cr);
+          var _inp='padding:6px 7px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:700;text-align:right;background:var(--bg);color:var(--text);min-width:0';
+          return '<div style="display:flex;align-items:center;gap:5px;margin-bottom:8px;flex-wrap:wrap">'
+            +'<span style="font-size:12px;color:var(--text2);white-space:nowrap">📦 CTN:</span>'
+            +'<input type="number" class="kpamt" min="0" value="'+(t.ctnCount!=null&&t.ctnCount!==''?t.ctnCount:'')+'" placeholder="'+totCtn+'" title="จำนวน CTN จริงที่ขึ้นรถ / cartons actually loaded" onclick="event.stopPropagation()" onchange="ofSetTourCtn(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="'+_inp+';width:62px;flex:0 0 62px">'
+            +'<span style="font-size:12px;color:var(--text2)">×</span>'
+            +'<input type="number" class="kpamt" min="0" value="'+_cr+'" title="ค่าจ้างต่อ CTN — ปกติ 350, ภาคใต้ 400 / pay per carton" onclick="event.stopPropagation()" onchange="ofSetTourCtnRate(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="'+_inp+';width:62px;flex:0 0 62px">'
+            +'<span style="font-size:12px;color:var(--text2)">฿</span>'
+            +'<span style="font-size:12.5px;font-weight:800;color:var(--green);white-space:nowrap;margin-left:auto">= '+_sum.toLocaleString()+' ฿</span>'
+            +(ro?'':'<button type="button" onclick="event.stopPropagation();ofCtnUsePay(\''+t.id+'\','+totCtn+')" title="ใส่เป็นค่าทัวร์ / use as the tour pay" style="flex-shrink:0;font-size:10px;padding:3px 7px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:700">→ ค่าทัวร์</button>')
+            +'</div>';
+        })())+
         (isL ? '' : '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'+
         '<span style="font-size:12px;color:var(--text2);white-space:nowrap">💰 Tour pay / ค่าทัวร์:</span>'+
         '<input type="number" class="kpamt" min="0" value="'+(t.driverPay!=null&&t.driverPay!==''?t.driverPay:(ofIsLala(t)&&t.carFee?t.carFee:''))+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourPay(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
@@ -11780,6 +11795,9 @@ function ofRenderTour(){
         // above the amount that is actually handed over at the end of the tour.
         tourAdjSummaryHTML(t)+
         (!isL&&(parseFloat(t.driverPay)||0)>0&&((parseFloat(t.driverAdvance)||0)>0||tourAdjTotal(t)!==0)?'<div style="font-size:11px;color:var(--text2);margin:-4px 0 8px;text-align:right">คงเหลือจ่ายท้ายทัวร์ / Pay at end: <b style="color:var(--green)">'+tourNetPay(t).toLocaleString()+' ฿</b></div>':'')+
+        // The hand-over: cash in the bag, minus what he keeps, equals what the shop
+        // gets — on screen and on one A4 page for both signatures.
+        (isL?'':'<button type="button" onclick="event.stopPropagation();ofTourSettle(\''+t.id+'\')" title="ปิดยอด — เงินสดที่เก็บได้ หัก ค่าทัวร์ / settle up: cash collected against his pay" style="width:100%;margin-bottom:8px;padding:9px;border:1px solid #bfdbfe;border-radius:var(--rs);background:#eff6ff;color:#1d4ed8;font-size:12.5px;font-weight:800;cursor:pointer">🧮 ปิดยอดทัวร์ / Settle up</button>')+
         // Cash + slip side by side, same size: cash = tap the button, transfer = upload
         // the slip. Both mark the tour as paid; the thumbnails open under the row.
         (isL ? '' : (function(){
@@ -14472,6 +14490,165 @@ function recAdjTotal(r){ return tourAdjTotal(r); }
 function tourAdjFmt(v){ return (v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString()+' ฿'; }
 // What is actually handed over at the end of the tour: earned − advance ± adjustments.
 function tourNetPay(t){ return Math.max(0, (parseFloat(t.driverPay)||0) - (parseFloat(t.driverAdvance)||0) + tourAdjTotal(t)); }
+// ══════════════════════════════════════════════════════════════════════
+//  END-OF-TOUR SETTLEMENT
+//  The driver comes back with a bag of cash. Out of it he keeps his tour pay
+//  (less whatever he drew before he left, plus/minus the adjustments) and the
+//  rest goes to the shop. This is the arithmetic for that hand-over, in one
+//  place, so the card, the settle window and the printed sheet cannot disagree.
+// ══════════════════════════════════════════════════════════════════════
+function tourSettleCalc(t){
+  var cash=0, online=0, unknown=0;
+  (t&&t.orders||[]).forEach(function(id){
+    if(((t.status||{})[id]||'')!=='delivered') return;
+    var o=(orders||[]).find(function(x){return x.id===id;}); if(!o) return;
+    var co=tourPayCO(t,o); cash+=co.cash; online+=co.online; unknown+=(co.unknown||0);
+  });
+  var pay=parseFloat(t&&t.driverPay)||0, adv=parseFloat(t&&t.driverAdvance)||0, adj=0;
+  try{ adj=tourAdjTotal(t); }catch(e){}
+  var driverGets=Math.max(0, pay-adv+adj);      // same figure as tourNetPay
+  return { cash:cash, online:online, unknown:unknown, pay:pay, adv:adv, adj:adj,
+           driverGets:driverGets, shopGets:cash-driverGets };
+}
+// Per-carton pay (the usual way when a tour is not paid per kilometre): how many
+// cartons actually went out × what this driver gets for one. 350 ฿ is the house
+// rate, 400 ฿ in the south — both only a starting value, the office types over it.
+function tourCtnRate(t){
+  var r=parseFloat(t&&t.ctnRate);
+  if(r>0) return r;
+  var south=0, n=0;
+  ((t&&t.orders)||[]).forEach(function(id){
+    var o=(orders||[]).find(function(x){return x.id===id;}); if(!o) return;
+    n++; if((o.zone||'')==='Southern') south++;
+  });
+  return (n && south*2>=n) ? 400 : 350;
+}
+function tourCtnCount(t, fallback){
+  var c=parseFloat(t&&t.ctnCount);
+  return (c>0)?c:(fallback||0);
+}
+// The hand-over window: what the driver brought back, what he keeps, what the shop
+// gets. Read-only arithmetic over what is already on the card — it books nothing,
+// so it can be opened and closed as often as anyone likes.
+function ofTourSettle(tourId){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var s=tourSettleCalc(t);
+  var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  var row=function(lbl,val,opt){
+    opt=opt||{};
+    return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:'+(opt.big?'7px 0':'4px 0')+';'
+      +(opt.top?'border-top:1px solid var(--border);margin-top:4px;padding-top:7px;':'')+'">'
+      +'<span style="font-size:'+(opt.big?'13.5px':'12.5px')+';color:'+(opt.big?'var(--text)':'var(--text2)')+';font-weight:'+(opt.big?'800':'600')+'">'+lbl+'</span>'
+      +'<span style="font-size:'+(opt.big?'17px':'14px')+';font-weight:'+(opt.big?'900':'700')+';white-space:nowrap;color:'+(opt.col||'var(--text)')+'">'+val+'</span></div>';
+  };
+  var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
+    var v=tourAdjVal(e);
+    return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:1px 0;color:var(--text2)">'
+      +'<span>'+esc(e.oid||'')+' · '+esc(e.note||'—')+'</span>'
+      +'<span style="font-weight:700;color:'+(v<0?'#b91c1c':'#166534')+';white-space:nowrap">'+tourAdjFmt(v)+'</span></div>';
+  }).join('');
+  var body='<div style="font-size:12px;color:var(--text2);margin-bottom:10px">🚚 '+esc(t.driverName||'')+(tidOk(t.tid)?' · '+esc(t.tid):'')+'</div>'
+    + row('💵 เงินสดที่เก็บได้ / cash collected', s.cash.toLocaleString()+' ฿', {big:true, col:'#166534'})
+    + (s.online>0?'<div style="font-size:11px;color:var(--text2);margin:-2px 0 6px">🏦 โอนเข้าบัญชีร้าน / transferred to the shop: '+s.online.toLocaleString()+' ฿ — ไม่ผ่านมือคนขับ / never in his hands</div>':'')
+    + (s.unknown>0?'<div style="font-size:11px;color:#92400e;margin:-2px 0 6px">❓ จ่ายแล้ว ยังไม่ระบุวิธี / paid, method not recorded: '+s.unknown.toLocaleString()+' ฿</div>':'')
+    + '<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border)"></div>'
+    + row('💰 ค่าทัวร์ / tour pay', s.pay.toLocaleString()+' ฿')
+    + (s.adv>0?row('🤝 หัก เบิกก่อนออกทัวร์ / less advance already paid', '− '+s.adv.toLocaleString()+' ฿', {col:'#b45309'}):'')
+    + (s.adj!==0?row('💸 หัก / เพิ่ม · adjustments', tourAdjFmt(s.adj), {col:s.adj<0?'#b91c1c':'#166534'}):'')
+    + (adjRows?'<div style="margin:-2px 0 6px;padding:5px 8px;background:var(--bg2);border-radius:var(--rs)">'+adjRows+'</div>':'')
+    + row('👤 คนขับรับ / driver keeps', s.driverGets.toLocaleString()+' ฿', {big:true, top:true, col:'#1d4ed8'})
+    + row('🏪 ร้านรับเงินสด / shop receives in cash', (s.shopGets<0?'− ':'')+Math.abs(s.shopGets).toLocaleString()+' ฿', {big:true, col:s.shopGets<0?'#b91c1c':'#166534'})
+    + (s.shopGets<0?'<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-top:4px">⚠️ เงินสดไม่พอจ่ายค่าทัวร์ — ร้านต้องจ่ายเพิ่ม '+Math.abs(s.shopGets).toLocaleString()+' ฿<div style="font-weight:500">the cash collected does not cover his pay — the shop has to add this</div></div>':'')
+    + (s.adv>0?'<div style="font-size:11px;color:var(--text2);margin-top:8px">🤝 เบิกก่อนออกทัวร์แล้ว '+s.adv.toLocaleString()+' ฿ — จ่ายไปแล้ว ไม่ต้องจ่ายซ้ำ / the advance was handed over before the tour, do not pay it again</div>':'');
+  var html='<div id="tset-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)ofTourSettleClose()">'
+    +'<div style="background:var(--bg);border-radius:14px;max-width:400px;width:100%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,0.4);max-height:92vh;overflow:auto">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">'
+        +'<div style="font-weight:800;font-size:15px">🧮 ปิดยอดทัวร์ / Tour settlement</div>'
+        +'<button type="button" onclick="ofTourSettleClose()" style="border:none;background:var(--bg2);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:16px;color:var(--text)">✕</button>'
+      +'</div>'
+      + body
+      +'<div style="display:flex;gap:8px;margin-top:14px">'
+        +'<button type="button" onclick="ofTourSettleClose()" style="flex:1;padding:10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:13px;font-weight:700;cursor:pointer">ปิด / Close</button>'
+        +'<button type="button" onclick="ofTourSettlePrint(\''+String(tourId).replace(/['"\\]/g,'')+'\')" style="flex:1;padding:10px;border:none;border-radius:var(--rs);background:#1d4ed8;color:#fff;font-size:13px;font-weight:700;cursor:pointer">🖨 พิมพ์ A4 / Print</button>'
+      +'</div>'
+    +'</div></div>';
+  var wrap=document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap.firstChild);
+}
+function ofTourSettleClose(){ var m=document.getElementById('tset-modal'); if(m) m.remove(); }
+// One A4 page: the same figures, room for two signatures.
+function ofTourSettlePrint(tourId){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var s=tourSettleCalc(t);
+  var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var money=function(n){ return Number(n||0).toLocaleString()+' ฿'; };
+  var when=(function(){ try{ return fmtD(kpTodayStr()); }catch(e){ return kpTodayStr(); } })();
+  var dep=(function(){ try{ return t.departedDate?fmtD(t.departedDate):''; }catch(e){ return t.departedDate||''; } })();
+  var stops=(t.orders||[]).filter(function(id){ return ((t.status||{})[id]||'')==='delivered'; });
+  var rows=stops.map(function(id){
+    var o=(orders||[]).find(function(x){return x.id===id;})||{id:id};
+    var co=tourPayCO(t,o);
+    var amt=co.cash+co.online+(co.unknown||0);
+    if(!amt) return '';
+    return '<tr><td>'+esc(id)+'</td><td>'+esc(o.customer||'')+'</td>'
+      +'<td class="r">'+(co.cash?money(co.cash):'')+'</td>'
+      +'<td class="r">'+(co.online?money(co.online):'')+'</td></tr>';
+  }).join('');
+  var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
+    return '<tr><td>'+esc(e.oid||'')+'</td><td>'+esc(e.note||'')+'</td><td class="r" colspan="2">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
+  }).join('');
+  var html='<!DOCTYPE html><html><head><meta charset="utf-8"><title>ปิดยอดทัวร์ '+esc(t.tid||'')+'</title><style>'
+    +'*{box-sizing:border-box}body{font-family:"Prompt","Sarabun","Segoe UI",sans-serif;margin:0;padding:16mm;color:#111;font-size:12px}'
+    +'h1{font-size:19px;margin:0 0 2px}.sub{color:#555;font-size:12px;margin-bottom:14px}'
+    +'table{width:100%;border-collapse:collapse;margin-bottom:12px}'
+    +'th,td{padding:4px 6px;border-bottom:1px solid #ddd;text-align:left}'
+    +'th{background:#f3f4f6;font-size:11px;text-transform:uppercase;letter-spacing:.03em}'
+    +'.r{text-align:right;white-space:nowrap}'
+    +'.sum{width:62mm;margin-left:auto}'
+    +'.sum div{display:flex;justify-content:space-between;gap:10px;padding:4px 0}'
+    +'.sum .big{border-top:2px solid #111;margin-top:5px;padding-top:7px;font-size:15px;font-weight:800}'
+    +'.sig{display:flex;gap:24px;margin-top:26mm}'
+    +'.sig div{flex:1;border-top:1px solid #111;padding-top:5px;font-size:11px;color:#555;text-align:center}'
+    +'@page{size:A4;margin:0}@media print{body{padding:14mm}}'
+    +'</style></head><body>'
+    +'<h1>🧮 ปิดยอดทัวร์ / Tour settlement</h1>'
+    +'<div class="sub">🚚 '+esc(t.driverName||'')+(tidOk(t.tid)?' · '+esc(t.tid):'')+(dep?' · ออกรถ / departed '+esc(dep):'')+' · พิมพ์ / printed '+esc(when)+'</div>'
+    +(rows?'<table><thead><tr><th>Order</th><th>ลูกค้า / customer</th><th class="r">💵 เงินสด</th><th class="r">🏦 โอน</th></tr></thead><tbody>'+rows+'</tbody></table>':'')
+    +(adjRows?'<table><thead><tr><th colspan="2">💸 หัก / เพิ่ม · adjustments</th><th class="r" colspan="2">฿</th></tr></thead><tbody>'+adjRows+'</tbody></table>':'')
+    +'<div class="sum">'
+      +'<div><span>💵 เงินสดที่เก็บได้ / cash collected</span><b>'+money(s.cash)+'</b></div>'
+      +(s.online?'<div><span>🏦 โอนเข้าบัญชี / transferred</span><b>'+money(s.online)+'</b></div>':'')
+      +'<div><span>💰 ค่าทัวร์ / tour pay</span><b>'+money(s.pay)+'</b></div>'
+      +(s.adv?'<div><span>🤝 หัก เบิกก่อน / less advance</span><b>− '+money(s.adv)+'</b></div>':'')
+      +(s.adj?'<div><span>💸 หัก / เพิ่ม</span><b>'+tourAdjFmt(s.adj)+'</b></div>':'')
+      +'<div class="big"><span>👤 คนขับรับ / driver keeps</span><b>'+money(s.driverGets)+'</b></div>'
+      +'<div class="big"><span>🏪 ร้านรับเงินสด / shop receives</span><b>'+(s.shopGets<0?'− ':'')+money(Math.abs(s.shopGets))+'</b></div>'
+    +'</div>'
+    +(s.adv?'<div style="font-size:11px;color:#555;margin-top:8px">🤝 เบิกก่อนออกทัวร์ '+money(s.adv)+' จ่ายไปแล้วก่อนออกรถ / the advance was already handed over before departure</div>':'')
+    +'<div class="sig"><div>ลงชื่อคนขับ / driver</div><div>ลงชื่อออฟฟิศ / office</div></div>'
+    +'<script>setTimeout(function(){window.print();},250);<\/script>'
+    +'</body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Popup blocked / เปิดหน้าต่างไม่ได้ — please allow popups'); return; }
+  w.document.open(); w.document.write(html); w.document.close(); w.focus();
+}
+function ofSetTourCtn(tourId, val){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var v=Math.max(0, parseFloat(val)||0);
+  t.ctnCount=v||null;
+  syncTours(); try{ ofRenderTour(); }catch(e){}
+}
+function ofSetTourCtnRate(tourId, val){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var v=Math.max(0, parseFloat(val)||0);
+  t.ctnRate=v||null;
+  syncTours(); try{ ofRenderTour(); }catch(e){}
+}
+function ofCtnUsePay(tourId, fallbackCtn){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var amt=Math.round(tourCtnCount(t,fallbackCtn)*tourCtnRate(t));
+  if(!amt){ alert('ใส่จำนวน CTN ก่อน / enter the carton count first'); return; }
+  ofSetTourPay(tourId, amt);
+}
 function _tourAdjSave(t, rerender){
   if(!t) return;
   t.adj=tourAdjArr(t);
