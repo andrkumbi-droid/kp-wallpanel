@@ -11486,11 +11486,10 @@ function ofRenderTour(){
     var tourCash=0, tourOnline=0, tourUnknown=0;
     // Only money collected ON THIS TOUR — a deposit taken weeks ago, or an office
     // transfer that landed before the truck left, is not in this driver's bag.
-    var tourPre=0;
     t.orders.forEach(function(id){
       if((t.status[id]||'')!=='delivered') return;
       var o=orders.find(function(x){return x.id===id;}); if(!o) return;
-      var _co=tourPayCO(t,o); tourCash+=_co.cash; tourOnline+=_co.online; tourUnknown+=(_co.unknown||0); tourPre+=(_co.pre||0);
+      var _co=tourPayCO(t,o); tourCash+=_co.cash; tourOnline+=_co.online; tourUnknown+=(_co.unknown||0);
     });
     // Slip control — same button on the full and the folded card. Not for a
     // read-only (logistics) user: checking transfers is office work.
@@ -11560,19 +11559,21 @@ function ofRenderTour(){
       // Payment shown inline on the order row — driver split if present, else derived
       // from payMethod (office-marked payments) so paid orders always show.
       var _co=tourPayCO(t,ord), _pc=_co.cash, _po=_co.online, _pu=_co.unknown||0, _pre=_co.pre||0;
-      // What is still owed after everything on record — that is what the driver
-      // has to bring back for this stop.
-      var _owed=Math.max(0, (ord?ofOrderTotalNum(ord):0) - _pc - _po - _pu - _pre);
+      // Still owed on the ORDER — measured against everything ever paid on it, not
+      // against this tour's share. (Taking the tour's share would call an order that
+      // was settled long ago "outstanding" the moment its old payment is not in the
+      // history.)
+      var _allPaid=(function(){ var a=ofPayCO(ord||{}); return a.cash+a.online+(a.unknown||0); })();
+      var _owed=Math.max(0, (ord?ofOrderTotalNum(ord):0) - _allPaid);
       // Compact payment chip — always shows something for a delivered order (the paid
       // amount(s), else an "unpaid" tag) so the row is never blank. Kept on one line.
       var payInline='';
-      // Paid before this tour left (deposit, office transfer): shown, but greyed and
-      // never counted as this driver's cash.
-      var _preChip=_pre>0
-        ? ' <span title="จ่ายก่อนออกทัวร์นี้ — ไม่ใช่เงินของคนขับเที่ยวนี้ / paid before this tour left, not this driver\'s cash" style="font-size:10px;font-weight:700;color:#64748b;background:var(--bg2);border-radius:8px;padding:1px 6px;white-space:nowrap">ล่วงหน้า '+_pre.toLocaleString()+'</span>'
-        : '';
-      var _owedChip=(_owed>0&&_pre>0)
-        ? ' <span title="ยังค้าง / still owed on this stop" style="font-size:10px;font-weight:700;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px;white-space:nowrap">ค้าง '+_owed.toLocaleString()+'</span>'
+      // Money paid before this tour is NOT shown on the row at all — this line is
+      // about the driver's own takings. It only has to stay out of the totals.
+      // Only where something WAS paid but not all of it — a stop with nothing paid
+      // already says "⏳ ค้าง / unpaid" below, and a settled one says nothing.
+      var _owedChip=(_owed>0 && _allPaid>0)
+        ? ' <span title="ยังค้าง — คนขับต้องเก็บ / still owed on this stop" style="font-size:10px;font-weight:700;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px;white-space:nowrap">ค้าง '+_owed.toLocaleString()+'</span>'
         : '';
       if(st==='delivered'){
         if(_pc>0||_po>0){
@@ -11584,19 +11585,20 @@ function ofRenderTour(){
           payInline='<span style="font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0">'
             +'<span onclick="event.stopPropagation();ofTourPayEdit(\''+String(id).replace(/['\\]/g,'')+'\')" title="Edit payment / แก้ไขการชำระเงิน — tap to change cash/online or amount" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;border-bottom:1px dotted var(--text3)">'+_pp.join('')+'</span>'
             +(_po>0?(ofSlipBadge(ord)||''):'')
-            +'</span>'+_preChip+_owedChip;
+            +'</span>'+_owedChip;
         } else if(_pu>0){
           // Paid, method unknown — never guess a banknote here. Tapping opens the
           // editor so the office picks cash or transfer once and for all.
           payInline='<span style="font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0">'
             +'<span onclick="event.stopPropagation();ofTourPayEdit(\''+String(id).replace(/['\\]/g,'')+'\')" title="Paid, but cash or transfer was never recorded — tap to set it / จ่ายแล้วแต่ยังไม่ระบุวิธี" style="cursor:pointer;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:1px 6px">❓'+_pu.toLocaleString()+'</span></span>';
         } else if(ord && ord.payAtOffice){
-          payInline='<span style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap;flex-shrink:0">💼 เก็บที่ออฟฟิศ / at office</span>'+_preChip;
+          payInline='<span style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap;flex-shrink:0">💼 เก็บที่ออฟฟิศ / at office</span>';
         } else if(_pre>0){
-          // Nothing collected on this tour, but the customer had already paid part
-          // of it — say which part, and what is still open.
-          payInline='<span style="font-size:11px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;flex-shrink:0">'
-            +_preChip+(_owed>0?_owedChip:'<span style="font-size:10px;font-weight:700;color:#166534;background:var(--green-bg);border-radius:8px;padding:1px 6px">✓ ครบ / settled</span>')+'</span>';
+          // Nothing collected on this tour. Either the driver still has to collect
+          // the rest, or the customer had already settled everything before he left.
+          payInline=_owed>0
+            ? '<span style="font-size:11px;font-weight:700;white-space:nowrap;flex-shrink:0">'+_owedChip+'</span>'
+            : '<span style="font-size:10px;font-weight:700;color:#166534;background:var(--green-bg);border-radius:8px;padding:1px 6px;white-space:nowrap;flex-shrink:0">✓ จ่ายแล้ว / already paid</span>';
         } else {
           payInline='<span style="font-size:10px;font-weight:700;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:1px 6px;white-space:nowrap;flex-shrink:0">⏳ ค้าง / unpaid</span>';
         }
@@ -11675,13 +11677,8 @@ function ofRenderTour(){
         +'<span style="color:#166534;font-weight:700">💵 Cash / เงินสด: '+tourCash.toLocaleString()+' ฿</span>'
         +'<span style="color:#1d4ed8;font-weight:700">🏦 Online / โอน: '+tourOnline.toLocaleString()+' ฿</span>'
         +(tourUnknown>0?'<span style="width:100%;color:#92400e;font-weight:700">❓ จ่ายแล้ว ยังไม่ระบุวิธี / paid, method not recorded: '+tourUnknown.toLocaleString()+' ฿ — not counted as cash</span>':'')
-        // Money on these orders that came in BEFORE this tour: shown so the office
-        // can see the full picture, but deliberately outside the driver's totals.
-        +(tourPre>0?'<span style="width:100%;color:var(--text2);font-weight:600">🧾 จ่ายล่วงหน้าก่อนออกทัวร์ / paid before this tour: '+tourPre.toLocaleString()+' ฿ — ไม่ใช่เงินของคนขับ / not this driver\'s money</span>':'')
         +'</div>'
-      : (tourPre>0
-          ? '<div style="margin:8px 0 4px;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);font-size:12px;color:var(--text2);font-weight:600">🧾 จ่ายล่วงหน้าก่อนออกทัวร์ / paid before this tour: '+tourPre.toLocaleString()+' ฿</div>'
-          : '');
+      : '';
     return '<div class="tmgmt">'+
       // Fold the card away — sits in the corner so it never moves when the card grows.
       '<div style="position:absolute;top:8px;right:8px;z-index:2">'+_tourMiniBtn(t.id,false)+'</div>'+
