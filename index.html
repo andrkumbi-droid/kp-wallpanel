@@ -18980,7 +18980,7 @@ var _lmMap=null,_lmLayer=null,_lmTimer=null,_lmOn=false,_lmFitted=false,_lmRetry
 // Second map for the south. Thailand runs 1,600 km north to south and 900 km across,
 // so on a 16:9 wall the whole country can only ever be a narrow strip. Split at the
 // isthmus and each half fills its own panel.
-var _lmMapB=null,_lmLayerB=null,_lmTilesB=null,_lmSplit=false;
+var _lmMapB=null,_lmLayerB=null,_lmTilesB=null,_lmSplit=false,_lmSig='';
 var KP_LM_SOUTH=12.6;      // Prachuap Khiri Khan and below counts as the south panel
 function kpLiveSplitOn(){ try{ return localStorage.getItem('kpLiveSplit')==='1'; }catch(e){ return false; } }
 function kpLiveSplitToggle(){
@@ -19141,7 +19141,24 @@ function kpLiveMapRender(){
   var boundsB=[];
   var panelFor=function(lat){ return (_lmSplit && _lmLayerB && lat<KP_LM_SOUTH) ? _lmLayerB : _lmLayer; };
   var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
-  var tours=(activeTours||[]).filter(function(t){ return t && (t.orders||[]).length; });
+  // A tour belongs on the wall only while it still has something to do. Once the
+  // truck is back, or every stop on it is delivered, it drops off — otherwise the
+  // map fills up with finished runs and the office cannot see who is still out.
+  // (The tour itself is untouched; it stays open until the office ends it.)
+  var tours=(activeTours||[]).filter(function(t){
+    if(!t || !(t.orders||[]).length) return false;
+    if(t.backAt || t.backDate) return false;                 // came home
+    var st=(t.orders||[]).filter(function(id){ return tourEffStatus(t,id)!=='cancelled'; });
+    if(!st.length) return false;                             // nothing but cancellations
+    var dn=st.filter(function(id){ var s=tourEffStatus(t,id); return s==='delivered'||s==='shipped'; }).length;
+    return dn<st.length;                                     // still stops to make
+  });
+  // New tour out, finished tour gone: re-frame once on the tours that are left,
+  // but only when the SET changes — a status update must not yank the view.
+  try{
+    var sig=tours.map(function(t){ return t.tid||t.id; }).join('|');
+    if(sig!==_lmSig){ _lmSig=sig; _lmFitted=false; }
+  }catch(e){}
   var legend=[], seen={}, bounds=[], usedCol={};
   tours.forEach(function(t, ti){
     var col=kpTourColor(t, usedCol);
