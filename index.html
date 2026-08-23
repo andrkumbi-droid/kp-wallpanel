@@ -18971,7 +18971,11 @@ function kpCashKioskShow(s){
 //  Same position rule as the office map: a carrier order sits at the depot.
 //  Read-only — nothing here writes, it is a wall display.
 // ════════════════════════════════════════════════════════════════════════
-var KP_TOURCOL=['#38bdf8','#f472b6','#fbbf24','#a78bfa','#34d399','#fb923c','#60a5fa','#f87171','#2dd4bf','#c084fc','#facc15','#4ade80'];
+// Ordered so the first few are as far apart on the colour wheel as possible, and
+// each carries its hue so two tours can never end up in neighbouring shades (sky
+// blue next to teal was unreadable from across the room).
+var KP_TOURCOL=['#38bdf8','#fb7185','#facc15','#4ade80','#c084fc','#fb923c','#22d3ee','#f472b6','#a3e635','#f87171','#818cf8','#2dd4bf'];
+var KP_TOURHUE=[  199,      350,      48,       142,      270,      27,       187,      330,      82,       0,        239,      174    ];
 var _lmMap=null,_lmLayer=null,_lmTimer=null,_lmOn=false,_lmFitted=false,_lmRetry=null,_lmTiles=null;
 // Second map for the south. Thailand runs 1,600 km north to south and 900 km across,
 // so on a 16:9 wall the whole country can only ever be a narrow strip. Split at the
@@ -19103,9 +19107,18 @@ function kpTourColor(t, used){
   var key=String((t&&(t.tid||t.id))||'');
   var h=0; for(var i=0;i<key.length;i++) h=(h*31+key.charCodeAt(i))>>>0;
   var idx=h%KP_TOURCOL.length;
+  // Skip past any colour whose hue sits within 30° of one already handed out —
+  // "already used" alone is not enough when the palette holds neighbours.
+  var taken=(used&&used._hues)||[];
   for(var g=0; g<KP_TOURCOL.length; g++){
-    var c=KP_TOURCOL[(idx+g)%KP_TOURCOL.length];
-    if(!used||!used[c]){ if(used) used[c]=1; return c; }
+    var i2=(idx+g)%KP_TOURCOL.length, c=KP_TOURCOL[i2], hue=KP_TOURHUE[i2];
+    var clash=taken.some(function(x){ var d=Math.abs(x-hue)%360; return Math.min(d,360-d)<30; });
+    if(!clash){ if(used){ used._hues=taken.concat([hue]); } return c; }
+  }
+  // More tours than the palette can keep apart: fall back to plain "not used yet".
+  for(var g2=0; g2<KP_TOURCOL.length; g2++){
+    var c2=KP_TOURCOL[(idx+g2)%KP_TOURCOL.length];
+    if(!used||!used[c2]){ if(used) used[c2]=1; return c2; }
   }
   return KP_TOURCOL[idx];
 }
@@ -19129,7 +19142,7 @@ function kpLiveMapRender(){
   var legend=[], seen={}, bounds=[], usedCol={};
   tours.forEach(function(t, ti){
     var col=kpTourColor(t, usedCol);
-    var next=kpLiveNextStop(t), drawn=0, line=[], noPos=0;
+    var next=kpLiveNextStop(t), drawn=0, line=[], noPos=0, seq=0;
     // Counted over the tour's own stop list, so the figures cannot disagree with
     // each other just because one order has not reached this device yet.
     var stops=(t.orders||[]).filter(function(id){ return tourEffStatus(t,id)!=='cancelled'; });
@@ -19161,20 +19174,29 @@ function kpLiveMapRender(){
         +(p.via?'<div style="color:#3730a3;font-weight:700">ท่ารถ '+esc(p.via)+' / carrier depot</div>':'')
         +(p.approx?'<div style="color:#b45309">◌ ตำแหน่งโดยประมาณ / approximate (province)</div>':'')
         +(p.suspect||p.custSuspect?'<div style="color:#dc2626;font-weight:700">⚠️ พิกัดอาจผิด / pin looks wrong</div>':'')+'</div>';
+      // Stops still to come are numbered in the order the driver reaches them, 1 =
+      // where he is heading now. Delivered ones carry no number: the array they sit
+      // in is not the order they were delivered in, so any number there would be
+      // invented. Small type on purpose — the number is for stepping through a run,
+      // the colour is what reads across the room.
+      if(!isDone) seq++;
       if(id===next){
         // The next stop pulses — a plain circle cannot be animated, so this one is
-        // a div marker. Still the biggest dot on the map, just not by much.
-        L.marker([lat,lng],{zIndexOffset:2000,icon:L.divIcon({className:'',iconSize:[12,12],iconAnchor:[6,6],tooltipAnchor:[0,-7],
-          html:'<div class="kp-next-dot" style="width:12px;height:12px;background:'+col+';border:2px solid #fff;box-shadow:0 0 10px '+col+'"></div>'})})
+        // a div marker.
+        L.marker([lat,lng],{zIndexOffset:2000,icon:L.divIcon({className:'',iconSize:[17,17],iconAnchor:[8.5,8.5],tooltipAnchor:[0,-10],
+          html:'<div class="kp-next-dot" style="width:17px;height:17px;background:'+col+';border:2px solid #fff;box-shadow:0 0 10px '+col
+            +';display:flex;align-items:center;justify-content:center;color:#0b1220;font-size:9px;font-weight:900;line-height:1">'+seq+'</div>'})})
+          .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(panelFor(lat));
+      } else if(!isDone){
+        L.marker([lat,lng],{icon:L.divIcon({className:'',iconSize:[15,15],iconAnchor:[7.5,7.5],tooltipAnchor:[0,-9],
+          html:'<div style="width:15px;height:15px;border-radius:50%;border:1.5px '+(p.approx?'dashed':'solid')+' '+col
+            +';background:rgba(15,23,42,.72);display:flex;align-items:center;justify-content:center;color:'+col
+            +';font-size:8.5px;font-weight:800;line-height:1;opacity:.9">'+seq+'</div>'})})
           .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(panelFor(lat));
       } else {
-        // Small on purpose: a tour has 20+ stops and they sit close together once
-        // the map is zoomed onto the run. A dashed ring means the spot is only the
-        // province, not the customer — otherwise the wall asserts a precision the
-        // data does not have.
-        L.circleMarker([lat,lng],{radius:isDone?4.5:4,color:col,weight:1.5,
-            opacity:isDone?1:0.45, fillColor:col, fillOpacity:isDone?0.95:0.18,
-            dashArray:p.approx?'2 2':null})
+        // Delivered: a small solid dot, nothing to read, just "this one is done".
+        L.circleMarker([lat,lng],{radius:4.5,color:col,weight:1.5,opacity:1,
+            fillColor:col, fillOpacity:0.95, dashArray:p.approx?'2 2':null})
           .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(panelFor(lat));
       }
     });
@@ -19210,7 +19232,7 @@ function kpLiveMapRender(){
   }
   var lg=document.getElementById('kp-livemap-legend');
   if(lg) lg.innerHTML = legend.length
-    ? legend.join('')+'<span style="color:#64748b;align-self:center">● ทึบ = ส่งแล้ว / solid = delivered · จาง = ยังไม่ส่ง / faded = still to come · กะพริบ = จุดถัดไป / pulsing = next stop</span>'
+    ? legend.join('')+'<span style="color:#64748b;font-size:11.5px;line-height:1.5;margin-top:4px">● ทึบ = ส่งแล้ว / solid = delivered<br>① เลข = ลำดับที่เหลือ / number = stops left, 1 = next<br>กะพริบ = กำลังไป / pulsing = heading there</span>'
     // "No tours" and "the tours have not arrived on this device yet" look identical
     // on a wall; saying the wrong one sends somebody looking for a problem.
     : ((!orders||!orders.length)
