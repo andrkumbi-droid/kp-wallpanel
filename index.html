@@ -18999,7 +18999,8 @@ function kpLiveSplitApply(){
   if(!b) return;
   b.style.display=_lmSplit?'':'none';
   if(_lmSplit && window.L && !_lmMapB){
-    _lmMapB=L.map('kp-livemap-b',{zoomControl:false,attributionControl:false});
+    // Its own zoom buttons: the south panel is a map in its own right, not a picture.
+    _lmMapB=L.map('kp-livemap-b',{zoomControl:true,attributionControl:false,zoomSnap:0.25,zoomDelta:0.5,wheelPxPerZoomLevel:120});
     _lmTilesB=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
       {subdomains:'abcd',maxZoom:19}).addTo(_lmMapB);
     _lmMapB.fitBounds([[5.6,97.5],[KP_LM_SOUTH,103.0]]);
@@ -19039,7 +19040,9 @@ function kpLiveMapApply(){
       setTimeout(function(){
         if(!_lmOn) return;
         if(!_lmMap){
-          _lmMap=L.map('kp-livemap',{zoomControl:true,attributionControl:false});
+          // Half-steps: a whole Leaflet zoom step doubles the scale, which on this
+          // screen means one press goes from "the whole run" to "one province".
+          _lmMap=L.map('kp-livemap',{zoomControl:true,attributionControl:false,zoomSnap:0.25,zoomDelta:0.5,wheelPxPerZoomLevel:120});
           // Dark tiles: a white map inside a black wall display is a lamp.
           _lmTiles=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
             {subdomains:'abcd',maxZoom:19}).addTo(_lmMap);
@@ -19142,15 +19145,19 @@ function kpLiveMapRender(){
   var legend=[], seen={}, bounds=[], usedCol={};
   tours.forEach(function(t, ti){
     var col=kpTourColor(t, usedCol);
-    var next=kpLiveNextStop(t), drawn=0, line=[], noPos=0, seq=0;
+    var next=kpLiveNextStop(t), drawn=0, line=[], noPos=0;
     // Counted over the tour's own stop list, so the figures cannot disagree with
     // each other just because one order has not reached this device yet.
     var stops=(t.orders||[]).filter(function(id){ return tourEffStatus(t,id)!=='cancelled'; });
     var done=stops.filter(function(id){ var s=tourEffStatus(t,id); return s==='delivered'||s==='shipped'; }).length;
-    (t.orders||[]).forEach(function(id){
+    (t.orders||[]).forEach(function(id, idx){
       var o=(orders||[]).find(function(x){return x.id===id;}); if(!o) return;
       var st=tourEffStatus(t,id);
       if(st==='cancelled') return;
+      // Stop number = its place in the tour, the same number the office tour card
+      // and the delivery sheet print. It does not renumber as stops get delivered,
+      // so "James is on stop 9" means the same thing on every screen.
+      var seq=idx+1;
       var isDone=(st==='delivered'||st==='shipped');
       var p=null; try{ p=_tmapStopPos(o); }catch(e){}
       if(!p){ noPos++; return; }
@@ -19179,24 +19186,26 @@ function kpLiveMapRender(){
       // in is not the order they were delivered in, so any number there would be
       // invented. Small type on purpose — the number is for stepping through a run,
       // the colour is what reads across the room.
-      if(!isDone) seq++;
       if(id===next){
-        // The next stop pulses — a plain circle cannot be animated, so this one is
-        // a div marker.
-        L.marker([lat,lng],{zIndexOffset:2000,icon:L.divIcon({className:'',iconSize:[17,17],iconAnchor:[8.5,8.5],tooltipAnchor:[0,-10],
-          html:'<div class="kp-next-dot" style="width:17px;height:17px;background:'+col+';border:2px solid #fff;box-shadow:0 0 10px '+col
-            +';display:flex;align-items:center;justify-content:center;color:#0b1220;font-size:9px;font-weight:900;line-height:1">'+seq+'</div>'})})
+        // Where he is heading: filled, ringed white and breathing.
+        L.marker([lat,lng],{zIndexOffset:2000,icon:L.divIcon({className:'',iconSize:[18,18],iconAnchor:[9,9],tooltipAnchor:[0,-11],
+          html:'<div class="kp-next-dot" style="width:18px;height:18px;background:'+col+';border:2px solid #fff;box-shadow:0 0 10px '+col
+            +';display:flex;align-items:center;justify-content:center;color:#0b1220;font-size:9.5px;font-weight:900;line-height:1">'+seq+'</div>'})})
           .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(panelFor(lat));
       } else if(!isDone){
+        // Still to come: hollow ring, so a glance separates it from a finished stop.
         L.marker([lat,lng],{icon:L.divIcon({className:'',iconSize:[15,15],iconAnchor:[7.5,7.5],tooltipAnchor:[0,-9],
           html:'<div style="width:15px;height:15px;border-radius:50%;border:1.5px '+(p.approx?'dashed':'solid')+' '+col
             +';background:rgba(15,23,42,.72);display:flex;align-items:center;justify-content:center;color:'+col
             +';font-size:8.5px;font-weight:800;line-height:1;opacity:.9">'+seq+'</div>'})})
           .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(panelFor(lat));
       } else {
-        // Delivered: a small solid dot, nothing to read, just "this one is done".
-        L.circleMarker([lat,lng],{radius:4.5,color:col,weight:1.5,opacity:1,
-            fillColor:col, fillOpacity:0.95, dashArray:p.approx?'2 2':null})
+        // Delivered: filled, and it keeps its stop number so the run can be counted
+        // off on the wall — "he is on 9 of 23" only works if 1..8 are still labelled.
+        L.marker([lat,lng],{icon:L.divIcon({className:'',iconSize:[15,15],iconAnchor:[7.5,7.5],tooltipAnchor:[0,-9],
+          html:'<div style="width:15px;height:15px;border-radius:50%;background:'+col
+            +';border:1.5px '+(p.approx?'dashed':'solid')+' '+col
+            +';display:flex;align-items:center;justify-content:center;color:#0b1220;font-size:8.5px;font-weight:900;line-height:1">'+seq+'</div>'})})
           .bindTooltip(tip,{direction:'top',opacity:1,className:'tmap-tip'}).addTo(panelFor(lat));
       }
     });
