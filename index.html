@@ -20246,6 +20246,12 @@ function handleDeliveryPhoto(input){
   if(files[0] && normPhone(_deliveryPhone) && !custGeoGet(_deliveryPhone)){
     readExifGps(files[0], function(g){
       if(g && !custGeoGet(_deliveryPhone)){
+        // Nobody is asked here — the pin is a by-product of taking the photo, so
+        // anything doubtful is simply not stored. A wrong pin is worse than none:
+        // it wins over the address everywhere and is never overwritten by itself.
+        var _o=(typeof orders!=='undefined')?orders.find(function(x){return x.id===_deliveryId;}):null;
+        var _d=custGeoDoubt(g.lat, g.lng, _o, _deliveryShipMode);
+        if(_d){ try{ console.log('[geo] photo pin not saved — '+_d); }catch(e){} return; }
         custGeoSet(_deliveryPhone, { lat:+g.lat.toFixed(6), lng:+g.lng.toFixed(6), at:new Date().toISOString(), by:'photo', src:'exif' });
         try{ dlGeoRefresh(); }catch(e){}
       }
@@ -20356,6 +20362,42 @@ function clearDeliveryPhoto(){}
 // ════════════════════════════════════════════════════════════
 function custGeoGet(phone){
   try{ var k=normPhone(phone); if(!k) return null; var m=customerMeta[k]; return (m&&m.geo&&typeof m.geo.lat==='number')?m.geo:null; }catch(e){ return null; }
+}
+// Where a delivery photo was taken is not always where the customer lives. An
+// order handed to a carrier is photographed AT THE DEPOT — and because a pin is
+// never overwritten once it exists, that yard became the customer's home for
+// good: 38 of 550 stored pins sat on a carrier yard, one of them putting a Phang
+// Nga customer 622 km away in Bangkok on the zone map (4-222, 22.08.).
+// So a position only becomes a customer pin when nothing contradicts it.
+// Returns '' when it is plausible, otherwise the reason it is not.
+function custGeoDoubt(lat, lng, o, shipMode){
+  var handover='ส่งขนส่ง ไม่ได้ส่งถึงบ้านลูกค้า / handed to a carrier, not to the customer';
+  if(shipMode) return handover;
+  if(o && (o.status==='shipped' || (String(o.shipper||'').trim() && !/ส่งเอง|รับเอง|รับกลับเอง/.test(o.shipper)))) return handover;
+  // Standing on a carrier's yard: that is the handover spot, never a home address.
+  try{
+    var best=null, bn='';
+    Object.keys(shipperLoc||{}).forEach(function(k){
+      var v=shipperLoc[k]||{}; if(typeof v.lat!=='number'||typeof v.lng!=='number') return;
+      var dx=(v.lng-lng)*111.32*Math.cos(lat*Math.PI/180), dy=(v.lat-lat)*110.57;
+      var km=Math.sqrt(dx*dx+dy*dy);
+      if(best===null||km<best){ best=km; bn=v.name||k; }
+    });
+    if(best!==null && best<0.3) return 'อยู่ที่ท่ารถ '+bn+' / on the yard of '+bn;
+  }catch(e){}
+  // Same 150 km rule the tour map flags with ⚠️, so the two cannot disagree.
+  try{
+    var p=kpCanonProvince(((o&&o.province)||'').trim()||kpExtractProvince((o&&o.address)||''));
+    if(!p) return '';
+    var g=KP_PROV_GEO[p];
+    if(!g){ var th=(window.KP_PROV_EN2TH||{})[String(p).toLowerCase().replace(/[\s\-\.]/g,'')]; if(th&&KP_PROV_GEO[th]){ p=th; g=KP_PROV_GEO[th]; } }
+    if(g){
+      var dLat=lat-g[0], dLng=(lng-g[1])*Math.cos(lat*Math.PI/180);
+      var km2=Math.round(Math.sqrt(dLat*dLat+dLng*dLng)*111);
+      if(km2>150) return 'ห่างจาก จ.'+p+' ~'+km2+' กม. / ~'+km2+' km from the province in the address';
+    }
+  }catch(e){}
+  return '';
 }
 function custGeoSet(phone, geo){
   var k=normPhone(phone); if(!k) return false;
@@ -20782,6 +20824,15 @@ function dlSaveGeo(){
   navigator.geolocation.getCurrentPosition(function(pos){
     var lat=pos.coords.latitude, lng=pos.coords.longitude;
     if(!geoSane(lat,lng)){ if(st){st.style.color='#dc2626';st.textContent='Invalid position — try again';} dlGeoRefresh(); return; }
+    // Here somebody deliberately says "I am standing at the customer", so a doubt
+    // asks instead of refusing — three stored pins came from this button being
+    // pressed on a carrier's yard.
+    var _o=(typeof orders!=='undefined')?orders.find(function(x){return x.id===_deliveryId;}):null;
+    var _d=custGeoDoubt(lat, lng, _o, _deliveryShipMode);
+    if(_d && !confirm('⚠️ '+_d+'\n\nบันทึกหมุดนี้เป็นที่อยู่ลูกค้าจริงไหม?\nSave this spot as the customer\'s location anyway?')){
+      if(st){ st.style.color='#b45309'; st.textContent='ไม่ได้บันทึก / not saved — '+_d; }
+      return;
+    }
     custGeoSet(_deliveryPhone, { lat:+lat.toFixed(6), lng:+lng.toFixed(6), acc:Math.round(pos.coords.accuracy||0), at:new Date().toISOString(), by:drName, src:'driver' });
     dlGeoRefresh();
   }, function(err){
