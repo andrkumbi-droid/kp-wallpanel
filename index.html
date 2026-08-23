@@ -10603,49 +10603,54 @@ function ofRecomputeTotal(o){
 //  So every payment now also appends a line to o.payHist, and the tour card
 //  counts only the lines that belong to that tour.
 // ══════════════════════════════════════════════════════════════════════
-function kpPayHistAdd(o, delta, method, by){
-  try{
-    if(!o || !delta) return;
-    var a=Array.isArray(o.payHist)?o.payHist.slice():(o.payHist?Object.keys(o.payHist).map(function(k){return o.payHist[k];}):[]);
-    a.push({ amt:Math.round(delta*100)/100, m:method||'', by:by||'', d:kpTodayStr(), ts:Date.now() });
-    // A wall of history helps nobody; the last handful covers every real case.
-    if(a.length>20) a=a.slice(a.length-20);
-    o.payHist=a;
-  }catch(e){}
-}
-function kpPayHistArr(o){
-  if(!o||!o.payHist) return [];
-  var a=o.payHist;
-  if(!Array.isArray(a)) a=Object.keys(a).map(function(k){ return a[k]; });
-  return a.filter(function(e){ return e && (parseFloat(e.amt)||0)!==0; });
-}
-// What was collected ON this tour: history entries dated from the day the truck
-// left. Without history (every order paid before this was built) fall back to the
-// single payment date — a payment older than the departure was not collected here.
+// NOTE: an earlier version of this kept a per-payment history on the order. It was
+// withdrawn after review: the history could not be written where it was needed
+// (the office paths sync before it is stamped), a cash+transfer stop was booked as
+// "method unknown", and a correction that nets to zero left a stale line behind —
+// every one of those understated a driver's cash. The two fields the app already
+// maintains carry enough signal, and they are always in sync with the Pay tab.
 function tourPayCO(t, o){
   var full=ofPayCO(o||{});
   if(!t||!o) return full;
   var dep=t.departedDate||'';
-  var hist=kpPayHistArr(o);
-  if(hist.length){
-    var cash=0, online=0, unknown=0, pre=0;
-    hist.forEach(function(e){
-      var amt=parseFloat(e.amt)||0;
-      if(dep && String(e.d||'') < dep){ pre+=amt; return; }      // paid before this tour
-      if(e.m==='online') online+=amt; else if(e.m==='cash') cash+=amt; else unknown+=amt;
-    });
-    return {cash:cash, online:online, unknown:unknown, pre:pre, hist:true};
-  }
   var pd=String(o.payDate||'');
   if(dep && pd && pd<dep){
-    // Everything on record was paid before this tour left.
-    return {cash:0, online:0, unknown:0, pre:(full.cash+full.online+(full.unknown||0))};
+    // The recorded payment predates this tour. But the cash/online split is a
+    // snapshot of THAT payment, while paidAmount carries the running total — so
+    // anything above the split was paid later, i.e. on this tour. (payDate is not
+    // rewritten on a top-up, which is why the split is the better marker.)
+    var _snap=(parseFloat(o.paidCash)||0)+(parseFloat(o.paidOnline)||0);
+    var _tot=(o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):0;
+    var _pre=_snap>0?_snap:_tot;
+    var _later=Math.max(0, Math.round((_tot-_pre)*100)/100);
+    if(_later>0){
+      var _m=(o.payMethod||o.payMethodPartial||'');
+      if(_m==='online') return {cash:0, online:_later, unknown:0, pre:_pre};
+      if(_m==='cash')   return {cash:_later, online:0, unknown:0, pre:_pre};
+      return {cash:0, online:0, unknown:_later, pre:_pre};
+    }
+    return {cash:0, online:0, unknown:0, pre:_pre};
   }
   return full;
 }
 function ofPayCO(o){
   var pc=parseFloat(o&&o.paidCash)||0, po=parseFloat(o&&o.paidOnline)||0;
-  if(pc>0||po>0) return {cash:pc, online:po};
+  if(pc>0||po>0){
+    // paidCash/paidOnline is a SNAPSHOT of one payment. Topping an order up later
+    // (office ticks "paid", driver collects the rest) raises paidAmount but leaves
+    // that split behind — and this function used to report the stale split, so the
+    // money paid afterwards vanished from the tour card, the Pay tab and the
+    // reports. 4-196: split says 14,175, paidAmount says 21,899, 7,724 lost.
+    var _amt=(o&&o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):0;
+    var _rest=Math.round((_amt-(pc+po))*100)/100;
+    if(_rest>0){
+      var _m=(o.payMethod||o.payMethodPartial||'');
+      if(_m==='online') po+=_rest;
+      else if(_m==='cash') pc+=_rest;
+      else return {cash:pc, online:po, unknown:_rest};   // never guess a banknote
+    }
+    return {cash:pc, online:po};
+  }
   // Mirror the order card's "paid" logic: paidAmount counts, else payMethod → full
   // total. Method falls back to payMethodPartial then cash when not explicitly set.
   var amt=(o&&o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):((o&&o.payMethod)?(parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0):0);
@@ -10713,9 +10718,6 @@ function ofPaidAmt(id, val){
   // → 💰 Live monitor. Only what came IN now: a correction downwards, or retyping
   // the same figure, is not a payment.
   if(amt-_prevPaid>0) kpPayFeedAdd({amt:amt-_prevPaid, id:id, kind:'office', by:who});
-  // …and on the order's own record, so a tour can later tell which part of the
-  // money was collected while THAT truck was out.
-  if(amt-_prevPaid!==0) kpPayHistAdd(o, amt-_prevPaid, o.payMethod||o.payMethodPartial||'', who);
 }
 function ofPaidToggle(id, checked){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
@@ -10790,6 +10792,13 @@ function ofTourPayEdit(id){
         +'<button type="button" onclick="ofTourPayClose()" style="border:none;background:var(--bg2);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:16px;color:var(--text)">✕</button>'
       +'</div>'
       +'<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Order '+id+' · Edit payment</div>'
+      // The tour row shows what THIS driver collected, this editor holds the whole
+      // order. Without saying so, someone matching the two would type the tour's
+      // share here and wipe an earlier deposit.
+      +'<div style="font-size:11.5px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:var(--rs);padding:6px 8px;margin-bottom:12px;font-weight:600">'
+        +'ยอดรวมทั้งออเดอร์ (รวมที่จ่ายมาก่อนหน้า) / this is the WHOLE order — including anything paid earlier'
+        +(ordTot?'<div style="font-weight:800;margin-top:2px">ยอดออเดอร์ / order total: '+ordTot.toLocaleString()+' ฿</div>':'')
+      +'</div>'
       +'<div style="display:flex;gap:8px;margin-bottom:12px">'
         +'<button type="button" onclick="ofTourPayPreset(\'cash\')" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:#166534;font-size:12px;font-weight:700;cursor:pointer">💵 ทั้งหมดเงินสด</button>'
         +'<button type="button" onclick="ofTourPayPreset(\'online\')" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer">🏦 ทั้งหมดโอน</button>'
@@ -10840,7 +10849,6 @@ function ofTourPaySave(id){
   try{ payUpdateBadge(); }catch(e){}
   try{ if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))_payRenderNow(); }catch(e){}
   if((cash+online)-_prevPaid>0) kpPayFeedAdd({amt:(cash+online)-_prevPaid, id:id, kind:'office', by:who});  // → 💰 Live monitor
-  if((cash+online)-_prevPaid!==0) kpPayHistAdd(o, (cash+online)-_prevPaid, o.payMethod, who);
   ofTourPayClose();
 }
 function ofPayMethodSel(id, m){
@@ -11939,7 +11947,7 @@ function ofSetDeparted(ti){
   var now=new Date(), hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   t.driving=true;
   if(!t.departedAt) t.departedAt=hhmm;   // first departure dates the tour — keep it
-  if(!t.departedDate) t.departedDate=now.toISOString().slice(0,10);
+  if(!t.departedDate) t.departedDate=kpTodayStr();   // local: an ISO date is still yesterday before 07:00 in Bangkok
   if(t.backAt||t.backDate){ t.backAt=null; t.backDate=null; }
   // Departure is the moment the goods leave the yard — who pressed it, and when, goes on record.
   try{ var _dn=(t.orders||[]).length;
@@ -17047,7 +17055,7 @@ function drDepart(){
   // The first departure is the one the whole app dates the tour by (reports,
   // tour day, payroll) \u2014 a second run after Back & Free must not move it.
   if(!tour.departedAt) tour.departedAt=hhmm;
-  if(!tour.departedDate) tour.departedDate=now.toISOString().slice(0,10);
+  if(!tour.departedDate) tour.departedDate=kpTodayStr();   // local: an ISO date is still yesterday before 07:00 in Bangkok
   if(tour.backAt||tour.backDate){ tour.backAt=null; tour.backDate=null; }  // on the road again
   try{ auditTour('depart','\ud83d\ude9a '+(tour.driverName||''),'\ud83d\ude80 \u0e2d\u0e2d\u0e01\u0e23\u0e16 / departed '+hhmm+' (driver)'); }catch(e){}
   drt('tour');
@@ -17482,7 +17490,7 @@ function drArrDepart(){
   tour.driving=true;
   var now=new Date(), hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   if(!tour.departedAt) tour.departedAt=hhmm;   // first departure dates the tour — keep it
-  if(!tour.departedDate) tour.departedDate=now.toISOString().slice(0,10);
+  if(!tour.departedDate) tour.departedDate=kpTodayStr();   // local: an ISO date is still yesterday before 07:00 in Bangkok
   if(tour.backAt||tour.backDate){ tour.backAt=null; tour.backDate=null; }
   try{ auditTour('depart','🚚 '+(tour.driverName||''),'🚀 ออกรถ / departed '+hhmm+' (driver)'); }catch(e){}
   try{ drPersistArrange(); }catch(e){}
@@ -22344,11 +22352,11 @@ function confirmDelivery(){
     }
     try{ pushSend('office','💼 Pay at office: '+id, ((ord&&ord.customer)||'')+' · '+_deliveryTotal.toLocaleString()+' ฿ — collect / record payment', {tag:'pay-office', orderId:id}); }catch(e){}
   } else if(ord){
-    // What the DRIVER just took in is the difference to whatever was already on
-    // record (a deposit collected weeks ago is not money in his pocket today).
-    var _was=parseFloat(ord.paidAmount)||0, _now=cash+online;
-    ord.payMethod=payMethod; ord.paidCash=cash; ord.paidOnline=online; ord.paidAmount=_now; ord.paidBy=drName; ord.payDate=new Date().toISOString().split('T')[0]; delete ord.payAtOffice;
-    if(_now-_was!==0) kpPayHistAdd(ord, _now-_was, payMethod, drName);
+    // payDate is the day the money arrived — the tour card reads it to tell a
+    // deposit taken weeks ago from what this driver collected today, so it is set
+    // unconditionally here (kpTodayStr, local: before 07:00 an ISO date is still
+    // yesterday in Bangkok).
+    ord.payMethod=payMethod; ord.paidCash=cash; ord.paidOnline=online; ord.paidAmount=cash+online; ord.paidBy=drName; ord.payDate=kpTodayStr(); delete ord.payAtOffice;
   }
   dlKmCommit(id);
   closeDeliveryModal();
