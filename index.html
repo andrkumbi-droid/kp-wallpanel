@@ -12563,6 +12563,9 @@ function ofKmDragEnd(){
   // Always re-render: it renumbers the stops and replays whatever arrived while
   // the drag was holding the list still.
   try{ ofRenderTour(); }catch(e){}
+  // The zone map numbers its pins by the same array position, so a reorder there
+  // has to redraw the pins and the route line as well.
+  try{ if(_tmapTid) _tmapRender(); }catch(e){}
 }
 // Take the calculated km payout over into the normal "Tour pay" field.
 function ofKmUsePay(tourId){
@@ -25996,9 +25999,22 @@ function calcViz() {
 
 <!-- 🌐 TOUR ZONE MAP — every stop of a tour (numbered) + free same-zone orders (Leaflet, lazy) -->
 <style>
-#tourmap-modal .modal{border-radius:16px;max-width:980px;width:96%;max-height:94vh;display:flex;flex-direction:column;padding:12px}
-#tourmap-map{width:100%;height:60vh;min-height:280px;border-radius:var(--rs);overflow:hidden;background:var(--bg2);z-index:0}
+/* Centred, not a bottom sheet: this one is a working window, not a quick action. */
+#tourmap-modal{align-items:center;padding:12px}
+#tourmap-modal .modal{border-radius:16px;max-width:1180px;width:100%;max-height:94vh;display:flex;flex-direction:column;padding:12px}
+#tourmap-split{display:flex;gap:10px;min-height:0;flex:1}
+#tourmap-map{flex:1 1 auto;min-width:0;height:66vh;min-height:280px;border-radius:var(--rs);overflow:hidden;background:var(--bg2);z-index:0}
+/* Stop list beside the map — same drag mechanics as the KM list on the tour card. */
+#tourmap-side{flex:0 0 288px;max-width:288px;display:flex;flex-direction:column;min-height:0}
+#tourmap-list{overflow-y:auto;flex:1;padding-right:2px}
+#tourmap-list .kmrow{padding:5px 6px;border-radius:var(--rs);border:1px solid transparent}
+#tourmap-list .kmrow:hover{background:var(--bg2);border-color:var(--border)}
 .leaflet-tooltip.tmap-tip{white-space:normal;max-width:280px}
+@media(max-width:900px){
+  #tourmap-split{flex-direction:column}
+  #tourmap-map{height:44vh}
+  #tourmap-side{flex:0 0 auto;max-width:none;max-height:34vh}
+}
 </style>
 <div class="modal-overlay" id="tourmap-modal">
   <div class="modal">
@@ -26007,7 +26023,13 @@ function calcViz() {
       <button type="button" class="mclose" onclick="closeTourMap()"><i class="ti ti-x"></i></button>
     </div>
     <div id="tourmap-legend" style="font-size:11px;color:var(--text2);margin-bottom:6px;display:flex;gap:12px;flex-wrap:wrap"></div>
-    <div id="tourmap-map"></div>
+    <div id="tourmap-split">
+      <div id="tourmap-map"></div>
+      <div id="tourmap-side">
+        <div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">☰ ลำดับส่ง / delivery order <span style="font-weight:600;text-transform:none">— ลากเพื่อจัดลำดับ / drag to reorder</span></div>
+        <div id="tourmap-list"></div>
+      </div>
+    </div>
     <div id="tourmap-missing" style="font-size:11px;color:var(--text2);margin-top:6px"></div>
   </div>
 </div>
@@ -26593,7 +26615,47 @@ var KP_PROV_GEO={
   'ตรัง':[7.5563,99.6114],'พัทลุง':[7.6167,100.0743],'ปัตตานี':[6.8692,101.2550],
   'ยะลา':[6.5411,101.2803],'นราธิวาส':[6.4254,101.8253]
 };
-var _tmapMap=null,_tmapLayer=null,_tmapTid=null,_tmapFitted=false,_tmapTimer=null;
+var _tmapMap=null,_tmapLayer=null,_tmapTid=null,_tmapFitted=false,_tmapTimer=null,_tmapMarkers={};
+// Clicking a row in the side list flies to that stop and opens its card.
+function tmapGoto(oid){
+  var m=_tmapMarkers[String(oid)];
+  if(!m||!_tmapMap) return;
+  var ll=m.getLatLng();
+  _tmapMap.setView(ll, Math.max(_tmapMap.getZoom(), 11), {animate:true});
+  try{ m.openPopup(); }catch(e){}
+}
+// The delivery-order list beside the map. Same classes and the same drag handler as
+// the KM list on the tour card (.ofkmlist/.kmrow/.kmgrab → ofKmDragStart), so a drop
+// writes t.orders exactly the way the office already knows — and the pins follow,
+// because both number the stops by array position.
+function _tmapRenderList(t){
+  var box=document.getElementById('tourmap-list'); if(!box) return;
+  var ro=!!window.ofReadOnly;
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  var rows=(t.orders||[]).map(function(id, idx){
+    var o=(orders||[]).find(function(x){return x.id===id;})||{};
+    var st=tourEffStatus(t,id);
+    var done=(st==='delivered'||st==='shipped'), can=(st==='cancelled');
+    var col=can?'var(--text3)':done?'#16a34a':'#2563eb';
+    var pos=_tmapPos(o);
+    var mark=!pos?'<span title="ไม่มีพิกัด / no location" style="color:#b45309">🚫</span>'
+             :pos.suspect?'<span title="หมุดอาจผิด / suspect pin" style="color:#dc2626">⚠️</span>'
+             :pos.approx?'<span title="ประมาณจากจังหวัด / province only" style="opacity:.5">◌</span>':'';
+    return '<div class="kmrow" data-oid="'+esc(id)+'" style="display:flex;align-items:center;gap:6px;font-size:12px;'+(can?'opacity:.5;':'')+'">'
+      +(ro?'':'<span class="kmgrab" title="ลากเพื่อจัดลำดับ / drag to reorder" onpointerdown="ofKmDragStart(event,this)" onclick="event.stopPropagation()">☰</span>')
+      +'<span onclick="tmapGoto(\''+String(id).replace(/['"\\]/g,'')+'\')" style="flex:1;min-width:0;cursor:pointer;display:flex;align-items:center;gap:6px">'
+        +'<b style="flex-shrink:0;min-width:19px;text-align:right;color:'+col+'">'+(idx+1)+'.</b>'
+        +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+          +'<b>'+esc(id)+'</b> '+mark
+          +'<span style="color:var(--text2)"> · '+esc(((o.province||'').trim()||o.zone||'—'))+'</span>'
+        +'</span>'
+      +'</span>'
+      +(done?'<span title="ส่งแล้ว / delivered" style="flex-shrink:0;color:#16a34a;font-weight:800">✓</span>':'')
+      +'</div>';
+  }).join('');
+  box.innerHTML='<div class="ofkmlist" data-tid="'+String(t.id).replace(/["\\]/g,'')+'">'
+    +(rows||'<div style="font-size:12px;color:var(--text2);padding:6px 2px">—</div>')+'</div>';
+}
 // Zone of an order — the stored zone first, else derived from province/address.
 function _tmapZoneOf(o){
   if(o && o.zone && o.zone!=='Other') return o.zone;
@@ -26694,6 +26756,7 @@ function ofTourMap(tid){
   if(_tmapTimer){ clearInterval(_tmapTimer); }
   _tmapTimer=setInterval(function(){
     if(!_tmapTid||!_tmapMap){ clearInterval(_tmapTimer); _tmapTimer=null; return; }
+    if(_kmDragRow) return;               // a row is being carried — hold still
     if(document.querySelector('#tourmap-map .leaflet-popup, #tourmap-map .leaflet-tooltip')) return;
     try{ _tmapRender(); }catch(e){}
   },15000);
@@ -26706,8 +26769,11 @@ function closeTourMap(){
 function _tmapRender(){
   var t=activeTours.find(function(x){return x.id===_tmapTid;});
   if(!t||!_tmapMap||!window.L) return;
+  if(_kmDragRow) return;                 // never rebuild the list under a dragging finger
+  try{ _tmapRenderList(t); }catch(e){}
   if(_tmapLayer){ try{ _tmapMap.removeLayer(_tmapLayer); }catch(e){} }
   _tmapLayer=L.layerGroup().addTo(_tmapMap);
+  _tmapMarkers={};
   var seen={}, bounds=[], noPos=[], seqPts=[], nSuspect=0;
   var place=function(o,label,color,x){
     var p=_tmapPos(o);
@@ -26720,10 +26786,11 @@ function _tmapRender(){
     x.approx=p.approx; x.prov=p.prov; x.suspect=p.suspect;
     if(p.suspect){ nSuspect++; color='#dc2626'; }
     var html=_tmapCard(o,t,x);
-    L.marker([p.lat,p.lng],{icon:_tmapIcon(label,color,p.approx),zIndexOffset:x.free?0:1000})
+    var mk=L.marker([p.lat,p.lng],{icon:_tmapIcon(label,color,p.approx),zIndexOffset:x.free?0:1000})
       .bindTooltip(html,{direction:'top',opacity:1,className:'tmap-tip'})
       .bindPopup(html,{maxWidth:300})
       .addTo(_tmapLayer);
+    _tmapMarkers[String(o.id)]=mk;      // so the side list can fly to this stop
     bounds.push([p.lat,p.lng]);
     return p;
   };
