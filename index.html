@@ -9156,7 +9156,7 @@ function ofOrderInfo(orderId){
   var labelBtn = '<button type="button" onclick="printOrderLabel(\''+String(o.id).replace(/['\\]/g,'')+'\')" '
     +'style="width:100%;margin-bottom:10px;padding:11px;border:none;border-radius:var(--rs);background:#1d4ed8;color:#fff;font-size:13px;font-weight:700;cursor:pointer">'
     +'🏷️ พิมพ์ป้ายติดกล่อง / Print carton label</button>';
-  var body = labelBtn + shipSection +
+  var body = labelBtn + shipSection + oimAdjSection(o.id) +
     '<div style="margin-bottom:6px">'+
       row('👤','ชื่อ / Name', esc(o.customer||''))+
       row('📞','เบอร์ / Phone', (o.phone&&o.phone!=='—')?esc(o.phone):'')+
@@ -11544,7 +11544,7 @@ function ofRenderTour(){
       return '<div class="kmrow" data-oid="'+id+'" style="padding:4px 0;min-width:0">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;flex-wrap:wrap;gap:4px 8px;min-width:0">'+
         kmMove+
-        '<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/[\'\\]/g,'')+'\')" title="Order info / ข้อมูลออเดอร์" style="font-weight:600;cursor:pointer;min-width:0;flex:1 1 auto">'+(_kmOn?'<b style="color:#1d4ed8">'+(_oi+1)+'.</b> ':'')+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+kmChip+conflictChip+tourAdjChip(t,id)+(ro?'':' <span onclick="event.stopPropagation();ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="color:var(--text2);font-size:12px;cursor:pointer;padding:0 3px">▾</span>'+(tourAdjOf(t,id).length?'':' <span onclick="event.stopPropagation();ofTourAdjOpen(\''+t.id+'\',\''+String(id).replace(/[\'"\\]/g,'')+'\')" title="หัก / เพิ่ม ค่าทัวร์ — เช่น ของเสียหาย, ค่าเรือ / deduct from or add to the tour pay — e.g. damage, ferry" style="font-size:12px;cursor:pointer;padding:0 3px;opacity:.55">💸</span>'))+'</span>'+
+        '<span onclick="event.stopPropagation();ofOrderInfo(\''+String(id).replace(/[\'\\]/g,'')+'\')" title="Order info / ข้อมูลออเดอร์" style="font-weight:600;cursor:pointer;min-width:0;flex:1 1 auto">'+(_kmOn?'<b style="color:#1d4ed8">'+(_oi+1)+'.</b> ':'')+((ord&&ord.priority&&st!=='delivered'&&st!=='cancelled')?'⭐ ':'')+id+(_opin?' <a href="'+_opin+'" target="_blank" onclick="event.stopPropagation()" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(ord&&ord.ctn?' <span style="font-size:11px;font-weight:600;color:var(--green)">📦'+ord.ctn+'</span>':'')+(ord&&ord.bundle?' <span style="font-size:11px;font-weight:600;color:#ea580c">🧶'+ord.bundle+'</span>':'')+shipBadge+kmChip+conflictChip+tourAdjChip(t,id)+(ro?'':' <span onclick="event.stopPropagation();ofTourShipToggle(\''+wrapId+'\')" title="Set shipper / กำหนดขนส่ง" style="color:var(--text2);font-size:12px;cursor:pointer;padding:0 3px">▾</span>')+'</span>'+
         '<div style="display:flex;align-items:center;gap:4px 6px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;min-width:0">'+
         '<span style="font-size:11px;color:var(--text2);white-space:nowrap">'+(ord?((ord.province||'').trim()||ord.zone||''):'')+'</span>'+
         payInline+
@@ -11570,7 +11570,6 @@ function ofRenderTour(){
         '</div>'+
         '</div>'+
         ofDelNoteHTML(ord,'margin-top:3px')+
-        tourAdjRowsHTML(t, id, ro)+
         (ro?'':'<div id="'+wrapId+'" style="display:none;margin-top:5px">'+
           '<select onchange="ofTourSetShipper(\''+String(id).replace(/['\\]/g,'')+'\',\''+driverEsc+'\',this.value)" style="width:100%;padding:6px 8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;cursor:pointer">'+
             shipOpts+
@@ -14394,7 +14393,10 @@ function _tourAdjSave(t, rerender){
   // it has to learn about a new deduction right away, not only at tour end.
   try{ if(tidOk(t.tid)) tourRegUpsert(t); }catch(e){}
   try{ ofRenderTourIds(); }catch(e){}
-  if(rerender!==false){ try{ ofRenderTour(); }catch(e){} }
+  if(rerender!==false){
+    try{ ofRenderTour(); }catch(e){}
+    try{ oimAdjRefresh(); }catch(e){}   // the order window is where the lines are edited
+  }
 }
 function _tourAdjFind(tourId, adjId){
   var t=(activeTours||[]).find(function(x){return x.id===tourId;}); if(!t) return null;
@@ -14410,8 +14412,6 @@ function ofTourAdjAdd(tourId, oid){
              sign:0, amt:0, note:'', by:ofWho(), ts:Date.now() });
   t.adj=arr;
   _tourAdjSave(t);
-  // The block must stay open across the re-render, or the new line is invisible.
-  try{ var w=document.getElementById('tadj_'+t.id+'_'+safeOrderId(oid)); if(w) w.style.display='block'; }catch(e){}
 }
 // 0 → − → + → 0. One button, three states, no dropdown.
 function ofTourAdjSign(tourId, adjId){
@@ -14463,26 +14463,21 @@ function ofTourAdjDel(tourId, adjId){
   _tourAdjSave(h.t);
   try{ auditTour('adjust','🚚 '+(h.t.driverName||''), '🗑 ลบรายการปรับ / adjustment removed · '+(h.e.oid||'')+' · '+tourAdjFmt(v)+(h.e.note?' · '+h.e.note:'')); }catch(e){}
 }
-// Tapping 💸 on an order that has nothing yet goes straight to an empty line —
-// opening a block whose only content is an "add" button is one tap too many.
-function ofTourAdjOpen(tourId, oid){
-  var t=(activeTours||[]).find(function(x){return x.id===tourId;}); if(!t) return;
-  if(!tourAdjOf(t,oid).length){ if(window.ofReadOnly) return; ofTourAdjAdd(tourId,oid); return; }
-  try{ ofToggleMore('tadj_'+t.id+'_'+safeOrderId(oid)); }catch(e){}
-}
-// The compact chip on the order row: shows the net effect, opens the editor.
+// The compact chip on the tour's order row: shows the net effect and opens the
+// order window, which is where the lines are actually edited.
 function tourAdjChip(t, oid){
   var list=tourAdjOf(t,oid); if(!list.length) return '';
   var v=list.reduce(function(a,e){ return a+tourAdjVal(e); },0);
   var pend=list.filter(function(e){ return tourAdjSign(e)===0; }).length;
   var bg=v<0?'#fee2e2':v>0?'#dcfce7':'var(--bg2)', c=v<0?'#b91c1c':v>0?'#166534':'var(--text2)';
-  return ' <span onclick="event.stopPropagation();ofTourAdjOpen(\''+String(t.id).replace(/['"\\]/g,'')+'\',\''+String(oid).replace(/['"\\]/g,'')+'\')"'
-    +' title="ปรับค่าทัวร์ / pay adjustment — tap to open" style="font-size:10px;font-weight:800;color:'+c+';background:'+bg+';border-radius:8px;padding:1px 6px;white-space:nowrap;cursor:pointer">💸 '
+  return ' <span onclick="event.stopPropagation();ofOrderInfo(\''+String(oid).replace(/['"\\]/g,'')+'\')"'
+    +' title="ปรับค่าทัวร์ / pay adjustment — tap to open the order" style="font-size:10px;font-weight:800;color:'+c+';background:'+bg+';border-radius:8px;padding:1px 6px;white-space:nowrap;cursor:pointer">💸 '
     +(v===0?'0 ฿':tourAdjFmt(v))+(pend?' ⏳'+pend:'')+'</span>';
 }
-// Editor block under one order row: note · 0/−/+ · amount · ✕, plus "add another".
-function tourAdjRowsHTML(t, oid, ro){
-  var wrapId='tadj_'+t.id+'_'+safeOrderId(oid);
+// The editor rows themselves: note · 0/−/+ · amount · ✕, plus "add another".
+// Lives in the order window (ofOrderInfo), not on the tour card — the tour row is
+// far too narrow for a reason field, and the office opens the order anyway.
+function tourAdjRowsInner(t, oid, ro){
   var oidJs=String(oid).replace(/['"\\]/g,'');
   var tidJs=String(t.id).replace(/['"\\]/g,'');
   var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
@@ -14516,10 +14511,42 @@ function tourAdjRowsHTML(t, oid, ro){
   }).join('');
   var addBtn = ro ? '' :
     '<button type="button" onclick="event.stopPropagation();ofTourAdjAdd(\''+tidJs+'\',\''+oidJs+'\')"'
-    +' title="เพิ่มอีกรายการ / add another line" style="font-size:10.5px;padding:3px 9px;border:1px dashed var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);cursor:pointer;font-weight:700">➕ เพิ่มรายการ / add</button>';
-  return '<div id="'+wrapId+'" style="display:none;margin-top:5px;padding:6px 8px;background:var(--bg2);border-radius:var(--rs)">'
-    +'<div style="font-size:10px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px">💸 หัก / เพิ่ม ค่าทัวร์ · pay adjustment</div>'
-    +rows+addBtn+'</div>';
+    +' title="เพิ่มอีกรายการ / add another line" style="font-size:11.5px;padding:6px 10px;border:1px dashed var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);cursor:pointer;font-weight:700">➕ เพิ่มรายการ / add a line</button>';
+  return rows+addBtn;
+}
+// ── The 💸 block inside the order window ────────────────────────────────
+// Only for an order that sits on a LIVE tour: this is the driver's pay, and the
+// pay belongs to the tour that is running. Re-rendered in place after every
+// change so the modal never shows a stale amount.
+function oimAdjTourOf(oid){
+  return (activeTours||[]).find(function(t){ return t && (t.orders||[]).indexOf(oid)>=0; })||null;
+}
+function oimAdjSection(oid){
+  var t=oimAdjTourOf(oid);
+  if(!t) return '';
+  return '<div id="oim-adj" data-oid="'+String(oid).replace(/["\\]/g,'')+'" style="background:var(--bg2);border-radius:var(--rs);padding:8px 10px;margin-bottom:12px">'
+    + oimAdjInner(t, oid) + '</div>';
+}
+function oimAdjInner(t, oid){
+  var ro=!!window.ofReadOnly;
+  var list=tourAdjOf(t,oid);
+  var sum=list.reduce(function(a,e){ return a+tourAdjVal(e); },0);
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
+  return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px">'
+      +'<span style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.04em">💸 หัก / เพิ่ม ค่าทัวร์ · Driver pay</span>'
+      +(sum!==0?'<span style="font-size:13px;font-weight:800;color:'+(sum<0?'#b91c1c':'#166534')+';white-space:nowrap">'+tourAdjFmt(sum)+'</span>':'')
+    +'</div>'
+    +'<div style="font-size:11px;color:var(--text2);margin-bottom:6px">🚚 '+esc(t.driverName||'')+(tidOk(t.tid)?' · '+esc(t.tid):'')
+      +' — หักหรือเพิ่มจากค่าทัวร์ของคนขับ / comes off (or is added to) this driver\'s tour pay</div>'
+    + tourAdjRowsInner(t, oid, ro);
+}
+// Called after every change while the order window is open.
+function oimAdjRefresh(){
+  var box=document.getElementById('oim-adj'); if(!box) return;
+  var oid=box.getAttribute('data-oid'); if(!oid) return;
+  var t=oimAdjTourOf(oid);
+  if(!t){ box.innerHTML=''; return; }
+  box.innerHTML=oimAdjInner(t, oid);
 }
 // The adjustment block in the tour's pay box: one line per entry, then the total.
 function tourAdjSummaryHTML(t){
