@@ -12299,6 +12299,7 @@ function ofLalaDelFeeSlip(ti,pi){
   var t=activeTours[ti]; if(!t||!t.carFeeSlips) return;
   if(!confirm('Remove slip? / ลบสลิป?')) return;
   t.carFeeSlips.splice(pi,1);
+  if(!t.carFeeSlips.length && t.payMethodTour!=='cash') delete t.paidAmtTour;
   syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){}
   ofRenderLala(); try{ ofRenderTour(); }catch(e){}
 }
@@ -14461,6 +14462,10 @@ function ofTourAddSlip(input, tourId){
     compressPhotoFile(f, function(dataUrl){
       t.carFeeSlips.push(dataUrl); done++;
       if(done===total){
+        // The slip alone says "paid" but not how much. Remember the amount it was
+        // paid against, so a deduction booked afterwards shows up as a difference
+        // in the settlement instead of quietly cancelling itself out.
+        if(!t.paidAmtTour){ try{ var _a=tourNetPay(t); if(_a>0) t.paidAmtTour=_a; }catch(e){} }
         syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){}
         try{ auditPhoto('🧾 สลิปค่ารถ / Car-fee slip', _tourLbl(t), _photoWho(), {area:'tour', n:total}); }catch(e){}
         try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){}
@@ -14473,6 +14478,10 @@ function ofTourDelSlip(tourId, pi){
   var t=activeTours.find(function(x){return x.id===tourId;}); if(!t||!t.carFeeSlips) return;
   if(!confirm('Remove slip? / ลบสลิป?')) return;
   t.carFeeSlips.splice(pi,1);
+  // Last slip gone and no cash payment: the tour is unpaid again, so the recorded
+  // amount goes with it — otherwise the settlement keeps deducting a payment that
+  // nothing on the card claims any more.
+  if(!t.carFeeSlips.length && t.payMethodTour!=='cash') delete t.paidAmtTour;
   syncTours(); try{ tourSyncPaidFromTour(t); }catch(e){}
   try{ ofRenderTour(); }catch(e){} try{ ofRenderLala(); }catch(e){}
 }
@@ -14537,28 +14546,36 @@ function tourSettleCalc(t){
   // − 11,500 − 20,000 above a bold "driver keeps 0") and dropped the shortfall.
   var due=pay-adv+adj;
   // Pay already handed over (cash button, slip, or a joint payout on the tour-ID
-  // tab)? Then nothing more comes out of the bag — otherwise he is paid twice.
+  // tab)? Then it must not come out of the bag a second time.
   var st={paid:false}; try{ st=tourPayState(t)||{paid:false}; }catch(e){}
-  // Already settled: nothing more comes out of the bag — EXCEPT when it was settled
-  // in cash, because that money was taken out of this very bag already, so the shop
-  // still receives the rest, not the lot.
-  var driverGets=st.paid?(st.how==='cash'?due:0):due;
-  // What was actually handed over, where we know it (recorded since 24.08). If the
-  // pay or a deduction moved afterwards, the settlement has to say so instead of
-  // calling the tour square.
-  var paidAmt=st.paid?(parseFloat(t.paidAmtTour)||0):0;
-  var payGap=(st.paid && paidAmt>0) ? Math.round((Math.max(0,due)-paidAmt)*100)/100 : 0;
+  // How much went to him, and — this is what the bag cares about — whether it came
+  // OUT of this bag. The amount is recorded since 24.08.; on older tours only the
+  // fact survives, so the sheet assumes the pay of the moment AND says that it is
+  // assuming (settledKnown) rather than quietly inventing the figure.
+  var rec=st.paid?(parseFloat(t.paidAmtTour)||0):0;
+  var settledKnown=(!st.paid || rec>0);
+  var settled=st.paid?(rec>0?rec:Math.max(0,due)):0;
+  var fromBag=(st.paid && st.how==='cash')?settled:0;
+  // What is still open between the two of them. Deliberately NOT clamped and NOT
+  // switched off by "already paid": a deduction booked after the money went out
+  // leaves him owing the difference, and forcing this to zero made that debt
+  // disappear from every total on the sheet.
+  var open=Math.round((due-settled)*100)/100;
+  // The bag is lighter by whatever he already took out of it, so a settlement that
+  // moved afterwards cannot ask the shop to count cash that is no longer there.
+  var bag=Math.round((cash-fromBag)*100)/100;
   // The card can show a pay PROPOSAL (cartons × rate, or the km calculation) that
   // nobody has carried into driverPay yet. Settling then prints "tour pay 0" and
   // hands the whole bag to the shop — on a page the driver signs. Report it.
   var prop=tourPayProposal(t);
   return { cash:cash, online:online, unknown:unknown, pay:pay, adv:adv, adj:adj,
-           due:due, alreadyPaid:!!st.paid, paidHow:st.how||'', paidAmt:paidAmt, payGap:payGap,
+           due:due, alreadyPaid:!!st.paid, paidHow:st.how||'', paidAmt:rec,
+           settled:settled, settledKnown:settledKnown, fromBag:fromBag, bag:bag,
            proposal:prop, payMissing:(pay<=0 && prop>0),
            // A shortfall is NOT cash the shop receives: the bag holds what it holds.
            // It is stated once, on its own line, as what the driver has to bring back.
-           driverGets:driverGets, owed:(driverGets<0?-driverGets:0),
-           shopGets:cash-Math.max(0, driverGets) };
+           driverGets:open, owed:(open<0?-open:0),
+           shopGets:bag-Math.max(0, open) };
 }
 // What the card is currently proposing as the tour pay, without writing it.
 function tourPayProposal(t){
@@ -14611,8 +14628,13 @@ function ofTourSettle(tourId){
       +'<span>'+esc(e.oid||'')+' · '+esc(e.note||'—')+'</span>'
       +'<span style="font-weight:700;color:'+(v<0?'#b91c1c':'#166534')+';white-space:nowrap">'+tourAdjFmt(v)+'</span></div>';
   }).join('');
+  // The settlement STATE belongs in the snapshot as well, not just the figures: a
+  // colleague pressing "paid in cash" on another device moves no figure at all
+  // (his due comes out of the bag either way), yet the printed sheet would gain a
+  // line saying the money has already changed hands.
   window._tsetShown={ id:tourId, cash:s.cash, online:s.online, unknown:s.unknown,
                       pay:s.pay, adv:s.adv, adj:s.adj, driverGets:s.driverGets, shopGets:s.shopGets,
+                      owed:s.owed, alreadyPaid:s.alreadyPaid, paidHow:s.paidHow, settled:s.settled, fromBag:s.fromBag,
                       stops:(t.orders||[]).filter(function(id){ return ((t.status||{})[id]||'')==='delivered'; }).length };
   var body='<div style="font-size:12px;color:var(--text2);margin-bottom:10px">🚚 '+esc(t.driverName||'')+(tidOk(t.tid)?' · '+esc(t.tid):'')+'</div>'
     + (s.payMissing?'<div style="font-size:12px;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:var(--rs);padding:7px 9px;margin-bottom:10px;font-weight:700">⚠️ ยังไม่ได้ใส่ค่าทัวร์ — การ์ดเสนอ '+s.proposal.toLocaleString()+' ฿ กด "→ ค่าทัวร์" ก่อนปิดยอด<div style="font-weight:500">the tour pay has not been entered yet; the card proposes '+s.proposal.toLocaleString()+' ฿ — press "→ ค่าทัวร์" first, or this settles at zero</div></div>':'')
@@ -14623,28 +14645,31 @@ function ofTourSettle(tourId){
     + (s.adv>0?row('−', '🤝 เบิกก่อนออกทัวร์ / advance, already handed over', s.adv.toLocaleString()+' ฿', {col:'#b45309'}):'')
     + (s.adj!==0?row(s.adj<0?'−':'+', '💸 หัก / เพิ่ม · adjustments', Math.abs(s.adj).toLocaleString()+' ฿', {col:s.adj<0?'#b91c1c':'#166534'}):'')
     + (adjRows?'<div style="margin:-2px 0 6px;padding:5px 8px 5px 22px;background:var(--bg2);border-radius:var(--rs)">'+adjRows+'</div>':'')
-    // Same explicit step as the printed sheet when the pay went out by transfer.
-    + ((s.alreadyPaid && s.paidHow!=='cash' && s.due>0)
-        ? row('−', '✅ จ่ายแล้วโดยโอน / already settled by transfer', s.due.toLocaleString()+' ฿', {col:'#166534'}) : '')
-    + (s.alreadyPaid?'<div style="font-size:11.5px;color:'+(s.payGap?'#b45309':'#166534')+';background:'+(s.payGap?'#fef3c7':'var(--green-bg)')+';border-radius:var(--rs);padding:6px 8px;margin:6px 0 6px 22px;font-weight:700">'
-        +'✅ ค่าทัวร์จ่ายไปแล้ว ('+(s.paidHow==='cash'?'เงินสด / cash':'โอน / transfer')+')'+(s.paidAmt?' · '+s.paidAmt.toLocaleString()+' ฿':'')
-        +(s.paidHow==='cash'?'<div style="font-weight:500">จ่ายจากเงินในกระเป๋านี้ / taken out of this bag</div>':'<div style="font-weight:500">ไม่ได้จ่ายจากเงินในกระเป๋า / not out of the bag</div>')
-        +(s.payGap>0?'<div style="color:#b45309">⚠️ ยังขาดอีก '+s.payGap.toLocaleString()+' ฿ — ค่าทัวร์เปลี่ยนหลังจ่ายแล้ว / the pay changed after it was settled, this much is still owed to him</div>':'')
-        +(s.payGap<0?'<div style="color:#b45309">⚠️ จ่ายเกินไป '+Math.abs(s.payGap).toLocaleString()+' ฿ — ค่าทัวร์ลดลงหลังจ่ายแล้ว / the pay dropped after it was settled, he was overpaid by this much</div>':'')
-      +'</div>':'')
+    // Already paid: the due first, then the payment itself as a step, so what is
+    // left open between the two of them is a result and not an assertion.
+    + (s.settled>0?(s.due<0
+        ? row('=', '👤 คนขับติดร้านอยู่ / he is already short by', Math.abs(s.due).toLocaleString()+' ฿', {col:'#b91c1c'})
+        : row('=', '👤 สิทธิ์ของคนขับ / what he is due for this tour', s.due.toLocaleString()+' ฿')):'')
+    + (s.settled>0?row('−', (s.paidHow==='cash'
+          ? '✅ จ่ายไปแล้วเป็นเงินสด — จากกระเป๋านี้ / already paid in cash, out of this bag'
+          : '✅ จ่ายไปแล้วโดยโอน — ไม่ใช่จากกระเป๋า / already paid by transfer, not out of the bag'),
+        s.settled.toLocaleString()+' ฿', {col:'#166534'}):'')
     + (s.owed>0
         ? row('=', '👤 คนขับต้องคืนร้าน / driver owes the shop', s.owed.toLocaleString()+' ฿', {big:true, col:'#b91c1c'})
-        : row('=', '👤 คนขับรับ / driver keeps', s.driverGets.toLocaleString()+' ฿', {big:true, col:'#1d4ed8'}))
-    // Second step: the bag, less what he keeps (or plus what he owes).
-    + row('', '💵 เงินสดที่เก็บได้ / cash in the bag', s.cash.toLocaleString()+' ฿', {gap:true})
+        : row('=', (s.settled>0?'👤 ยังต้องจ่ายเพิ่ม / still to hand over to him':'👤 คนขับรับ / driver keeps'), s.driverGets.toLocaleString()+' ฿', {big:true, col:'#1d4ed8'}))
+    + (s.settled>0 && s.driverGets!==0?'<div style="font-size:11.5px;color:#b45309;background:#fef3c7;border-radius:var(--rs);padding:6px 8px;margin:6px 0 0 22px;font-weight:700">⚠️ ค่าทัวร์หรือรายการหักเปลี่ยนหลังจ่ายไปแล้ว<div style="font-weight:500">the pay or a deduction moved after the money had already gone out — this is the difference</div></div>':'')
+    + (!s.settledKnown?'<div style="font-size:11.5px;color:#b45309;background:#fef3c7;border-radius:var(--rs);padding:6px 8px;margin:6px 0 0 22px;font-weight:700">⚠️ ไม่ได้บันทึกยอดที่จ่ายไป — ใบนี้ถือว่าเท่ากับค่าทัวร์ปัจจุบัน<div style="font-weight:500">the amount already paid was never recorded, so this sheet assumes it was the pay as it stands — check the slip</div></div>':'')
+    // Second step: the bag, less what already left it, less what he still gets.
+    + row('', '💵 เงินสดที่เก็บได้ / cash collected', s.cash.toLocaleString()+' ฿', {gap:true})
+    + (s.fromBag>0?row('−', '💵 ค่าทัวร์ที่หยิบจากกระเป๋านี้แล้ว / his pay, already taken out of this bag', s.fromBag.toLocaleString()+' ฿', {col:'#1d4ed8'}):'')
     + (s.owed>0
         ? row('+', '👤 ที่คนขับต้องคืน / what he brings back', s.owed.toLocaleString()+' ฿', {col:'#b91c1c'})
-        : row('−', '👤 คนขับรับ / driver keeps', s.driverGets.toLocaleString()+' ฿', {col:'#1d4ed8'}))
+        : (s.driverGets>0||!s.settled)?row('−', (s.settled>0?'👤 ที่ยังต้องจ่ายเพิ่ม / still handed over now':'👤 คนขับรับ / driver keeps'), s.driverGets.toLocaleString()+' ฿', {col:'#1d4ed8'}):'')
     + (s.shopGets<0
         ? row('=', '🏪 ร้านต้องจ่ายเพิ่ม / shop has to add', Math.abs(s.shopGets).toLocaleString()+' ฿', {big:true, col:'#b91c1c'})
         : row('=', '🏪 ร้านรับ / shop receives', (s.shopGets+(s.owed||0)).toLocaleString()+' ฿', {big:true, col:'#166534'}))
     + (s.shopGets<0?'<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-top:4px">⚠️ เงินสดไม่พอจ่ายค่าทัวร์ — ร้านต้องจ่ายเพิ่ม '+Math.abs(s.shopGets).toLocaleString()+' ฿<div style="font-weight:500">the cash collected does not cover his pay — the shop has to add this</div></div>':'')
-    + (s.owed>0?'<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-top:4px">⚠️ หัก/เบิกมากกว่าค่าทัวร์ — คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสดในกระเป๋า<div style="font-weight:500">the deductions and the advance exceed his pay — he brings this back on top of the cash in the bag</div></div>':'')
+    + (s.owed>0?'<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-top:4px">⚠️ คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสดในกระเป๋า<div style="font-weight:500">he brings this back on top of the cash in the bag — the deductions, the advance or a pay already handed over exceed what he earned</div></div>':'')
     + (s.adv>0?'<div style="font-size:11px;color:var(--text2);margin-top:8px">🤝 เบิกก่อนออกทัวร์แล้ว '+s.adv.toLocaleString()+' ฿ — จ่ายไปแล้ว ไม่ต้องจ่ายซ้ำ / the advance was handed over before the tour, do not pay it again</div>':'');
   var html='<div id="tset-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)ofTourSettleClose()">'
     +'<div style="background:var(--bg);border-radius:14px;max-width:400px;width:100%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,0.4);max-height:92vh;overflow:auto">'
@@ -14673,16 +14698,26 @@ function ofTourSettlePrint(tourId){
   // the office has not seen — show the new ones and let them look again.
   var shown=window._tsetShown;
   var nowStops=(t.orders||[]).filter(function(id){ return ((t.status||{})[id]||'')==='delivered'; }).length;
+  // Quote the figures the way the window showed them, not the raw fields: a
+  // shortfall is displayed on its own line, so shopGets alone is a number nobody
+  // ever saw.
+  var shopSeen=function(o){ return (o.shopGets<0?'−'+Math.abs(o.shopGets).toLocaleString():(o.shopGets+(o.owed||0)).toLocaleString()); };
+  var drvSeen=function(o){ return (o.owed>0?'−'+o.owed.toLocaleString():o.driverGets.toLocaleString()); };
   if(shown && shown.id===tourId && (shown.cash!==s.cash || shown.pay!==s.pay || shown.adv!==s.adv
       || shown.adj!==s.adj || shown.driverGets!==s.driverGets || shown.shopGets!==s.shopGets
       // The stop tables and the transfer/unknown totals are on the paper too — a
       // change there has to stop the print just as a cash change does.
-      || shown.online!==s.online || shown.unknown!==s.unknown || shown.stops!==nowStops)){
+      || shown.online!==s.online || shown.unknown!==s.unknown || shown.stops!==nowStops
+      // …and so does the hand-over the sheet asserts, even when it moves no figure.
+      || shown.alreadyPaid!==s.alreadyPaid || shown.paidHow!==s.paidHow
+      || shown.settled!==s.settled || shown.fromBag!==s.fromBag)){
     alert('ตัวเลขเปลี่ยนไปตั้งแต่เปิดหน้านี้ / the figures changed since this window was opened.\n\n'
       +'เงินสด / cash: '+shown.cash.toLocaleString()+' → '+s.cash.toLocaleString()+'\n'
-      +'คนขับรับ / driver: '+shown.driverGets.toLocaleString()+' → '+s.driverGets.toLocaleString()+'\n'
-      +'ร้านรับ / shop: '+shown.shopGets.toLocaleString()+' → '+s.shopGets.toLocaleString()+'\n\n'
-      +'กรุณาตรวจอีกครั้งแล้วกดพิมพ์ / please check the updated sheet and press print again.');
+      +'คนขับรับ / driver: '+drvSeen(shown)+' → '+drvSeen(s)+'\n'
+      +'ร้านรับ / shop: '+shopSeen(shown)+' → '+shopSeen(s)+'\n'
+      +(shown.alreadyPaid!==s.alreadyPaid||shown.settled!==s.settled
+        ?'จ่ายค่าทัวร์แล้ว / tour pay settled: '+(shown.alreadyPaid?shown.settled.toLocaleString():'—')+' → '+(s.alreadyPaid?s.settled.toLocaleString():'—')+'\n':'')
+      +'\nกรุณาตรวจอีกครั้งแล้วกดพิมพ์ / please check the updated sheet and press print again.');
     ofTourSettleClose(); ofTourSettle(tourId); return;
   }
   if(s.payMissing && !confirm('⚠️ ยังไม่ได้ใส่ค่าทัวร์ — จะพิมพ์เป็น 0 ฿\n'
@@ -14795,22 +14830,27 @@ function ofTourSettlePrint(tourId){
       +'<div class="ct"><span class="op"></span><span class="lb">💰 ค่าทัวร์ / tour pay</span><b>'+money(s.pay)+'</b></div>'
       +(s.adv?'<div class="ct"><span class="op">−</span><span class="lb">🤝 เบิกก่อนออกทัวร์ / advance, already handed over</span><b>'+money(s.adv)+'</b></div>':'')
       +(s.adj?'<div class="ct"><span class="op">'+(s.adj<0?'−':'+')+'</span><span class="lb">💸 หัก / เพิ่ม · adjustments</span><b>'+money(Math.abs(s.adj))+'</b></div>':'')
-      // Settled by transfer: the money reached him outside this bag, so it comes
-      // off here as its own step. Without the line the column read "pay 20,000
-      // = driver keeps 0", which does not add up on a page people sign.
-      +((s.alreadyPaid && s.paidHow!=='cash' && s.due>0)
-        ?'<div class="ct"><span class="op">−</span><span class="lb">✅ จ่ายแล้วโดยโอน / already settled by transfer</span><b>'+money(s.due)+'</b></div>':'')
+      // Already paid — by transfer or in cash: the money reached him, so it comes
+      // off here as its own step, under the due it was paid against. Without those
+      // two lines the column read "pay 20,000 = driver keeps 0", which does not add
+      // up on a page people sign.
+      +(s.settled>0?'<div class="ct'+(s.due<0?' neg':'')+'"><span class="op">=</span><span class="lb">👤 '+(s.due<0?'คนขับติดร้านอยู่ / he is already short by':'สิทธิ์ของคนขับ / what he is due for this tour')+'</span><b>'+money(Math.abs(s.due))+'</b></div>'
+        +'<div class="ct"><span class="op">−</span><span class="lb">'+(s.paidHow==='cash'
+            ?'✅ จ่ายไปแล้วเป็นเงินสด — จากกระเป๋านี้ / already paid in cash, out of this bag'
+            :'✅ จ่ายไปแล้วโดยโอน — ไม่ใช่จากกระเป๋า / already paid by transfer, not out of the bag')+'</span><b>'+money(s.settled)+'</b></div>':'')
       +(s.owed>0
         ? '<div class="ct tot neg"><span class="op">=</span><span class="lb">👤 คนขับต้องคืนร้าน / driver owes the shop</span><b>'+money(s.owed)+'</b></div>'
-        : '<div class="ct tot"><span class="op">=</span><span class="lb">👤 คนขับรับ / driver keeps</span><b>'+money(s.driverGets)+'</b></div>')
+        : '<div class="ct tot"><span class="op">=</span><span class="lb">👤 '+(s.settled>0?'ยังต้องจ่ายเพิ่ม / still to hand over to him':'คนขับรับ / driver keeps')+'</span><b>'+money(s.driverGets)+'</b></div>')
       // A note, not a step: no figure in the amount column, or it reads as another
       // line of the sum and the column stops adding up to its own total.
-      +(s.alreadyPaid?'<div class="ct"><span class="op"></span><span class="lb note">✅ จ่ายไปแล้ว ('+(s.paidHow==='cash'?'เงินสด / cash — จากเงินในกระเป๋านี้ / out of this bag':'โอน / transfer — ไม่ใช่จากกระเป๋า / not out of the bag')+')'+(s.paidAmt?' · '+money(s.paidAmt):'')
-        +(s.payGap>0?' — ยังขาดอีก / still owed to him '+money(s.payGap):(s.payGap<0?' — จ่ายเกิน / overpaid by '+money(-s.payGap):''))+'</span></div>':'')
-      +'<div class="ct gap"><span class="op"></span><span class="lb">💵 เงินสดที่เก็บได้ / cash in the bag</span><b>'+money(s.cash)+'</b></div>'
+      +(s.alreadyPaid&&!s.settledKnown?'<div class="ct"><span class="op"></span><span class="lb note">⚠️ ไม่ได้บันทึกยอดที่จ่ายไป — ถือว่าเท่ากับค่าทัวร์ปัจจุบัน / the amount already paid was never recorded, this sheet assumes it was the pay as it stands</span></div>':'')
+      +'<div class="ct gap"><span class="op"></span><span class="lb">💵 เงินสดที่เก็บได้ / cash collected</span><b>'+money(s.cash)+'</b></div>'
+      // The bag is lighter by whatever he already took out of it.
+      +(s.fromBag>0?'<div class="ct"><span class="op">−</span><span class="lb">💵 ค่าทัวร์ที่หยิบจากกระเป๋านี้แล้ว / his pay, already taken out of this bag</span><b>'+money(s.fromBag)+'</b></div>':'')
       +(s.owed>0
         ? '<div class="ct"><span class="op">+</span><span class="lb">👤 ที่คนขับต้องคืน / what he brings back</span><b>'+money(s.owed)+'</b></div>'
-        : '<div class="ct"><span class="op">−</span><span class="lb">👤 คนขับรับ / driver keeps</span><b>'+money(s.driverGets)+'</b></div>')
+        : (s.driverGets>0||!s.settled)
+          ? '<div class="ct"><span class="op">−</span><span class="lb">👤 '+(s.settled>0?'ที่ยังต้องจ่ายเพิ่ม / still handed over now':'คนขับรับ / driver keeps')+'</span><b>'+money(s.driverGets)+'</b></div>' : '')
       // If the bag does not cover his pay the result is negative, and saying "shop
       // receives 0" would hide that the shop has to put money in.
       +(s.shopGets<0
@@ -14818,8 +14858,11 @@ function ofTourSettlePrint(tourId){
         : '<div class="ct tot"><span class="op">=</span><span class="lb">🏪 ร้านรับ / shop receives</span><b>'+money(s.shopGets+(s.owed||0))+'</b></div>')
     +'</div>'
     +(s.payMissing?'<div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:8px">⚠️ ยังไม่ได้ใส่ค่าทัวร์ (การ์ดเสนอ '+money(s.proposal)+') — ใบนี้ปิดยอดที่ 0 / the tour pay was never entered, this sheet settles it at zero</div>':'')
-    +(s.due<0?'<div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:8px">⚠️ หัก/เบิกมากกว่าค่าทัวร์ — คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสด / the deductions and advance exceed his pay, he brings this back on top of the cash</div>':'')
-    +(s.alreadyPaid?'<div style="font-size:11px;color:#166534;font-weight:700;margin-top:6px">✅ ค่าทัวร์จ่ายไปแล้ว ไม่หักจากเงินในกระเป๋า / the tour pay was already settled, it is not taken out of the bag</div>':'')
+    // Same condition as the window, so the paper cannot carry a warning the office
+    // never saw — and the wording no longer names a cause it cannot know: he also
+    // owes money back when a pay already handed over turned out to be too high.
+    +(s.owed>0?'<div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:8px">⚠️ คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสด / he brings this back on top of the cash</div>':'')
+    +(s.settled>0&&s.driverGets!==0?'<div style="font-size:11px;color:#b45309;font-weight:700;margin-top:6px">⚠️ ค่าทัวร์หรือรายการหักเปลี่ยนหลังจ่ายไปแล้ว / the pay or a deduction moved after the money had already gone out — the line above is the difference</div>':'')
     +(s.adv?'<div style="font-size:11px;color:#555;margin-top:8px">🤝 เบิกก่อนออกทัวร์ '+money(s.adv)+' จ่ายไปแล้วก่อนออกรถ / the advance was already handed over before departure</div>':'')
     +'<div class="sig"><div>ลงชื่อคนขับ / driver</div><div>ลงชื่อออฟฟิศ / office</div></div>'
     // Last line of defence: measure the finished page and shrink it to fit. The
