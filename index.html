@@ -26625,18 +26625,26 @@ function _tmapVia(o){
   var c=null; try{ c=shipperLatLng(sh); }catch(e){}
   return (c&&geoSane(c.lat,c.lng))?{lat:c.lat,lng:c.lng,via:sh}:null;
 }
-// Where the driver actually stops with this order.
+// Where the driver actually stops with this order. For a carrier order the stop is
+// the depot, but the CUSTOMER's own position still has to be judged: that pin is
+// what a future self-delivered order to the same customer will route by, and a
+// handover photo taken at the depot is exactly how a wrong EXIF pin gets saved.
+// So the customer's quality flags travel along on the depot result.
 function _tmapStopPos(o){
   var v=_tmapVia(o);
-  if(v) return {lat:v.lat,lng:v.lng,approx:false,via:v.via};
-  return _tmapPos(o);
+  if(!v) return _tmapPos(o);
+  var cp=_tmapPos(o);
+  return { lat:v.lat, lng:v.lng, approx:false, via:v.via,
+           cust:cp||null, custSuspect:cp?cp.suspect:null, custProv:cp?cp.prov:'', custApprox:cp?!!cp.approx:false };
 }
 // Clicking a row in the side list flies to that stop and opens its card.
 function tmapGoto(oid){
   var m=_tmapMarkers[String(oid)];
   if(!m||!_tmapMap) return;
   var ll=m.getLatLng();
-  _tmapMap.setView(ll, Math.max(_tmapMap.getZoom(), 11), {animate:true});
+  // Zoom IN, don't just re-centre: at the opening zoom several handovers at one
+  // depot sit within a couple of pixels of each other.
+  _tmapMap.setView(ll, Math.max(_tmapMap.getZoom(), 14), {animate:true});
   try{ m.openPopup(); }catch(e){}
 }
 // The delivery-order list beside the map. Same classes and the same drag handler as
@@ -26654,7 +26662,8 @@ function _tmapRenderList(t){
     var col=can?'var(--text3)':done?'#16a34a':'#2563eb';
     var pos=_tmapStopPos(o);
     var mark=!pos?'<span title="ไม่มีพิกัด / no location" style="color:#b45309">🚫</span>'
-             :pos.via?'<span title="ส่งที่ท่ารถ '+esc(pos.via)+' / handover at the '+esc(pos.via)+' depot" style="font-size:10px">🚚</span>'
+             :pos.via?('<span title="ส่งที่ท่ารถ '+esc(pos.via)+' / handover at the '+esc(pos.via)+' depot" style="font-size:10px">🚚</span>'
+                       +(pos.custSuspect?'<span title="หมุดลูกค้าอาจผิด ~'+pos.custSuspect+' กม. / customer pin looks wrong" style="color:#dc2626">⚠️</span>':''))
              :pos.suspect?'<span title="หมุดอาจผิด / suspect pin" style="color:#dc2626">⚠️</span>'
              :pos.approx?'<span title="ประมาณจากจังหวัด / province only" style="opacity:.5">◌</span>':'';
     return '<div class="kmrow" data-oid="'+esc(id)+'" style="display:flex;align-items:center;gap:6px;font-size:12px;'+(can?'opacity:.5;':'')+'">'
@@ -26741,6 +26750,10 @@ function _tmapCard(o,t,x){
     +'<div style="font-weight:800;margin-top:2px">💰 '+esc(amt)+'</div>'
     // The pin is the DEPOT — say so, or the office reads it as the delivery address.
     +(x.via?'<div style="margin-top:3px;padding:3px 6px;background:#eef2ff;border-radius:6px;color:#3730a3;font-weight:700">🚚 ผ่านขนส่ง '+esc(x.via)+' — หมุดนี้คือท่ารถ ส่งมอบที่นี่<div style="font-weight:500;color:#4338ca">via carrier '+esc(x.via)+' — this pin is the depot, handover here; the goods travel on to the address above</div></div>':'')
+    // The depot is right, but the customer pin behind it may not be — say so here
+    // too, because that is the card the office actually opens.
+    +(x.custSuspect?'<div style="color:#dc2626;font-weight:700;margin-top:2px">⚠️ หมุดลูกค้าห่างจาก จ.'+esc(x.custProv||'')+' ~'+x.custSuspect+' กม. — อาจผิด / the customer pin ~'+x.custSuspect+' km off, probably wrong'
+      +(window.ofReadOnly?'':' <button type="button" onclick="ofTourMapClearPin(\''+oidJs+'\')" style="border:none;background:#dc2626;color:#fff;border-radius:6px;padding:1px 7px;font-size:10px;font-weight:700;cursor:pointer">🗑 ลบ / clear</button>')+'</div>':'')
     +(x.approx?'<div style="color:#b45309;margin-top:2px">⚠️ ตำแหน่งโดยประมาณ (จ.'+esc(x.prov||'')+') / approx. — no exact pin</div>':'')
     +(x.suspect?'<div style="color:#dc2626;font-weight:700;margin-top:2px">⚠️ หมุดห่างจาก จ.'+esc(x.prov||'')+' ~'+x.suspect+' กม. — พิกัดอาจผิด (เช่น GPS จากรูปถ่าย) / pin ~'+x.suspect+' km from the address province — probably wrong (e.g. photo GPS)</div>':'')
     +'<div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
@@ -26807,9 +26820,21 @@ function _tmapRender(){
     // spread the later pins in a small ring so every one stays hover- and clickable.
     var key=p.lat.toFixed(4)+','+p.lng.toFixed(4);
     var n=seen[key]||0; seen[key]=n+1;
-    if(n>0){ var r=p.approx?0.035:0.0007, a=n*2.4; p={lat:p.lat+r*Math.cos(a),lng:p.lng+r*Math.sin(a),approx:p.approx,prov:p.prov,suspect:p.suspect,via:p.via}; }
+    if(n>0){
+      // Ring radius has to beat the pin size at the zoom the map OPENS at (12 →
+      // ~37 m/px): several handovers at one depot is the normal case now, and at
+      // 78 m they were three pins in the same 2 px. A depot ring is wide enough to
+      // read, a province fallback wider still, a true duplicate customer pin stays
+      // tight — that one is rare and should not wander off the address.
+      var r=p.approx?0.035:(p.via?0.006:0.0007), a=n*2.4;
+      p={lat:p.lat+r*Math.cos(a),lng:p.lng+r*Math.sin(a),approx:p.approx,prov:p.prov,suspect:p.suspect,via:p.via,
+         cust:p.cust,custSuspect:p.custSuspect,custProv:p.custProv,custApprox:p.custApprox};
+    }
     x.approx=p.approx; x.prov=p.prov; x.suspect=p.suspect; x.via=p.via;
+    x.custSuspect=p.custSuspect; x.custProv=p.custProv;
     if(p.suspect){ nSuspect++; color='#dc2626'; }
+    // The depot pin itself is right; it is the customer pin behind it that is off.
+    if(p.custSuspect) nSuspect++;
     if(p.via) nVia++;
     var html=_tmapCard(o,t,x);
     var mk=L.marker([p.lat,p.lng],{icon:_tmapIcon(label,color,p.approx,p.via),zIndexOffset:x.free?0:1000})
@@ -26820,15 +26845,32 @@ function _tmapRender(){
     bounds.push([p.lat,p.lng]);
     // Where the goods END UP, drawn faded: the driver does not go there, so it must
     // not look like a stop and must not drag the map's zoom across the country.
-    if(p.via){
-      var cp=_tmapPos(o);
+    if(p.via && p.cust){
+      var cp=p.cust, bad=!!p.custSuspect;
+      // Customer dots stack too — several orders falling back to the same province
+      // capital would otherwise be one dot with one reachable tooltip.
+      var ckey='c'+cp.lat.toFixed(4)+','+cp.lng.toFixed(4);
+      var cn=seen[ckey]||0; seen[ckey]=cn+1;
+      var clat=cp.lat, clng=cp.lng;
+      if(cn>0){ var cr=cp.approx?0.03:0.004, ca=cn*2.4; clat+=cr*Math.cos(ca); clng+=cr*Math.sin(ca); }
       // Muted, but not invisible: a pale dot on a pale map cannot be found at all.
-      if(cp) L.circleMarker([cp.lat,cp.lng],{radius:6,color:'#4f46e5',weight:2,opacity:.75,dashArray:'3 2',fillColor:'#c7d2fe',fillOpacity:.75})
+      // A dot at coordinates the app itself calls wrong is drawn RED, and carries
+      // the same one-tap repair the customer pins get.
+      var oidJs2=String(o.id).replace(/['"\\]/g,'');
+      L.circleMarker([clat,clng],{radius:bad?7:6,color:bad?'#dc2626':'#4f46e5',weight:2,opacity:.85,dashArray:'3 2',
+                                  fillColor:bad?'#fecaca':'#c7d2fe',fillOpacity:.75})
         .bindTooltip('<div style="font-size:11.5px;color:#111"><b>'+esc0(o.id)+'</b> · ปลายทางลูกค้า / final address'
           +'<div style="color:#555">'+esc0(o.customer||'')+'</div>'
           +'<div style="color:#3730a3;font-weight:700">🚚 ส่งต่อโดย '+esc0(p.via)+' / carried on by '+esc0(p.via)+'</div>'
+          +(bad?'<div style="color:#dc2626;font-weight:700">⚠️ หมุดห่างจาก จ.'+esc0(p.custProv||'')+' ~'+p.custSuspect+' กม. — พิกัดลูกค้าอาจผิด / customer pin looks wrong</div>':'')
           +(cp.approx?'<div style="color:#b45309">◌ ประมาณจากจังหวัด / province only</div>':'')+'</div>',
           {direction:'top',opacity:1,className:'tmap-tip'})
+        .bindPopup('<div style="font-size:12px;color:#111;min-width:170px"><b>'+esc0(o.id)+'</b> · ปลายทางลูกค้า / final address'
+          +'<div style="color:#555;margin-top:2px">'+esc0(o.customer||'')+'</div>'
+          +'<div style="color:#555">'+esc0(o.address||'')+'</div>'
+          +(bad?'<div style="color:#dc2626;font-weight:700;margin-top:3px">⚠️ หมุดห่างจาก จ.'+esc0(p.custProv||'')+' ~'+p.custSuspect+' กม. — พิกัดลูกค้าอาจผิด (เช่น GPS จากรูปถ่ายที่ท่ารถ)<div style="font-weight:500">customer pin ~'+p.custSuspect+' km from the address province — probably a photo GPS taken at the depot</div></div>'
+              +(window.ofReadOnly?'':'<div style="margin-top:4px"><button type="button" onclick="ofTourMapClearPin(\''+oidJs2+'\')" style="border:none;background:#dc2626;color:#fff;border-radius:6px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer">🗑 ลบหมุดผิด / clear pin</button></div>'):'')
+          +'</div>',{maxWidth:280})
         .addTo(_tmapLayer);
     }
     return p;
