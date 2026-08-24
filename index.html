@@ -4335,7 +4335,7 @@ function kpToursSig(){
       return [t.id,(t.orders||[]).join(','),JSON.stringify(t.status||{}),t.driving?1:0,t.departedAt||'',t.backAt||'',
         t.driverPay,t.driverAdvance,t.payMethodTour||'',(t.carPhotos||[]).length,(t.carFeeSlips||[]).length,
         JSON.stringify(t.adj||null),t.ctnCount,t.ctnRate,
-        t.kmMode?1:0,t.kmRate,(t.kmLog?(Array.isArray(t.kmLog)?t.kmLog.length:Object.keys(t.kmLog).length):0),
+        t.kmMode?1:0,t.kmRate,t.kmManual,(t.kmLog?(Array.isArray(t.kmLog)?t.kmLog.length:Object.keys(t.kmLog).length):0),
         t.lalaDriver||'',t.plate||''].join('|');
     }).join('~');
   }catch(e){ return String(Date.now()); }
@@ -11679,13 +11679,23 @@ function ofRenderTour(){
     var kmRow = '';
     if(_kmOn){
       var _kmT=kmTotal(t), _kmR=kmRateOf(t), _kmP=kmPayAmount(t), _kmLog=kmLogOf(t), _kmStart=_kmLog[0];
+      var _kmMan=kmManualOf(t), _kmLogd=kmLoggedTotal(t);
       kmRow='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 4px;padding:8px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--rs);font-size:12px">'
-        +'<span style="font-weight:800;color:#1d4ed8;white-space:nowrap">🛣️ รวม / Total: '+kmFmt(_kmT)+' กม.</span>'
+        // Typeable, so a tour whose readings are missing can still be settled. Empty
+        // field = the readings count; the logged sum stands in it as the placeholder.
+        +(ro
+          ? '<span style="font-weight:800;color:#1d4ed8;white-space:nowrap">🛣️ รวม / Total: '+kmFmt(_kmT)+' กม.'+(_kmMan?' 🖊️':'')+'</span>'
+          : '<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;font-weight:800;color:#1d4ed8">🛣️ รวม / Total:'
+            +'<input type="number" class="kpamt" min="0" step="0.1" value="'+(_kmMan||'')+'" placeholder="'+kmFmt(_kmLogd)+'" title="ใส่ระยะทางเองได้ ถ้าไม่มีเลขไมล์ / type the distance by hand when the readings are missing" onclick="event.stopPropagation()" onchange="ofSetKmManual(\''+t.id+'\',this.value)" style="width:74px;padding:4px 6px;border:1px solid '+(_kmMan?'#f59e0b':'var(--border)')+';border-radius:var(--rs);font-size:12px;font-weight:800;text-align:right;background:var(--bg);color:var(--text)">กม.</span>')
         +'<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap">×<input type="number" min="0" step="0.5" value="'+_kmR+'" onclick="event.stopPropagation()" onchange="ofSetKmRate(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="width:62px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">฿/กม.</span>'
         +'<span style="margin-left:auto;font-weight:800;color:var(--green);white-space:nowrap">= '+_kmP.toLocaleString()+' ฿</span>'
         +(ro?'':'<button type="button" onclick="event.stopPropagation();ofKmUsePay(\''+t.id+'\')" title="ใส่เป็นค่าทัวร์ / use as tour pay" style="font-size:10px;padding:3px 7px;border:none;background:#1d4ed8;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:700">→ ค่าทัวร์</button>')
-        +'<div style="width:100%;font-size:10px;color:'+(_kmStart?'var(--text2)':'#92400e')+'">'
-          +(_kmStart?'🏁 Start '+kmFmt(_kmStart.km)+' กม.'+(kmPhotosOf(_kmStart).length?' 📷'+(kmPhotosOf(_kmStart).length>1?'×'+kmPhotosOf(_kmStart).length:''):''):'⏳ รอคนขับถ่ายรูปเลขไมล์ก่อนออกรถ / waiting for the start odometer photo')
+        +'<div style="width:100%;font-size:10px;color:'+(_kmMan?'#b45309':(_kmStart?'var(--text2)':'#92400e'))+'">'
+          +(_kmMan
+            ? '🖊️ ใส่ระยะทางเอง / distance entered by hand'+(t.kmManualBy?' · '+t.kmManualBy:'')
+              +(_kmLogd?' · คนขับบันทึก / driver logged '+kmFmt(_kmLogd)+' กม.':' · ไม่มีเลขไมล์ / no readings')
+              +' <span onclick="event.stopPropagation();ofSetKmManual(\''+t.id+'\',\'\')" title="ใช้เลขไมล์แทน / use the readings again" style="cursor:pointer;color:#1d4ed8;font-weight:700">↩︎</span>'
+            : (_kmStart?'🏁 Start '+kmFmt(_kmStart.km)+' กม.'+(kmPhotosOf(_kmStart).length?' 📷'+(kmPhotosOf(_kmStart).length>1?'×'+kmPhotosOf(_kmStart).length:''):''):'⏳ รอคนขับถ่ายรูปเลขไมล์ก่อนออกรถ — หรือใส่ระยะทางเองด้านบน / waiting for the start odometer photo, or type the distance above'))
           +(_kmLog.length?' · <span onclick="event.stopPropagation();ofToggleMore(\'kmlog_'+t.id+'\')" style="cursor:pointer;color:#1d4ed8;font-weight:700">📷 รูปเลขไมล์ ('+_kmLog.length+') ▾</span>':'')
         +'</div>'
         +'<div id="kmlog_'+t.id+'" style="display:none;width:100%">'+kmSummaryHTML(t)+'</div>'
@@ -12455,6 +12465,9 @@ function archiveTour(t){
     adj:tourAdjArr(t), adjTotal:tourAdjTotal(t),
     carPhotoN:(t.carPhotos||[]).length, carSlipN:(t.carFeeSlips||[]).length, lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0, carFeeByCustomer:!!t.carFeeByCustomer,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
+    // Without this the Drivers tab recomputes from the readings and a hand-entered
+    // distance is gone the moment the tour is ended — together with its pay basis.
+    kmManual:kmManualOf(t)||null, kmManualBy:t.kmManualBy||'', kmManualAt:t.kmManualAt||0,
     payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now() };
   // The photographs go BESIDE the record (see kpTourPhotoHTML): a tour record must stay
@@ -12541,10 +12554,17 @@ function kmByOrder(t){
   return map;
 }
 // Total = sum of all legs, so it always matches the numbers shown per stop.
-function kmTotal(t){
+function kmLoggedTotal(t){
   var s=kmLegs(t).reduce(function(a,l){return a+l.dist;},0);
   return Math.round(s*10)/10;
 }
+// …unless the office typed the distance itself. KM ON pressed after departure
+// leaves no start reading, so the driver app never asks for one and the tour
+// would settle at 0 km. A hand-entered total wins over the log, is marked as
+// hand-entered everywhere it is shown, and never touches the readings — clear
+// it and the logged sum is back.
+function kmManualOf(t){ var m=parseFloat(t&&t.kmManual); return (isFinite(m)&&m>0)?Math.round(m*10)/10:0; }
+function kmTotal(t){ return kmManualOf(t) || kmLoggedTotal(t); }
 function kmPayAmount(t){ return Math.round(kmTotal(t)*kmRateOf(t)); }
 function kmFmt(n){ n=parseFloat(n)||0; return (Math.round(n*10)/10).toLocaleString(); }
 // A reading can carry several photos (odometer, dashboard, surroundings). Entries logged
@@ -12692,6 +12712,28 @@ function ofKmDragEnd(){
   try{ if(_tmapTid) _tmapRender(); }catch(e){}
 }
 // Take the calculated km payout over into the normal "Tour pay" field.
+// The office types the distance for a tour whose readings are missing (KM switched
+// on too late, driver's phone dead, photos forgotten). Money-relevant: it is the
+// pay basis, so it is audited like the rate, and the field only commits on Enter
+// or ✓ — 3 instead of 346 must not slip in on a tab-away.
+function ofSetKmManual(tourId, val){
+  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var old=kmManualOf(t), logged=kmLoggedTotal(t);
+  var v=(val===''||val==null)?0:Math.max(0, Math.round((parseFloat(val)||0)*10)/10);
+  if(v===old) return;
+  if(!v){ delete t.kmManual; delete t.kmManualBy; delete t.kmManualAt; }
+  else {
+    t.kmManual=v;
+    t.kmManualBy=((staffList||[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
+    t.kmManualAt=Date.now();
+  }
+  syncTours();
+  try{ auditTour('km','🚚 '+(t.driverName||''), v
+    ? '🛣️ ใส่ระยะทางเอง / km entered by hand: '+(old?kmFmt(old)+' → ':'')+kmFmt(v)+' กม.'+(logged?' (คนขับบันทึก / driver logged '+kmFmt(logged)+')':' (ไม่มีเลขไมล์ / no readings)')
+    : '🛣️ ลบระยะทางที่ใส่เอง / hand-entered km cleared ('+kmFmt(old)+' กม. → '+kmFmt(logged)+' จากเลขไมล์ / from the readings)'); }catch(e){}
+  try{ ofRenderTour(); }catch(e){}
+  try{ ofDriversRender(); }catch(e){}
+}
 function ofKmUsePay(tourId){
   var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
   var amt=kmPayAmount(t);
@@ -12701,7 +12743,7 @@ function ofKmUsePay(tourId){
 // Shared read-only km block (office tour card, Drivers tab, driver app).
 function kmSummaryHTML(t, opts){
   opts=opts||{};
-  var log=kmLogOf(t); if(!log.length && !opts.always) return '';
+  var log=kmLogOf(t), man=kmManualOf(t); if(!log.length && !man && !opts.always) return '';
   var tot=kmTotal(t), rate=kmRateOf(t), pay=kmPayAmount(t), legs=kmLegs(t);
   var rows=log.map(function(e,i){
     var d=(i===0)?null:(legs[i-1]?legs[i-1].dist:0);
@@ -12726,8 +12768,15 @@ function kmSummaryHTML(t, opts){
   return '<div style="margin-top:8px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:var(--rs);padding:8px 10px">'
     +'<div style="font-size:11px;font-weight:800;color:#1d4ed8;margin-bottom:2px">🛣️ KM / กิโลเมตร</div>'
     +rows
+    // Says whose number this is. A hand-entered total on a tour that also has
+    // readings would otherwise look like the sum of those readings.
+    +(man?'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid var(--border);font-size:11px;color:#b45309">'
+      +'<span style="width:38px;text-align:center;flex-shrink:0">🖊️</span>'
+      +'<span style="flex:1;min-width:0">ใส่เอง / by hand'+(t.kmManualBy?' · '+t.kmManualBy:'')+(log.length?' — แทนเลขไมล์ / instead of the readings ('+kmFmt(kmLoggedTotal(t))+' กม.)':'')+'</span>'
+      +'<span style="font-weight:700;white-space:nowrap">'+kmFmt(man)+' กม.</span>'
+      +'<span style="width:56px"></span></div>':'')
     +'<div style="display:flex;justify-content:space-between;gap:8px;margin-top:6px;padding-top:6px;border-top:1px solid #bfdbfe;font-size:12px;font-weight:700">'
-      +'<span>รวม / Total: '+kmFmt(tot)+' กม.</span>'
+      +'<span>รวม / Total: '+kmFmt(tot)+' กม.'+(man?' 🖊️':'')+'</span>'
       +'<span>× '+kmFmt(rate)+' ฿ = <span style="color:var(--green)">'+pay.toLocaleString()+' ฿</span></span>'
     +'</div>'
     +'</div>';
@@ -15278,6 +15327,9 @@ function ofActiveTourRec(t){
     adj:tourAdjArr(t), adjTotal:tourAdjTotal(t),
     carPhotos:(t.carPhotos||[]), carFeeSlips:(t.carFeeSlips||[]), lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0, carFeeByCustomer:!!t.carFeeByCustomer,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
+    // Without this the Drivers tab recomputes from the readings and a hand-entered
+    // distance is gone the moment the tour is ended — together with its pay basis.
+    kmManual:kmManualOf(t)||null, kmManualBy:t.kmManualBy||'', kmManualAt:t.kmManualAt||0,
     payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now(), _active:true };
 }
@@ -17616,7 +17668,17 @@ function drKmRender(){
     return (st==='delivered'||st==='shipped') && !done[id];
   });
   var head, body;
-  if(!start){
+  // No start reading, but the office typed the distance: stop demanding a photo the
+  // driver can no longer take — he is already on the road — and show him the number
+  // his pay is now based on.
+  if(!start && kmManualOf(t)){
+    head='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+      +'<span style="font-size:14px;font-weight:800;color:#1d4ed8">🛣️ ทัวร์คิดตามกิโลเมตร / KM tour</span>'
+      +'<span style="font-size:13px;font-weight:800">'+kmFmt(kmTotal(t))+' กม. · '+kmPayAmount(t).toLocaleString()+' ฿</span>'
+      +'</div>'
+      +'<div style="font-size:11px;color:#b45309;margin-top:2px">🖊️ ออฟฟิศใส่ระยะทางให้ / the office entered the distance · '+kmFmt(kmRateOf(t))+' ฿/กม.</div>';
+    body='';
+  } else if(!start){
     head='<div style="font-size:14px;font-weight:800;color:#92400e">🏁 เลขไมล์ก่อนออกรถ / Start odometer</div>'
       +'<div style="font-size:12px;color:#92400e;margin-top:2px">ถ่ายรูปเลขไมล์ในรถก่อนออก / Photograph the odometer before you leave</div>';
     body='<button type="button" onclick="drKmOpen(\'\')" style="width:100%;margin-top:8px;padding:12px;border:none;border-radius:var(--rs);background:#d97706;color:#fff;font-size:14px;font-weight:800;cursor:pointer">📷 ถ่ายรูป + ใส่เลขไมล์ / Take photo + km</button>';
