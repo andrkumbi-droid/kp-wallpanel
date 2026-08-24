@@ -18891,6 +18891,27 @@ function kpMeName(){
 //   1-086  booked 6,567 ฿, read as 6,557 ฿ one second later — a misread digit.
 // A real second payment (a deposit, then the rest) is hours apart, not seconds — and
 // two payments of the identical size on one order land hours apart too.
+// Time alone cannot tell a late re-report from a second payment. The order can:
+// if one of the two rows already accounts for everything the order was ever paid,
+// the other one is not new money — whatever the clock says. #217 on 24.08.: the
+// driver's slip photo was unreadable, the office uploaded the right one two hours
+// later, and 37,590 ฿ stood on the monitor twice, in the day's total as well.
+// This self-corrects when a real second payment is booked, because booking it
+// RAISES paidAmount and then neither row covers the order on its own any more.
+// Decides only when the orders are loaded — a bare monitor keeps the time rules.
+function kpPayFeedCovered(v, rec){
+  try{
+    if(!v || !rec || String(v.id)!==String(rec.id)) return false;
+    if(new Date(v.ts||0).toDateString()!==new Date(rec.ts||0).toDateString()) return false;
+    var o=(typeof orders!=='undefined'?orders:[]).find(function(x){ return String(x.id)===String(v.id); });
+    if(!o) return false;
+    var booked=parseFloat(o.paidAmount)||0;
+    if(!(booked>0)) return false;
+    var tol=Math.max(20, booked*0.01);
+    var a=Math.abs(parseFloat(v.amt)||0), b=Math.abs(parseFloat(rec.amt)||0);
+    return Math.abs(a-booked)<=tol || Math.abs(b-booked)<=tol;
+  }catch(e){ return false; }
+}
 function kpPayFeedSame(v, rec){
   if(!v || !rec || !v.id || !rec.id) return false;
   if(String(v.id)!==String(rec.id)) return false;
@@ -18898,6 +18919,7 @@ function kpPayFeedSame(v, rec){
   var a=Math.abs(parseFloat(v.amt)||0), b=Math.abs(parseFloat(rec.amt)||0);
   var near=Math.abs(a-b) <= Math.max(20, Math.max(a,b)*0.01);
   if(near && gap <= 15*60*1000) return true;                   // the same figure again
+  if(kpPayFeedCovered(v, rec)) return true;                    // the order is already paid up by one of them
   if((v.kind||"")===(rec.kind||"")) return false;              // same channel, other amount
   if(gap >= 2*3600*1000) return false;                         // reported within two hours
   if(gap <= 10*60*1000) return true;                           // slip vs booking
