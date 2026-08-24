@@ -14617,7 +14617,12 @@ function tourSettleCalc(t){
   // nobody has carried into driverPay yet. Settling then prints "tour pay 0" and
   // hands the whole bag to the shop — on a page the driver signs. Report it.
   var prop=tourPayProposal(t);
-  return { cash:cash, online:online, unknown:unknown, pay:pay, adv:adv, adj:adj,
+  // A km tour's pay is a product, so the sheet shows where the figure comes from
+  // instead of a bare "tour pay" the driver has to take on trust.
+  var km=null;
+  try{ if(t&&t.kmMode) km={ total:kmTotal(t), rate:kmRateOf(t), pay:kmPayAmount(t),
+                            byHand:!!kmManualOf(t), legs:kmLegs(t).length }; }catch(e){}
+  return { cash:cash, online:online, unknown:unknown, pay:pay, adv:adv, adj:adj, km:km,
            due:due, alreadyPaid:!!st.paid, paidHow:st.how||'', paidAmt:rec,
            settled:settled, settledKnown:settledKnown, fromBag:fromBag, bag:bag,
            proposal:prop, payMissing:(pay<=0 && prop>0),
@@ -14691,6 +14696,12 @@ function ofTourSettle(tourId){
     + (s.online>0?'<div style="font-size:11px;color:var(--text2);margin-bottom:6px">🏦 โอนเข้าบัญชีร้าน / transferred to the shop: '+s.online.toLocaleString()+' ฿ — ไม่ผ่านมือคนขับ, ไม่อยู่ในบิลนี้ / never in his hands, not part of this sum</div>':'')
     + (s.unknown>0?'<div style="font-size:11px;color:#92400e;margin-bottom:6px">❓ จ่ายแล้ว ยังไม่ระบุวิธี / paid, method not recorded: '+s.unknown.toLocaleString()+' ฿</div>':'')
     + row('', '💰 ค่าทัวร์ / tour pay', s.pay.toLocaleString()+' ฿')
+    // Where that figure comes from on a km tour — a note under the row, never a
+    // step, or the column stops adding up to its own total.
+    + (s.km?'<div style="font-size:11px;color:var(--text2);margin:-2px 0 5px 22px">🛣️ '+kmFmt(s.km.total)+' กม. × '+kmFmt(s.km.rate)+' ฿/กม. = '+s.km.pay.toLocaleString()+' ฿'
+        +(s.km.byHand?' · 🖊️ ใส่ระยะทางเอง / distance entered by hand':(s.km.legs?' · '+s.km.legs+' ช่วง / legs':''))
+        +(s.km.pay!==s.pay?'<div style="color:#b45309;font-weight:700">⚠️ ค่าทัวร์ที่ใส่ไว้ไม่เท่ากับที่คิดจากกิโลเมตร / the tour pay entered is not what the kilometres come to</div>':'')
+      +'</div>':'')
     + (s.adv>0?row('−', '🤝 เบิกก่อนออกทัวร์ / advance, already handed over', s.adv.toLocaleString()+' ฿', {col:'#b45309'}):'')
     + (s.adj!==0?row(s.adj<0?'−':'+', '💸 หัก / เพิ่ม · adjustments', Math.abs(s.adj).toLocaleString()+' ฿', {col:s.adj<0?'#b91c1c':'#166534'}):'')
     + (adjRows?'<div style="margin:-2px 0 6px;padding:5px 8px 5px 22px;background:var(--bg2);border-radius:var(--rs)">'+adjRows+'</div>':'')
@@ -14800,11 +14811,26 @@ function ofTourSettlePrint(tourId){
   var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
     return '<tr><td>'+esc(e.oid||'')+'</td><td>'+esc(e.note||'')+'</td><td class="r">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
   }).join('');
+  // A km tour that has readings: the legs the pay is built from, so the driver can
+  // check his own odometer against the sheet he is signing. Nothing to list when the
+  // office typed the distance — the note under the pay says so instead.
+  var kmRows='', kmN=0, kmOdo=false;
+  if(s.km){
+    kmOdo=(kmInputMode(t)==='odo');
+    var _legs=kmLegs(t), _start=kmLogOf(t)[0];
+    if(kmOdo && _start && _legs.length){ kmRows+='<tr><td>🏁 Start</td><td class="r">'+kmFmt(_start.km)+'</td><td class="r">—</td></tr>'; kmN++; }
+    _legs.forEach(function(l){
+      kmRows+='<tr><td>'+esc(l.orderId||'—')+'</td>'
+        +(kmOdo?'<td class="r">'+kmFmt(l.km)+'</td>':'')
+        +'<td class="r">'+kmFmt(l.dist)+' กม.</td></tr>';
+      kmN++;
+    });
+  }
   // ONE PAGE, always. A tour can carry 3 stops or 40, so the sheet tightens itself:
   // type and row height step down as the list grows, and past ~30 rows the two stop
   // tables move side by side, which halves the height they need.
   var adjN=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).length;
-  var total=nRows+adjN;
+  var total=nRows+adjN+kmN;
   var twoCol=total>30;
   var fs   = total>44?8   : total>36?8.5 : total>26?9.5 : total>16?10 : 12;
   var pad  = total>36?'1px 4px' : total>26?'2px 5px' : total>16?'2px 5px' : '4px 6px';
@@ -14871,12 +14897,22 @@ function ofTourSettlePrint(tourId){
     + tbl('💵 เงินสด / CASH', 'คนขับเก็บมา / collected by the driver', cashRows, cashSum, 'รวมเงินสด / cash total', 'cash')
     +'</div>'
     + tbl('❓ ยังไม่ระบุวิธี / METHOD NOT RECORDED', '', unkRows, unkSum, 'รวม / total', 'unk')
+    +(kmRows?'<table><thead><tr><th'+(kmOdo?'':' colspan="1"')+'>🛣️ กิโลเมตร / KM</th>'
+        +(kmOdo?'<th class="r">เลขไมล์ / odometer</th>':'')
+        +'<th class="r">กม. / km</th></tr></thead><tbody>'+kmRows+'</tbody>'
+        +'<tfoot><tr><td'+(kmOdo?' colspan="2"':'')+' class="sumlbl">รวม / total × '+kmFmt(s.km.rate)+' ฿/กม. = '+money(s.km.pay)+'</td>'
+        +'<td class="r sumlbl">'+kmFmt(s.km.total)+' กม.</td></tr></tfoot></table>':'')
     +(adjRows?'<table><thead><tr><th colspan="2">💸 หัก / เพิ่ม · adjustments</th><th class="r">฿</th></tr></thead><tbody>'+adjRows+'</tbody></table>':'')
     // ── the sum, worked out ──────────────────────────────────────────────
     // Step 1: what the driver is owed for the tour. Step 2: the bag minus that.
     // Transfers stay out of it — they went to the bank, not into the bag.
     +'<div class="calc">'
       +'<div class="ct"><span class="op"></span><span class="lb">💰 ค่าทัวร์ / tour pay</span><b>'+money(s.pay)+'</b></div>'
+      // Where the figure comes from on a km tour. A note, no amount column — the
+      // product is already IN the tour pay above, it must not be added again.
+      +(s.km?'<div class="ct"><span class="op"></span><span class="lb note">🛣️ '+kmFmt(s.km.total)+' กม. × '+kmFmt(s.km.rate)+' ฿/กม. = '+money(s.km.pay)
+        +(s.km.byHand?' · ใส่ระยะทางเอง / distance entered by hand':(s.km.legs?' · '+s.km.legs+' ช่วง / legs':''))
+        +(s.km.pay!==s.pay?' — ⚠️ ไม่เท่ากับค่าทัวร์ที่ใส่ไว้ / not what the tour pay above says':'')+'</span></div>':'')
       +(s.adv?'<div class="ct"><span class="op">−</span><span class="lb">🤝 เบิกก่อนออกทัวร์ / advance, already handed over</span><b>'+money(s.adv)+'</b></div>':'')
       +(s.adj?'<div class="ct"><span class="op">'+(s.adj<0?'−':'+')+'</span><span class="lb">💸 หัก / เพิ่ม · adjustments</span><b>'+money(Math.abs(s.adj))+'</b></div>':'')
       // Already paid — by transfer or in cash: the money reached him, so it comes
