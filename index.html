@@ -27414,6 +27414,8 @@ function calcViz() {
   <div id="clprev-frame"></div>
 </div></div>
 <input type="file" id="cldoc-file" accept="image/*,.pdf,.xls,.xlsx,.csv,.doc,.docx" multiple style="display:none" onchange="clDocOnFile(this)">
+<!-- "📄 from PI" on a container that has none filed yet: read the sheet now, file it on save. -->
+<input type="file" id="clpi-file" accept=".xls,.xlsx,.xlsm,.csv" style="display:none" onchange="clPiOnFile(this)">
 
 <!-- CONTAINER LOG MODAL -->
 <div class="modal-overlay" id="cl-modal">
@@ -29273,7 +29275,7 @@ function clDocDel(kind,idx){
 //  supplier sends a sheet with headings nobody has seen before, by the same
 //  "amount = pieces × price" detector the landed-cost import uses.
 // ════════════════════════════════════════════════════════════════════════════
-var _clPiRows=[], _clPiCid=null, _clPiName='';
+var _clPiRows=[], _clPiCid=null, _clPiName='', _clPiMeta=null, _clPiFilled=[], _clPiFile=null;
 // heading → what the column holds. Order matters: "PCS/CTN" and "QTY/CTN" are a
 // pack size, not a carton count and not a quantity, so pack is asked first.
 var CL_PI_H=[
@@ -29376,28 +29378,90 @@ function clPiRows(aoa){
   return clPiBuild(aoa, {row:d.headerRow, code:d.code,
                          ctn:(d.viaCtn||d.pack!=null)?d.qty:null, pack:d.pack, qty:d.pcs});
 }
+// ── the head of the paper, not just its table ─────────────────────────────
+// Every PI from this supplier is built the same way: the seller's name on the
+// first line, "DATE: … INVOICE NO.: YP0007" on the right, "SHIPMENT DATE" a few
+// rows below, and DEPOSIT / BALANCE under the products. That is most of the
+// container card — so it is read too, and a new container fills itself in.
+function _clPiDate(s){
+  var t=String(s||''), m;
+  if((m=t.match(/(20\d{2})\s*[-\/.年]\s*(\d{1,2})\s*[-\/.月]\s*(\d{1,2})/)))
+    return m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2);
+  // dd/mm/yyyy only when the first number cannot be a month — never guess
+  if((m=t.match(/(\d{1,2})\s*[-\/.]\s*(\d{1,2})\s*[-\/.]\s*(20\d{2})/)) && +m[1]>12)
+    return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
+  return '';
+}
+function clPiMeta(aoa){
+  var out={supplier:'',piNo:'',piDate:'',shipDate:'',deposit:0,balance:0,total:0,cur:''};
+  if(!aoa||!aoa.length) return out;
+  var cells=[];
+  aoa.slice(0,25).forEach(function(r,ri){ (r||[]).forEach(function(v){ var t=_clPiTxt(v); if(t) cells.push({r:ri,t:t}); }); });
+  var all=cells.map(function(c){ return c.t; }).join(' | ');
+  // Seller = the first real line of the paper, cut where its address starts.
+  for(var i=0;i<cells.length;i++){
+    if(cells[i].r>3) break;
+    var t=cells[i].t.split(/ADDRESS|ที่อยู่|地址/i)[0].trim().replace(/[,;:]$/,'');
+    if(t.length>=6 && t.length<=90 && !/proforma|invoice|buyer|date|contract/i.test(t)){ out.supplier=t; break; }
+  }
+  var m;
+  // "INVOICE NO.: YP0007" — the label ends in ".:" as often as in ":", so every
+  // punctuation between the word and the number has to be allowed to repeat.
+  if((m=all.match(/(?:INVOICE|P\.?\s?I\.?|CONTRACT|ORDER)\s*(?:NO|NUMBER|#)[\s.:：\-]*([A-Za-z0-9][A-Za-z0-9\-\/_]{2,19})/i))) out.piNo=m[1];
+  // Two labelled dates on the same paper: the shipment one carries its own word
+  // in front, everything else labelled DATE is the invoice date.
+  var dm, drx=/([A-Za-z ]{0,14})DATE\s*[.:：]?\s*([^|]{0,26})/gi;
+  while((dm=drx.exec(all))){
+    var d=_clPiDate(dm[2]); if(!d) continue;
+    if(/SHIP|LOAD|DELIV/i.test(dm[1]||'')){ if(!out.shipDate) out.shipDate=d; }
+    else if(!out.piDate) out.piDate=d;
+  }
+  var cur=all.match(/\b(USD|RMB|CNY|EUR|THB)\b/i);
+  if(cur) out.cur = /rmb/i.test(cur[1]) ? 'CNY' : cur[1].toUpperCase();
+  // The money lines under the table: label on the left, figure on the right.
+  aoa.forEach(function(r){
+    var lbl='', nums=[];
+    (r||[]).forEach(function(v){
+      var t=_clPiTxt(v); if(!t) return;
+      var n=_clPiNum(v);
+      if(n>0 && /^[\d.,\s]+$/.test(String(v).trim())) nums.push(n);
+      else if(!lbl) lbl=t;
+    });
+    if(!lbl||!nums.length) return;
+    // 30 % of a price with decimals lands on 8385.900000000001 — money is money.
+    var last=Math.round(nums[nums.length-1]*100)/100;
+    if(/deposit|定金/i.test(lbl) && !/mold|模具/i.test(lbl)){ if(!out.deposit) out.deposit=last; }
+    else if(/balance|余款|尾款/i.test(lbl)){ if(!out.balance) out.balance=last; }
+    else if(/^(total|grand\s*total|合计|总计)/i.test(lbl)){ if(!out.total) out.total=last; }
+  });
+  return out;
+}
 // Whichever sheet in the workbook holds the most product lines is the PI.
 function clPiFromWb(wb){
-  var best=[], name='';
+  var best=[], name='', meta=null, first=null;
   (wb.SheetNames||[]).forEach(function(nm){
     var aoa=[];
     try{ aoa=XLSX.utils.sheet_to_json(wb.Sheets[nm],{header:1,raw:true,defval:''}); }catch(e){ return; }
+    if(!first) first=aoa;
     var rows=clPiRows(aoa);
-    if(rows.length>best.length){ best=rows; name=nm; }
+    if(rows.length>best.length){ best=rows; name=nm; try{ meta=clPiMeta(aoa); }catch(e){ meta=null; } }
   });
-  return {rows:best, sheet:name};
+  if(!meta && first){ try{ meta=clPiMeta(first); }catch(e){ meta=null; } }
+  return {rows:best, sheet:name, meta:meta};
 }
-// cb(rows, info) — rows is null when the file could not be read at all.
+// cb(rows, info, meta) — rows is null when the file could not be read at all.
 function clPiReadBytes(u8,name,cb){
   if(/\.(csv|txt)$/i.test(name||'')){
     var txt='';
     try{ txt=new TextDecoder('utf-8').decode(u8); }catch(e){ cb(null,'CSV'); return; }
-    cb(clPiRows(acInvCSV(txt)), 'CSV');
+    var aoa=acInvCSV(txt);
+    var mt=null; try{ mt=clPiMeta(aoa); }catch(e){}
+    cb(clPiRows(aoa), 'CSV', mt);
     return;
   }
   acInvLoadXLSX(function(ok){
     if(!ok||!window.XLSX){ cb(null,'ต้องต่อเน็ต / this needs the internet'); return; }
-    try{ var wb=XLSX.read(u8,{type:'array'}); var r=clPiFromWb(wb); cb(r.rows, r.sheet); }
+    try{ var wb=XLSX.read(u8,{type:'array'}); var r=clPiFromWb(wb); cb(r.rows, r.sheet, r.meta); }
     catch(e){ cb(null, String(e&&e.message||e)); }
   });
 }
@@ -29405,8 +29469,8 @@ function clPiReadBytes(u8,name,cb){
 function clPiFromFile(f,cid){
   var r=new FileReader();
   r.onload=function(e){
-    clPiReadBytes(new Uint8Array(e.target.result), f.name, function(rows,info){
-      clPiOffer(rows, cid, f.name, info);
+    clPiReadBytes(new Uint8Array(e.target.result), f.name, function(rows,info,meta){
+      clPiOffer(rows, cid, f.name, info, meta);
     });
   };
   r.onerror=function(){};
@@ -29418,7 +29482,7 @@ function clPiFromDoc(cid,kind,idx){
   var f=clDocsOf(c,kind)[idx]; if(!f) return;
   var go=function(src){
     if(!src){ alert('ไฟล์หาย / File missing'); return; }
-    var done=function(u8){ clPiReadBytes(u8, f.name, function(rows,info){ clPiOffer(rows, c.id, f.name, info); }); };
+    var done=function(u8){ clPiReadBytes(u8, f.name, function(rows,info,meta){ clPiOffer(rows, c.id, f.name, info, meta); }); };
     if(/^data:/.test(src)) return done(_clB64ToU8(src));
     fetch(src).then(function(r){ return r.arrayBuffer(); })
       .then(function(b){ done(new Uint8Array(b)); })
@@ -29435,17 +29499,31 @@ function clPiFromDoc(cid,kind,idx){
     go(v);
   }, function(){ if(busy) busy.style.display='none'; alert('โหลดไม่สำเร็จ / Could not load'); });
 }
-// The button next to "Add" in the container form: read the newest filed PI.
+// The button next to "Add" in the container form. A container that already has
+// its PI filed reads that one; a brand-new container has nowhere to read from
+// yet, so it asks for the file — which then fills the form AND is filed as the
+// PI the moment the container is saved. One drop, whole card.
 function clPiFromEdit(){
   var c=_clEditId ? (containerLog||[]).find(function(x){return x.id===_clEditId;}) : null;
-  if(!c){ alert('บันทึกตู้ก่อน แล้วแนบไฟล์ PI / save the container first, then file its PI'); return; }
-  var all=clDocsOf(c,'pi'), sheets=all.filter(function(f){ return clDocKindOf(f)==='sheet'; });
-  if(!sheets.length){ alert('ยังไม่มีไฟล์ Excel ใน PI / no spreadsheet filed under the PI yet\n\nเปิด 📎 เอกสารตู้ แล้ววางไฟล์ / open the container papers and drop the file there'); return; }
-  clPiFromDoc(c.id, 'pi', all.indexOf(sheets[sheets.length-1]));
+  if(c){
+    var all=clDocsOf(c,'pi'), sheets=all.filter(function(f){ return clDocKindOf(f)==='sheet'; });
+    if(sheets.length){ clPiFromDoc(c.id, 'pi', all.indexOf(sheets[sheets.length-1])); return; }
+  }
+  clPiPick();
+}
+function clPiPick(){ var i=document.getElementById('clpi-file'); if(i){ i.value=''; i.click(); } }
+function clPiOnFile(input){
+  var f=(input&&input.files)?input.files[0]:null;
+  if(input) input.value='';
+  if(!f) return;
+  _clPiFile=f;                       // filed under 📄 PI when the container is saved
+  clPiFromFile(f, _clEditId||'__form__');
 }
 function clPiFormOpen(){
   var m=document.getElementById('cl-modal');
-  return !!(m && m.classList.contains('open') && _clEditId && _clEditId===_clPiCid);
+  if(!(m && m.classList.contains('open'))) return false;
+  if(_clPiCid==='__form__') return true;      // a container that has no id yet
+  return !!(_clEditId && _clEditId===_clPiCid);
 }
 // Codes the app has seen before — anything else gets an orange box to look at.
 function _clPiKnown(){
@@ -29455,7 +29533,39 @@ function _clPiKnown(){
   try{ acSoldCodes().forEach(function(c){ if(c&&c.code) k[c.code]=1; }); }catch(e){}
   return k;
 }
-function clPiOffer(rows,cid,name,info){
+// The head of the paper into the empty boxes of the form. Never over anything
+// somebody typed — a field with something in it is left exactly as it is, and
+// what was actually filled is listed back, so nothing lands silently.
+var CL_PI_FIELDS=[
+  ['cl-supplier',    'supplier', 'ผู้ผลิต / Supplier'],
+  ['cl-pi-no',       'piNo',     'PI / Order No.'],
+  ['cl-loading',     'shipDate', '🏭 Loading / SHIPMENT DATE']
+];
+function clPiHeadFill(meta){
+  var done=[];
+  if(!meta) return done;
+  CL_PI_FIELDS.forEach(function(f){
+    var el=document.getElementById(f[0]), v=meta[f[1]];
+    if(!el || !v || String(el.value||'').trim()) return;
+    el.value=v; done.push(f[2]+': '+v);
+  });
+  // The PI's money has no box of its own on a container, so it goes into the
+  // notes — where the office looks when the bank asks what this transfer was.
+  var nt=document.getElementById('cl-notes');
+  if(nt && !String(nt.value||'').trim() && (meta.total>0||meta.deposit>0||meta.balance>0)){
+    var cur=meta.cur||'';
+    var bits=[];
+    if(meta.piNo) bits.push('PI '+meta.piNo);
+    if(meta.piDate) bits.push('ลงวันที่/dated '+meta.piDate);
+    if(meta.total>0)   bits.push('รวม/total '+meta.total.toLocaleString()+' '+cur);
+    if(meta.deposit>0) bits.push('มัดจำ/deposit '+meta.deposit.toLocaleString());
+    if(meta.balance>0) bits.push('คงเหลือ/balance '+meta.balance.toLocaleString());
+    nt.value=bits.join(' · ');
+    done.push('📝 Notes: '+nt.value);
+  }
+  return done;
+}
+function clPiOffer(rows,cid,name,info,meta){
   if(rows===null){ alert('อ่านไฟล์นี้ไม่ได้ / could not read this sheet\n'+(info||'')); return; }
   if(!rows.length){
     alert('ไม่พบรายการสินค้าในไฟล์นี้ / no product lines found in this file\n\nกรอกเองได้ตามปกติ / please type them in as before');
@@ -29463,12 +29573,15 @@ function clPiOffer(rows,cid,name,info){
   }
   _clPiRows=rows; _clPiCid=cid;
   _clPiName=(name||'')+(info&&info!=='CSV'?' · '+info:'');
+  _clPiMeta=meta||null;
+  _clPiFilled=[];
+  if(clPiFormOpen()){ try{ _clPiFilled=clPiHeadFill(_clPiMeta)||[]; }catch(e){} }
   clPiRender();
   document.getElementById('clpi-modal').classList.add('open');
 }
 function clPiClose(){
   var m=document.getElementById('clpi-modal'); if(m) m.classList.remove('open');
-  _clPiRows=[]; _clPiCid=null; _clPiName='';
+  _clPiRows=[]; _clPiCid=null; _clPiName=''; _clPiMeta=null; _clPiFilled=[];
 }
 function clPiRender(){
   var body=document.getElementById('clpi-body'); if(!body) return;
@@ -29485,6 +29598,28 @@ function clPiRender(){
   var cols='display:grid;grid-template-columns:22px 1.3fr 1fr .8fr .9fr;gap:5px';
   var h='<div style="font-size:11.5px;color:var(--text2);margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 '+_esc(_clPiName||'')+'</div>'
     +'<div style="font-size:13px;font-weight:800;margin-bottom:8px">อ่านได้ '+_clPiRows.length+' รายการ / '+_clPiRows.length+' products read from the sheet</div>';
+  // What the head of the paper said, and which boxes of the form it went into.
+  h+=(function(){
+    var m=_clPiMeta; if(!m) return '';
+    var line=function(l,v){ return v?('<div style="display:flex;justify-content:space-between;gap:8px"><span style="color:var(--text2)">'+l+'</span><span style="font-weight:700;text-align:right;min-width:0">'+_esc(String(v))+'</span></div>'):''; };
+    var body=line('ผู้ผลิต / Supplier', m.supplier)
+      +line('PI No.', m.piNo)
+      +line('วันที่ PI / PI date', m.piDate?clFmtD(m.piDate):'')
+      +line('🏭 SHIPMENT DATE', m.shipDate?clFmtD(m.shipDate):'')
+      +line('รวม / Total', m.total>0?(m.total.toLocaleString()+' '+(m.cur||'')):'')
+      +line('มัดจำ / Deposit', m.deposit>0?(m.deposit.toLocaleString()+' '+(m.cur||'')):'')
+      +line('คงเหลือ / Balance', m.balance>0?(m.balance.toLocaleString()+' '+(m.cur||'')):'');
+    if(!body) return '';
+    return '<div style="background:var(--bg2);border-radius:var(--rs);padding:8px 10px;margin-bottom:8px;font-size:11.5px">'
+      +'<div style="font-size:10.5px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">🧾 หัวใบ PI / from the header</div>'
+      +body
+      +(_clPiFilled.length
+        ? '<div style="margin-top:6px;padding-top:5px;border-top:1px solid var(--border);color:#166534;font-weight:700">✓ ใส่ในฟอร์มให้แล้ว / filled into the form:<br>'
+            +_clPiFilled.map(function(x){ return '· '+_esc(x); }).join('<br>')+'</div>'
+        : (clPiFormOpen()?'<div style="margin-top:6px;padding-top:5px;border-top:1px solid var(--border);color:var(--text2)">ช่องที่กรอกไว้แล้วไม่ถูกเขียนทับ / the boxes you already filled were left alone</div>':''))
+      +(_clPiFile?'<div style="margin-top:5px;color:#4f46e5;font-weight:700">📎 ไฟล์นี้จะถูกเก็บเป็น PI ตอนกด Save / this file is filed as the PI when you save</div>':'')
+    +'</div>';
+  })();
   if(have>0) h+='<div style="font-size:11.5px;color:#92400e;background:var(--orange-l);border-radius:var(--rs);padding:7px 9px;margin-bottom:8px">'
     +'⚠️ ตู้นี้มี '+have+' รายการอยู่แล้ว / this container already has '+have+' lines</div>';
   h+='<div style="'+cols+';margin-bottom:3px;font-size:10px;color:var(--text2);font-weight:700">'
@@ -29925,6 +30060,7 @@ function clRenderStats() {
 
 function openCL(id) {
   _clEditId = id;
+  _clPiFile = null;                 // a PI picked for an earlier container is not this one's
   var c = id ? containerLog.find(function(x){return x.id===id;}) : null;
   document.getElementById('cl-modal-title').textContent = id ? '✏️ Edit Container' : '🚢 Add Container';
   document.getElementById('cl-del-btn').style.display = id ? 'flex' : 'none';
@@ -29957,6 +30093,7 @@ function openCL(id) {
 function closeCL() {
   document.getElementById('cl-modal').classList.remove('open');
   _clEditId = null;
+  _clPiFile = null;
 }
 
 function clAddHelperGroup(group, count, per){
@@ -30037,6 +30174,22 @@ function saveCL() {
     createdAt: old ? (old.createdAt||Date.now()) : Date.now()
   });
   window.fbDB.ref('containerLog/'+entry.id).set(entry);
+  // A PI that was read into this form but never filed anywhere: now that the
+  // container has an id, the file goes under 📄 PI where it belongs. The record
+  // has to come back from the database first — the uploader looks it up by id.
+  if(_clPiFile){
+    var _pf=_clPiFile; _clPiFile=null;
+    var _tries=0;
+    (function waitForRecord(){
+      if((containerLog||[]).some(function(x){ return x.id===entry.id; })){
+        _clDocId=entry.id;
+        try{ _clDocUpload(_pf,'pi',function(){}); }catch(e){}
+        return;
+      }
+      if(_tries++>40) return;                 // 4 s, then give up quietly
+      setTimeout(waitForRecord,100);
+    })();
+  }
   closeCL();
 }
 
