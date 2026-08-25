@@ -28959,6 +28959,149 @@ function clPiApply(mode){
   try{ if(document.getElementById('cldocs-modal').classList.contains('open')) clDocsRender(); }catch(e){}
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  BOOKING A CONTAINER IN — the last moment anybody looks at it
+//  ---------------------------------------------------------------------------
+//  "Container arrived" adds the goods to stock and drops the card into the
+//  history, where nobody opens it again. So this is the last chance to notice
+//  that the PI or one of the two transfer slips was never filed, and the moment
+//  the warehouse needs the list on paper: what should be in the container, per
+//  code, in cartons and in pieces, to tick off against what came off the truck.
+// ════════════════════════════════════════════════════════════════════════════
+function clPapersMissing(c){
+  var m=[];
+  if(!clDocsOf(c,'pi').length)                       m.push('📄 PI / ใบแจ้งราคา');
+  if(c.deposit && !clDocsOf(c,'depositSlip').length) m.push('💰 สลิปมัดจำ / deposit slip');
+  if(c.balance && !clDocsOf(c,'balanceSlip').length) m.push('💳 สลิปยอดคงเหลือ / balance slip');
+  if(!c.balance)                                     m.push('💳 ยังไม่ได้จ่ายยอดคงเหลือ / balance not paid yet');
+  return m;
+}
+// ── the goods-in check sheet ──────────────────────────────────────────────
+var CL_CHK_SEC=[
+  ['kp',   'KP — แผ่นผนัง WPC / WPC wall panels'],
+  ['pvc',  'K-PVC — ฝ้าเพดาน / PVC ceiling panels'],
+  ['l',    'L — ขอบ L / L-corner'],
+  ['t',    'T — ขอบ T / T-profile'],
+  ['u',    'U — ขอบ U / U-profile'],
+  ['clip', 'คลิป / Clips'],
+  ['other','อื่น ๆ / other']
+];
+var CL_CHK_PANEL={kp:1,pvc:1};      // everything else counts as accessories
+function clChkCat(code){
+  var c=String(code||'').toUpperCase().replace(/\s+/g,'');
+  if(/CLIP/.test(c))     return 'clip';
+  if(/^K-?PVC/.test(c))  return 'pvc';
+  if(/^KP/.test(c))      return 'kp';
+  if(/^L/.test(c))       return 'l';
+  if(/^T[\d-]/.test(c))  return 't';
+  if(/^U[\d-]/.test(c))  return 'u';
+  return 'other';
+}
+function clPrintCheck(id){
+  var c=(containerLog||[]).find(function(x){return x.id===id;}); if(!c) return;
+  var items=(c.items||[]).filter(function(i){ return i && i.code && (parseInt(i.qty)||0)>0; });
+  if(!items.length){ alert('ตู้นี้ยังไม่มีรายการสินค้า / this container has no product list yet\n\nใส่จากไฟล์ PI ได้ที่ปุ่ม 📄 จาก PI / fill it from the PI file'); return; }
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var groups={};
+  items.forEach(function(i){ var k=clChkCat(i.code); (groups[k]=groups[k]||[]).push(i); });
+  Object.keys(groups).forEach(function(k){
+    groups[k].sort(function(a,b){ return String(a.code).localeCompare(String(b.code), undefined, {numeric:true}); });
+  });
+  var sum=function(arr,f){ return (arr||[]).reduce(function(a,i){ return a+(parseInt(f(i))||0); },0); },
+      qOf=function(i){ return i.qty; }, cOf=function(i){ return i.ctn; };
+  var nRow=0;
+  var sec=function(key,title){
+    var arr=groups[key]; if(!arr||!arr.length) return '';
+    return '<div class="sec"><div class="sect">'+esc(title)
+      +'<span class="cnt">'+arr.length+' รายการ · '+sum(arr,cOf).toLocaleString()+' CTN · '+sum(arr,qOf).toLocaleString()+' pcs</span></div>'
+      +'<table><thead><tr>'
+        +'<th class="c w-n">#</th><th class="w-cd">รหัส / Code</th>'
+        +'<th class="c w-ctn">ลัง / CTN</th><th class="c w-pc">แผ่น/ลัง<br>pcs per CTN</th><th class="c w-tot">รวม / TOTAL pcs</th>'
+        +'<th class="c w-got">นับได้ ลัง<br>counted CTN</th><th class="c w-gott">นับได้ รวม<br>counted pcs</th><th class="w-nt">✓ / หมายเหตุ Note</th>'
+      +'</tr></thead><tbody>'
+      +arr.map(function(i){
+        var ctn=parseInt(i.ctn)||0, per=parseInt(i.pcsPerCtn)||0, qty=parseInt(i.qty)||0;
+        return '<tr>'
+          +'<td class="c muted">'+(++nRow)+'</td>'
+          +'<td class="cd">'+esc(i.code)+'</td>'
+          +'<td class="c b">'+(ctn?ctn.toLocaleString():'—')+'</td>'
+          +'<td class="c">'+(per?per.toLocaleString():'—')+'</td>'
+          +'<td class="c b tot">'+qty.toLocaleString()+'</td>'
+          +'<td class="box"></td><td class="box"></td><td class="box"></td>'
+        +'</tr>';
+      }).join('')
+      +'</tbody></table></div>';
+  };
+  var body=CL_CHK_SEC.map(function(s){ return sec(s[0],s[1]); }).join('');
+  var pan=[], acc=[];
+  Object.keys(groups).forEach(function(k){ (CL_CHK_PANEL[k]?pan:acc).push.apply(CL_CHK_PANEL[k]?pan:acc, groups[k]); });
+  var tRow=function(lbl,arr,cls){
+    return '<tr class="'+(cls||'')+'"><td>'+lbl+'</td>'
+      +'<td class="c">'+arr.length+'</td>'
+      +'<td class="c b">'+sum(arr,cOf).toLocaleString()+'</td>'
+      +'<td class="c b">'+sum(arr,qOf).toLocaleString()+'</td>'
+      +'<td class="box"></td><td class="box"></td></tr>';
+  };
+  var now=new Date();
+  var dateStr=now.toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'});
+  var info=function(l,v){ return '<div><span>'+l+'</span><b>'+esc(v||'—')+'</b></div>'; };
+  var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Container check / ใบตรวจรับตู้ '+esc(c.containerNo||c.supplier||'')+'</title><style>'
+    +'*{box-sizing:border-box;margin:0;padding:0}'
+    +'@page{size:A4 portrait;margin:9mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;background:#fff;font-size:10pt}'
+    +'.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:5px}'
+    +'.hd h1{font-size:14pt}.hd .d{font-size:9.5pt;color:#444;text-align:right}'
+    +'.meta{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0 4px;font-size:9.5pt}'
+    +'.meta div{border:1px solid #bbb;border-radius:4px;padding:2px 8px}'
+    +'.meta span{color:#666;margin-right:5px}'
+    +'.who{display:flex;gap:8px;margin:6px 0 2px;font-size:9.5pt}'
+    +'.who div{flex:1;border:1px solid #111;border-radius:4px;padding:4px 8px;height:11mm}'
+    +'.note{font-size:8.5pt;color:#555;margin-top:3px}'
+    +'.sec{margin-top:10px}'
+    +'.sect{font-size:11pt;font-weight:800;background:#ffeb3b;border:1px solid #999;padding:3px 7px;margin-bottom:3px}'
+    +'.sect .cnt{font-size:9pt;font-weight:600;color:#444;float:right}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #999;padding:2px 5px;font-size:9.5pt}'
+    +'th{background:#f1f5f9;font-size:8pt;text-transform:uppercase;letter-spacing:.03em;line-height:1.2}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'td{height:8mm}'
+    +'.c{text-align:center}.muted{color:#777}.b{font-weight:800}'
+    +'.cd{font-weight:800;font-size:11pt}'
+    +'.box{background:#fcfcfc}'
+    +'.tot{background:#fffbeb}'
+    +'.sum{margin-top:12px;page-break-inside:avoid}'
+    +'.sum td{height:9mm;font-size:10.5pt}'
+    +'.sum .gt td{background:#fffbeb;font-weight:800;font-size:11.5pt}'
+    +'.w-n{width:8mm}.w-cd{width:26mm}.w-ctn{width:16mm}.w-pc{width:20mm}.w-tot{width:22mm}'
+    +'.w-got{width:22mm}.w-gott{width:22mm}'
+    +'</style></head><body>'
+    +'<div class="hd"><h1>📦 ใบตรวจรับตู้ / Container check sheet</h1>'
+      +'<div class="d"><b>'+esc(c.supplier||'')+'</b><br>'+esc(dateStr)+'</div></div>'
+    +'<div class="meta">'
+      +info('ตู้ / Container', c.containerNo)
+      +info('PI', c.piNo)
+      +info('🏭 Loading', c.loading?clFmtD(c.loading):'')
+      +info('🛳️ Thailand', (c.arrivedThAct||c.arrivedTh)?clFmtD(c.arrivedThAct||c.arrivedTh):'')
+      +info('🏪 โกดัง / Warehouse', c.arrivedWh?clFmtD(c.arrivedWh):'')
+    +'</div>'
+    +'<div class="who"><div>ผู้ตรวจนับ / Checked by:</div><div>ผู้ขนของ / Unloaded by:</div><div>วันที่ / Date:</div></div>'
+    +'<div class="note"><b>ตัวเลขซ้ายคือที่สั่งไว้ตาม PI — นับของจริงแล้วเขียนในช่องขวา</b> / the figures on the left are what the PI says; '
+      +'count what came off the truck and write it in the boxes on the right. รวม = ลัง × แผ่น/ลัง / TOTAL = cartons × pcs per carton. '
+      +'ถ้าไม่ตรง เขียนหมายเหตุ / write a note where it does not match.</div>'
+    +body
+    +'<div class="sum"><table>'
+      +'<thead><tr><th>สรุป / Summary</th><th class="c">รายการ / items</th><th class="c">ลัง / CTN</th><th class="c">รวม / TOTAL pcs</th>'
+        +'<th class="c w-got">นับได้ ลัง</th><th class="c w-gott">นับได้ รวม</th></tr></thead><tbody>'
+      +tRow('แผ่น / Panels (KP · K-PVC)', pan)
+      +tRow('อุปกรณ์ / Accessories (L · T · U · Clips)', acc)
+      +tRow('รวมทั้งตู้ / Whole container', items, 'gt')
+      +'</tbody></table></div>'
+    +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(full); w.document.close(); w.focus();
+}
+
 function clCard(c, isPending) {
   var d1=clDaysBetween(c.deposit,c.loading), d2=clDaysBetween(c.loading,c.arrivedThAct), d3=clDaysBetween(c.arrivedThAct,c.arrivedWh), dtot=clDaysBetween(c.deposit,c.arrivedWh);
   var statusColor = c.arrivedWh?'var(--green)':c.arrivedThAct?'var(--orange)':c.loading?'var(--blue)':'var(--text2)';
@@ -29013,7 +29156,10 @@ function clCard(c, isPending) {
             +'<span style="font-weight:600">'+i.code+'</span>'
             +'<span style="color:var(--green);font-weight:700">'+parseInt(i.qty).toLocaleString()+' pcs'+ctnTxt+'</span></div>';
         }).join('')
-      +'</div></details>';
+      +'</div></details>'
+      // On paper, per code, in cartons and pieces — what the warehouse ticks off
+      // against the truck. Stays on the card after arrival so it can be reprinted.
+      +'<button type="button" class="btnsm" style="width:100%;justify-content:center;margin-bottom:8px;padding:6px 4px;font-size:11.5px" onclick="clPrintCheck(\''+c.id+'\')">🖨️ ใบตรวจรับสินค้า / print the goods check sheet</button>';
   }
 
   // ── What has to sell before THIS container gets its turn ──────────────────
@@ -29081,6 +29227,11 @@ function clCard(c, isPending) {
 
   // Arrived button for pending
   if(isPending) {
+    // Say what is still missing here, not only in the dialog — the card is where
+    // somebody can still do something about it.
+    var _miss=clPapersMissing(c);
+    if(_miss.length) html += '<div style="font-size:11px;color:#92400e;background:var(--orange-l);border-radius:var(--rs);padding:6px 9px;margin-bottom:6px;cursor:pointer" onclick="clDocsOpen(\''+c.id+'\')">'
+      +'⚠️ ก่อนรับเข้าคลัง / before booking in: '+_miss.join(' · ')+'</div>';
     html += '<button type="button" class="btn btng" style="margin-top:0" onclick="clArrived(\''+c.id+'\')">'
       +'<i class="ti ti-package-import"></i> Container arrived at warehouse / ถึงโกดังแล้ว</button>';
   }
@@ -29093,6 +29244,15 @@ function clCard(c, isPending) {
 function clArrived(id) {
   var c = containerLog.find(function(x){return x.id===id;});
   if(!c) return;
+  // Papers first. OK is the harmless way out — it opens the container papers
+  // instead of booking anything in; going on without them takes a second yes.
+  var miss = clPapersMissing(c);
+  if(miss.length){
+    if(confirm('⚠️ ยังไม่ครบ / not complete yet:\n\n'+miss.join('\n')
+      +'\n\n[OK] เปิดเอกสารตู้ อัปโหลดตอนนี้ / open the container papers and upload now'
+      +'\n[Cancel] ทำต่อโดยไม่มีเอกสาร / go on without them')){ clDocsOpen(id); return; }
+    if(!confirm('รับตู้เข้าคลังโดยไม่มี '+miss.length+' อย่างข้างบน?\nBook the container in anyway, without the '+miss.length+' item(s) above?')) return;
+  }
   var today = new Date().toISOString().split('T')[0];
   if(!confirm('Mark container from '+c.supplier+' as arrived today ('+clFmtD(today)+')?\nThis will add all products to stock.')) return;
   c.arrivedWh = today;
