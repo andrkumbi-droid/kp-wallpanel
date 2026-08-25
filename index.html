@@ -29179,6 +29179,11 @@ function _clDocToDb(f,base,save){
   }
   if((f.size||0)>CL_DOC_MAXB64){
     if(busy) busy.style.display='none';
+    // A PI from WeChat is mostly photographs pasted into the sheet: one of them
+    // is 19.8 MB, of which 19.7 MB are five PNGs and 26 KB are the numbers. So a
+    // spreadsheet is not refused for its size — the table is offered without the
+    // pictures instead, which is the part this app reads anyway.
+    if(/\.(xlsx|xlsm|xls)$/i.test(f.name||'')){ _clDocSlim(f,base,save); return; }
     alert('ไฟล์ใหญ่เกินไป / File too big — '+(f.name||'')+'\n'+clDocSize(f.size)+' (สูงสุด/max '+clDocSize(CL_DOC_MAXB64)+')');
     save(null,null,true);   // keeps a multi-file drop going instead of stopping dead
     return;
@@ -29187,6 +29192,54 @@ function _clDocToDb(f,base,save){
   r.onload=function(e){ save(Object.assign({k:key},base),e.target.result); };
   r.onerror=function(){ save(null,null); };
   r.readAsDataURL(f);
+}
+// Too big to file, because of what is glued into it. Read the workbook and write
+// it out again: every cell, every sheet, every number — no pictures. 19.8 MB
+// becomes 26 KB, the product import reads it exactly the same, and the original
+// stays where it came from.
+function _clDocSlim(f,base,save){
+  var busy=document.getElementById('cldoc-busy');
+  var giveUp=function(){
+    if(busy) busy.style.display='none';
+    alert('ไฟล์ใหญ่เกินไป / File too big — '+(f.name||'')+'\n'+clDocSize(f.size)+' (สูงสุด/max '+clDocSize(CL_DOC_MAXB64)+')');
+    save(null,null,true);
+  };
+  acInvLoadXLSX(function(ok){
+    if(!ok||!window.XLSX){ giveUp(); return; }
+    if(busy){ busy.style.display=''; busy.textContent='⏳ กำลังย่อไฟล์… / slimming the file…'; }
+    var rd=new FileReader();
+    rd.onerror=giveUp;
+    rd.onload=function(ev){
+      var out=null;
+      try{
+        var wb=XLSX.read(new Uint8Array(ev.target.result),{type:'array'});
+        var w=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+        // In the browser this comes back as an ArrayBuffer, which has no .length —
+        // measuring that as 0 is what made a perfectly good 26 KB file look empty.
+        out=w ? (w instanceof Uint8Array ? w : new Uint8Array(w)) : null;
+      }catch(e){ out=null; }
+      if(busy) busy.style.display='none';
+      // base64 costs another third — measure what will really be stored.
+      if(!out || !out.length || out.length*1.4>CL_DOC_MAXB64){ giveUp(); return; }
+      if(!confirm('ไฟล์ใหญ่เกินไป / too big: '+clDocSize(f.size)+' (สูงสุด/max '+clDocSize(CL_DOC_MAXB64)+')\n\n'
+        +'ส่วนใหญ่เป็นรูปที่แปะไว้ในชีต / most of it is pictures pasted into the sheet.\n'
+        +'บันทึกเฉพาะตาราง ไม่มีรูป ('+clDocSize(out.length)+') ไหม?\n'
+        +'Store the table only, without the pictures?\n\n'
+        +'ตัวเลขและรายการสินค้าครบทุกบรรทัด / every number and product line is kept.\n'
+        +'ไฟล์ต้นฉบับยังอยู่ที่เดิม / the original file stays where it is.')){ save(null,null,true); return; }
+      var mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      var nm=String(f.name||'file').replace(/\.(xlsx|xlsm|xls)$/i,'')+' (ตาราง-table only).xlsx';
+      if(busy){ busy.style.display=''; busy.textContent='⏳ กำลังบันทึก… / storing…'; }
+      var rd2=new FileReader();
+      rd2.onerror=giveUp;
+      rd2.onload=function(e2){
+        save(Object.assign({k:'d'+Date.now()+Math.floor(Math.random()*1000), slim:1}, base,
+              {name:nm, size:out.length, mime:mime}), e2.target.result);
+      };
+      rd2.readAsDataURL(new Blob([out],{type:mime}));
+    };
+    rd.readAsArrayBuffer(f);
+  });
 }
 function clDocDel(kind,idx){
   var c=(containerLog||[]).find(function(x){return x.id===_clDocId;}); if(!c) return;
