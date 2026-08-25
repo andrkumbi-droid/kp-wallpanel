@@ -31527,8 +31527,15 @@ function billsShipData(mk){
       if(_tr) _trPay=parseFloat(_tr.driverPay)||0;
       var _dup=(amt>0 && _trPay>0);
       if(_dup){ lalaDup++; lalaDupAmt+=amt; }      // amt = what must NOT be counted again
-      lala.push({ o:o, tour:_t||null, onTour:!!at, dup:_dup, dupPay:_trPay });
-      lalaTotal+=amt; if(amt<=0 && !o.shipFree) lalaMissing++;
+      // One ride, one price: a Lalamove tour is paid as a single amount for all the
+      // stops on it. So an order on a tour that already carries its pay has no bill
+      // of its own left to enter — it is covered, not missing. Without this, four of
+      // five orders shout "no cost" while the fifth holds the lump sum, and a tour
+      // that is paid and settled still reads as unfinished work.
+      var _cov=(amt<=0 && !o.shipFree && _trPay>0);
+      var _cnt=0; try{ _cnt=tidArr(_tr&&_tr.orders).length; }catch(e){}
+      lala.push({ o:o, tour:_t||null, onTour:!!at, dup:_dup, dupPay:_trPay, covered:_cov, tourN:_cnt });
+      lalaTotal+=amt; if(amt<=0 && !o.shipFree && !_cov) lalaMissing++;
       return;
     }
     // Marked free → settled, so it belongs with its company, not in the pending bucket.
@@ -31544,7 +31551,10 @@ function billsShipData(mk){
   });
   // Newest first inside a company; unpriced ones on top — that is the work to do.
   var _shipSort=function(a,b){
-    var pa=(parseFloat(a.o.shipCost)||0)>0?1:0, pb=(parseFloat(b.o.shipCost)||0)>0?1:0;
+    // "Done" means priced, free, or covered by the tour it went out on — only what
+    // still needs a number floats to the top.
+    var done=function(x){ return ((parseFloat(x.o.shipCost)||0)>0 || x.o.shipFree || x.covered)?1:0; };
+    var pa=done(a), pb=done(b);
     if(pa!==pb) return pa-pb;
     return String(b.o.shipCostDate||b.o.date||'').localeCompare(String(a.o.shipCostDate||a.o.date||''));
   };
@@ -31690,7 +31700,16 @@ function _billItemRow(b){
 // Every picture kind can be looked at (tap the pill) and added afterwards (the ➕) —
 // goods, carrier receipt and the customer's transfer slip, straight from Bills.
 function _billShipRowHTML(r,idx,amber){
-  var o=r.o, t=r.tour, amt=parseFloat(o.shipCost)||0, free=!!o.shipFree, open=(amt<=0 && !free);
+  var o=r.o, t=r.tour, amt=parseFloat(o.shipCost)||0, free=!!o.shipFree;
+  // Covered = the tour this order rode on was paid as one amount. Nothing to enter
+  // here, so no red frame and no warning — the tour is where that money lives.
+  var cov=!!r.covered, open=(amt<=0 && !free && !cov);
+  var covShare=(cov && r.tourN>0) ? Math.round((r.dupPay||0)/r.tourN) : 0;
+  var covTip=cov ? ('ค่าทัวร์ '+(r.dupPay||0).toLocaleString()+' ฿ จ่ายรวมทั้งทัวร์แล้ว'
+      +(r.tourN>0?(' · '+r.tourN+' ออเดอร์ ≈ '+covShare.toLocaleString()+' ฿ ต่อออเดอร์'):'')
+      +' / the whole ride was paid as one amount on the tour — nothing to enter on this order') : '';
+  var covChip=cov ? ('<span title="'+covTip+'" style="font-size:11px;font-weight:800;color:#166534;background:#dcfce7;border-radius:8px;padding:1px 7px;white-space:nowrap">🆔 ในค่าทัวร์ / in tour pay'
+      +(covShare?' <span style="font-weight:600">≈'+covShare.toLocaleString()+'</span>':'')+'</span>') : '';
   var gid='bshipg_'+idx+'_'+safeOrderId(o.id), eid=String(o.id).replace(/['\\]/g,'');
   var nG=0,nR=0,nS=0;
   try{ nG=orderPhotoCount(o.id,'delivery'); nR=orderPhotoCount(o.id,'shipreceipt'); nS=orderPhotoCount(o.id,'slip'); }catch(e){}
@@ -31735,13 +31754,14 @@ function _billShipRowHTML(r,idx,amber){
             +' style="flex-shrink:0;display:grid;grid-template-columns:auto auto;column-gap:10px;row-gap:2px;font-size:11px;white-space:nowrap;line-height:1.35">'
             +(_tot>0?cell('ยอดลูกค้า / order', _tot.toLocaleString()):'')
             +cell('💸 ค่าเก็บเงิน / fee', _f.toLocaleString())
-            +cell('🚚 ค่าส่ง / ship', amt>0?amt.toLocaleString():(free?'<span style="color:#16a34a;font-weight:700">ฟรี / free</span>':'—'))
+            +cell('🚚 ค่าส่ง / ship', amt>0?amt.toLocaleString():(free?'<span style="color:#16a34a;font-weight:700">ฟรี / free</span>':(cov?'<span title="'+covTip+'" style="color:#166534;font-weight:700">ในค่าทัวร์ / in tour</span>':'—')))
             +'<div style="grid-column:1/3;border-top:1px solid var(--border);margin:3px 0 1px"></div>'
             +cell('รวม / cost', '<span style="font-size:13px">'+(amt+_f).toLocaleString()+' ฿</span>', true)
             +'</div>';
         }
         return amt>0?'<span style="font-weight:800;white-space:nowrap">'+amt.toLocaleString()+' ฿</span>'
              :free?'<span style="font-size:11px;font-weight:800;color:#16a34a;background:#dcfce7;border-radius:8px;padding:1px 7px;white-space:nowrap">ฟรี / free</span>'
+             :cov?covChip
              :'<span style="font-size:11px;font-weight:700;color:'+col+';white-space:nowrap">'+(amber?'บนทัวร์ / on tour':'⚠️ ยังไม่ใส่ / no cost')+'</span>';
       })())+
     '</div>'+
