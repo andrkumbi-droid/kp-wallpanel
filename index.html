@@ -149,6 +149,15 @@ textarea{resize:none}
 .pline .cutwrap .cutlbl{font-size:11.5px;font-weight:800;color:#6d28d9;white-space:nowrap}
 .pline .cutwrap input.cutcm{width:82px;text-align:right;font-weight:700;color:#6d28d9}
 .eline{display:grid;grid-template-columns:72px 1fr 1fr 1fr 32px;gap:6px;align-items:center;margin-bottom:6px;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);border-left:3px solid var(--orange)}
+/* Type a number in a code box → the models with that number, with their price. */
+#ofsug{position:fixed;z-index:400;display:none;max-height:46vh;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);box-shadow:0 10px 28px rgba(0,0,0,.20)}
+#ofsug .r{display:flex;align-items:center;gap:8px;padding:8px 9px;font-size:12.5px;cursor:pointer;border-bottom:1px solid var(--border)}
+#ofsug .r:last-child{border-bottom:none}
+#ofsug .r.on,#ofsug .r:hover{background:var(--blue-bg)}
+#ofsug .c{font-weight:800;min-width:60px;white-space:nowrap}
+#ofsug .n{color:var(--text2);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ofsug .s{font-size:11px;color:var(--text2);white-space:nowrap}
+#ofsug .p{font-weight:800;color:var(--green);white-space:nowrap}
 .colh-e{display:grid;grid-template-columns:72px 1fr 1fr 1fr 32px;gap:6px;padding:0 10px;margin-bottom:3px}
 .colh-e span{font-size:11px;color:var(--text2);font-weight:500}
 .eline input{background:var(--bg);border:1px solid var(--border)}
@@ -9640,6 +9649,232 @@ function ofAddE(){
   document.getElementById('of-edges').appendChild(d);
 }
 function rmLine(btn){btn.closest('.pline,.eline').remove();ofCalc();}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CODE BOX → PICK THE MODEL, THE PRICE COMES WITH IT
+//  ---------------------------------------------------------------------------
+//  Nobody in the office says "KP009", they say "the 9". So typing 9 now offers
+//  every model carrying that number — the panel, the corner, the T and the U —
+//  with its name, what is on the shelf and what it costs. Picking one writes the
+//  code AND the price and puts the cursor in the quantity box, which is all that
+//  is left to type.
+//
+//  The price stays free to overwrite, but a price that is not the list price has
+//  to be confirmed once. That one question is the whole difference between a
+//  deliberate discount and a typo that nobody notices until the month is counted
+//  — 19 ฿ instead of 199 ฿ looks like nothing on a busy screen.
+//
+//  Five forms share these three boxes and the edit modal has price and quantity
+//  the other way round, so each form declares where its columns are.
+// ════════════════════════════════════════════════════════════════════════════
+var OF_SUG_HOSTS={
+  'of-panels':  {q:1,p:2,kind:'panel',calc:'ofCalc'},
+  'of-edges':   {q:1,p:2,kind:'edge', calc:'ofCalc'},
+  'po-products':{q:1,p:2,kind:'panel',calc:'poCalc'},
+  'co-lines':   {q:1,p:2,kind:'panel',calc:'coCalc'},
+  'co-edges':   {q:1,p:2,kind:'edge', calc:'coCalc'},
+  'em-lines':   {q:2,p:1,kind:'panel',calc:'emCalc'}
+};
+var _ofSugEl=null, _ofSugFor=null, _ofSugItems=[], _ofSugIdx=-1;
+function ofSugHost(el){
+  var line=(el&&el.closest)?el.closest('.pline,.eline'):null; if(!line) return null;
+  var w=line.parentElement, cfg=w?OF_SUG_HOSTS[w.id]:null;
+  return cfg?{line:line, cfg:cfg}:null;
+}
+function ofSugCalc(cfg){ try{ var f=window[cfg.calc]; if(typeof f==='function') f(); }catch(e){} }
+// The catalogue entry for a code — KP36, KP036 and kp 36 are the same product.
+function ofCatProd(code){
+  var c=String(code==null?'':code).trim().toUpperCase().replace(/\s+/g,'');
+  if(!c) return null;
+  var list=window.QT_PRODUCTS||[];
+  var hit=null;
+  list.forEach(function(x){ if(!hit && String(x.code).toUpperCase()===c) hit=x; });
+  if(hit) return hit;
+  var n=ofNormCode(c);
+  list.forEach(function(x){ if(!hit && ofNormCode(x.code)===n) hit=x; });
+  return hit;
+}
+function _ofSugFam(code){
+  var c=String(code||'').toUpperCase();
+  return (/^K-?PVC/.test(c)||/^KP/.test(c)) ? 'panel' : 'edge';
+}
+// What matches what was typed. A pure number means the model number: 9 finds
+// KP009 and L09 before it finds KP019 or KP090.
+function ofSugFind(q,kind){
+  var s=String(q||'').trim().toUpperCase().replace(/\s+/g,'');
+  if(!s) return [];
+  var digits=/^\d+$/.test(s)?String(parseInt(s,10)):'';
+  var list=(window.QT_PRODUCTS||[]).slice(), seen={};
+  list.forEach(function(p){ seen[ofNormCode(p.code)]=1; });
+  // Codes the stock knows but the price list does not — findable, just without a price.
+  try{
+    (window.stockItems||[]).forEach(function(it){
+      if(!it||!it.code) return;
+      var n=ofNormCode(it.code); if(seen[n]) return;
+      seen[n]=1; list.push({code:it.code, name:'', price:0, _nolist:1});
+    });
+  }catch(e){}
+  var out=[];
+  list.forEach(function(p){
+    var c=String(p.code).toUpperCase(), score=-1;
+    if(digits){
+      var num=(c.match(/(\d+)\s*$/)||[])[1];
+      var nn=num?String(parseInt(num,10)):'';
+      if(nn===digits) score=0;
+      else if(nn && nn.indexOf(digits)===0) score=2;
+      else if(c.indexOf(digits)>=0) score=4;
+    } else {
+      // L7 IS L07 in this house, so the folded code counts as the exact hit —
+      // ahead of L70, which merely starts with the same two characters.
+      if(ofNormCode(s)===ofNormCode(c)) score=0;
+      else if(c.indexOf(s)===0) score=1;
+      else if(c.indexOf(s)>=0) score=3;
+      else if(String(p.name||'').toUpperCase().indexOf(s)>=0) score=5;
+    }
+    if(score<0) return;
+    // The box knows whether it wants panels or edges, but only as a tiebreaker:
+    // typing 9 in the panel box must still show L09 above KP019.
+    score=score*10 + ((kind && _ofSugFam(c)!==kind)?1:0);
+    out.push({p:p,s:score});
+  });
+  out.sort(function(a,b){
+    if(a.s!==b.s) return a.s-b.s;
+    return String(a.p.code).localeCompare(String(b.p.code), undefined, {numeric:true});
+  });
+  return out.slice(0,14).map(function(x){ return x.p; });
+}
+function ofSugEl(){
+  if(!_ofSugEl){ _ofSugEl=document.createElement('div'); _ofSugEl.id='ofsug'; document.body.appendChild(_ofSugEl); }
+  return _ofSugEl;
+}
+function ofSugHide(){ if(_ofSugEl) _ofSugEl.style.display='none'; _ofSugFor=null; _ofSugItems=[]; _ofSugIdx=-1; }
+function ofSugPaint(){
+  if(!_ofSugEl) return;
+  [].forEach.call(_ofSugEl.querySelectorAll('.r'), function(r,i){ r.classList.toggle('on', i===_ofSugIdx); });
+  var on=_ofSugEl.querySelector('.r.on'); if(on && on.scrollIntoView) on.scrollIntoView({block:'nearest'});
+}
+function ofSugPos(inp){
+  var el=ofSugEl(), line=inp.closest('.pline,.eline'), r=(line||inp).getBoundingClientRect();
+  el.style.left=Math.round(r.left)+'px';
+  el.style.width=Math.round(r.width)+'px';
+  el.style.top='0px';
+  var h=el.offsetHeight||0, below=window.innerHeight-r.bottom;
+  // On a phone the keyboard eats the bottom half — then the list goes above the row.
+  if(below < Math.min(h,160)+8 && r.top>below) el.style.top=Math.max(4, Math.round(r.top-h-4))+'px';
+  else el.style.top=Math.round(r.bottom+4)+'px';
+}
+function ofSugShow(inp,h){
+  var items=ofSugFind(inp.value, h.cfg.kind);
+  if(!items.length){ ofSugHide(); return; }
+  _ofSugFor=inp; _ofSugItems=items; _ofSugIdx=-1;
+  var stk={}; try{ stk=stockOnHandMap()||{}; }catch(e){}
+  var el=ofSugEl();
+  el.innerHTML=items.map(function(p,i){
+    var pr=parseFloat(p.price)||0, n=stk[ofNormCode(p.code)];
+    return '<div class="r" onmousedown="event.preventDefault()" onclick="ofSugPick('+i+')">'
+      +'<span class="c">'+_esc(String(p.code).toUpperCase())+'</span>'
+      +'<span class="n">'+_esc(p.name||'')+'</span>'
+      +(n!=null?'<span class="s" title="Grade A in stock / มีในคลัง">'+(n>0?n.toLocaleString():'<span style="color:#dc2626;font-weight:700">0</span>')+'</span>':'')
+      +'<span class="p">'+(pr>0?pr.toLocaleString()+' ฿':'<span style="color:var(--text3);font-weight:600">—</span>')+'</span>'
+    +'</div>';
+  }).join('');
+  el.style.display='block';
+  ofSugPos(inp);
+}
+function ofSugPick(i){
+  var inp=_ofSugFor, p=_ofSugItems[i]; if(!inp||!p) return;
+  var h=ofSugHost(inp); if(!h){ ofSugHide(); return; }
+  var ins=h.line.querySelectorAll('input'), pr=parseFloat(p.price)||0;
+  inp.value=String(p.code).toUpperCase();
+  if(pr>0 && ins[h.cfg.p]) ins[h.cfg.p].value=pr;
+  // An edge line also carries its type — the code says which one it is.
+  if(h.line.classList.contains('eline')){
+    var sel=h.line.querySelector('select'), c=String(p.code).toUpperCase();
+    var t=/^L/.test(c)?'lcorner':/^T/.test(c)?'ttrim':/^U/.test(c)?'utrim':'';
+    if(sel&&t) sel.value=t;
+  }
+  ofSugHide();
+  ofSugCalc(h.cfg);
+  ofPriceMark(h.line);
+  var qty=ins[h.cfg.q];
+  if(qty){ try{ qty.focus(); qty.select(); }catch(e){} }
+}
+// Orange box = this is not the list price. The tooltip says what the list price is.
+function ofPriceMark(line){
+  var h=ofSugHost(line); if(!h) return;
+  var ins=line.querySelectorAll('input'), pe=ins[h.cfg.p]; if(!pe) return;
+  var prod=ofCatProd(ins[0]?ins[0].value:''), cat=prod?(parseFloat(prod.price)||0):0;
+  var v=parseFloat(pe.value)||0;
+  var off=(cat>0 && v>0 && v!==cat);
+  pe.style.borderColor=off?'#f59e0b':'';
+  pe.style.color=off?'#b45309':'';
+  pe.style.fontWeight=off?'700':'';
+  pe.title=cat>0?('ราคาปกติ / list price '+cat.toLocaleString()+' ฿'):'';
+}
+// Typed a price of your own? Say so once. Grade B and C are meant to be cheaper,
+// so those lines are left alone.
+function ofPriceConfirm(line){
+  var h=ofSugHost(line); if(!h) return;
+  var ins=line.querySelectorAll('input'), pe=ins[h.cfg.p]; if(!pe) return;
+  var g=line.querySelector('select.grsel');
+  if(g && g.value && g.value!=='A'){ ofPriceMark(line); return; }
+  var prod=ofCatProd(ins[0]?ins[0].value:''), cat=prod?(parseFloat(prod.price)||0):0;
+  var v=parseFloat(pe.value)||0;
+  if(cat<=0 || v<=0 || v===cat){ ofPriceMark(line); return; }
+  var d=v-cat, pct=Math.round(d/cat*1000)/10;
+  var ok=confirm('⚠️ ราคาไม่เท่าราคาปกติ / not the list price\n\n'
+    +String(prod.code).toUpperCase()+(prod.name?' · '+prod.name:'')+'\n'
+    +'ราคาปกติ / list:    '+cat.toLocaleString()+' ฿\n'
+    +'ที่ใส่ / entered:  '+v.toLocaleString()+' ฿   ('+(d>0?'+':'')+d.toLocaleString()+' ฿ · '+(d>0?'+':'')+pct+'%)\n\n'
+    +'ใช้ราคานี้ใช่ไหม? / use this price?');
+  if(!ok){ pe.value=cat; ofSugCalc(h.cfg); }
+  ofPriceMark(line);
+}
+// A code typed out in full still fills the price in — but never over one that is
+// already there.
+function ofCodeDone(line){
+  var h=ofSugHost(line); if(!h) return;
+  var ins=line.querySelectorAll('input'), pe=ins[h.cfg.p];
+  if(pe && !String(pe.value||'').trim()){
+    var prod=ofCatProd(ins[0]?ins[0].value:''), cat=prod?(parseFloat(prod.price)||0):0;
+    if(cat>0){ pe.value=cat; ofSugCalc(h.cfg); }
+  }
+  ofPriceMark(line);
+}
+document.addEventListener('input', function(ev){
+  var t=ev.target;
+  if(!t||t.tagName!=='INPUT'||t.type!=='text') return;
+  var h=ofSugHost(t); if(!h) return;
+  ofSugShow(t,h);
+});
+document.addEventListener('focusin', function(ev){
+  var t=ev.target;
+  if(t && t.tagName==='INPUT' && t.type==='text'){
+    var h=ofSugHost(t);
+    if(h && String(t.value||'').trim()){ ofSugShow(t,h); return; }
+  }
+  if(_ofSugFor && t!==_ofSugFor) ofSugHide();
+});
+document.addEventListener('keydown', function(ev){
+  if(!_ofSugFor || ev.target!==_ofSugFor || !_ofSugItems.length) return;
+  var n=_ofSugItems.length;
+  if(ev.key==='ArrowDown'){ ev.preventDefault(); _ofSugIdx=(_ofSugIdx+1)%n; ofSugPaint(); }
+  else if(ev.key==='ArrowUp'){ ev.preventDefault(); _ofSugIdx=(_ofSugIdx-1+n)%n; ofSugPaint(); }
+  else if(ev.key==='Enter'){ ev.preventDefault(); ofSugPick(_ofSugIdx>=0?_ofSugIdx:0); }
+  else if(ev.key==='Escape'){ ofSugHide(); }
+});
+document.addEventListener('change', function(ev){
+  var t=ev.target; if(!t||t.tagName!=='INPUT') return;
+  var h=ofSugHost(t); if(!h) return;
+  var ins=h.line.querySelectorAll('input');
+  if(t===ins[0]) ofCodeDone(h.line);
+  else if(t===ins[h.cfg.p]) ofPriceConfirm(h.line);
+});
+document.addEventListener('mousedown', function(ev){
+  if(_ofSugFor && _ofSugEl && !_ofSugEl.contains(ev.target) && ev.target!==_ofSugFor) ofSugHide();
+}, true);
+window.addEventListener('scroll', function(){ if(_ofSugFor) ofSugHide(); }, true);
+window.addEventListener('resize', function(){ if(_ofSugFor) ofSugHide(); });
 function ofCheck(){const res=document.getElementById('of-sres');res.style.display='block';let issues=[];document.querySelectorAll('#of-panels .pline').forEach(l=>{const i=l.querySelectorAll('input');const code=i[0].value.trim().toUpperCase(),qty=parseInt(i[1].value)||0;if(!code||!qty)return;const s=stockItems.find(x=>x.code===code);if(!s){issues.push(code+': not in stock');}else if(s.qty<qty){const inc=incomingItems.find(x=>x.code===code);issues.push(code+': only '+s.qty+(inc?' · '+inc.qty+' coming '+fmtD(inc.eta):' — not enough'));}});if(issues.length){res.style.background=OL;res.style.color=OT;res.textContent='⚠ '+issues.join(' · ');}else{res.style.background=GL;res.style.color=GT;res.textContent='✓ Stock OK / สต็อกพอ';}}
 var _ofPriority=false, _ofPriorityReason='';
 function ofTogglePriorityNew(){
@@ -10033,7 +10268,7 @@ function ofCreate(){
   // A prepayment left in the box would silently attach itself to the NEXT order.
   var _pp=document.getElementById('of-prepaid'); if(_pp) _pp.value='';
   var _pm=document.getElementById('of-prepaid-method'); if(_pm) _pm.value='cash';
-  _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
+  _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
   if(_ofPriority){ try{ pushSend('warehouse','⭐ Priority order: '+no, _ofPriorityReason||'Important order', {tag:'priority'}); }catch(e){} }
   _ofPriority=false;_ofPriorityReason='';try{ofUpdatePriorityBtn();}catch(e){}
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
