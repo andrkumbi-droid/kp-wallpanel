@@ -2046,6 +2046,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 
   <div class="view" id="ofv-new"><div class="sec"><div class="card">
     <div id="of-instore-banner" style="display:none;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:var(--rs);padding:10px 12px;margin-bottom:10px;font-size:13px;font-weight:700;color:#047857">🏪 In-store sale / ขายหน้าร้าน · Zone 5</div>
+    <!-- Filled by 🔁 on an order card: whose repeat order this is, and what they took last time. -->
+    <div id="of-reorder-note" style="display:none"></div>
     <div id="of-zone-wrap">
     <label class="fl">Zone / โซน</label>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px" id="of-zone-btns">
@@ -10268,7 +10270,7 @@ function ofCreate(){
   // A prepayment left in the box would silently attach itself to the NEXT order.
   var _pp=document.getElementById('of-prepaid'); if(_pp) _pp.value='';
   var _pm=document.getElementById('of-prepaid-method'); if(_pm) _pm.value='cash';
-  _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
+  _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofReorderClose();}catch(e){}try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
   if(_ofPriority){ try{ pushSend('warehouse','⭐ Priority order: '+no, _ofPriorityReason||'Important order', {tag:'priority'}); }catch(e){} }
   _ofPriority=false;_ofPriorityReason='';try{ofUpdatePriorityBtn();}catch(e){}
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
@@ -10601,6 +10603,8 @@ function ofOrderCard(o, sfx){
   s += '<div style="display:flex;align-items:flex-start;gap:8px;margin-top:4px">'
     +'<div style="font-size:13px;flex:1;min-width:0">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':'')+(_clipPacks>0?' · 🛍️ '+_clipPacks+' คลิปแพ็ค / clip pack'+(_clipPacks>1?'s':''):'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+(o.bundle&&o.bundle>0?' <span style="background:#fff7ed;color:#ea580c;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">🧶 '+o.bundle+' มัด</span>':'')+'</div>'
     +'<button type="button" class="btnsm" onclick="ofCopyPack(\''+o.id+'\',this)" title="Copy pack list / คัดลอก" style="flex-shrink:0;padding:4px 8px"><i class="ti ti-copy"></i></button>'
+    // Same customer, new order — everything about them is already here.
+    +(window.ofReadOnly?'':'<button type="button" class="btnsm" onclick="ofReorder(\''+o.id+'\')" title="สั่งซ้ำ ลูกค้าเดิม / Order again — same customer, new order number" style="flex-shrink:0;padding:4px 8px;font-size:13px;line-height:1">🔁</button>')
     +'</div>';
   s += noteHTML;
   var _shownTotal=(ofCanonTotal(o)!=null?ofCanonTotal(o).toLocaleString()+' ฿':o.total);
@@ -10968,6 +10972,117 @@ function ofPaidToggle(id, checked){
 //   @All <id>
 //   <code> - <qty>
 //   CL - <total clips>
+// ════════════════════════════════════════════════════════════════════════════
+//  ORDER AGAIN — same customer, empty basket
+//  ---------------------------------------------------------------------------
+//  Somebody who liked the panels comes back for the second room. Everything
+//  about them is already in the old order: name, phone, the address the driver
+//  actually found, the chat they write in, their province and their zone.
+//  Typing it again is slow and is where a wrong address comes from — so 🔁 on
+//  the card carries all of it into a fresh order with a fresh number of that
+//  zone. Only the goods stay empty, because that is the part that changed;
+//  what they took last time is printed at the top of the form, one tap away
+//  from being filled in again.
+// ════════════════════════════════════════════════════════════════════════════
+var _ofReorderFrom='';
+function ofReorderItems(o){
+  var PRIO={panel:0,lcorner:1,ttrim:2,tedge:2,utrim:3,uedge:3};
+  return (o&&o.lineItems||[]).filter(function(li){ return PRIO[li.type]!=null && (parseInt(li.qty)||0)>0; })
+    .sort(function(a,b){ return PRIO[a.type]-PRIO[b.type]; });
+}
+// Is somebody in the middle of writing an order? Then ask before overwriting it.
+function ofReorderDirty(){
+  var any=false;
+  ['of-cust','of-phone','of-addr','of-loc','of-province','of-contact-name','of-deliveround','of-reqnote','of-paste'].forEach(function(k){
+    var e=document.getElementById(k); if(e && String(e.value||'').trim()) any=true;
+  });
+  document.querySelectorAll('#of-panels .pline, #of-edges .eline').forEach(function(l){
+    var i=l.querySelectorAll('input'); if(i[0] && String(i[0].value||'').trim()) any=true;
+  });
+  return any;
+}
+function ofReorder(id){
+  var o=(typeof orders!=='undefined'?orders:[]).find(function(x){ return x.id===id; });
+  if(!o){ alert('ไม่พบออเดอร์ / order not found'); return; }
+  if(ofReorderDirty() && !confirm('ฟอร์มออเดอร์ใหม่ยังมีข้อมูลค้างอยู่ / the new-order form is not empty\n\n'
+      +'เขียนทับด้วยข้อมูลลูกค้าของ '+o.id+' ไหม? / replace it with the customer from '+o.id+'?')) return;
+  oft('new');
+  var set=function(k,v){ var e=document.getElementById(k); if(e) e.value=(v&&v!=='—')?String(v):''; };
+  set('of-cust',o.customer); set('of-phone',o.phone); set('of-addr',o.address);
+  set('of-province',o.province); set('of-loc',o.location);
+  var sp={}; try{ sp=kpSplitContact(o.contact||'')||{}; }catch(e){}
+  set('of-contact-ch',sp.ch||''); set('of-contact-name',sp.nm||'');
+  // These belonged to that delivery, not to this one.
+  ['of-deliveround','of-reqdate','of-reqnote','of-paste','of-free-clips','of-free-minus',
+   'of-clip-packs','of-extra-label','of-extra-price','of-discount','of-delivery'].forEach(function(k){ set(k,''); });
+  var d=document.getElementById('of-date'); if(d) d.value=kpTodayStr();
+  // Same zone → and with it the next free number of that zone. An in-store-locked
+  // account keeps its own zone, which is the whole point of that lock.
+  if(!window.ofInstoreOnly){ try{ selectZone(o.zone||'Bangkok'); }catch(e){} }
+  var pw=document.getElementById('of-panels'); if(pw){ pw.innerHTML=''; ofAddP(); }
+  var ew=document.getElementById('of-edges'); if(ew) ew.innerHTML='';
+  _ofReorderFrom=o.id;
+  ofReorderNote(o);
+  try{ ofLookupCustomer(); }catch(e){}    // their history — and the blocked-customer warning
+  try{ ofCalc(); }catch(e){}
+  try{ window.scrollTo(0,0); }catch(e){}
+}
+function ofReorderNote(o){
+  var el=document.getElementById('of-reorder-note'); if(!el) return;
+  var items=ofReorderItems(o);
+  el.style.display='';
+  el.innerHTML='<div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:var(--rs);padding:9px 11px;margin-bottom:10px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+      +'<span style="font-size:12.5px;font-weight:800;color:#3730a3">🔁 สั่งซ้ำ / Order again · '+_esc(o.id)+'</span>'
+      +'<span onclick="ofReorderClose()" title="ปิด / close" style="cursor:pointer;color:#6366f1;font-weight:800">✕</span>'
+    +'</div>'
+    +'<div style="font-size:11.5px;color:var(--text2);margin-top:3px">ข้อมูลลูกค้าใส่ให้แล้ว เหลือแค่สินค้า / the customer is filled in — only the goods are left</div>'
+    +(items.length
+      ? '<div style="font-size:12px;margin-top:6px;color:#3730a3"><b>ครั้งก่อน / last time:</b> '
+          +items.map(function(li){ return _esc(String(li.code||'').toUpperCase())+' × '+(parseInt(li.qty)||0); }).join(' · ')+'</div>'
+        +'<button type="button" onclick="ofReorderSame()" style="margin-top:7px;font-size:11.5px;font-weight:700;padding:5px 10px;border:1px solid #c7d2fe;background:var(--bg);color:#4338ca;border-radius:var(--rs);cursor:pointer">📋 ใส่สินค้าเดิม / take the same goods</button>'
+      : '')
+  +'</div>';
+}
+function ofReorderClose(){
+  var el=document.getElementById('of-reorder-note');
+  if(el){ el.style.display='none'; el.innerHTML=''; }
+  _ofReorderFrom='';
+}
+// The optional shortcut: the same goods at the same prices, ready to be changed.
+// Prices come from the old order, so a price that has moved since shows up orange.
+function ofReorderSame(){
+  var o=(typeof orders!=='undefined'?orders:[]).find(function(x){ return x.id===_ofReorderFrom; });
+  if(!o) return;
+  var items=ofReorderItems(o); if(!items.length) return;
+  var pw=document.getElementById('of-panels'), ew=document.getElementById('of-edges');
+  if(pw) pw.innerHTML='';
+  if(ew) ew.innerHTML='';
+  var EDGE={lcorner:'lcorner',ttrim:'ttrim',utrim:'utrim',tedge:'ttrim',uedge:'utrim'};
+  items.forEach(function(li){
+    var code=String(li.code||'').toUpperCase(), qty=parseInt(li.qty)||0, pr=parseFloat(li.unitPrice)||0;
+    if(li.type==='panel'){
+      if(!pw) return;
+      ofAddP();
+      var l=pw.lastElementChild, i=l.querySelectorAll('input');
+      i[0].value=code; i[1].value=qty; if(pr>0) i[2].value=pr;
+      var g=l.querySelector('select.grsel');
+      if(g && li.grade){ g.value=gradeNorm(li.grade); try{ kpGradeColor(g); }catch(e){} }
+      var cc=l.querySelector('input.cutcm'); if(cc && li.cutLen) cc.value=parseInt(li.cutLen)||'';
+      try{ ofPriceMark(l); }catch(e){}
+    } else {
+      if(!ew) return;
+      ofAddE();
+      var l2=ew.lastElementChild, i2=l2.querySelectorAll('input'), s2=l2.querySelector('select');
+      if(s2) s2.value=EDGE[li.type]||'lcorner';
+      i2[0].value=code; i2[1].value=qty; if(pr>0) i2[2].value=pr;
+      try{ ofPriceMark(l2); }catch(e){}
+    }
+  });
+  if(pw && !pw.children.length) ofAddP();
+  try{ ofCalc(); }catch(e){}
+}
+
 function ofCopyPack(id, btn){
   var o=orders.find(function(x){return x.id===id;}); if(!o) return;
   var lines=['@All '+o.id];
