@@ -158,6 +158,11 @@ textarea{resize:none}
 #ofsug .n{color:var(--text2);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #ofsug .s{font-size:11px;color:var(--text2);white-space:nowrap}
 #ofsug .p{font-weight:800;color:var(--green);white-space:nowrap}
+/* A code nobody knows: said under the line it was typed in, with the codes it
+   was probably meant to be, each one a tap away. */
+.pline .codewarn,.eline .codewarn{grid-column:1/-1;order:10;display:flex;align-items:center;flex-wrap:wrap;gap:6px;background:#fef2f2;border:1px solid #fecaca;border-radius:var(--rs);padding:5px 9px;margin-top:2px;font-size:11px;font-weight:700;color:#b91c1c}
+.pline .codewarn b,.eline .codewarn b{font-weight:800}
+.pline .codewarn .fix,.eline .codewarn .fix{background:var(--bg);border:1px solid #fca5a5;color:#b91c1c;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:800;cursor:pointer}
 .colh-e{display:grid;grid-template-columns:72px 1fr 1fr 1fr 32px;gap:6px;padding:0 10px;margin-bottom:3px}
 .colh-e span{font-size:11px;color:var(--text2);font-weight:500}
 .eline input{background:var(--bg);border:1px solid var(--border)}
@@ -9823,6 +9828,7 @@ function ofSugPick(i){
   }
   ofSugHide();
   ofSugCalc(h.cfg);
+  ofCodeMark(h.line);
   ofPriceMark(h.line);
   var qty=ins[h.cfg.q];
   if(qty){ try{ qty.focus(); qty.select(); }catch(e){} }
@@ -9858,6 +9864,105 @@ function ofPriceConfirm(line){
   if(!ok){ pe.value=cat; ofSugCalc(h.cfg); }
   ofPriceMark(line);
 }
+// ── a code that does not exist ────────────────────────────────────────────
+// KP0198 for KP019, L011 for L11: one digit too many and the order carries a
+// product nobody can pick, which is only noticed in the warehouse. Every code is
+// checked against the price list AND the stock list the moment the box is left,
+// and what it was probably meant to be is offered right underneath.
+function ofCodeAll(){
+  var out=[], seen={};
+  (window.QT_PRODUCTS||[]).forEach(function(p){
+    var c=String(p&&p.code||'').toUpperCase(); if(c && !seen[c]){ seen[c]=1; out.push(c); }
+  });
+  try{
+    (window.stockItems||[]).forEach(function(s){
+      var c=String(s&&s.code||'').toUpperCase(); if(c && !seen[c]){ seen[c]=1; out.push(c); }
+    });
+  }catch(e){}
+  return out;
+}
+function ofCodeKnown(code){
+  var c=String(code==null?'':code).trim().toUpperCase().replace(/\s+/g,'');
+  if(!c) return true;                       // an empty box is not a wrong code
+  if(ofCatProd(c)) return true;             // covers KP36 → KP036 as well
+  var n=ofNormCode(c), hit=false;
+  try{
+    (window.stockItems||[]).forEach(function(s){
+      if(!hit && s && s.code && ofNormCode(s.code)===n) hit=true;
+    });
+  }catch(e){}
+  return hit;
+}
+function _ofLev(a,b){
+  if(a===b) return 0;
+  var m=a.length, n=b.length;
+  if(!m||!n) return m||n;
+  var prev=[], cur=[], i, j;
+  for(j=0;j<=n;j++) prev[j]=j;
+  for(i=1;i<=m;i++){
+    cur[0]=i;
+    for(j=1;j<=n;j++){
+      cur[j]=Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+(a.charAt(i-1)===b.charAt(j-1)?0:1));
+    }
+    for(j=0;j<=n;j++) prev[j]=cur[j];
+  }
+  return prev[n];
+}
+// The codes a typo was most likely meant to be: one the typo contains or that
+// contains the typo first, then anything within two keystrokes.
+function ofCodeNear(code){
+  var c=String(code||'').trim().toUpperCase().replace(/\s+/g,'');
+  if(!c) return [];
+  var out=[];
+  ofCodeAll().forEach(function(k){
+    var s=-1;
+    if(c.indexOf(k)===0 || k.indexOf(c)===0) s=0;
+    else if(ofNormCode(k)===ofNormCode(c)) s=0;
+    else {
+      var d=_ofLev(c,k);
+      if(d<=2 && Math.abs(c.length-k.length)<=2) s=d;
+    }
+    if(s>=0) out.push({c:k, s:s});
+  });
+  out.sort(function(a,b){ return a.s-b.s || Math.abs(a.c.length-c.length)-Math.abs(b.c.length-c.length) || a.c.localeCompare(b.c,undefined,{numeric:true}); });
+  var seen={}, res=[];
+  out.forEach(function(x){ if(!seen[x.c] && res.length<3){ seen[x.c]=1; res.push(x.c); } });
+  return res;
+}
+function ofCodeFix(btn,code){
+  var line=btn.closest('.pline,.eline'); if(!line) return;
+  var h=ofSugHost(line); if(!h) return;
+  var ins=line.querySelectorAll('input');
+  ins[0].value=code;
+  var prod=ofCatProd(code), cat=prod?(parseFloat(prod.price)||0):0;
+  var pe=ins[h.cfg.p];
+  if(pe && cat>0 && !String(pe.value||'').trim()) pe.value=cat;
+  if(line.classList.contains('eline')){
+    var sel=line.querySelector('select'), t=/^L/.test(code)?'lcorner':/^T/.test(code)?'ttrim':/^U/.test(code)?'utrim':'';
+    if(sel&&t) sel.value=t;
+  }
+  ofCodeMark(line); ofPriceMark(line); ofSugCalc(h.cfg);
+}
+function ofCodeMark(line){
+  var ins=line.querySelectorAll('input'), ce=ins[0]; if(!ce) return;
+  var old=line.querySelector('.codewarn'); if(old) old.remove();
+  var code=String(ce.value||'').trim().toUpperCase();
+  var bad=code && !ofCodeKnown(code);
+  ce.style.borderColor=bad?'#dc2626':'';
+  ce.style.color=bad?'#b91c1c':'';
+  ce.style.fontWeight=bad?'700':'';
+  ce.title=bad?'ไม่มีรหัสนี้ในระบบ / this code does not exist':'';
+  if(!bad) return;
+  var near=[]; try{ near=ofCodeNear(code); }catch(e){}
+  var d=document.createElement('div');
+  d.className='codewarn';
+  d.innerHTML='<span>⚠️ ไม่มีรหัส <b>'+_esc(code)+'</b> / unknown code</span>'
+    +(near.length
+      ? '<span style="font-weight:600;color:var(--text2)">หมายถึง / did you mean</span>'
+        +near.map(function(k){ return '<button type="button" class="fix" onclick="ofCodeFix(this,\''+_esc(k)+'\')">'+_esc(k)+'</button>'; }).join('')
+      : '');
+  line.appendChild(d);
+}
 // A code typed out in full still fills the price in — but never over one that is
 // already there.
 function ofCodeDone(line){
@@ -9867,6 +9972,7 @@ function ofCodeDone(line){
     var prod=ofCatProd(ins[0]?ins[0].value:''), cat=prod?(parseFloat(prod.price)||0):0;
     if(cat>0){ pe.value=cat; ofSugCalc(h.cfg); }
   }
+  ofCodeMark(line);
   ofPriceMark(line);
 }
 document.addEventListener('input', function(ev){
@@ -10175,6 +10281,23 @@ function ofCreate(){
       var _ago=_days===0?'วันนี้ / today':(_days+' วันก่อน / '+_days+'d ago');
       if(!confirm('⚠️ เบอร์นี้เพิ่งมีออเดอร์ / Recent order with this phone\n\nมีออเดอร์เบอร์เดียวกันถูกสร้างใน 7 วันที่ผ่านมา / An order with this phone number was created in the last 7 days:\n\n• '+_d.id+(_d.customer&&_d.customer!=='—'?' — '+_d.customer:'')+' ('+_ago+')'+(_recent.length>1?'\n  + อีก '+(_recent.length-1)+' / +'+(_recent.length-1)+' more':'')+'\n\nสร้างต่อหรือไม่? / Create anyway?\nOK = สร้าง / create   ·   Cancel = ยกเลิก / abort')) return;
     }
+  }
+  // Last look at the codes. A product nobody can pick is only noticed in the
+  // warehouse, hours later — so an order carrying a code that is in neither the
+  // price list nor the stock list has to be confirmed here, by name.
+  var _badCodes=[];
+  document.querySelectorAll('#of-panels .pline, #of-edges .eline').forEach(function(l){
+    var i=l.querySelectorAll('input');
+    var c=String(i[0]&&i[0].value||'').trim().toUpperCase();
+    var q=parseInt(i[1]&&i[1].value)||0;
+    if(!c || q<=0) return;
+    try{ if(ofCodeKnown(c)) return; }catch(e){ return; }
+    var near=[]; try{ near=ofCodeNear(c); }catch(e){}
+    _badCodes.push('• '+c+' × '+q+(near.length?('   → '+near.join(' / ')+' ?'):''));
+  });
+  if(_badCodes.length){
+    if(!confirm('⚠️ ไม่มีรหัสนี้ในระบบ / code not found\n\n'+_badCodes.join('\n')
+      +'\n\nพิมพ์ผิดหรือเปล่า? / a typo?\nOK = สร้างต่อ / create anyway   ·   Cancel = กลับไปแก้ / go back and fix')) return;
   }
   // Safety net: if the field holds a stale number (≠ the live next number for
   // this zone, e.g. left over from an earlier session), confirm before using it
@@ -11140,14 +11263,14 @@ function ofReorderSame(){
       var g=l.querySelector('select.grsel');
       if(g && li.grade){ g.value=gradeNorm(li.grade); try{ kpGradeColor(g); }catch(e){} }
       var cc=l.querySelector('input.cutcm'); if(cc && li.cutLen) cc.value=parseInt(li.cutLen)||'';
-      try{ ofPriceMark(l); }catch(e){}
+      try{ ofCodeMark(l); ofPriceMark(l); }catch(e){}
     } else {
       if(!ew) return;
       ofAddE();
       var l2=ew.lastElementChild, i2=l2.querySelectorAll('input'), s2=l2.querySelector('select');
       if(s2) s2.value=EDGE[li.type]||'lcorner';
       i2[0].value=code; i2[1].value=qty; if(pr>0) i2[2].value=pr;
-      try{ ofPriceMark(l2); }catch(e){}
+      try{ ofCodeMark(l2); ofPriceMark(l2); }catch(e){}
     }
   });
   if(pw && !pw.children.length) ofAddP();
