@@ -2127,6 +2127,17 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="sumrow"><span>Clip packs / คลิปแพ็ค</span><span id="of-sx">—</span></div>
       <div class="sumrow" id="of-sg" style="display:none"><span>Free clips 🎁</span><span id="of-sgv" style="color:var(--green)"></span></div>
       <div class="sumrow" id="of-stc" style="display:none"><span style="font-weight:600">Total clips / คลิปรวม</span><span id="of-stcv" style="font-weight:600;color:var(--blue)"></span></div>
+      <!-- Lines typed under the list price. That money is already inside the item
+           prices, so it is only shown here — never subtracted a second time. The
+           button puts the list prices back and moves the difference into the
+           discount box, for when the customer should see it as one figure. -->
+      <div class="sumrow" id="of-listdisc" title="ส่วนต่างจากราคาปกติ อยู่ในราคาสินค้าแล้ว จึงไม่หักซ้ำ / the difference from the list price is already inside the item prices, so it is not subtracted again" style="display:none;align-items:center;margin-top:4px">
+        <span style="color:#b45309;flex:1;min-width:0;line-height:1.3">ลดจากราคาปกติ / below list<br><span style="font-size:10.5px;color:var(--text2)">อยู่ในราคาแล้ว / in the prices</span></span>
+        <span style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+          <span id="of-listdisc-v" style="color:#b45309;font-weight:700">—</span>
+          <button type="button" onclick="ofListDiscMove()" title="ตั้งราคาปกติกลับ แล้วย้ายส่วนต่างไปช่องส่วนลด / put the list prices back and move the difference into the discount box" style="font-size:10.5px;font-weight:700;padding:3px 7px;border:1px solid #fcd34d;background:#fffbeb;color:#b45309;border-radius:var(--rs);cursor:pointer;white-space:nowrap">→ ส่วนลด / as discount</button>
+        </span>
+      </div>
       <div class="sumrow" style="align-items:center;margin-top:4px">
         <span style="color:var(--red)">Discount / ส่วนลด</span>
         <div style="display:flex;align-items:center;gap:4px">
@@ -9524,6 +9535,16 @@ function ofCalc(){
     if(sgvEl) sgvEl.textContent=freeGift>0?freeGift.toLocaleString()+' pcs (ฟรี)':'';
     const discount=parseInt(document.getElementById('of-discount')?document.getElementById('of-discount').value:0)||0;
     const delivery=parseInt(document.getElementById('of-delivery')?document.getElementById('of-delivery').value:0)||0;
+    // What the customer is already saving through the line prices themselves.
+    // Shown, not subtracted: it is inside `grand` already.
+    (function(){
+      var row=document.getElementById('of-listdisc'); if(!row) return;
+      var d=null; try{ d=ofListDiscScan(); }catch(e){ d=null; }
+      var amt=d?Math.round(d.amt):0;
+      row.style.display=amt>0?'flex':'none';
+      var v=document.getElementById('of-listdisc-v');
+      if(v) v.textContent=amt>0?('− '+amt.toLocaleString()+' ฿'):'—';
+    })();
     const grandFinal=Math.max(0,grand-discount+delivery);
     document.getElementById('of-st').textContent=grandFinal.toLocaleString('en-US')+' ฿';
     // Prepayment: the grand total above stays what the customer owes in all — this
@@ -10972,6 +10993,51 @@ function ofPaidToggle(id, checked){
 //   @All <id>
 //   <code> - <qty>
 //   CL - <total clips>
+// ── What a cheaper line price is worth ────────────────────────────────────
+// A price typed under the list price IS the discount — it is already inside the
+// line total, so writing it into the discount box as well would take it off the
+// customer twice. So it is added up and shown on its own row instead, and the
+// office can move it into the discount box in one tap when the receipt should
+// name it: the list prices go back on the lines, the difference goes into the
+// box, and the grand total comes out exactly the same.
+// Grade B and C are meant to be cheaper — they are not a discount.
+function ofListDiscScan(){
+  var out={amt:0, lines:[]};
+  document.querySelectorAll('#of-panels .pline, #of-edges .eline').forEach(function(l){
+    var i=l.querySelectorAll('input');
+    if(!i[0]||!i[1]||!i[2]) return;
+    var g=l.querySelector('select.grsel');
+    if(g && g.value && g.value!=='A') return;
+    var prod=null; try{ prod=ofCatProd(i[0].value); }catch(e){}
+    var list=prod?(parseFloat(prod.price)||0):0;
+    var v=parseFloat(i[2].value)||0, q=parseInt(i[1].value)||0;
+    if(list<=0 || v<=0 || q<=0 || v>=list) return;
+    var d=(list-v)*q;
+    out.amt+=d;
+    out.lines.push({el:l, code:String(prod.code).toUpperCase(), list:list, price:v, qty:q, diff:d});
+  });
+  return out;
+}
+function ofListDiscMove(){
+  var d=null; try{ d=ofListDiscScan(); }catch(e){ return; }
+  if(!d || !d.amt) return;
+  var el=document.getElementById('of-discount'); if(!el) return;
+  var cur=parseInt(el.value)||0, add=Math.round(d.amt);
+  var msg='ตั้งราคาปกติกลับ แล้วใส่ '+add.toLocaleString()+' ฿ ในช่องส่วนลด?\n'
+    +'Put the list prices back and move '+add.toLocaleString()+' ฿ into the discount box?\n\n'
+    +d.lines.map(function(x){ return '• '+x.code+'  '+x.price.toLocaleString()+' → '+x.list.toLocaleString()+' ฿ × '+x.qty; }).join('\n')
+    +'\n\nยอดรวมเท่าเดิม / the grand total does not change';
+  if(cur>0) msg+='\nส่วนลดเดิม / discount so far '+cur.toLocaleString()+' + '+add.toLocaleString()+' = '+(cur+add).toLocaleString()+' ฿';
+  if(!confirm(msg)) return;
+  d.lines.forEach(function(x){
+    var i=x.el.querySelectorAll('input');
+    i[2].value=x.list;
+    try{ ofPriceMark(x.el); }catch(e){}
+  });
+  el.value=cur+add;
+  try{ ofCalc(); }catch(e){}
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 //  ORDER AGAIN — same customer, empty basket
 //  ---------------------------------------------------------------------------
