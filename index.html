@@ -22338,6 +22338,61 @@ function poModelSummaryHTML(open){
     }).join('')
     +'</div>';
 }
+// What the money in the book is worth per region — the same picture the tour tab
+// draws of what is waiting, one tile per zone: how many are booked, how many
+// panels that is, how many of them are ready and what the zone comes to. It says
+// where the next container has to land before twenty cards have been opened.
+var PO_ZONE_ORDER=['Bangkok','Northern','Northeastern','Eastern','Southern','Instore'];
+function poTotalOf(p){
+  var sub=((p&&p.lineItems)||[]).reduce(function(a,x){ return a+(parseFloat(x.amount)||0); },0);
+  return Math.max(0, sub+(parseInt(p&&p.clipPacks)||0)*199+(parseInt(p&&p.extraPrice)||0)
+                      +(parseInt(p&&p.delivery)||0)-(parseInt(p&&p.discount)||0));
+}
+function poZoneSummaryHTML(open){
+  if(!open || !open.length) return '';
+  var Z={}, seq=[];
+  open.forEach(function(p){
+    var z=(p&&p.zone)||'— ไม่ระบุ / no zone';
+    if(!Z[z]){ Z[z]={z:z,n:0,baht:0,panels:0,ready:0,short:0,shortPcs:0}; seq.push(z); }
+    var d=Z[z];
+    d.n++; d.baht+=poTotalOf(p);
+    (((p||{}).lineItems)||[]).forEach(function(li){
+      if(!li || !PO_PRODT[li.type] || PO_SUM_EXCL[li.type]) return;
+      d.panels+=parseInt(li.qty)||0;
+    });
+    var rdy=false; try{ rdy=poReady(p); }catch(e){}
+    if(rdy) d.ready++;
+    else { d.short++; try{ d.shortPcs+=poShortTotal(p)||0; }catch(e){} }
+  });
+  seq.sort(function(a,b){
+    var ia=PO_ZONE_ORDER.indexOf(a), ib=PO_ZONE_ORDER.indexOf(b);
+    if(ia<0) ia=99; if(ib<0) ib=99;
+    return ia-ib || String(a).localeCompare(String(b));
+  });
+  var g={n:0,baht:0,panels:0};
+  seq.forEach(function(k){ g.n+=Z[k].n; g.baht+=Z[k].baht; g.panels+=Z[k].panels; });
+  var tile=function(d){
+    var c=(typeof zoneColor==='function'?zoneColor(d.z):'')||'var(--text2)';
+    return '<div style="background:var(--bg);border:1.5px solid var(--border);border-left:4px solid '+c+';border-radius:var(--rs);padding:8px 10px">'
+      +'<div style="font-size:11px;font-weight:700;color:'+c+'">'+_esc(d.z)+'</div>'
+      +'<div style="font-size:13px;font-weight:700;margin-top:2px">'+d.n+' pre-order'+(d.n!==1?'s':'')+'</div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-top:1px">'+d.panels.toLocaleString()+' panels</div>'
+      +'<div style="font-size:11px;margin-top:2px;display:flex;flex-wrap:wrap;gap:2px 8px">'
+        +(d.ready?'<span style="color:#166534;font-weight:700">✅ '+d.ready+' พร้อม/ready</span>':'')
+        +(d.short?'<span style="color:#92400e;font-weight:700">⏳ '+d.short+' ขาด'+(d.shortPcs?' '+d.shortPcs.toLocaleString():'')+'</span>':'')
+      +'</div>'
+      +'<div style="font-size:13.5px;font-weight:800;margin-top:3px;color:var(--blue)">'+Math.round(d.baht).toLocaleString()+' ฿</div>'
+    +'</div>';
+  };
+  return '<div class="card" style="margin-bottom:10px;background:var(--bg2)">'
+    +'<div style="font-size:12px;font-weight:800;margin-bottom:6px">🗺️ ยอดจองต่อภาค / Pre-ordered per zone</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'+seq.map(function(k){ return tile(Z[k]); }).join('')+'</div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;padding-top:6px;border-top:1px solid var(--border);font-size:12.5px;font-weight:800">'
+      +'<span style="min-width:0">รวม / total · '+g.n+' pre-orders · '+g.panels.toLocaleString()+' panels</span>'
+      +'<span style="color:var(--blue);white-space:nowrap">'+Math.round(g.baht).toLocaleString()+' ฿</span>'
+    +'</div>'
+  +'</div>';
+}
 function poRender(){
   var list=document.getElementById('po-list'); if(!list) return;
   try{ poBackfillNos(); }catch(e){}
@@ -22346,10 +22401,7 @@ function poRender(){
   var open=preOrders.filter(function(p){return p.status==='open';}).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
   var done=preOrders.filter(function(p){return p.status!=='open';}).sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);}).slice(0,30);
   function prodStr(p){ return (p.lineItems||[]).map(function(li){return li.code+' ×'+li.qty;}).join(' · '); }
-  function poTotal(p){
-    var sub=(p.lineItems||[]).reduce(function(a,x){return a+(parseFloat(x.amount)||0);},0);
-    return Math.max(0, sub+(parseInt(p.clipPacks)||0)*199+(parseInt(p.extraPrice)||0)+(parseInt(p.delivery)||0)-(parseInt(p.discount)||0));
-  }
+  function poTotal(p){ return poTotalOf(p); }   // one place does this sum now
   function card(p){
     var ready=poReady(p);
     var badge = p.status==='converted' ? '<span class="badge" style="background:var(--green-bg);color:var(--green)">→ '+(p.convertedId||'order')+'</span>'
@@ -22400,7 +22452,7 @@ function poRender(){
       +actions
       +'</div>';
   }
-  list.innerHTML = (open.length?poModelSummaryHTML(open)+open.map(card).join(''):'<div class="empty" style="padding:1rem;font-size:13px">No open pre-orders / ไม่มีพรีออเดอร์</div>')
+  list.innerHTML = (open.length?poModelSummaryHTML(open)+poZoneSummaryHTML(open)+open.map(card).join(''):'<div class="empty" style="padding:1rem;font-size:13px">No open pre-orders / ไม่มีพรีออเดอร์</div>')
     + (done.length?'<div class="stit" style="font-size:12px;margin-top:12px">History</div>'+done.map(card).join(''):'');
   poUpdateBadge();
 }
