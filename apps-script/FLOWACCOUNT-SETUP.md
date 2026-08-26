@@ -7,9 +7,26 @@ Apps-Script-Relay — dasselbe Muster wie die Chat-Übersetzung.
 
 ## 1. Zugangsdaten bei FlowAccount holen
 
-1. In FlowAccount einloggen → **MyCompany → Connections** (การเชื่อมต่อ)
-2. **client-id** und **client-secret** kopieren
-   (falls der Bereich fehlt: der Tarif hat keinen API-Zugang → FlowAccount-Support fragen)
+Für die **Sandbox** kommen sie per Mail vom OpenAPI-Team
+(`developer_support@flowaccount.com`) — dort stehen `Client_id`, `Client_secret`
+und der Token-Link. Für **live** später: FlowAccount → **MyCompany → Connections**
+(การเชื่อมต่อ); fehlt der Bereich, hat der Tarif keinen API-Zugang (Open API gibt
+es nur im Paket Pro Business).
+
+### Sandbox und live unterscheiden sich NUR am Token-Endpunkt
+
+Am 26.08.2026 gegen den echten Host geprüft (ohne Zugangsdaten):
+
+| Aufruf | Antwort | heißt |
+|---|---|---|
+| `POST /test/token` | `200 {"error":"invalid_client"}` | Sandbox-Tür, offen |
+| `POST /token` | `403 {"message":"Forbidden"}` | live, für uns zu |
+| `/v3-alpha/th/tax-invoices…` mit falschem Bearer | `401` | Pfad existiert |
+| `/sandbox/…` | `403` | hat es nie gegeben |
+
+Die API-Pfade sind also für beide `…/v3-alpha`; **welche Firma** man bearbeitet,
+entscheidet allein der Token. Deshalb ist der Default jetzt
+`FA_MODE=sandbox → https://openapi.flowaccount.com/test/token`.
 
 ## 2. Relay deployen
 
@@ -20,6 +37,11 @@ Apps-Script-Relay — dasselbe Muster wie die Chat-Übersetzung.
    | `FA_CLIENT_ID` | *(aus Schritt 1)* |
    | `FA_CLIENT_SECRET` | *(aus Schritt 1)* |
    | `FA_MODE` | `sandbox` |
+
+   Läuft ein Relay noch mit dem **alten** Code (Deploy vor dem 26.08.2026), kommen
+   diese zwei dazu — dann sind sie richtig eingestellt, ohne neu zu deployen:
+   | `FA_TOKEN_URL` | `https://openapi.flowaccount.com/test/token` |
+   | `FA_BASE_SANDBOX` | `https://openapi.flowaccount.com/v3-alpha` |
 3. **Deploy → New deployment → Web app** · Execute as **Me** · Access **Anyone** → **/exec-URL kopieren**
 
 ## 3. URL in die App eintragen

@@ -20,9 +20,20 @@
  *   FA_CLIENT_SECRET  = <same place>                    NEVER commit these.
  *   FA_MODE           = sandbox | live                  (start with sandbox!)
  *   FA_CULTURE        = th                              (optional, default th)
- *   FA_TOKEN_URL      = (optional override; default https://openapi.flowaccount.com/token)
- *   FA_BASE_SANDBOX   = (optional; default https://openapi.flowaccount.com/sandbox)
+ *   FA_TOKEN_URL      = (optional override; default depends on FA_MODE, see below)
+ *   FA_BASE_SANDBOX   = (optional; default https://openapi.flowaccount.com/v3-alpha)
  *   FA_BASE_LIVE      = (optional; default https://openapi.flowaccount.com/v3-alpha)
+ *
+ * SANDBOX vs LIVE is only the TOKEN endpoint (verified against the live host on
+ * 26.08.2026, unauthenticated):
+ *   POST /test/token   → 200 {"error":"invalid_client"}  ← the sandbox door, open
+ *   POST /token        → 403 {"message":"Forbidden"}     ← live, closed to us
+ *   /v3-alpha/th/tax-invoices[/inline-document] → 401 with a bad bearer = exists
+ *   /sandbox/…                                  → 403    = never existed
+ * So a sandbox token is what makes the calls run against the sandbox company;
+ * the API path is the same v3-alpha for both. The old sandbox defaults
+ * (/token + /sandbox) could not have worked — that is what the relay's
+ * "token 403" really was, on top of the placeholder credentials.
  *
  * Request  (POST, text/plain JSON body):
  *   { "action":"health" }
@@ -42,10 +53,12 @@ function _faProps() {
     secret: p.getProperty('FA_CLIENT_SECRET') || '',
     mode: mode,
     culture: p.getProperty('FA_CULTURE') || 'th',
-    tokenUrl: p.getProperty('FA_TOKEN_URL') || 'https://openapi.flowaccount.com/token',
+    tokenUrl: p.getProperty('FA_TOKEN_URL')
+      || (mode === 'live' ? 'https://openapi.flowaccount.com/token'
+                          : 'https://openapi.flowaccount.com/test/token'),
     base: mode === 'live'
       ? (p.getProperty('FA_BASE_LIVE') || 'https://openapi.flowaccount.com/v3-alpha')
-      : (p.getProperty('FA_BASE_SANDBOX') || 'https://openapi.flowaccount.com/sandbox')
+      : (p.getProperty('FA_BASE_SANDBOX') || 'https://openapi.flowaccount.com/v3-alpha')
   };
 }
 
