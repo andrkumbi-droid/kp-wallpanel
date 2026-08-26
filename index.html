@@ -2759,7 +2759,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     </div>
     <div class="stit" style="font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:8px">
       <span>Pre-Orders</span>
-      <button type="button" class="btnsm" style="font-size:11px" onclick="resyncPreOrdersToSheet()" title="ส่งพรีออเดอร์ทั้งหมดเข้าชีต / push every pre-order into the sheet"><i class="ti ti-table"></i> → Sheet</button>
+      <span style="display:flex;gap:6px;flex-shrink:0">
+        <button type="button" class="btnsm" style="font-size:11px" onclick="poPrintReport()" title="พิมพ์รายงานพรีออเดอร์ / print the pre-order report"><i class="ti ti-printer"></i> 🖨️ รายงาน / report</button>
+        <button type="button" class="btnsm" style="font-size:11px" onclick="resyncPreOrdersToSheet()" title="ส่งพรีออเดอร์ทั้งหมดเข้าชีต / push every pre-order into the sheet"><i class="ti ti-table"></i> → Sheet</button>
+      </span>
     </div>
     <div id="po-list"></div>
   </div></div>
@@ -22343,6 +22346,19 @@ function poModelSummaryHTML(open){
 // panels that is, how many of them are ready and what the zone comes to. It says
 // where the next container has to land before twenty cards have been opened.
 var PO_ZONE_ORDER=['Bangkok','Northern','Northeastern','Eastern','Southern','Instore'];
+var _poZoneOpen={};
+function poZoneToggle(z,open){ _poZoneOpen[z]=!!open; }
+// Tapping a line in a zone scrolls to that pre-order's own card and marks it for
+// a moment, so a long list does not have to be searched by eye.
+function poJumpTo(id){
+  var list=document.getElementById('po-list'); if(!list) return;
+  var btn=list.querySelector('[onclick*="poEdit(\''+id+'\')"], [onclick*="poDelete(\''+id+'\')"]');
+  var card=btn?btn.closest('.card'):null; if(!card) return;
+  card.scrollIntoView({block:'center', behavior:'smooth'});
+  var old=card.style.boxShadow;
+  card.style.boxShadow='0 0 0 3px #4338ca';
+  setTimeout(function(){ card.style.boxShadow=old; }, 1400);
+}
 function poTotalOf(p){
   var sub=((p&&p.lineItems)||[]).reduce(function(a,x){ return a+(parseFloat(x.amount)||0); },0);
   return Math.max(0, sub+(parseInt(p&&p.clipPacks)||0)*199+(parseInt(p&&p.extraPrice)||0)
@@ -22353,8 +22369,9 @@ function poZoneSummaryHTML(open){
   var Z={}, seq=[];
   open.forEach(function(p){
     var z=(p&&p.zone)||'— ไม่ระบุ / no zone';
-    if(!Z[z]){ Z[z]={z:z,n:0,baht:0,panels:0,ready:0,short:0,shortPcs:0}; seq.push(z); }
+    if(!Z[z]){ Z[z]={z:z,n:0,baht:0,panels:0,ready:0,short:0,shortPcs:0,list:[]}; seq.push(z); }
     var d=Z[z];
+    d.list.push(p);
     d.n++; d.baht+=poTotalOf(p);
     (((p||{}).lineItems)||[]).forEach(function(li){
       if(!li || !PO_PRODT[li.type] || PO_SUM_EXCL[li.type]) return;
@@ -22371,18 +22388,44 @@ function poZoneSummaryHTML(open){
   });
   var g={n:0,baht:0,panels:0};
   seq.forEach(function(k){ g.n+=Z[k].n; g.baht+=Z[k].baht; g.panels+=Z[k].panels; });
+  // Tap a zone and its pre-orders unfold underneath it, the way the tour tab
+  // opens what is waiting in a region. The open ones are remembered, otherwise
+  // every save in the form would fold them all shut again.
   var tile=function(d){
     var c=(typeof zoneColor==='function'?zoneColor(d.z):'')||'var(--text2)';
-    return '<div style="background:var(--bg);border:1.5px solid var(--border);border-left:4px solid '+c+';border-radius:var(--rs);padding:8px 10px">'
-      +'<div style="font-size:11px;font-weight:700;color:'+c+'">'+_esc(d.z)+'</div>'
-      +'<div style="font-size:13px;font-weight:700;margin-top:2px">'+d.n+' pre-order'+(d.n!==1?'s':'')+'</div>'
-      +'<div style="font-size:11px;color:var(--text2);margin-top:1px">'+d.panels.toLocaleString()+' panels</div>'
-      +'<div style="font-size:11px;margin-top:2px;display:flex;flex-wrap:wrap;gap:2px 8px">'
-        +(d.ready?'<span style="color:#166534;font-weight:700">✅ '+d.ready+' พร้อม/ready</span>':'')
-        +(d.short?'<span style="color:#92400e;font-weight:700">⏳ '+d.short+' ขาด'+(d.shortPcs?' '+d.shortPcs.toLocaleString():'')+'</span>':'')
+    var op=!!_poZoneOpen[d.z];
+    return '<details'+(op?' open':'')+' ontoggle="poZoneToggle(\''+_esc(d.z).replace(/'/g,"\\'")+'\',this.open)"'
+        +' style="background:var(--bg);border:1.5px solid var(--border);border-left:4px solid '+c+';border-radius:var(--rs)">'
+      +'<summary style="cursor:pointer;padding:8px 10px;list-style:none">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;gap:6px">'
+          +'<span style="font-size:11px;font-weight:700;color:'+c+'">'+_esc(d.z)+'</span>'
+          +'<span style="font-size:10px;color:var(--text2)">▾</span>'
+        +'</div>'
+        +'<div style="font-size:13px;font-weight:700;margin-top:2px">'+d.n+' pre-order'+(d.n!==1?'s':'')+'</div>'
+        +'<div style="font-size:11px;color:var(--text2);margin-top:1px">'+d.panels.toLocaleString()+' panels</div>'
+        +'<div style="font-size:11px;margin-top:2px;display:flex;flex-wrap:wrap;gap:2px 8px">'
+          +(d.ready?'<span style="color:#166534;font-weight:700">✅ '+d.ready+' พร้อม/ready</span>':'')
+          +(d.short?'<span style="color:#92400e;font-weight:700">⏳ '+d.short+' ขาด'+(d.shortPcs?' '+d.shortPcs.toLocaleString():'')+'</span>':'')
+        +'</div>'
+        +'<div style="font-size:13.5px;font-weight:800;margin-top:3px;color:var(--blue)">'+Math.round(d.baht).toLocaleString()+' ฿</div>'
+      +'</summary>'
+      +'<div style="border-top:1px solid var(--border);padding:2px 10px 8px">'
+        +d.list.map(function(p){
+          var rdy=false, shrt=0;
+          try{ rdy=poReady(p); }catch(e){}
+          try{ shrt=poShortTotal(p)||0; }catch(e){}
+          return '<div onclick="poJumpTo(\''+p.id+'\')" title="ไปที่การ์ด / go to the card" style="padding:5px 0;border-bottom:1px solid var(--border);font-size:11px;cursor:pointer">'
+            +'<div style="display:flex;justify-content:space-between;gap:6px;align-items:baseline">'
+              +'<span style="font-weight:800;color:#4338ca">'+_esc(poLabel(p))+'</span>'
+              +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_esc(p.customer||'—')+'</span>'
+              +'<span style="font-weight:700;white-space:nowrap">'+Math.round(poTotalOf(p)).toLocaleString()+' ฿</span>'
+            +'</div>'
+            +'<div style="color:var(--text2);margin-top:1px">'+_esc((p.lineItems||[]).map(function(li){ return li.code+' ×'+li.qty; }).join(' · '))+'</div>'
+            +'<div style="margin-top:1px;font-weight:700;color:'+(rdy?'#166534':'#92400e')+'">'+(rdy?'✅ พร้อม / ready':'⏳ ขาด '+shrt.toLocaleString()+' / short')+'</div>'
+          +'</div>';
+        }).join('')
       +'</div>'
-      +'<div style="font-size:13.5px;font-weight:800;margin-top:3px;color:var(--blue)">'+Math.round(d.baht).toLocaleString()+' ฿</div>'
-    +'</div>';
+    +'</details>';
   };
   return '<div class="card" style="margin-bottom:10px;background:var(--bg2)">'
     +'<div style="font-size:12px;font-weight:800;margin-bottom:6px">🗺️ ยอดจองต่อภาค / Pre-ordered per zone</div>'
@@ -22392,6 +22435,140 @@ function poZoneSummaryHTML(open){
       +'<span style="color:var(--blue);white-space:nowrap">'+Math.round(g.baht).toLocaleString()+' ฿</span>'
     +'</div>'
   +'</div>';
+}
+// ── the pre-order book on paper ───────────────────────────────────────────
+// Three questions in one sheet: what is booked per region and what it is worth,
+// how many pieces of each model are owed and how much of that is on the shelf,
+// and then every open pre-order with its customer, so the page can be worked
+// through with a pen when the container lands.
+function poPrintReport(){
+  var open=(preOrders||[]).filter(function(p){ return p && p.status==='open'; });
+  if(!open.length){ alert('ไม่มีพรีออเดอร์ที่เปิดอยู่ / no open pre-orders'); return; }
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var stock={}; try{ stock=stockOnHandMap()||{}; }catch(e){}
+  // per zone
+  var Z={}, zseq=[];
+  open.forEach(function(p){
+    var z=p.zone||'— ไม่ระบุ / no zone';
+    if(!Z[z]){ Z[z]={z:z,n:0,baht:0,panels:0,ready:0,short:0,shortPcs:0,list:[]}; zseq.push(z); }
+    var d=Z[z]; d.n++; d.baht+=poTotalOf(p); d.list.push(p);
+    (p.lineItems||[]).forEach(function(li){
+      if(!li||!PO_PRODT[li.type]||PO_SUM_EXCL[li.type]) return;
+      d.panels+=parseInt(li.qty)||0;
+    });
+    var rdy=false; try{ rdy=poReady(p); }catch(e){}
+    if(rdy) d.ready++; else { d.short++; try{ d.shortPcs+=poShortTotal(p)||0; }catch(e){} }
+  });
+  zseq.sort(function(a,b){
+    var ia=PO_ZONE_ORDER.indexOf(a), ib=PO_ZONE_ORDER.indexOf(b);
+    if(ia<0) ia=99; if(ib<0) ib=99;
+    return ia-ib || String(a).localeCompare(String(b));
+  });
+  // per model — what is owed, what is on the shelf, what is missing
+  var M={}, mseq=[];
+  open.forEach(function(p){
+    (p.lineItems||[]).forEach(function(li){
+      if(!li||!PO_PRODT[li.type]||!li.code) return;
+      var k=ofNormCode(li.code);
+      if(!M[k]){ M[k]={code:li.code, key:k, need:0, acc:!!PO_SUM_EXCL[li.type]}; mseq.push(k); }
+      M[k].need+=parseInt(li.qty)||0;
+    });
+  });
+  var models=mseq.map(function(k){ return M[k]; }).filter(function(r){ return r.need>0; })
+    .sort(function(a,b){ return (a.acc?1:0)-(b.acc?1:0) || b.need-a.need; });
+  var g={n:open.length, baht:0, panels:0, ready:0, short:0};
+  zseq.forEach(function(k){ g.baht+=Z[k].baht; g.panels+=Z[k].panels; g.ready+=Z[k].ready; g.short+=Z[k].short; });
+  var now=new Date();
+  var dateStr=now.toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'})
+    +' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  var zoneRows=zseq.map(function(k){
+    var d=Z[k];
+    return '<tr><td class="b">'+esc(d.z)+'</td>'
+      +'<td class="c">'+d.n+'</td>'
+      +'<td class="c">'+d.panels.toLocaleString()+'</td>'
+      +'<td class="c ok">'+(d.ready||'—')+'</td>'
+      +'<td class="c warn">'+(d.short?d.short+(d.shortPcs?' ('+d.shortPcs.toLocaleString()+')':''):'—')+'</td>'
+      +'<td class="r b">'+Math.round(d.baht).toLocaleString()+'</td></tr>';
+  }).join('');
+  var modelRows=models.map(function(r){
+    var have=stock[r.key]||0, sh=Math.max(0,r.need-have);
+    return '<tr><td class="cd">'+esc(r.code)+(r.acc?' <span class="muted">(acc.)</span>':'')+'</td>'
+      +'<td class="c b">'+r.need.toLocaleString()+'</td>'
+      +'<td class="c">'+have.toLocaleString()+'</td>'
+      +'<td class="c '+(sh>0?'warn b':'ok')+'">'+(sh>0?sh.toLocaleString():'✓')+'</td></tr>';
+  }).join('');
+  var zoneBlocks=zseq.map(function(k){
+    var d=Z[k];
+    return '<div class="sec"><div class="sect">'+esc(d.z)
+      +'<span class="cnt">'+d.n+' pre-orders · '+d.panels.toLocaleString()+' panels · '+Math.round(d.baht).toLocaleString()+' ฿</span></div>'
+      +'<table><thead><tr><th class="w-no">No.</th><th>ลูกค้า / Customer</th><th class="w-pr">สินค้า / Products</th>'
+        +'<th class="c w-st">สถานะ / State</th><th class="r w-amt">฿</th><th class="w-ck">✓</th></tr></thead><tbody>'
+      +d.list.map(function(p){
+        var rdy=false, sh=0;
+        try{ rdy=poReady(p); }catch(e){}
+        try{ sh=poShortTotal(p)||0; }catch(e){}
+        var dep=parseInt(p.deposit)||0;
+        return '<tr>'
+          +'<td class="b">'+esc(poLabel(p))+'</td>'
+          +'<td>'+esc(p.customer||'—')+(p.phone?'<div class="muted">'+esc(p.phone)+'</div>':'')
+             +(p.address?'<div class="muted sm">'+esc(String(p.address).slice(0,80))+'</div>':'')+'</td>'
+          +'<td>'+esc((p.lineItems||[]).map(function(li){ return li.code+' ×'+li.qty; }).join(' · '))
+             +(dep?'<div class="muted">มัดจำ/deposit '+dep.toLocaleString()+' ฿</div>':'')+'</td>'
+          +'<td class="c '+(rdy?'ok b':'warn b')+'">'+(rdy?'พร้อม<br>ready':'ขาด '+sh.toLocaleString())+'</td>'
+          +'<td class="r b">'+Math.round(poTotalOf(p)).toLocaleString()+'</td>'
+          +'<td class="box"></td></tr>';
+      }).join('')
+      +'</tbody></table></div>';
+  }).join('');
+  var full='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Pre-orders / พรีออเดอร์ '+esc(now.toISOString().slice(0,10))+'</title><style>'
+    +'*{box-sizing:border-box;margin:0;padding:0}'
+    +'@page{size:A4 portrait;margin:9mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;background:#fff;font-size:10pt}'
+    +'.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:5px}'
+    +'.hd h1{font-size:14pt}.hd .d{font-size:9.5pt;color:#444;text-align:right}'
+    +'.tot{display:flex;gap:8px;margin:7px 0 2px;font-size:9.5pt}'
+    +'.tot div{flex:1;border:1px solid #bbb;border-radius:4px;padding:4px 8px;text-align:center}'
+    +'.tot b{display:block;font-size:13pt}'
+    +'.sec{margin-top:11px;page-break-inside:auto}'
+    +'.sect{font-size:11pt;font-weight:800;background:#ffeb3b;border:1px solid #999;padding:3px 7px;margin-bottom:3px}'
+    +'.sect .cnt{font-size:9pt;font-weight:600;color:#444;float:right}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #999;padding:3px 5px;font-size:9.5pt;vertical-align:top}'
+    +'th{background:#f1f5f9;font-size:8pt;text-transform:uppercase;letter-spacing:.03em;line-height:1.2}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.c{text-align:center}.r{text-align:right}.b{font-weight:800}'
+    +'.muted{color:#666;font-size:8.5pt}.sm{font-size:8pt}'
+    +'.ok{color:#166534}.warn{color:#b45309}'
+    +'.cd{font-weight:800;font-size:10.5pt}'
+    +'.box{background:#fcfcfc}'
+    +'.w-no{width:14mm}.w-st{width:20mm}.w-amt{width:20mm}.w-ck{width:10mm}.w-pr{width:52mm}'
+    +'.two{display:flex;gap:8px;align-items:flex-start}'
+    +'.two>div{flex:1;min-width:0}'
+    +'</style></head><body>'
+    +'<div class="hd"><h1>📋 พรีออเดอร์ / Pre-orders — KP Wallpanel</h1><div class="d">'+esc(dateStr)+'</div></div>'
+    +'<div class="tot">'
+      +'<div>พรีออเดอร์ / pre-orders<b>'+g.n+'</b></div>'
+      +'<div>แผ่น / panels<b>'+g.panels.toLocaleString()+'</b></div>'
+      +'<div>พร้อม / ready<b>'+g.ready+'</b></div>'
+      +'<div>ขาด / short<b>'+g.short+'</b></div>'
+      +'<div>รวม / total<b>'+Math.round(g.baht).toLocaleString()+' ฿</b></div>'
+    +'</div>'
+    +'<div class="two">'
+      +'<div class="sec" style="margin-top:9px"><div class="sect">🗺️ ต่อภาค / Per zone</div>'
+        +'<table><thead><tr><th>ภาค / Zone</th><th class="c">P/O</th><th class="c">แผ่น</th><th class="c">พร้อม</th><th class="c">ขาด</th><th class="r">฿</th></tr></thead>'
+        +'<tbody>'+zoneRows
+        +'<tr><td class="b">รวม / total</td><td class="c b">'+g.n+'</td><td class="c b">'+g.panels.toLocaleString()+'</td>'
+          +'<td class="c b ok">'+g.ready+'</td><td class="c b warn">'+g.short+'</td><td class="r b">'+Math.round(g.baht).toLocaleString()+'</td></tr>'
+        +'</tbody></table></div>'
+      +'<div class="sec" style="margin-top:9px"><div class="sect">📊 ต่อรุ่น / Per model</div>'
+        +'<table><thead><tr><th>รหัส / Code</th><th class="c">จอง / booked</th><th class="c">มี / stock</th><th class="c">ขาด / short</th></tr></thead>'
+        +'<tbody>'+modelRows+'</tbody></table></div>'
+    +'</div>'
+    +zoneBlocks
+    +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(full); w.document.close(); w.focus();
 }
 function poRender(){
   var list=document.getElementById('po-list'); if(!list) return;
