@@ -23,17 +23,26 @@
  *   FA_TOKEN_URL      = (optional override; default depends on FA_MODE, see below)
  *   FA_BASE_SANDBOX   = (optional; default https://openapi.flowaccount.com/v3-alpha)
  *   FA_BASE_LIVE      = (optional; default https://openapi.flowaccount.com/v3-alpha)
+ *   FA_PATH_CREATE    = (optional; default /tax-invoices/inline)
+ *   FA_PATH_PDF       = (optional; default /tax-invoices/{id}/export-pdf/base64)
  *
  * SANDBOX vs LIVE is only the TOKEN endpoint (verified against the live host on
  * 26.08.2026, unauthenticated):
  *   POST /test/token   → 200 {"error":"invalid_client"}  ← the sandbox door, open
  *   POST /token        → 403 {"message":"Forbidden"}     ← live, closed to us
- *   /v3-alpha/th/tax-invoices[/inline-document] → 401 with a bad bearer = exists
+ *   /v3-alpha/th/tax-invoices                   → 401 with a bad bearer = exists
  *   /sandbox/…                                  → 403    = never existed
  * So a sandbox token is what makes the calls run against the sandbox company;
  * the API path is the same v3-alpha for both. The old sandbox defaults
  * (/token + /sandbox) could not have worked — that is what the relay's
  * "token 403" really was, on top of the placeholder credentials.
+ *
+ * The create path is /tax-invoices/inline, from FlowAccount's own SDK
+ * (github.com/flowaccount/flowaccount-openapi-sdk, TaxInvoiceApi:
+ * "POST /tax-invoices/inline — Create tax invoice document inline discount or
+ * inline vat", body InlineDocument → InlineDocumentResponse with
+ * data.recordId / data.documentId / data.documentSerial). The guessed
+ * /tax-invoices/inline-document answered 405 with a perfectly valid token.
  *
  * Request  (POST, text/plain JSON body):
  *   { "action":"health" }
@@ -58,7 +67,11 @@ function _faProps() {
                           : 'https://openapi.flowaccount.com/test/token'),
     base: mode === 'live'
       ? (p.getProperty('FA_BASE_LIVE') || 'https://openapi.flowaccount.com/v3-alpha')
-      : (p.getProperty('FA_BASE_SANDBOX') || 'https://openapi.flowaccount.com/v3-alpha')
+      : (p.getProperty('FA_BASE_SANDBOX') || 'https://openapi.flowaccount.com/v3-alpha'),
+    // The one path that was guessed wrong for two weeks. It is a property now, so
+    // the next surprise from FlowAccount costs a line in the settings, not a redeploy.
+    pathCreate: p.getProperty('FA_PATH_CREATE') || '/tax-invoices/inline',
+    pathPdf: p.getProperty('FA_PATH_PDF') || '/tax-invoices/{id}/export-pdf/base64'
   };
 }
 
@@ -109,7 +122,7 @@ function _faApi(cfg, method, path, payloadObj) {
 // PDF of one tax invoice: original + copy in one file (เอกสารออกเป็นชุด).
 function _faPdf(cfg, id) {
   var body = _faApi(cfg, 'post',
-    '/' + cfg.culture + '/tax-invoices/' + id + '/export-pdf/base64',
+    '/' + cfg.culture + cfg.pathPdf.replace('{id}', id),
     { culture: cfg.culture, document: { original: true, copy: true } });
   var b64 = body && (body.data || body.pdf || '');
   if (!b64) throw new Error('pdf: empty response');
@@ -134,7 +147,7 @@ function _faHandle(e) {
 
     if (req.action === 'create') {
       if (!req.doc || !req.doc.contactName) return _faJson({ error: 'no document' });
-      var made = _faApi(cfg, 'post', '/' + cfg.culture + '/tax-invoices/inline-document', req.doc);
+      var made = _faApi(cfg, 'post', '/' + cfg.culture + cfg.pathCreate, req.doc);
       // The created document sits in .data on the new API; be liberal in what we read.
       var d = made && (made.data || made);
       var id = d && (d.recordId || d.id);
