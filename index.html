@@ -13830,7 +13830,10 @@ function ofUnpaidGroups(){
     var r=tourReg[k]||{}; r.id=k;
     // still driving → not due yet · already settled (tick OR paid inside the tour)
     if(r.state!=='ended' || tourRegPaidRec(r)) return;
-    var gk=(r.driverId||r.driverName||'?')+'|'+tidDay(k);
+    // ONE ROW PER TOUR. It used to be one row per driver-day, which paid two
+    // tours whether or not that was wanted — the office picks what goes into a
+    // transfer by ticking, and two ticks still make one payout with both IDs.
+    var gk=k;
     if(!by[gk]){ by[gk]={key:gk, driverId:r.driverId||'', driverName:r.driverName||'—', day:tidDay(k), tours:[], pay:0, orders:0}; out.push(by[gk]); }
     by[gk].tours.push(r); by[gk].pay+=Number(r.driverPay)||0; by[gk].orders+=tidArr(r.orders).length;
     if(!by[gk].driverName || by[gk].driverName==='—') by[gk].driverName=r.driverName||'—';
@@ -13840,8 +13843,19 @@ function ofUnpaidGroups(){
     g.tours.sort(function(a,b){ return tidSeq(a.id)-tidSeq(b.id); });
     g.ids=g.tours.map(function(r){ return r.id; });
   });
-  out.sort(function(a,b){ return String(b.day).localeCompare(String(a.day)) || String(a.driverName).localeCompare(String(b.driverName)); });
+  out.sort(function(a,b){
+    return String(b.day).localeCompare(String(a.day))
+        || String(a.driverName).localeCompare(String(b.driverName))
+        || (tidSeq(a.ids[0])-tidSeq(b.ids[0]));      // the day's tours in the order they ran
+  });
   return out;
+}
+// How many unpaid tours this driver has on that day — the row offers to tick the
+// lot when there is more than one, which is the old behaviour as a shortcut
+// instead of a rule.
+function ofUnpaidDayCount(list, g){
+  var who=g.driverId||g.driverName;
+  return list.filter(function(x){ return x.day===g.day && (x.driverId||x.driverName)===who; }).length;
 }
 function tpToggle(key){
   var g=ofUnpaidGroups().find(function(x){ return x.key===key; }); if(!g) return;
@@ -13855,10 +13869,11 @@ function tpToggle(key){
   if(!Object.keys(_tpSel).length) _tpDriver='';
   ofRenderUnpaid();
 }
-function tpSelectDay(day){
+// "the whole day": every unpaid tour that driver drove on that date, ticked at once.
+function tpSelectDay(day, who){
   var list=ofUnpaidGroups().filter(function(g){ return g.day===day; });
   if(!list.length) return;
-  _tpSel={}; _tpDriver=list[0].driverId||list[0].driverName;
+  _tpSel={}; _tpDriver=who || (list[0].driverId||list[0].driverName);
   list.forEach(function(g){ if((g.driverId||g.driverName)===_tpDriver) _tpSel[g.key]=1; });
   ofRenderUnpaid();
 }
@@ -13921,13 +13936,19 @@ function ofRenderUnpaid(){
   var open=true; try{ var b=document.getElementById('of-unpaid-body'); if(b) open=(b.style.display!=='none'); }catch(e){}
   var rows=list.map(function(g){
     var on=!!_tpSel[g.key], dim=(_tpDriver && (g.driverId||g.driverName)!==_tpDriver);
+    var dayN=ofUnpaidDayCount(list,g);
     var lbl=g.ids.length>1 ? (g.ids[0]+' … -'+tidSeq(g.ids[g.ids.length-1])) : g.ids[0];
     var dayLbl=g.day?fmtD('20'+g.day.slice(0,2)+'-'+g.day.slice(2,4)+'-'+g.day.slice(4,6)):'';
     return '<label style="display:flex;gap:9px;align-items:center;padding:8px 9px;border:1px solid '+(on?'#86efac':'var(--border)')+';border-radius:var(--rs);margin-bottom:6px;background:'+(on?'#f0fdf4':'var(--bg)')+';cursor:pointer'+(dim?';opacity:.45':'')+'">'
       +'<input type="checkbox" '+(on?'checked ':'')+'onchange="tpToggle(\''+g.key+'\')" style="width:17px;height:17px;flex-shrink:0;cursor:pointer">'
       +'<span style="flex:1;min-width:0">'
         +'<span style="font-size:12.5px;font-weight:800">'+lbl+'</span> <span style="font-size:11.5px;font-weight:700;color:var(--text2)">🚚 '+_esc(g.driverName)+'</span>'
-        +'<div style="font-size:10.5px;color:var(--text2);margin-top:1px">🗓 '+dayLbl+' · '+g.ids.length+' ทัวร์ · '+g.orders+' orders</div>'
+        +'<div style="font-size:10.5px;color:var(--text2);margin-top:1px">🗓 '+dayLbl+(g.ids.length>1?' · '+g.ids.length+' ทัวร์':'')+' · '+g.orders+' orders'
+          // More than one tour that day: offer them all in one tap, without making
+          // that the only way to pay. preventDefault, or the label's own checkbox
+          // would toggle underneath the tap.
+          +((dayN>1&&!on)?' · <span onclick="event.preventDefault();event.stopPropagation();tpSelectDay(\''+g.day+'\',\''+String(g.driverId||g.driverName).replace(/['"\\]/g,'')+'\')" title="ติ๊กทุกทัวร์ของวันนี้ / tick every tour of this day" style="color:#1d4ed8;font-weight:800;cursor:pointer">⚡ ทั้งวัน / whole day ('+dayN+')</span>':'')
+        +'</div>'
       +'</span>'
       +'<span style="font-size:13px;font-weight:900;color:'+(g.pay>0?'var(--green)':'#c2410c')+';white-space:nowrap">'+(g.pay>0?g.pay.toLocaleString()+' ฿':'⚠ ไม่มีค่าทัวร์')+'</span>'
     +'</label>';
@@ -13939,7 +13960,7 @@ function ofRenderUnpaid(){
       +'<span style="font-size:13px;font-weight:900;color:#c2410c;white-space:nowrap">'+total.toLocaleString()+' ฿ ▾</span>'
     +'</div>'
     +'<div id="of-unpaid-body" style="'+(open?'':'display:none;')+'margin-top:8px">'
-      +'<div style="font-size:10.5px;color:#92400e;margin-bottom:6px">ติ๊กหลายวันของคนขับคนเดียวกัน แล้วกดจ่ายครั้งเดียว / tick several days of ONE driver and pay them in one transfer</div>'
+      +'<div style="font-size:10.5px;color:#92400e;margin-bottom:6px">หนึ่งแถว = หนึ่งทัวร์ · ติ๊กทัวร์ที่จะจ่ายด้วยกัน (คนขับคนเดียวกัน) แล้วกดจ่ายครั้งเดียว / one row = one tour — tick the ones that go in ONE transfer</div>'
       +rows
       +'<button type="button" onclick="tpayOpen()"'+(sel.length?'':' disabled')+' style="width:100%;margin-top:4px;padding:11px;border:none;border-radius:var(--rs);background:'+(sel.length?'#16a34a':'var(--bg2)')+';color:'+(sel.length?'#fff':'var(--text3)')+';font-size:13.5px;font-weight:800;cursor:'+(sel.length?'pointer':'default')+'">'
         +(sel.length?'💸 จ่าย / Pay '+selTours+' ทัวร์ · '+selSum.toLocaleString()+' ฿':'เลือกทัวร์ที่จะจ่าย / tick the tours to pay')+'</button>'
