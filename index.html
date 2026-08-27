@@ -1058,6 +1058,13 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       });
       db.ref('activeTours').on('value', function(snap) {
         var raw = snap.val() ? Object.values(snap.val()) : [];
+        // Keep what the database really holds, per tour, before anything local
+        // touches it. syncTours() writes only what differs from this — see there
+        // for why an order used to fall off a running tour on its own.
+        try{
+          window._tourFbSnap = {};
+          raw.forEach(function(t){ if(t && t.id) window._tourFbSnap[t.id] = JSON.parse(JSON.stringify(t)); });
+        }catch(e){ window._tourFbSnap = window._tourFbSnap || {}; }
         // Remove empty/corrupt tours from Firebase
         raw.filter(function(t){ return !t || !t.orders || t.orders.length === 0; }).forEach(function(t){
           if(t && t.id) db.ref('activeTours/'+t.id).remove();
@@ -1071,6 +1078,13 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
             if(s[k]!==undefined) ns[id]=s[k]; else if(s[id]!==undefined) ns[id]=s[id];
             if(c[k]!==undefined) nc[id]=c[k]; else if(c[id]!==undefined) nc[id]=c[id];
           });
+          // Entries for orders that have since left the tour are carried along
+          // untouched. Dropping them here meant every write deleted somebody's
+          // "delivered" flag from the record — and made every tour look changed
+          // to syncTours even when this device had changed nothing at all.
+          var keep={}; t.orders.forEach(function(id){ keep[tourKey(id)]=1; });
+          Object.keys(s).forEach(function(k){ if(!keep[k] && ns[k]===undefined) ns[k]=s[k]; });
+          Object.keys(c).forEach(function(k){ if(!keep[k] && nc[k]===undefined) nc[k]=c[k]; });
           t.status=ns; t.checks=nc;
         });
         // Give every tour its registered ID back before anything renders — a render
@@ -4209,7 +4223,53 @@ function tourForFb(t){
 // A full .set() let a stale client wipe another client's freshly-created tour
 // (the orders survived as "loaded" but the tour vanished). Per-tour writes +
 // explicit removals (fbRemoveTour) below avoid that clobbering.
-function syncTours() { if(window.fbDB) { activeTours.forEach(function(t){ if(t&&t.id) window.fbDB.ref('activeTours/'+t.id).set(tourForFb(t)); }); } }
+//
+// …and per-tour was still not enough. Every device wrote EVERY tour it held, as
+// one whole object, on any change: a driver marking a stop delivered rewrote the
+// whole tour from his phone's copy, including its list of orders. If the office
+// had added an order in between and his copy was older, that order was silently
+// gone — no audit entry, because nobody removed it. Order 4-240 fell off Aoo +
+// Waen's tour twice on 27.08. that way, and the orphan healer then released it
+// ("tour gone") three minutes later, which is when the driver called.
+//
+// So: write only the FIELDS that this device actually changed, measured against
+// what the database last sent us. A device that did not touch the order list
+// never writes the order list — and a tab that is simply stale writes nothing at
+// all, because nothing differs from its own snapshot.
+function syncTours() {
+  if(!window.fbDB) return;
+  var snaps = window._tourFbSnap || {};
+  activeTours.forEach(function(t){
+    if(!t || !t.id) return;
+    var out = tourForFb(t), base = snaps[t.id];
+    if(!base){ window.fbDB.ref('activeTours/'+t.id).set(out); return; }   // new tour
+    var upd = {}, n = 0;
+    // An empty object and a missing node are the same thing in Firebase — treating
+    // them as different would make every sync write status/checks on every tour.
+    // Two maps with the same content in a different key order are the same map —
+    // comparing raw JSON made every tour look changed, because the rebuilt copy is
+    // keyed in tour order and the database hands its keys back in its own.
+    var canon = function(x){
+      if(x==null || typeof x!=='object') return JSON.stringify(x===undefined?null:x);
+      if(Array.isArray(x)) return '['+x.map(canon).join(',')+']';
+      var k=Object.keys(x).sort();
+      return '{'+k.map(function(j){ return JSON.stringify(j)+':'+canon(x[j]); }).join(',')+'}';
+    };
+    var same = function(a, b){
+      var e = function(x){ return x==null || (typeof x==='object' && !Array.isArray(x) && !Object.keys(x).length); };
+      if(e(a) && e(b)) return true;
+      return canon(a) === canon(b);
+    };
+    Object.keys(out).forEach(function(k){
+      if(!same(out[k], base[k])){ upd[k] = out[k]; n++; }
+    });
+    // A field that disappeared locally has to be cleared, not left standing.
+    Object.keys(base).forEach(function(k){
+      if(out[k] === undefined && base[k] !== undefined && base[k] !== null){ upd[k] = null; n++; }
+    });
+    if(n) window.fbDB.ref('activeTours/'+t.id).update(upd);
+  });
+}
 // ── RE-RENDER GUARD ─────────────────────────────────────────────────────────
 // Every Firebase update used to rebuild whole views, which closed open dropdowns
 // and threw the page back to the top — even when nothing visible had changed and
@@ -16339,6 +16399,14 @@ function ofHealLoadedOrphans(){
   var n=0;
   (orders||[]).forEach(function(o){
     if(!o || o.status!=='loaded' || onTour[o.id] || !tidOk(o.tourNo)) return;
+    // Second line of defence: the tour number on the order still points at a tour
+    // that is RUNNING. Then this device's copy of that tour is simply missing the
+    // order — releasing it would take a real stop off a real truck, which is what
+    // happened to 4-240. The tour registry is the authority here, not our copy.
+    try{
+      var _r = (typeof tourReg!=='undefined' ? tourReg : {})[String(o.tourNo)];
+      if(_r && _r.state==='active') return;
+    }catch(e){}
     o.status='ready';
     try{ addStatusLog(o,'ready','Auto'); }catch(e){}
     try{ auditStatus(o.id,'loaded','ready','Auto','tour gone — released for the next tour'); }catch(e){}
