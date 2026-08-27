@@ -7764,7 +7764,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828002;
+var KP_BUILD = 20260828003;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -21452,7 +21452,56 @@ function kpGeoBuildIndex(){
     Object.keys(pv).forEach(function(p){ if(pv[p]>tn){ tn=pv[p]; top=p; } });
     idx.zip[z]={lat:la/l.length, lng:ln/l.length, prov:top, n:l.length, list:l};
   });
+  // How far apart do sub-districts sit HERE? A khwaeng in Bangkok has neighbours
+  // 1.5 km away; ต.แม่ละมุ้ง in อ.อุ้มผาง — the largest district in the country —
+  // has them 25 km away. One flat "25 km is too far" therefore means two
+  // different things, and it was calling honest rural pins wrong (1-023) while
+  // waving through city pins that really were in the wrong street. So every
+  // tambon carries its own scale: the distance to its nearest neighbour.
+  // Bucketed by 0.1° and searched 3x3, so it stays a few milliseconds.
+  var grid={};
+  idx.flat.forEach(function(t){
+    var k=Math.round(t.lat*10)+':'+Math.round(t.lng*10);
+    (grid[k]=grid[k]||[]).push(t);
+  });
+  idx.flat.forEach(function(t){
+    var gy=Math.round(t.lat*10), gx=Math.round(t.lng*10), best=Infinity;
+    for(var dy=-1;dy<=1;dy++) for(var dx=-1;dx<=1;dx++){
+      var cell=grid[(gy+dy)+':'+(gx+dx)]; if(!cell) continue;
+      for(var i=0;i<cell.length;i++){
+        var u=cell[i]; if(u===t) continue;
+        var d=kpKm(t.lat,t.lng,u.lat,u.lng);
+        if(d<best) best=d;
+      }
+    }
+    // No neighbour inside ~11 km means the place is genuinely remote.
+    t.sp=isFinite(best)?+best.toFixed(2):18;
+  });
+  // An amphoe inherits the median spacing of its own tambon.
+  Object.keys(idx.prov).forEach(function(prov){
+    var PE=idx.prov[prov];
+    Object.keys(PE.amp).forEach(function(k){
+      var ae=PE.amp[k];
+      var sps=ae.list.map(function(t){ return t.sp; }).sort(function(a,b){ return a-b; });
+      ae.sp=sps.length?sps[Math.floor(sps.length/2)]:18;
+    });
+  });
   _kpGeoIdx=idx;
+}
+// How far a pin may sit from a predicted point before it counts as wrong, at the
+// local scale. Never stricter than the flat limits it replaces — it only gives
+// room where the geography demands it.
+function kpGeoLimit(pred){
+  if(!pred) return 150;
+  var sp=(typeof pred.sp2==='number'&&pred.sp2>0)?pred.sp2:0;
+  if(pred.level==='tambon') return sp?Math.max(25,Math.min(70,4*sp)):25;
+  if(pred.level==='amphoe') return sp?Math.max(40,Math.min(90,2.5*sp)):40;
+  return pred.level==='zip'?45:150;
+}
+// The same scale for the softer "a bit far from the centre" note.
+function kpGeoWideLimit(pred){
+  var sp=(pred&&typeof pred.sp2==='number'&&pred.sp2>0)?pred.sp2:0;
+  return sp?Math.max(8,Math.min(30,2*sp)):8;
 }
 
 // ── Parsing a Thai address ────────────────────────────────────────────────
@@ -21523,8 +21572,8 @@ function kpAddrParse(text, provHint){
     var pe0=_kpGeoIdx.prov[fx.prov];
     var ae0=out.amphoe?pe0.amp[kpGeoNorm(out.amphoe)]:null;
     var te0=(ae0&&out.tambon)?ae0.tam[kpGeoNorm(out.tambon)]:null;
-    if(te0){ out.level='tambon'; out.lat=te0.lat; out.lng=te0.lng; }
-    else if(ae0){ out.level='amphoe'; out.tambon=''; out.lat=ae0.lat; out.lng=ae0.lng; }
+    if(te0){ out.level='tambon'; out.lat=te0.lat; out.lng=te0.lng; out.sp2=te0.sp; }
+    else if(ae0){ out.level='amphoe'; out.tambon=''; out.lat=ae0.lat; out.lng=ae0.lng; out.sp2=ae0.sp; }
     else out.level='prov';
     return out;
   }
@@ -21604,9 +21653,9 @@ function kpAddrParse(text, provHint){
   if(cands.length>1) out.amb=true;
 
   if(TE){
-    out.tambon=TE.name; out.amphoe=TE.amp; out.level='tambon'; out.lat=TE.lat; out.lng=TE.lng;
+    out.tambon=TE.name; out.amphoe=TE.amp; out.level='tambon'; out.lat=TE.lat; out.lng=TE.lng; out.sp2=TE.sp;
   } else if(AE){
-    out.amphoe=AE.name; out.level='amphoe'; out.lat=AE.lat; out.lng=AE.lng;
+    out.amphoe=AE.name; out.level='amphoe'; out.lat=AE.lat; out.lng=AE.lng; out.sp2=AE.sp;
   } else if(out.zip && _kpGeoIdx.zip[out.zip] && _kpGeoIdx.zip[out.zip].prov===out.prov){
     out.level='zip'; out.lat=_kpGeoIdx.zip[out.zip].lat; out.lng=_kpGeoIdx.zip[out.zip].lng;
   } else {
@@ -21707,7 +21756,7 @@ function kpGeoPredict(o, addr){
   if(!a) return null;
   var L=function(level,src,lat,lng,e,key){
     var n=e?e.n:0, sp=e?e.sp:null;
-    return {lat:lat,lng:lng,level:level,src:src,n:n,sp:sp,key:key||'',
+    return {lat:lat,lng:lng,level:level,src:src,n:n,sp:sp,key:key||'',sp2:(a.sp2||0),
       label:(src==='learn' ? ('learned from '+n+' deliveries'+(sp!=null?' (±'+sp+' km)':''))
             : level==='tambon' ? 'sub-district centre'
             : level==='amphoe' ? 'district centre'
@@ -21770,6 +21819,24 @@ function kpGeoWhy(o, lat, lng, pred, addr){
   }catch(e){}
   // 3 — the pin is in a different province than the address says. With the
   // gazetteer this is exact, not a 150-km guess.
+  // Before anything is called WRONG: does this pin simply belong to another order
+  // on the same phone? One number can have two building sites, and then the pin is
+  // perfectly good — just not for this order. orderRouteLatLng already refuses to
+  // route by it, so this is a note, not a fault to be repaired.
+  try{
+    var ph0=normPhone(o&&o.phone), sib=null;
+    if(ph0 && geoSane(a.lat,a.lng)) (orders||[]).some(function(x){
+      if(!x||x.id===(o&&o.id)||normPhone(x.phone)!==ph0) return false;
+      var xa=kpAddrOf(x);
+      if(!xa||xa.level==='prov'||!geoSane(xa.lat,xa.lng)) return false;
+      // the sibling's address explains the pin, and ours does not
+      if(kpKm(lat,lng,xa.lat,xa.lng)<15 && kpKm(a.lat,a.lng,xa.lat,xa.lng)>25){ sib=x; return true; }
+      return false;
+    });
+    if(sib) return {code:'multi',hard:false,other:sib.id,
+      th:'หมุดนี้เป็นของ '+sib.id+' (เบอร์เดียวกัน คนละที่อยู่) — ออเดอร์นี้นำทางตามที่อยู่แล้ว',
+      en:'this pin belongs to '+sib.id+' (same phone, different site) — this order already routes by its address'};
+  }catch(e){}
   // A pin 3 km from the address can still fall on the far side of a provincial
   // boundary — that is a border, not a mistake, and half the first pin-check run
   // was made of those. It only counts as wrong when it is also FAR.
@@ -21785,30 +21852,14 @@ function kpGeoWhy(o, lat, lng, pred, addr){
             th:a.amb?'ชื่อตำบลซ้ำในจังหวัดนี้ ต้องระบุอำเภอด้วย':'ที่อยู่ไม่มี ต./อ. ที่รู้จัก',
             en:a.amb?'sub-district name is ambiguous in this province — needs the district'
                     :'no known sub-district/district in the address'};
-  // 5 — same phone, another order whose address is somewhere else entirely. One
-  // pin per phone cannot serve two building sites.
-  try{
-    var ph=normPhone(o&&o.phone), other=null;
-    if(ph && geoSane(a.lat,a.lng)) (orders||[]).some(function(x){
-      if(!x||x.id===(o&&o.id)||normPhone(x.phone)!==ph) return false;
-      var xa=kpAddrOf(x);
-      if(!xa||xa.level==='prov'||!geoSane(xa.lat,xa.lng)) return false;
-      if(kpKm(a.lat,a.lng,xa.lat,xa.lng)>25){ other=x; return true; }
-      return false;
-    });
-    if(other) return {code:'multi',hard:false,other:other.id,
-      th:'เบอร์เดียวกันมีอีกที่อยู่ห่างมาก ('+other.id+') — หมุดเดียวใช้ไม่ได้ทั้งสองที่',
-      en:'the same phone has a far-away second address ('+other.id+') — one pin cannot serve both'};
-  }catch(e){}
-  // 6 — plain distance from the prediction. The limit follows how sharp that
-  // prediction is: a tambon centre 25 km out is wrong, a province fallback
-  // 25 km out is perfectly normal.
+  // 5 — plain distance from the prediction, judged at the LOCAL scale: how sharp
+  // the prediction is, and how far apart sub-districts actually sit here.
   if(pred){
     var km=kpKm(lat,lng,pred.lat,pred.lng);
-    var lim=pred.level==='tambon'?25:pred.level==='amphoe'?40:pred.level==='zip'?45:150;
+    var lim=kpGeoLimit(pred);
     if(km>lim) return {code:'far',hard:true,km:Math.round(km),got:rv,
       th:'ห่างจากที่อยู่ ~'+Math.round(km)+' กม.',en:'~'+Math.round(km)+' km from the address'};
-    if(pred.level==='tambon'&&km>8) return {code:'wide',hard:false,km:Math.round(km),
+    if(pred.level==='tambon' && km>kpGeoWideLimit(pred)) return {code:'wide',hard:false,km:Math.round(km),
       th:'ห่างจากกลางตำบล ~'+Math.round(km)+' กม.',en:'~'+Math.round(km)+' km from the sub-district centre'};
   }
   return null;
@@ -29492,9 +29543,9 @@ function _tmapPos(o){
     if(pred){
       var km=kpKm(c.lat,c.lng,pred.lat,pred.lng);
       res.predKm=Math.round(km); res.pred=pred;
-      // The limit follows how sharp the prediction is — a tambon centre 25 km
-      // out is wrong, a province fallback 25 km out is perfectly normal.
-      var lim=pred.level==='tambon'?25:pred.level==='amphoe'?40:pred.level==='zip'?45:150;
+      // Same local scale the pin check uses, so the map and the list can never
+      // disagree about what counts as too far.
+      var lim=kpGeoLimit(pred);
       if(km>lim){
         var g0=custGeoGet(o&&o.phone);
         if(!(g0&&g0.ok)){                      // the office can confirm a pin once and for all
