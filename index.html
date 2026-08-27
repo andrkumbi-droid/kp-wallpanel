@@ -23941,6 +23941,9 @@ function openStaffM(id) {
     document.getElementById('staffm-fingrey').checked = !!s.finPayGrey;
     document.getElementById('staffm-food').checked = !!s.foodAccess;
     document.getElementById('staffm-stock').checked = !!s.stockEdit;
+    // The tick reflects what the printed sheet does today: the rule below, unless
+    // somebody was explicitly taken off it or explicitly put on it.
+    document.getElementById('staffm-crew').checked = clCrewOn(s);
     document.getElementById('staffm-payroll').checked = !!s.payrollOn;
     document.getElementById('staffm-driver').checked = !!s.isDriver;
     // Hub tools: no flag on an old record means "on" (backward-compat).
@@ -23973,6 +23976,7 @@ function openStaffM(id) {
     document.getElementById('staffm-stock').checked = false;
     document.getElementById('staffm-payroll').checked = false;
     document.getElementById('staffm-driver').checked = false;
+    document.getElementById('staffm-crew').checked = false;
     ['staffm-calc','staffm-quote','staffm-count','staffm-pay'].forEach(function(id){ document.getElementById(id).checked = true; });
     document.getElementById('staffm-phone').value = '';
     document.getElementById('staffm-vehicle').value = '';
@@ -24005,6 +24009,7 @@ function saveStaffM() {
   const finPayGrey = document.getElementById('staffm-fingrey').checked;
   const foodAccess = document.getElementById('staffm-food').checked;
   const stockEdit = document.getElementById('staffm-stock').checked;
+  const crewWanted = document.getElementById('staffm-crew').checked;
   const payrollOn = document.getElementById('staffm-payroll').checked;
   const isDriver = document.getElementById('staffm-driver').checked;
   const calcAccess = document.getElementById('staffm-calc').checked;
@@ -24016,11 +24021,12 @@ function saveStaffM() {
   const lang = document.getElementById('staffm-lang').value || 'th';
   if(editStaffId) {
     const s = staffList.find(x => x.id === editStaffId);
-    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.finAccess = finAccess; s.cashFeedAccess = cashFeedAccess; s.finPayrollOn = finPayrollOn; s.finPayGrey = finPayGrey; s.foodAccess = foodAccess; s.stockEdit = stockEdit; s.payrollOn = payrollOn; s.isDriver = isDriver; s.calcAccess = calcAccess; s.quoteAccess = quoteAccess; s.countAccess = countAccess; s.payAccess = payAccess; s.phone = phone; s.vehicle = vehicle; s.lang = lang;
+    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.finAccess = finAccess; s.cashFeedAccess = cashFeedAccess; s.finPayrollOn = finPayrollOn; s.finPayGrey = finPayGrey; s.foodAccess = foodAccess; s.stockEdit = stockEdit; clCrewSet(s, crewWanted); s.payrollOn = payrollOn; s.isDriver = isDriver; s.calcAccess = calcAccess; s.quoteAccess = quoteAccess; s.countAccess = countAccess; s.payAccess = payAccess; s.phone = phone; s.vehicle = vehicle; s.lang = lang;
     if(isDriver && !s.driverId) s.driverId = 'd' + Date.now();
   } else {
     var ns = { id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, acctAccess, officeAccess, warehouseAccess, logisticsMode, preorderAccess, billsAccess, finAccess, cashFeedAccess, finPayrollOn, finPayGrey, foodAccess, stockEdit, payrollOn, isDriver, calcAccess, quoteAccess, countAccess, payAccess, phone, vehicle, lang };
     if(isDriver) ns.driverId = 'd' + Date.now();
+    clCrewSet(ns, crewWanted);
     staffList.push(ns);
   }
   rebuildDrivers();
@@ -27414,6 +27420,13 @@ function calcViz() {
       <div style="font-size:11px;color:var(--text2)">Books daily food buying — lands in Bills → Food</div>
     </div>
   </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
+    <input type="checkbox" id="staffm-crew" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">📦 ใบตรวจรับตู้ / On the container check sheet</div>
+      <div style="font-size:11px;color:var(--text2)">Printed as a tick box on the sheet the warehouse fills in when a container is unloaded. Turn it off for somebody who never helps, or who is away for months.</div>
+    </div>
+  </div>
   <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:#fef3c7;border-radius:var(--rs);border:1px solid #fcd34d">
     <input type="checkbox" id="staffm-stock" style="width:18px;height:18px;cursor:pointer">
     <div>
@@ -30024,6 +30037,29 @@ function clPapersMissing(c){
   if(!c.balance)                                     m.push('💳 ยังไม่ได้จ่ายยอดคงเหลือ / balance not paid yet');
   return m;
 }
+// ── who is printed on the check sheet ─────────────────────────────────────
+// By default the people who would be there anyway: warehouse staff on the
+// payroll, plus the office people on theirs. On top of that two switches, so a
+// colleague who never helps (or is away for months) can be taken off without
+// touching their access rights — and somebody outside those groups can be put on.
+function clCrewRule(s){
+  if(!s || s.active===false) return false;
+  return !!((s.warehouseAccess && s.payrollOn) || (s.officeAccess && s.finPayrollOn));
+}
+function clCrewOn(s){
+  if(!s) return false;
+  if(s.crewOff) return false;
+  if(s.crewOn)  return true;
+  return clCrewRule(s);
+}
+// Store the tick as the smallest thing that survives a role change: only the
+// deviation from the rule is kept, never the rule's own answer.
+function clCrewSet(s, want){
+  if(!s) return;
+  if(want === clCrewRule(s)){ delete s.crewOn; delete s.crewOff; return; }
+  if(want){ s.crewOn = true;  delete s.crewOff; }
+  else    { s.crewOff = true; delete s.crewOn; }
+}
 // ── the goods-in check sheet ──────────────────────────────────────────────
 var CL_CHK_SEC=[
   ['kp',   'KP — แผ่นผนัง WPC / WPC wall panels'],
@@ -30157,9 +30193,11 @@ function clPrintCheck(id){
     // advance — they get a count and a line to write them on.
     +(function(){
       var st=[]; try{ st=(typeof staffList!=='undefined'?staffList:[])||[]; }catch(e){}
-      var pick=function(f){ return st.filter(f).map(function(x){ return String(x.name||'').trim(); }).filter(Boolean); };
-      var wh=pick(function(x){ return x && x.active!==false && x.warehouseAccess && x.payrollOn; });
-      var of=pick(function(x){ return x && x.active!==false && x.officeAccess && x.finPayrollOn; });
+      var pick=function(f){ return st.filter(function(x){ return clCrewOn(x) && f(x); })
+        .map(function(x){ return String(x.name||'').trim(); }).filter(Boolean); };
+      // warehouse first, then everybody else who is on the sheet
+      var wh=pick(function(x){ return x.warehouseAccess && x.payrollOn; });
+      var of=pick(function(x){ return !(x.warehouseAccess && x.payrollOn); });
       var names=wh.concat(of);
       var box=function(n){ return '<span class="nm"><span class="tick"></span>'+esc(n)+'</span>'; };
       return '<div class="crew">'
