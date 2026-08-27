@@ -2391,6 +2391,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="mbox" onclick="ofOpenMonthOrders()" title="Show all orders of this month / ดูออเดอร์ทั้งหมดของเดือนนี้" style="cursor:pointer"><div class="mbox-l">Total Orders / ออเดอร์</div><div class="mbox-v" id="of-sales-orders">0</div><div class="mbox-s">this month <i class="ti ti-list-search" style="font-size:11px;vertical-align:-1px"></i></div></div>
       <div class="mbox"><div class="mbox-l">Avg ฿/day / เฉลี่ยต่อวัน</div><div class="mbox-v" id="of-sales-avgrev">0</div><div class="mbox-s" id="of-sales-avgrev-s">฿ per day</div></div>
       <div class="mbox"><div class="mbox-l">Avg orders/day / ออเดอร์ต่อวัน</div><div class="mbox-v" id="of-sales-avgord">0</div><div class="mbox-s">per day / ต่อวัน</div></div>
+      <!-- What a panel really went for this month: the money on the panel lines,
+           less the share of any order discount that falls on them. -->
+      <div class="mbox"><div class="mbox-l">Ø ราคา/แผ่น / per panel</div><div class="mbox-v" id="of-sales-avgpanel">0</div><div class="mbox-s" id="of-sales-avgpanel-s">฿ / แผ่น</div></div>
+      <div class="mbox"><div class="mbox-l">Ø ราคา/เส้น / per edge (L·T·U)</div><div class="mbox-v" id="of-sales-avgedge">0</div><div class="mbox-s" id="of-sales-avgedge-s">฿ / เส้น</div></div>
     </div>
     <!-- Sales by zone toggle -->
     <button type="button" onclick="toggleSalesDetail('zone')" style="display:flex;align-items:center;justify-content:space-between;width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;cursor:pointer;margin-bottom:8px">
@@ -8333,6 +8337,45 @@ function ofRenderSales() {
   var _elAvgR=document.getElementById('of-sales-avgrev'); if(_elAvgR) _elAvgR.textContent=_avgRev.toLocaleString();
   var _elAvgRs=document.getElementById('of-sales-avgrev-s'); if(_elAvgRs) _elAvgRs.textContent='฿ · '+_activeDays+' day'+(_activeDays!==1?'s':'');
   var _elAvgO=document.getElementById('of-sales-avgord'); if(_elAvgO) _elAvgO.textContent=(_avgOrd>=10?Math.round(_avgOrd):Math.round(_avgOrd*10)/10).toLocaleString();
+
+  // ── What one panel actually sold for ──────────────────────────────────────
+  // Money on the panel lines ÷ panels on those lines — not revenue ÷ panels,
+  // which would fold delivery, clips and extras into the price of a board. An
+  // order discount is taken off proportionally: it is a discount on the goods,
+  // so the panels carry their share of it (186.26 → 186.06 in August).
+  // Grade B and C sit in the same lines and pull the figure down, which is the
+  // truth about the month.
+  (function(){
+    var GOODS={panel:1,pvc:1,lcorner:1,ttrim:1,utrim:1,tedge:1,uedge:1};
+    var EDGE={lcorner:1,ttrim:1,utrim:1,tedge:1,uedge:1};
+    var pQ=0,pR=0,eQ=0,eR=0;
+    filteredAll.forEach(function(o){
+      var li=(o&&o.lineItems)||[]; if(!li.length) return;
+      var goods=0, disc=0;
+      li.forEach(function(x){
+        if(!x) return;
+        var a=parseFloat(x.amount)||0;
+        if(GOODS[x.type]) goods+=a;
+        else if(x.type==='discount') disc+=Math.abs(a);
+      });
+      li.forEach(function(x){
+        if(!x||!GOODS[x.type]) return;
+        var q=parseInt(x.qty)||0, a=parseFloat(x.amount)||0;
+        if(q<=0) return;
+        var net=a-(goods>0?disc*(a/goods):0);
+        if(x.type==='panel'||x.type==='pvc'){ pQ+=q; pR+=net; }
+        else if(EDGE[x.type]){ eQ+=q; eR+=net; }
+      });
+    });
+    var fmt=function(v){ return (Math.round(v*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); };
+    var set=function(id,sid,q,r,unit){
+      var e=document.getElementById(id); if(e) e.textContent = q>0 ? fmt(r/q) : '—';
+      var s=document.getElementById(sid);
+      if(s) s.textContent = q>0 ? ('฿ · '+q.toLocaleString()+' '+unit) : ('฿ / '+unit);
+    };
+    set('of-sales-avgpanel','of-sales-avgpanel-s',pQ,pR,'แผ่น');
+    set('of-sales-avgedge','of-sales-avgedge-s',eQ,eR,'เส้น');
+  })();
 
   // ── Sales by zone (grouped by order-id prefix, same as Sheets routing) ──
   const ZONE_DEFS = [
