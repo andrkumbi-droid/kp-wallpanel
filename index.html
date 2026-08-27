@@ -21346,6 +21346,50 @@ function kpKm(aLat,aLng,bLat,bLng){
 function kpGeoNorm(s){
   return String(s==null?'':s).replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/[\s.,\-()\/\\'"]+/g,'');
 }
+// Two spellings of the same Thai syllable. Some keyboards write สระอำ decomposed
+// (NIKHAHIT + SARA AA) instead of the single character — invisible on screen,
+// fatal to every string compare. "จ.ลําปาง" matched no province at all and put
+// the order nowhere. NFC does not join these two, so it has to be done by hand.
+function kpThaiFix(s){ return String(s==null?'':s).replace(/\u0E4D\u0E32/g,'\u0E33'); }
+// Province names come off order forms typed by hand, and a province that does not
+// match EXACTLY used to mean no position at all. Every one of these is a real
+// entry from the live data: สุราษ · สุราษธานี · สูราษฎร์ธานี · สุราฎษร์ธานี · นคราชสีมา ·
+// ภุเก็ต · สพรรณบุรี · นคนายก · ปหมธานี · กาญจะนะบุรี. Rather than keep a list of
+// other people's typos, match them: exact, then prefix, then edit distance —
+// and only ever when ONE province wins outright.
+function _kpLev(a,b){
+  var m=a.length, n=b.length, prev=[], cur=[], i, j;
+  for(j=0;j<=n;j++) prev[j]=j;
+  for(i=1;i<=m;i++){
+    cur[0]=i;
+    for(j=1;j<=n;j++){
+      cur[j]=Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+(a.charAt(i-1)===b.charAt(j-1)?0:1));
+    }
+    prev=cur.slice();
+  }
+  return prev[n];
+}
+function kpProvFix(name){
+  if(!_kpGeoIdx) return '';
+  var t=kpThaiFix(name).replace(/^(จังหวัด\s*|จ\s*\.\s*)/,'').replace(/[\s.\-]/g,'');
+  if(!t) return '';
+  var all=Object.keys(_kpGeoIdx.prov);
+  if(_kpGeoIdx.prov[t]) return t;
+  // a truncated name ("สุราษ") — only if exactly one province starts with it
+  if(t.length>=4){
+    var pre=all.filter(function(p){ return p.indexOf(t)===0; });
+    if(pre.length===1) return pre[0];
+  }
+  // a misspelling — the winner has to be strictly better than the runner-up,
+  // or ตรัง/ตราด and ระยอง/ระนอง would start swapping places
+  var lim=Math.min(3, Math.max(1, Math.floor(t.length/3)));
+  var best='', bd=99, second=99;
+  all.forEach(function(p){
+    var d=_kpLev(t,p);
+    if(d<bd){ second=bd; bd=d; best=p; } else if(d<second){ second=d; }
+  });
+  return (bd<=lim && bd<second) ? best : '';
+}
 function kpGeoReady(){ return !!_kpGeoIdx; }
 // Lazy: nothing loads until something actually needs an address position. The
 // service worker caches it like any other same-origin GET, so it costs one
@@ -21429,7 +21473,7 @@ function kpAddrParse(text, provHint){
   // words ("ต.บ้าน<ZWSP>พรุ"). They are invisible to a human and fatal to the
   // marker capture, which stops at the first non-Thai character — 4-109 read as
   // ต.หาดใหญ่ instead of ต.บ้านพรุ purely because of one of them.
-  var raw=String(text||'').replace(/[\u200B-\u200D\uFEFF\u00AD]/g,'');
+  var raw=kpThaiFix(String(text||'').replace(/[\u200B-\u200D\uFEFF\u00AD]/g,''));
   var out={prov:'',amphoe:'',tambon:'',zip:0,level:'',amb:false,fixed:false,lat:0,lng:0};
   if(!raw && !provHint) return out;
 
@@ -21442,12 +21486,28 @@ function kpAddrParse(text, provHint){
 
   // ── province: what is typed on the order wins, else read it out of the text,
   // else derive it from the postcode.
-  var p=kpCanonProvince(String(provHint||'').trim()||kpExtractProvince(raw));
-  if(p && _kpGeoIdx && !_kpGeoIdx.prov[p]){
-    var th=(window.KP_PROV_EN2TH||{})[String(p).toLowerCase().replace(/[\s\-.]/g,'')];
-    if(th) p=th;
+  var p;
+  if(!_kpGeoIdx){
+    p=kpCanonProvince(String(provHint||'').trim()||kpExtractProvince(raw));
+  } else {
+    var resolve=function(x){
+      if(!x) return '';
+      x=kpThaiFix(String(x).trim());
+      if(_kpGeoIdx.prov[x]) return x;
+      var th=(window.KP_PROV_EN2TH||{})[String(x).toLowerCase().replace(/[\s\-.]/g,'')];
+      if(th && _kpGeoIdx.prov[th]) return th;
+      return kpProvFix(x);
+    };
+    // A province written with จ./จังหวัด in the address is the customer's own
+    // statement and beats the dropdown on the order form. #131 sat in นครพนม for
+    // months because the field said so, while its address plainly read
+    // "จ.อยุธยา" — and its driver pin had been in Ayutthaya the whole time.
+    var mp=raw.match(/(?:จังหวัด|จ\s*\.)\s*([\u0E00-\u0E7F]+)/);
+    p = resolve(mp?kpCanonProvince(mp[1]):'')
+     || resolve(kpCanonProvince(String(provHint||'').trim()))
+     || resolve(kpCanonProvince(kpExtractProvince(raw)));
+    if(!p && out.zip && _kpGeoIdx.zip[out.zip]) p=_kpGeoIdx.zip[out.zip].prov;
   }
-  if(!p && _kpGeoIdx && out.zip && _kpGeoIdx.zip[out.zip]) p=_kpGeoIdx.zip[out.zip].prov;
   out.prov=p||'';
   if(!_kpGeoIdx){ out.level=out.prov?'prov':''; return out; }
 
