@@ -19,9 +19,9 @@
  *   FA_CLIENT_ID      = <from FlowAccount MyCompany → Connections>
  *   FA_CLIENT_SECRET  = <same place>                    NEVER commit these.
  *   FA_MODE           = sandbox | live                  (start with sandbox!)
- *   FA_CULTURE        = th                              (optional, default th)
+ *   FA_CULTURE        = (optional; live defaults to th, sandbox to none)
  *   FA_TOKEN_URL      = (optional override; default depends on FA_MODE, see below)
- *   FA_BASE_SANDBOX   = (optional; default https://openapi.flowaccount.com/v3-alpha)
+ *   FA_BASE_SANDBOX   = (optional; default https://openapi.flowaccount.com/test)
  *   FA_BASE_LIVE      = (optional; default https://openapi.flowaccount.com/v3-alpha)
  *   FA_PATH_CREATE    = (optional; default /tax-invoices/inline)
  *   FA_PATH_PDF       = (optional; default /tax-invoices/{id}/export-pdf/base64)
@@ -30,12 +30,14 @@
  * 26.08.2026, unauthenticated):
  *   POST /test/token   → 200 {"error":"invalid_client"}  ← the sandbox door, open
  *   POST /token        → 403 {"message":"Forbidden"}     ← live, closed to us
- *   /v3-alpha/th/tax-invoices                   → 401 with a bad bearer = exists
- *   /sandbox/…                                  → 403    = never existed
- * So a sandbox token is what makes the calls run against the sandbox company;
- * the API path is the same v3-alpha for both. The old sandbox defaults
- * (/token + /sandbox) could not have worked — that is what the relay's
- * "token 403" really was, on top of the placeholder credentials.
+ * Three stages exist, and they are shaped differently (401 = the path is there):
+ *   /test/tax-invoices/inline         → 401   sandbox, NO culture segment
+ *   /test/th/tax-invoices/inline      → 404   …a culture in front breaks it
+ *   /v3-alpha/th/tax-invoices/inline  → 401   the other stage, WITH culture
+ *   /v1/tax-invoices/inline           → 401   what the published SDK documents
+ *   /sandbox/…                        → 403   never existed
+ * A token from /test/token belongs to the /test stage, so that is where sandbox
+ * calls go — and without the culture segment.
  *
  * The create path is /tax-invoices/inline, from FlowAccount's own SDK
  * (github.com/flowaccount/flowaccount-openapi-sdk, TaxInvoiceApi:
@@ -61,13 +63,21 @@ function _faProps() {
     id: p.getProperty('FA_CLIENT_ID') || '',
     secret: p.getProperty('FA_CLIENT_SECRET') || '',
     mode: mode,
-    culture: p.getProperty('FA_CULTURE') || 'th',
+    // The two stages are shaped differently: /v3-alpha carries the culture in the
+    // path (/th/tax-invoices/…), the /test stage does not (/tax-invoices/… — 404
+    // with a culture in front). So sandbox defaults to no culture segment; set
+    // FA_CULTURE only if a stage actually wants one.
+    culture: (function(){
+      var c = p.getProperty('FA_CULTURE');
+      if (c == null || c === '') return (mode === 'live') ? 'th' : '';
+      return c;
+    })(),
     tokenUrl: p.getProperty('FA_TOKEN_URL')
       || (mode === 'live' ? 'https://openapi.flowaccount.com/token'
                           : 'https://openapi.flowaccount.com/test/token'),
     base: mode === 'live'
       ? (p.getProperty('FA_BASE_LIVE') || 'https://openapi.flowaccount.com/v3-alpha')
-      : (p.getProperty('FA_BASE_SANDBOX') || 'https://openapi.flowaccount.com/v3-alpha'),
+      : (p.getProperty('FA_BASE_SANDBOX') || 'https://openapi.flowaccount.com/test'),
     // The one path that was guessed wrong for two weeks. It is a property now, so
     // the next surprise from FlowAccount costs a line in the settings, not a redeploy.
     pathCreate: p.getProperty('FA_PATH_CREATE') || '/tax-invoices/inline',
@@ -102,6 +112,10 @@ function _faToken(cfg) {
   return body.access_token;
 }
 
+// A stage that wants a culture in the path gets one; the /test stage must not
+// see one at all — /test/th/tax-invoices/inline is a 404, /test/tax-invoices/inline
+// exists.
+function _faPath(cfg, p) { return cfg.culture ? ('/' + cfg.culture + p) : p; }
 function _faApi(cfg, method, path, payloadObj) {
   var res = UrlFetchApp.fetch(cfg.base + path, {
     method: method,
@@ -122,7 +136,7 @@ function _faApi(cfg, method, path, payloadObj) {
 // PDF of one tax invoice: original + copy in one file (เอกสารออกเป็นชุด).
 function _faPdf(cfg, id) {
   var body = _faApi(cfg, 'post',
-    '/' + cfg.culture + cfg.pathPdf.replace('{id}', id),
+    _faPath(cfg, cfg.pathPdf.replace('{id}', id)),
     { culture: cfg.culture, document: { original: true, copy: true } });
   var b64 = body && (body.data || body.pdf || '');
   if (!b64) throw new Error('pdf: empty response');
@@ -147,7 +161,7 @@ function _faHandle(e) {
 
     if (req.action === 'create') {
       if (!req.doc || !req.doc.contactName) return _faJson({ error: 'no document' });
-      var made = _faApi(cfg, 'post', '/' + cfg.culture + cfg.pathCreate, req.doc);
+      var made = _faApi(cfg, 'post', _faPath(cfg, cfg.pathCreate), req.doc);
       // The created document sits in .data on the new API; be liberal in what we read.
       var d = made && (made.data || made);
       var id = d && (d.recordId || d.id);
