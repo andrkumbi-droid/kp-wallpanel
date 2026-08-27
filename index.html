@@ -4215,6 +4215,14 @@ function syncWOrders() { fbSyncList('wOrders', wOrders, function(o){ return Stri
 // the whole tour write fails and the tour silently vanishes. The raw ids live in
 // t.orders, so the reader rebuilds the real keys from there (see activeTours .on).
 function tourKey(id){ return String(id||'').replace(/[.#$/\[\]]/g,'_'); }
+// ── a tour without a driver ───────────────────────────────────────────────
+// The office plans the routes in the morning and hands them out when the drivers
+// turn up. Such a tour is real — real orders, real ID, on the board — it just has
+// nobody to send it to yet: no push, no "delivered by" stamp, and the driver app
+// cannot see it (it matches on driverId, and this one is empty).
+var TOUR_NODRIVER='__nodriver__';
+var TOUR_NODRIVER_LABEL='⏳ ยังไม่กำหนดคนขับ / no driver yet';
+function tourHasDriver(t){ return !!(t && String(t.driverId||'').trim()); }
 function tourForFb(t){
   // kmRoute is a locally derived comparison value — it must never be stored (see
   // _kmRouteLocal); dropping it here also clears the old entries on the next write.
@@ -12381,7 +12389,9 @@ function ofRenderTour(){
       '<div style="text-align:center;font-size:16px;font-weight:700;color:var(--text);margin-bottom:8px;padding-right:26px">'+(tidOk(t.tid)?'<span title="Tour ID / รหัสทัวร์" style="font-size:12px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px;margin-right:7px;vertical-align:2px">'+t.tid+'</span>':'')+(ro
         ? '<i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName
         // Tapping the name itself swaps the driver — the rest of the header still opens the tour detail.
-        : '<span onclick="event.stopPropagation();ofSwapDriver(\''+t.id+'\')" title="เปลี่ยนคนขับ / change driver" style="cursor:pointer;padding:1px 6px;border-radius:8px;background:var(--blue-l)"><i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+'<span style="font-size:12px;font-weight:800;color:var(--blue);margin-left:6px">⇄</span></span>')+
+        // A tour planned without a driver wears the same chip in amber: tapping it
+        // opens the very same picker, which is how it gets handed out later.
+        : '<span onclick="event.stopPropagation();ofSwapDriver(\''+t.id+'\')" title="'+(tourHasDriver(t)?'เปลี่ยนคนขับ / change driver':'เลือกคนขับ / pick a driver')+'" style="cursor:pointer;padding:1px 6px;border-radius:8px;background:'+(tourHasDriver(t)?'var(--blue-l)':'#fef3c7')+'"><i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:'+(tourHasDriver(t)?'var(--blue)':'#b45309')+'"></i>'+t.driverName+'<span style="font-size:12px;font-weight:800;color:'+(tourHasDriver(t)?'var(--blue)':'#b45309')+';margin-left:6px">⇄</span></span>')+
       (ro?'':'<i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2);vertical-align:-2px;margin-left:4px"></i>')+'</div>'+
       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:8px">'+
       kpcTourBubble(t.id)+
@@ -12562,10 +12572,19 @@ function ofRenderTour(){
   kpRestoreOpen(_openTour);
   // Driver select grid
   var dsel=document.getElementById('of-drsel'),noD=document.getElementById('of-nodrivers');
-  if(drivers.length===0){dsel.style.display='none';noD.style.display='block';}
+  // A tour can be built before anybody knows who drives it — the office plans in
+  // the morning, the drivers are handed out when they turn up. TOUR_NODRIVER is a
+  // real choice in this grid; the tour is created empty-handed and the card asks
+  // for a driver later.
+  var _noDrvBtn='<button type="button" class="drselbtn '+(ofSelDriver===TOUR_NODRIVER?'sel':'')+'" data-did="'+TOUR_NODRIVER+'" onclick="ofSelDr(this)" title="เตรียมทัวร์ไว้ก่อน แล้วค่อยจ่ายให้คนขับ / plan it now, hand it to a driver later">'
+    +'<div style="width:36px;height:36px;border-radius:50%;background:var(--bg2);display:flex;align-items:center;justify-content:center;font-size:17px;margin:0 auto 4px">⏳</div>'
+    +'<div style="font-size:12px;font-weight:600">ยังไม่กำหนด</div>'
+    +'<div style="font-size:11px;color:var(--text2);margin-top:1px">no driver yet</div>'
+  +'</button>';
+  if(drivers.length===0){dsel.style.display='grid';noD.style.display='block';dsel.innerHTML=_noDrvBtn;}
   else{
     dsel.style.display='grid';noD.style.display='none';
-    dsel.innerHTML=drivers.map(function(d){
+    dsel.innerHTML=_noDrvBtn+drivers.map(function(d){
       var ht=activeTours.find(function(t){return t.driverId===d.id;});
       var isSel=ofSelDriver===d.id;
       var isDriving=ht&&ht.driving;return '<button type="button" class="drselbtn '+(isSel?'sel':'')+(ht?' ontour':'')+'" data-did="'+d.id+'" onclick="ofSelDr(this)">'+
@@ -12663,6 +12682,9 @@ function tourWhenHtml(t){
 }
 function ofSetDeparted(ti){
   var t=activeTours[ti];if(!t)return;
+  // A truck cannot leave without a driver — and the pay, the payout and the
+  // settle-up all hang off him afterwards.
+  if(!tourHasDriver(t)){ alert('ยังไม่ได้เลือกคนขับ / no driver on this tour yet\n\nเลือกคนขับบนการ์ดก่อน / pick one on the card first'); return; }
   var now=new Date(), hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   t.driving=true;
   if(!t.departedAt) t.departedAt=hhmm;   // first departure dates the tour — keep it
@@ -16682,7 +16704,9 @@ function ofSwapDriver(tourId){
   var t = activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
   ofSwapTourId = tourId;
   var ttl=document.getElementById('tour-drv-title');
-  if(ttl) ttl.textContent='เปลี่ยนคนขับ / Change driver — '+(t.driverName||'');
+  if(ttl) ttl.textContent = tourHasDriver(t)
+    ? ('เปลี่ยนคนขับ / Change driver — '+(t.driverName||''))
+    : ('กำหนดคนขับ / Assign a driver'+(tidOk(t.tid)?' — '+t.tid:''));
   ofRenderSwapDrvList();
   document.getElementById('tour-drv-modal').classList.add('open');
 }
@@ -16722,7 +16746,7 @@ function ofSwapDrvPick(driverId){
   var d = drivers.find(function(x){return x.id===driverId;}); if(!d) return;
   var oldId=t.driverId||'', oldName=t.driverName||'—', n=(t.orders||[]).length;
   if(oldId===d.id){ closeTourDrv(); return; }
-  if(!confirm('เปลี่ยนคนขับ / Change driver\n\n'+oldName+'  →  '+d.name+'\n'+n+' order'+(n!==1?'s':'')+(t.driving?'\n\n⚠ ทัวร์ออกรถแล้ว / tour already departed':''))) return;
+  if(!confirm((oldId?'เปลี่ยนคนขับ / Change driver':'กำหนดคนขับ / Assign driver')+'\n\n'+(oldId?oldName+'  →  ':'')+d.name+'\n'+n+' order'+(n!==1?'s':'')+(t.driving?'\n\n⚠ ทัวร์ออกรถแล้ว / tour already departed':''))) return;
   t.driverId=d.id; t.driverName=d.name;
   // A Lalamove tour pays through the carrier's "car fee"; a real driver is paid the
   // tour pay. Keep the two in step so neither side shows a stale number.
@@ -17372,11 +17396,15 @@ function ofCreateTour(){
   const res=document.getElementById('of-tres');res.style.display='block';
   if(!ofSelDriver){res.style.background=OL;res.style.color=OT;res.textContent='Select a driver first / เลือกคนขับก่อน';return;}
   if(ofSelOrders.length===0){res.style.background=OL;res.style.color=OT;res.textContent='Add at least one order';return;}
-  const d=drivers.find(x=>x.id===ofSelDriver);
+  // Planned without a driver: a real tour with real orders, just nobody to send
+  // it to yet. It never merges into an existing tour and never pushes a
+  // notification — the card asks for a driver, and that is when it goes out.
+  const noDrv = (ofSelDriver===TOUR_NODRIVER);
+  const d = noDrv ? {id:'', name:TOUR_NODRIVER_LABEL} : drivers.find(x=>x.id===ofSelDriver);
   // "Create as new tour" forces a separate 2nd tour instead of merging into the
   // driver's still-loading tour (lets the office pre-plan multiple tours).
   const forceNew=!!(document.getElementById('of-newtour-chk')||{}).checked;
-  const existingTour=forceNew?null:activeTours.find(t=>t.driverId===ofSelDriver);
+  const existingTour=(forceNew||noDrv)?null:activeTours.find(t=>t.driverId===ofSelDriver);
   const status={};ofSelOrders.forEach(id=>{
     const src=orders.find(x=>x.id===id);
     // Planned New/Packing orders keep their packing status; the warehouse still
@@ -17408,15 +17436,15 @@ function ofCreateTour(){
     auditTour('add','🚚 '+d.name, '+'+ofSelOrders.length+' order'+(ofSelOrders.length!==1?'s':'')+': '+ofSelOrders.join(', '));
   } else {
     // Driver is driving (or no tour) — create a new tour, orders pre-sorted into an optimal route
-    const now=new Date();_tourId='t'+Date.now();activeTours.push({id:_tourId,driverId:ofSelDriver,driverName:d.name,orders:optimizeTourOrder([...ofSelOrders]),status,checks:{},created:now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')});
+    const now=new Date();_tourId='t'+Date.now();activeTours.push({id:_tourId,driverId:noDrv?'':ofSelDriver,driverName:d.name,orders:optimizeTourOrder([...ofSelOrders]),status,checks:{},created:now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')});
     res.style.background=GL;res.style.color=GT;res.textContent='✓ New tour sent to '+d.name+'! '+ofSelOrders.length+' orders';
     auditTour('create','🚚 '+d.name, 'New tour · '+ofSelOrders.length+' order'+(ofSelOrders.length!==1?'s':'')+': '+ofSelOrders.join(', '));
-    try{pushSend('driver_'+ofSelDriver,'🚚 New Tour Ready!',ofSelOrders.length+' order'+(ofSelOrders.length!==1?'s':'')+' assigned to you',{tag:'tour'});}catch(e){}
+    if(!noDrv){ try{pushSend('driver_'+ofSelDriver,'🚚 New Tour Ready!',ofSelOrders.length+' order'+(ofSelOrders.length!==1?'s':'')+' assigned to you',{tag:'tour'});}catch(e){} }
   }
   // Stamp the assigned driver into "Delivered by" (sheet col AC) immediately on
   // assignment + push each order to the sheet, so the office sees who has it
   // before it's even delivered. (Reassigning via a new tour overwrites it.)
-  if(d){ ofSelOrders.forEach(function(id){
+  if(d && !noDrv){ ofSelOrders.forEach(function(id){
     var _od=orders.find(function(x){return x.id===id;});
     if(_od){ _od.deliveredBy=d.name; stampSelfDriver(_od, d.name); try{ sheetsSyncOrder(_od); }catch(e){} }
   }); }
