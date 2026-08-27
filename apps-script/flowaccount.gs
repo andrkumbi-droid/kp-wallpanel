@@ -25,6 +25,7 @@
  *   FA_BASE_LIVE      = (optional; default https://openapi.flowaccount.com/v3-alpha)
  *   FA_PATH_CREATE    = (optional; default /tax-invoices/inline)
  *   FA_PATH_PDF       = (optional; default /tax-invoices/{id}/export-pdf/base64)
+ *   FA_CULTURE_DOC    = (optional; default th — the language INSIDE the PDF)
  *
  * SANDBOX vs LIVE is only the TOKEN endpoint (verified against the live host on
  * 26.08.2026, unauthenticated):
@@ -72,6 +73,11 @@ function _faProps() {
       if (c == null || c === '') return (mode === 'live') ? 'th' : '';
       return c;
     })(),
+    // The language INSIDE a document is not the same thing as the culture segment
+    // in the URL. The PDF call takes it in the body, and it must be a real one:
+    // with the path segment ('test') in there it answered
+    // 500 "Requested value 'TEST' was not found".
+    docCulture: p.getProperty('FA_CULTURE_DOC') || 'th',
     tokenUrl: p.getProperty('FA_TOKEN_URL')
       || (mode === 'live' ? 'https://openapi.flowaccount.com/token'
                           : 'https://openapi.flowaccount.com/test/token'),
@@ -137,7 +143,7 @@ function _faApi(cfg, method, path, payloadObj) {
 function _faPdf(cfg, id) {
   var body = _faApi(cfg, 'post',
     _faPath(cfg, cfg.pathPdf.replace('{id}', id)),
-    { culture: cfg.culture, document: { original: true, copy: true } });
+    { culture: cfg.docCulture, document: { original: true, copy: true } });
   var b64 = body && (body.data || body.pdf || '');
   if (!b64) throw new Error('pdf: empty response');
   return b64;
