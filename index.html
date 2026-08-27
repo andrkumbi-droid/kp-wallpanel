@@ -1264,6 +1264,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         try{ if(typeof _tmapRender==='function' && _tmapTid && _tmapMap) _tmapRender(); }catch(e){}
         try{ if(document.getElementById('ofgeo-modal') && document.getElementById('ofgeo-modal').classList.contains('open')) ofGeoRender(); }catch(e){}
       });
+      db.ref('handoverLoc').on('value', function(snap) {
+        handoverLoc = snap.val() || {};
+        try{ if(typeof _tmapRender==='function' && _tmapTid && _tmapMap) _tmapRender(); }catch(e){}
+        try{ if(document.getElementById('ofgeo-modal') && document.getElementById('ofgeo-modal').classList.contains('open')) ofGeoRender(); }catch(e){}
+      });
       db.ref('addrFix').on('value', function(snap) {
         addrFix = snap.val() || {};
         try{ (orders||[]).forEach(function(o){ o._addrSig=''; }); }catch(e){}   // parses are cached per order
@@ -7759,7 +7764,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828001;
+var KP_BUILD = 20260828002;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -21656,6 +21661,14 @@ function kpGeoReverse(lat,lng){
 //        out-vote eleven other customers) and capped at 24
 var geoLearn={};
 var KP_LEARN_MAX=24;
+// Places where goods change hands and the driver turns around — ferry piers,
+// bus terminals, a customer's own pick-up point. A carrier's YARD is already
+// covered by shipperLoc; this is for the rest. Same problem, same shape: the
+// driver really did stand there, so the pin is honest — it just is not where the
+// customer lives. Koh Samui and Koh Yao orders were the giveaway: three pins on
+// the ดอนสัก and บางโรง piers, three customers on the islands behind them.
+// handoverLoc[key] = {name, lat, lng, r (km, default 1.5), by, at}
+var handoverLoc={};
 function _kpMedPoint(s){
   var la=s.map(function(x){return x.a;}).sort(function(x,y){return x-y;});
   var ln=s.map(function(x){return x.o;}).sort(function(x,y){return x-y;});
@@ -21736,6 +21749,19 @@ function kpGeoWhy(o, lat, lng, pred, addr){
       if(d<bk){ bk=d; bn=v.name||k; }
     });
     if(bk<0.4) return {code:'carrier',hard:true,th:'อยู่ที่ท่ารถ '+bn,en:'on the '+bn+' carrier yard'};
+  }catch(e){}
+  // 1b — a known handover point (ferry pier, terminal, pick-up spot). Wider than
+  // a yard, because a pier is.
+  try{
+    var hk='', hd=Infinity, hr=1.5;
+    Object.keys(handoverLoc||{}).forEach(function(k){
+      var v=handoverLoc[k]||{};
+      if(typeof v.lat!=='number'||typeof v.lng!=='number') return;
+      var d=kpKm(lat,lng,v.lat,v.lng);
+      if(d<hd){ hd=d; hk=v.name||k; hr=(typeof v.r==='number'&&v.r>0)?v.r:1.5; }
+    });
+    if(hd<hr) return {code:'handover',hard:true,th:'อยู่ที่จุดส่งต่อ '+hk+' ไม่ใช่บ้านลูกค้า',
+                      en:'at the '+hk+' handover point, not at the customer'};
   }catch(e){}
   // 2 — taken at the shop: the button was pressed while loading, not on site.
   try{
@@ -21849,6 +21875,25 @@ function kpGeoRebuild(cb){
 }
 // Everything the app knows about one order's position, in one object — what the
 // map, the pin-check list and the driver warning all read.
+// Where to actually SEND somebody for this order. Not the same question as "what
+// pin is stored" (orderLatLng) — a pin can be honest and still be the wrong place
+// for THIS order: one phone, two building sites, and the pin belongs to the other
+// one (#093 sat 90 km away on its owner's restaurant). Since the address itself
+// now resolves to a sub-district, refusing a contradicted pin costs nothing and
+// stops the driver being sent to the wrong province.
+// Returns {lat,lng,from:'pin'|'addr'} or null.
+function orderRouteLatLng(o){
+  var c=orderLatLng(o);
+  if(!c) { var p0=kpGeoPredict(o); return p0?{lat:p0.lat,lng:p0.lng,from:'addr',pred:p0}:null; }
+  if(!_kpGeoIdx) return {lat:c.lat,lng:c.lng,from:'pin'};
+  var g=custGeoGet(o&&o.phone);
+  if(g&&g.ok) return {lat:c.lat,lng:c.lng,from:'pin'};      // the office has vouched for it
+  var pred=kpGeoPredict(o);
+  // Only a SHARP address may overrule a pin. A province-level guess never does.
+  if(pred && (pred.level==='tambon'||pred.level==='amphoe') && kpKm(c.lat,c.lng,pred.lat,pred.lng)>40)
+    return {lat:pred.lat,lng:pred.lng,from:'addr',pred:pred,rejected:{lat:c.lat,lng:c.lng}};
+  return {lat:c.lat,lng:c.lng,from:'pin'};
+}
 function orderGeoInfo(o){
   var a=kpAddrOf(o), pred=kpGeoPredict(o,a), pin=orderLatLng(o);
   var out={addr:a, pred:pred, pin:pin, why:null, km:null, ok:false, src:''};
@@ -21867,18 +21912,21 @@ function orderGeoInfo(o){
 // The driver's saved pin always wins, so it overrides any pasted link.
 function orderLocUrl(o){
   if(!o) return '';
-  var g=custGeoGet(o.phone);
-  if(g) return 'https://www.google.com/maps/search/?api=1&query='+g.lat+','+g.lng;
+  var r=(typeof orderRouteLatLng==='function')?orderRouteLatLng(o):null;
+  if(r && r.from==='pin') return 'https://www.google.com/maps/search/?api=1&query='+r.lat+','+r.lng;
   var lnk=(o.location||'').trim();
-  return /^https?:\/\//i.test(lnk) ? lnk : '';
+  if(/^https?:\/\//i.test(lnk)) return lnk;
+  // No pin we trust and no link — the address still knows its sub-district.
+  return r ? ('https://www.google.com/maps/search/?api=1&query='+r.lat+','+r.lng) : '';
 }
 // Navigation URL: precise pin → turn-by-turn directions; else open the link.
 function orderNavUrl(o){
   if(!o) return '';
-  var g=custGeoGet(o.phone);
-  if(g) return 'https://www.google.com/maps/dir/?api=1&destination='+g.lat+','+g.lng;
+  var r=(typeof orderRouteLatLng==='function')?orderRouteLatLng(o):null;
+  if(r && r.from==='pin') return 'https://www.google.com/maps/dir/?api=1&destination='+r.lat+','+r.lng;
   var lnk=(o.location||'').trim();
-  return /^https?:\/\//i.test(lnk) ? lnk : '';
+  if(/^https?:\/\//i.test(lnk)) return lnk;
+  return r ? ('https://www.google.com/maps/dir/?api=1&destination='+r.lat+','+r.lng) : '';
 }
 
 // ════════════════════════════════════════════════════════════
@@ -22180,8 +22228,11 @@ function optimizeTourOrder(ids){
   var withC=[], without=[];
   ids.forEach(function(id){
     var o=orders.find(function(x){return x.id===id;});
-    var c=orderLatLng(o);
-    if(c){ c.id=id; withC.push(c); } else { without.push(id); }
+    // The route follows where the driver should GO, which is not always the
+    // stored pin — and an order with no pin at all now has a sub-district to
+    // sort by instead of dropping to the end of the list.
+    var c=(typeof orderRouteLatLng==='function')?orderRouteLatLng(o):orderLatLng(o);
+    if(c){ withC.push({lat:c.lat,lng:c.lng,id:id}); } else { without.push(id); }
   });
   if(withC.length<3) return ids.slice(); // not enough pins to bother — leave as-is
   // Nearest-neighbour from every start, keep the shortest open path.
@@ -29721,6 +29772,7 @@ var _ofGeoRows=[], _ofGeoSum=null, _ofGeoFilter='', _ofGeoQ='';
 var KP_WHY_LABEL={
   carrier:{th:'ถ่ายที่ท่ารถขนส่ง',en:'taken on a carrier yard',fix:'ลบหมุด / drop the pin'},
   shop:{th:'ถ่ายที่ร้าน/คลัง',en:'taken at the shop',fix:'ลบหมุด / drop the pin'},
+  handover:{th:'อยู่ที่จุดส่งต่อ (ท่าเรือ/ท่ารถ)',en:'at a known handover point',fix:'ลบหมุด — บ้านลูกค้าอยู่ที่อื่น / drop the pin, the customer lives elsewhere'},
   province:{th:'หมุดอยู่คนละจังหวัดกับที่อยู่',en:'pin is in a different province than the address',fix:'ตรวจว่าที่อยู่หรือหมุดผิด / check which of the two is wrong'},
   far:{th:'หมุดห่างจากที่อยู่มาก',en:'pin is far from the address',fix:'ลบหรือย้ายหมุด / drop or move the pin'},
   wide:{th:'ห่างจากกลางตำบลพอสมควร',en:'a bit far from the sub-district centre',fix:'ปกติในตำบลใหญ่ / normal in a large sub-district'},
@@ -29874,6 +29926,7 @@ function _ofGeoRow(r,ro,esc){
     +(ro?'':'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">'
       +(gi.pin?'<button type="button" onclick="ofGeoDrop(\''+oid+'\')" style="'+_ofGeoBtn('#fee2e2','#b91c1c')+'">🗑 ลบหมุด / drop pin</button>':'')
       +(gi.pin?'<button type="button" onclick="ofGeoAccept(\''+oid+'\')" style="'+_ofGeoBtn('#dcfce7','#15803d')+'">✓ หมุดถูกต้อง / pin is right</button>':'')
+      +(gi.pin?'<button type="button" onclick="ofGeoHandover(\''+oid+'\')" title="ท่าเรือ/ท่ารถ/จุดนัดรับ — จำไว้ ครั้งต่อไปจะไม่บันทึกเป็นบ้านลูกค้า" style="'+_ofGeoBtn('#e0e7ff','#3730a3')+'">🚢 จุดส่งต่อ / handover point</button>':'')
       +(o.phone?'<button type="button" onclick="ofGeoEditPin(\''+oid+'\')" style="'+_ofGeoBtn('var(--bg2)','var(--text)')+'">📍 ย้ายหมุด / move pin</button>':'')
       +'<button type="button" onclick="ofGeoFixOpen(\''+oid+'\')" style="'+_ofGeoBtn('var(--bg2)','var(--text)')+'">✏️ แก้ที่อยู่ / fix address</button>'
       +(gi.pin?'<a href="https://www.google.com/maps/search/?api=1&query='+gi.pin.lat+','+gi.pin.lng+'" target="_blank" style="'+_ofGeoBtn('var(--bg2)','var(--text)')+';text-decoration:none">🌐 map</a>':'')
@@ -29911,6 +29964,38 @@ function ofGeoAccept(oid){
   if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').set(g);
   try{ kpAddrKeys(kpAddrOf(o)).forEach(function(key){ _kpLearnPush(key, k, g.lat, g.lng, null); }); }catch(e){}
   try{ auditAdd({type:'edit',orderId:oid,by:g.okBy,detail:'✓ ยืนยันหมุด GPS / GPS pin confirmed correct (pin check)'}); }catch(e){}
+  ofGeoRender();
+}
+// "This spot is a pier / terminal / meeting point, not a home." Records the place
+// once, drops the pin, and from then on nobody's pin can be saved there again —
+// the same protection carrier yards already had. This is how the map learns the
+// difference between where the goods change hands and where the customer lives.
+function ofGeoHandover(oid){
+  if(window.ofReadOnly) return;
+  var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return;
+  var k=normPhone(o.phone); if(!k) return;
+  var g=custGeoGet(o.phone); if(!g||!geoSane(g.lat,g.lng)){ alert('ไม่มีหมุด / no pin on this order'); return; }
+  var rv=kpGeoReverse(g.lat,g.lng);
+  var sug=rv?('ท่า'+rv.tambon):'';
+  var name=prompt('🚢 ชื่อจุดส่งต่อนี้? / name this handover point\n'
+    +(rv?('อยู่ที่ ต.'+rv.tambon+' อ.'+rv.amphoe+' จ.'+rv.prov+'\n'):'')
+    +'เช่น ท่าเรือดอนสัก / e.g. Don Sak pier', sug);
+  if(name===null) return;
+  name=String(name).trim(); if(!name){ alert('ต้องมีชื่อ / a name is required'); return; }
+  var rkm=parseFloat(prompt('รัศมี (กม.) — หมุดที่อยู่ใกล้กว่านี้จะถือว่าเป็นจุดส่งต่อ\nRadius in km — any pin closer than this counts as a handover, not a home','1.5'));
+  if(!isFinite(rkm)||rkm<=0) rkm=1.5;
+  var who=(typeof ofWho==='function'?ofWho():'Office');
+  var key=('h'+Math.round(g.lat*1e4)+'_'+Math.round(g.lng*1e4)).replace(/[.#$/\[\]]/g,'_');
+  var rec={name:name, lat:+g.lat.toFixed(5), lng:+g.lng.toFixed(5), r:rkm, by:who, at:new Date().toISOString(),
+           fromOrder:String(oid)};
+  handoverLoc[key]=rec;
+  if(window.fbDB) window.fbDB.ref('handoverLoc/'+key).set(rec);
+  // …and drop the pin it came from, keeping it recoverable like every other drop.
+  if(window.fbDB) window.fbDB.ref('pinTrash/'+k).set({geo:g, reason:'handover', handover:name,
+    orders:[String(oid)], customer:o.customer||'', address:String(o.address||'').slice(0,160), by:who, at:new Date().toISOString()});
+  if(customerMeta[k]) delete customerMeta[k].geo;
+  if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').remove();
+  try{ auditAdd({type:'edit',orderId:oid,by:who,detail:'🚢 บันทึกจุดส่งต่อ "'+name+'" (รัศมี '+rkm+' กม.) และลบหมุดที่นั่น / handover point recorded, pin dropped'}); }catch(e){}
   ofGeoRender();
 }
 function ofGeoEditPin(oid){
