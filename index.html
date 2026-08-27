@@ -12381,6 +12381,13 @@ function ofRenderTour(){
         '<span style="font-size:12px;color:var(--text2);white-space:nowrap">🤝 Advance / เบิกก่อนออกทัวร์:</span>'+
         '<input type="number" class="kpamt" min="0" value="'+(t.driverAdvance!=null&&t.driverAdvance!==''?t.driverAdvance:'')+'" placeholder="0" onclick="event.stopPropagation()" onchange="ofSetTourAdvance(\''+t.id+'\',this.value)" '+(ro?'readonly ':'')+'style="flex:1;max-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:14px;font-weight:700;text-align:right;background:var(--bg);color:var(--text)">'+
         '<span style="font-size:12px;color:var(--text2)">฿</span>'+
+        '</div>'+
+        // Deductions and extras for the whole day, not for one stop: the ferry, a
+        // fine, a bonus. Same lines as in the order window, same total, and the
+        // settle-up counts them without knowing the difference.
+        '<div style="background:var(--bg2);border-radius:var(--rs);padding:7px 9px;margin-bottom:8px" onclick="event.stopPropagation()">'+
+          '<div style="font-size:10px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px">💸 หัก / เพิ่ม ทั้งทัวร์ · whole-tour adjustments</div>'+
+          tourAdjRowsInner(t, '', ro)+
         '</div>')+
         // What was deducted or added on individual stops, with the reason — right
         // above the amount that is actually handed over at the end of the tour.
@@ -15132,6 +15139,11 @@ function tourAdjOf(t, oid){ return tourAdjArr(t).filter(function(e){ return Stri
 function tourAdjSign(e){ var s=parseInt(e&&e.sign,10); return (s===-1||s===1)?s:0; }
 function tourAdjVal(e){ return tourAdjSign(e) * Math.abs(parseFloat(e&&e.amt)||0); }
 function tourAdjTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+tourAdjVal(e); },0); }
+// A line with no order on it belongs to the WHOLE tour — a ferry ticket, a fine, a
+// bonus for the day. Same list, same total, same settle-up: only the empty oid
+// tells them apart, so everything that already counts adjustments counts these too.
+function tourAdjIsTour(e){ return !String((e&&e.oid)||'').trim(); }
+function tourAdjWho(e){ return tourAdjIsTour(e) ? 'ทั้งทัวร์ / whole tour' : String(e.oid||''); }
 // Same for an archived record (Drivers tab) — it carries its own copy.
 function recAdjArr(r){ return tourAdjArr(r); }
 function recAdjOf(r, oid){ return tourAdjOf(r, oid); }
@@ -15244,7 +15256,7 @@ function ofTourSettle(tourId){
   var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
     var v=tourAdjVal(e);
     return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:1px 0;color:var(--text2)">'
-      +'<span>'+esc(e.oid||'')+' · '+esc(e.note||'—')+'</span>'
+      +'<span>'+esc(tourAdjWho(e))+' · '+esc(e.note||'—')+'</span>'
       +'<span style="font-weight:700;color:'+(v<0?'#b91c1c':'#166534')+';white-space:nowrap">'+tourAdjFmt(v)+'</span></div>';
   }).join('');
   // The settlement STATE belongs in the snapshot as well, not just the figures: a
@@ -15374,7 +15386,7 @@ function ofTourSettlePrint(tourId){
       +'<tfoot><tr><td colspan="2" class="sumlbl">'+label+'</td><td class="r sumlbl">'+money(sum)+'</td></tr></tfoot></table>';
   };
   var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
-    return '<tr><td>'+esc(e.oid||'')+'</td><td>'+esc(e.note||'')+'</td><td class="r">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
+    return '<tr><td>'+esc(tourAdjWho(e))+'</td><td>'+esc(e.note||'')+'</td><td class="r">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
   }).join('');
   // A km tour that has readings: the legs the pay is built from, so the driver can
   // check his own odometer against the sheet he is signing. Nothing to list when the
@@ -15732,9 +15744,10 @@ function tourAdjSummaryHTML(t){
     var c=v<0?'#b91c1c':v>0?'#166534':'var(--text2)';
     // An entry whose order has left the tour has no row of its own any more — without
     // a delete button here it would keep changing the pay with no way to reach it.
-    var orphan=!onTour[String(e.oid)];
+    // A whole-tour line has no order to lose, so it is never an orphan.
+    var orphan=!tourAdjIsTour(e) && !onTour[String(e.oid)];
     return '<div style="display:flex;gap:6px;align-items:baseline;font-size:11px;padding:1px 0">'
-      +'<span style="font-weight:700;white-space:nowrap">'+esc(e.oid||'')+(orphan?' <span title="ออเดอร์ไม่อยู่ในทัวร์แล้ว / order is no longer on this tour" style="color:#b45309">⚠️</span>':'')+'</span>'
+      +'<span style="font-weight:700;white-space:nowrap'+(tourAdjIsTour(e)?';color:var(--text2)':'')+'">'+esc(tourAdjWho(e))+(orphan?' <span title="ออเดอร์ไม่อยู่ในทัวร์แล้ว / order is no longer on this tour" style="color:#b45309">⚠️</span>':'')+'</span>'
       +'<span style="flex:1;min-width:0;color:var(--text2)">'+esc(e.note||'—')+(s===0?' <span style="color:#b45309;font-weight:700">⏳ ยังไม่คิด / not counted</span>':'')+'</span>'
       +'<span style="font-weight:800;color:'+c+';white-space:nowrap">'+(s===0?'—':tourAdjFmt(v))+'</span>'
       +((orphan&&!window.ofReadOnly)?'<button type="button" onclick="event.stopPropagation();ofTourAdjDel(\''+String(t.id).replace(/['"\\]/g,'')+'\',\''+String(e.id).replace(/['"\\]/g,'')+'\')" title="ลบ / delete" style="flex-shrink:0;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);font-size:10px;line-height:1;padding:2px 5px;cursor:pointer">✕</button>':'')
@@ -15755,7 +15768,7 @@ function recAdjHTML(rec, oid){
   var rows=list.map(function(e){
     var v=tourAdjVal(e), c=v<0?'#b91c1c':v>0?'#166534':'var(--text2)';
     return '<div style="display:flex;gap:6px;align-items:baseline;padding:1px 0">'
-      +(oid==null?'<span style="font-weight:700;white-space:nowrap">'+esc(e.oid||'')+'</span>':'')
+      +(oid==null?'<span style="font-weight:700;white-space:nowrap">'+esc(tourAdjWho(e))+'</span>':'')
       +'<span style="flex:1;min-width:0;color:var(--text2)">📝 '+esc(e.note||'—')+'</span>'
       +'<span style="font-weight:800;color:'+c+';white-space:nowrap">'+(tourAdjSign(e)===0?'—':tourAdjFmt(v))+'</span>'
       +'</div>';
