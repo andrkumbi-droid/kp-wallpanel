@@ -21362,14 +21362,43 @@ function fataxReprint(id){
 // base64 → Blob-URL → new tab. Same route the container papers use: a data: URL
 // cannot be navigated to, and Safari on the iPhone leaves iframes blank — the
 // tab with the browser's own PDF viewer prints reliably everywhere.
+// The invoice comes back three seconds after the tap, and by then the browser no
+// longer counts window.open as something the user asked for — it blocks it every
+// single time. So the PDF is shown inside the app instead: the viewer's own print
+// and download buttons are right there, plus two of ours, and nothing has to be
+// allowed in the browser settings first.
+var _fataxPdfUrl='';
 function fataxPrint(b64){
   try{
     var bin=atob(b64), u8=new Uint8Array(bin.length);
     for(var i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
-    var url=URL.createObjectURL(new Blob([u8],{type:'application/pdf'}));
-    var w=window.open(url,'_blank');
-    if(!w) alert('เปิดป๊อปอัพไม่ได้ กรุณาอนุญาต popup / please allow popups');
+    if(_fataxPdfUrl){ try{ URL.revokeObjectURL(_fataxPdfUrl); }catch(e){} }
+    _fataxPdfUrl=URL.createObjectURL(new Blob([u8],{type:'application/pdf'}));
+    var old=document.getElementById('fatax-pdf'); if(old) old.remove();
+    var wrap=document.createElement('div');
+    wrap.id='fatax-pdf';
+    wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:10001;display:flex;flex-direction:column;padding:10px;gap:8px';
+    wrap.onclick=function(ev){ if(ev.target===wrap) fataxPdfClose(); };
+    wrap.innerHTML='<div style="display:flex;gap:8px;align-items:center;flex-shrink:0">'
+        +'<span style="flex:1;min-width:0;color:#fff;font-size:13px;font-weight:800">🧾 ใบกำกับภาษี / Tax invoice</span>'
+        +'<button type="button" onclick="fataxPdfPrint()" style="padding:8px 14px;border:none;border-radius:var(--rs);background:#16a34a;color:#fff;font-size:13px;font-weight:800;cursor:pointer">🖨️ พิมพ์ / print</button>'
+        +'<a href="'+_fataxPdfUrl+'" download="tax-invoice.pdf" style="padding:8px 14px;border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;font-weight:700;text-decoration:none">⬇ บันทึก / save</a>'
+        +'<button type="button" onclick="fataxPdfClose()" style="padding:8px 12px;border:none;border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:14px;font-weight:800;cursor:pointer">✕</button>'
+      +'</div>'
+      +'<iframe id="fatax-pdf-frame" src="'+_fataxPdfUrl+'" style="flex:1;width:100%;border:0;border-radius:8px;background:#fff"></iframe>';
+    document.body.appendChild(wrap);
   }catch(e){ alert('PDF error: '+e); }
+}
+function fataxPdfPrint(){
+  var f=document.getElementById('fatax-pdf-frame');
+  // Chrome prints the PDF straight out of the frame; where that is refused the
+  // viewer's own printer icon is still sitting in the toolbar above.
+  try{ f.contentWindow.focus(); f.contentWindow.print(); }
+  catch(e){ alert('กดปุ่มพิมพ์ในหน้าต่าง PDF ด้านล่าง / use the printer button in the PDF viewer below'); }
+}
+function fataxPdfClose(){
+  var w=document.getElementById('fatax-pdf'); if(w) w.remove();
+  if(_fataxPdfUrl){ try{ URL.revokeObjectURL(_fataxPdfUrl); }catch(e){} _fataxPdfUrl=''; }
 }
 // SlipOK verify web-app URL (Apps Script proxy → SlipOK API). Paste your /exec
 // URL here after deploying apps-script/slipok-verify.gs. Empty = local QR
