@@ -1256,6 +1256,19 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         homeLoc = (v && typeof v.lat==='number' && typeof v.lng==='number') ? {lat:v.lat,lng:v.lng} : null;
         try{ if(document.getElementById('ofv-tour') && document.getElementById('ofv-tour').classList.contains('active')) ofRenderTour(); }catch(e){}
       });
+      // What the app has learned about where each sub-district really is, and the
+      // hand/AI corrections for addresses the parser cannot read. Both are small
+      // (a few hundred short records) and shared by every device.
+      db.ref('geoLearn').on('value', function(snap) {
+        geoLearn = snap.val() || {};
+        try{ if(typeof _tmapRender==='function' && _tmapTid && _tmapMap) _tmapRender(); }catch(e){}
+        try{ if(document.getElementById('ofgeo-modal') && document.getElementById('ofgeo-modal').classList.contains('open')) ofGeoRender(); }catch(e){}
+      });
+      db.ref('addrFix').on('value', function(snap) {
+        addrFix = snap.val() || {};
+        try{ (orders||[]).forEach(function(o){ o._addrSig=''; }); }catch(e){}   // parses are cached per order
+        try{ if(typeof _tmapRender==='function' && _tmapTid && _tmapMap) _tmapRender(); }catch(e){}
+      });
       db.ref('soldOut').on('value', function(snap) {
         soldOut = snap.val() || {};
         try{ var s=document.getElementById('qt-suggestions'); if(s&&s.innerHTML) qtRefreshSoldOut(); }catch(e){}
@@ -2246,8 +2259,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div class="stit">Overview / ภาพรวม</div>
     <div id="of-tour-overview" style="margin-bottom:12px"></div>
     </div>
-    <div class="stit" style="display:flex;justify-content:space-between;align-items:center">Active tours / ทัวร์ที่กำลังดำเนินอยู่
+    <div class="stit" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">Active tours / ทัวร์ที่กำลังดำเนินอยู่
+      <span style="display:flex;gap:6px;flex-wrap:wrap">
       <button type="button" id="of-tour-mappins-btn" onclick="ofBackfillPins(this)" title="Resolve all customer map-links into saved pins (one time)" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:600">📍 Map-Links → Pins</button>
+      <button type="button" onclick="ofGeoOpen()" title="Every position the app is unsure about, grouped by the reason it is unsure" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:600">🎯 ตรวจหมุด / Pin check</button>
+      </span>
     </div>
     <div id="of-active-tours"><div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div></div>
     <!-- Everything still owed to a driver, ticked and paid out in one transfer -->
@@ -7743,7 +7759,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260822002;
+var KP_BUILD = 20260827001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -21110,7 +21126,7 @@ function handleDeliveryPhoto(input){
         var _o=(typeof orders!=='undefined')?orders.find(function(x){return x.id===_deliveryId;}):null;
         var _d=custGeoDoubt(g.lat, g.lng, _o, _deliveryShipMode);
         if(_d){ try{ console.log('[geo] photo pin not saved — '+_d); }catch(e){} return; }
-        custGeoSet(_deliveryPhone, { lat:+g.lat.toFixed(6), lng:+g.lng.toFixed(6), at:new Date().toISOString(), by:'photo', src:'exif' });
+        custGeoSet(_deliveryPhone, { lat:+g.lat.toFixed(6), lng:+g.lng.toFixed(6), at:new Date().toISOString(), by:'photo', src:'exif' }, _o);
         try{ dlGeoRefresh(); }catch(e){}
       }
     });
@@ -21243,7 +21259,18 @@ function custGeoDoubt(lat, lng, o, shipMode){
     });
     if(best!==null && best<0.3) return 'อยู่ที่ท่ารถ '+bn+' / on the yard of '+bn;
   }catch(e){}
-  // Same 150 km rule the tour map flags with ⚠️, so the two cannot disagree.
+  // Same rule the tour map flags with ⚠️, so the two can never disagree. With the
+  // gazetteer loaded this is a tambon-sharp check (~25 km) instead of the old
+  // 150 km province one; without it, the old rule still stands on its own.
+  if(kpGeoReady() && o){
+    try{
+      var w=kpGeoWhy(o, lat, lng, kpGeoPredict(o), null);
+      // 'carrier' and 'shop' are already answered above; 'vague'/'noaddr' mean the
+      // ADDRESS is unusable, which is no reason to distrust the driver's GPS.
+      if(w && w.hard && ['carrier','shop','vague','noaddr'].indexOf(w.code)<0) return w.th+' / '+w.en;
+      return '';
+    }catch(e){}
+  }
   try{
     var p=kpCanonProvince(((o&&o.province)||'').trim()||kpExtractProvince((o&&o.address)||''));
     if(!p) return '';
@@ -21257,14 +21284,520 @@ function custGeoDoubt(lat, lng, o, shipMode){
   }catch(e){}
   return '';
 }
-function custGeoSet(phone, geo){
+function custGeoSet(phone, geo, o){
   var k=normPhone(phone); if(!k) return false;
+  // Stamp the address this pin was captured FOR. Without it a pin belongs to a
+  // phone number and to nothing else — which is how the same builder ordering
+  // for a second site got navigated to their first house: the pin always wins
+  // over the pasted map link (orderNavUrl) and nobody could see it was stale.
+  try{
+    var a=o?kpAddrOf(o):null;
+    if(a&&a.prov){
+      geo.addrKey=kpAddrKeys(a)[0]||('P~'+a.prov);
+      geo.addr=String((o&&o.address)||'').slice(0,160);
+    }
+  }catch(e){}
   customerMeta[k]=customerMeta[k]||{};
   customerMeta[k].geo=geo;
   if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').set(geo);
+  // Feed the learner — a pin somebody actually stood on is the only ground
+  // truth this app ever gets.
+  try{ if(o) kpGeoLearnAdd(o, geo.lat, geo.lng, geo.src||''); }catch(e){}
   return true;
 }
 function geoSane(lat,lng){ return typeof lat==='number'&&typeof lng==='number'&&isFinite(lat)&&isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180&&!(lat===0&&lng===0); }
+
+// ══════════════════════════════════════════════════════════════════════════
+//  ADDRESS → PIN — gazetteer + self-learning   (27.08.2026)
+//  ------------------------------------------------------------------------
+//  Until today an order without a GPS pin was drawn at its PROVINCE CAPITAL:
+//  40-150 km off, useless for routing — and impossible to learn from, because
+//  there was no real prediction that could be right or wrong. Now three layers
+//  stack up, finest first:
+//    1. geoLearn   the median of the pins WE actually delivered to for that
+//                  tambon/amphoe. Own data, beats everything else.
+//    2. th-geo     the official gazetteer: 7,436 tambon + 928 amphoe with
+//                  coordinates (data/th-geo.json, lazy-loaded, ~390 KB /
+//                  ~107 KB gzipped, built by tools/build-th-geo.js).
+//    3. KP_PROV_GEO  the old province capital — last resort.
+//  Measured against a real driver pin (ต.ไสหร้า อ.ฉวาง จ.นครศรีธรรมราช): the
+//  tambon centre is 2.5 km away, the province capital the map used before was
+//  43.6 km away.
+//
+//  When a driver later saves the real pin, the prediction is SCORED against it
+//  (kpGeoScore) and, if nothing looks wrong, fed back in (kpGeoLearnAdd). A big
+//  miss is never quietly averaged away — kpGeoWhy classifies it and it lands in
+//  the office "🎯 ตรวจหมุด / Pin check" list.
+// ══════════════════════════════════════════════════════════════════════════
+var KP_TH_GEO_URL='data/th-geo.json';
+var KP_TH_GEO=null;            // raw gazetteer file
+var _kpGeoIdx=null;            // derived lookup indexes (built once, in memory)
+var _kpGeoLoading=false, _kpGeoFailed=false, _kpGeoWait=[];
+
+// Straight-line km between two points. Planar — at Thailand's scale the error is
+// well under 1%, and everything here is judged in whole kilometres anyway.
+function kpKm(aLat,aLng,bLat,bLng){
+  var k=Math.cos((aLat+bLat)/2*Math.PI/180);
+  var dy=(aLat-bLat)*110.574, dx=(aLng-bLng)*111.320*k;
+  return Math.sqrt(dx*dx+dy*dy);
+}
+// Reduce a Thai name or address to a bare needle, so that "ต. บ้านหัน",
+// "ต.บ้านหัน" and "ตำบลบ้านหัน" all contain the same "บ้านหัน".
+function kpGeoNorm(s){
+  return String(s==null?'':s).replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/[\s.,\-()\/\\'"]+/g,'');
+}
+function kpGeoReady(){ return !!_kpGeoIdx; }
+// Lazy: nothing loads until something actually needs an address position. The
+// service worker caches it like any other same-origin GET, so it costs one
+// request ever — the boot payload is untouched.
+function kpGeoLoad(cb){
+  if(_kpGeoIdx){ if(cb) cb(true); return; }
+  if(cb) _kpGeoWait.push(cb);
+  if(_kpGeoLoading) return;
+  var fin=function(ok){
+    _kpGeoLoading=false;
+    var w=_kpGeoWait; _kpGeoWait=[];
+    w.forEach(function(f){ try{ f(ok); }catch(e){} });
+  };
+  if(_kpGeoFailed){ fin(false); return; }
+  _kpGeoLoading=true;
+  fetch(KP_TH_GEO_URL).then(function(r){ return r.ok?r.json():null; })
+    .then(function(j){
+      if(j&&j.p){ try{ KP_TH_GEO=j; kpGeoBuildIndex(); }catch(e){ _kpGeoFailed=true; } }
+      else _kpGeoFailed=true;
+      fin(!!_kpGeoIdx);
+    })
+    .catch(function(){ _kpGeoFailed=true; fin(false); });
+}
+// One pass over the file → every index the app needs. ~7,400 entries, ~15 ms.
+function kpGeoBuildIndex(){
+  var P=KP_TH_GEO.p, idx={prov:{}, zip:{}, flat:[]};
+  Object.keys(P).forEach(function(prov){
+    var pe={amp:{}, ampN:[], tamN:[]};
+    Object.keys(P[prov]).forEach(function(amp){
+      var A=P[prov][amp];
+      var ae={name:amp, lat:A.c[0], lng:A.c[1], zip:A.z, tam:{}, list:[]};
+      Object.keys(A.t).forEach(function(tam){
+        var v=A.t[tam];
+        var te={name:tam, amp:amp, prov:prov, lat:v[0], lng:v[1], zip:(v[2]||A.z)};
+        ae.tam[kpGeoNorm(tam)]=te; ae.list.push(te);
+        pe.tamN.push({n:kpGeoNorm(tam), e:te});
+        idx.flat.push(te);
+        (idx.zip[te.zip]=idx.zip[te.zip]||[]).push(te);
+      });
+      pe.amp[kpGeoNorm(amp)]=ae;
+      pe.ampN.push({n:kpGeoNorm(amp), e:ae});
+    });
+    // Longest name first, always: "เมืองชัยภูมิ" must win over a bare "เมือง",
+    // and "บ้านหันใหม่" over "บ้านหัน".
+    pe.ampN.sort(function(a,b){ return b.n.length-a.n.length; });
+    pe.tamN.sort(function(a,b){ return b.n.length-a.n.length; });
+    idx.prov[prov]=pe;
+  });
+  // Postal code → mean point of its tambon + the province it belongs to. The zip
+  // is the one part of a Thai address customers almost never get wrong.
+  Object.keys(idx.zip).forEach(function(z){
+    var l=idx.zip[z], la=0, ln=0, pv={};
+    l.forEach(function(t){ la+=t.lat; ln+=t.lng; pv[t.prov]=(pv[t.prov]||0)+1; });
+    var top='', tn=-1;
+    Object.keys(pv).forEach(function(p){ if(pv[p]>tn){ tn=pv[p]; top=p; } });
+    idx.zip[z]={lat:la/l.length, lng:ln/l.length, prov:top, n:l.length, list:l};
+  });
+  _kpGeoIdx=idx;
+}
+
+// ── Parsing a Thai address ────────────────────────────────────────────────
+// Markers first (ต./ตำบล/แขวง, อ./อำเภอ/เขต), but a captured token is only a
+// HAYSTACK, never the answer: staff type "ต.บ้านหันอ.เกษตรสมบูรณ์" without a
+// space just as often as with one. The answer always comes from the gazetteer —
+// which is also why an address with no markers at all still resolves
+// ("… ไสหร้า ฉวาง นครศรีธรรมราช" → ต.ไสหร้า อ.ฉวาง).
+var _KPA_ZIP=/(?:^|[^0-9])([1-9][0-9]{4})(?![0-9])/g;
+var _KPA_TAM=/(?:ตำบล|แขวง|ต\s*\.)\s*([\u0E00-\u0E7F][\u0E00-\u0E7F\s]*)/;
+var _KPA_AMP=/(?:กิ่งอำเภอ|อำเภอ|เขต|อ\s*\.)\s*([\u0E00-\u0E7F][\u0E00-\u0E7F\s]*)/;
+
+// A raw address that the office (or Claude, stage 5) has resolved by hand.
+// addrFix[hash] = {prov, amphoe, tambon, by, at}
+var addrFix={};
+function kpAddrHash(s){
+  var t=kpGeoNorm(s), h=2166136261;
+  for(var i=0;i<t.length;i++){ h^=t.charCodeAt(i); h=(h*16777619)>>>0; }
+  return h.toString(36);
+}
+function kpAddrParse(text, provHint){
+  // Zero-width characters come in with pasted LINE addresses and sit INSIDE
+  // words ("ต.บ้าน<ZWSP>พรุ"). They are invisible to a human and fatal to the
+  // marker capture, which stops at the first non-Thai character — 4-109 read as
+  // ต.หาดใหญ่ instead of ต.บ้านพรุ purely because of one of them.
+  var raw=String(text||'').replace(/[\u200B-\u200D\uFEFF\u00AD]/g,'');
+  var out={prov:'',amphoe:'',tambon:'',zip:0,level:'',amb:false,fixed:false,lat:0,lng:0};
+  if(!raw && !provHint) return out;
+
+  // ── postcode: the LAST standalone 5-digit group in the Thai range. House
+  // numbers ("174/5") and phone fragments are excluded by the digit guards.
+  var m, last=0;
+  _KPA_ZIP.lastIndex=0;
+  while((m=_KPA_ZIP.exec(raw))!==null){ var z=+m[1]; if(z>=10000&&z<=96999) last=z; }
+  out.zip=last;
+
+  // ── province: what is typed on the order wins, else read it out of the text,
+  // else derive it from the postcode.
+  var p=kpCanonProvince(String(provHint||'').trim()||kpExtractProvince(raw));
+  if(p && _kpGeoIdx && !_kpGeoIdx.prov[p]){
+    var th=(window.KP_PROV_EN2TH||{})[String(p).toLowerCase().replace(/[\s\-.]/g,'')];
+    if(th) p=th;
+  }
+  if(!p && _kpGeoIdx && out.zip && _kpGeoIdx.zip[out.zip]) p=_kpGeoIdx.zip[out.zip].prov;
+  out.prov=p||'';
+  if(!_kpGeoIdx){ out.level=out.prov?'prov':''; return out; }
+
+  // ── a hand/AI correction for exactly this address overrides everything
+  var fx=addrFix[kpAddrHash(raw)];
+  if(fx && fx.prov && _kpGeoIdx.prov[fx.prov]){
+    out.prov=fx.prov; out.amphoe=fx.amphoe||''; out.tambon=fx.tambon||''; out.fixed=true;
+    var pe0=_kpGeoIdx.prov[fx.prov];
+    var ae0=out.amphoe?pe0.amp[kpGeoNorm(out.amphoe)]:null;
+    var te0=(ae0&&out.tambon)?ae0.tam[kpGeoNorm(out.tambon)]:null;
+    if(te0){ out.level='tambon'; out.lat=te0.lat; out.lng=te0.lng; }
+    else if(ae0){ out.level='amphoe'; out.tambon=''; out.lat=ae0.lat; out.lng=ae0.lng; }
+    else out.level='prov';
+    return out;
+  }
+
+  var PE=_kpGeoIdx.prov[out.prov];
+  if(!PE){ out.level=out.prov?'prov':''; return out; }
+
+  var hay=kpGeoNorm(raw);
+  var mt=raw.match(_KPA_TAM), ma=raw.match(_KPA_AMP);
+  var hayT=mt?kpGeoNorm(mt[1]):'', hayA=ma?kpGeoNorm(ma[1]):'';
+
+  // ── amphoe. Only ever used to CHOOSE between same-named sub-districts and as
+  // the fallback level; a wrong amphoe must not be able to hide the tambon.
+  var AE=null, aeSure=false, provN=kpGeoNorm(out.prov);
+  if(hayA){
+    // "อ.เมือง" alone means the capital district, which the register spells
+    // "เมือง" + province.
+    var cap=PE.amp[kpGeoNorm('เมือง'+out.prov)];
+    if(hayA==='เมือง' && cap) AE=cap;
+    for(var i=0;!AE&&i<PE.ampN.length;i++) if(hayA.indexOf(PE.ampN[i].n)===0) AE=PE.ampN[i].e;
+    aeSure=!!AE;                     // it sat behind an อ./อำเภอ/เขต marker
+  }
+  if(!AE) for(var i2=0;i2<PE.ampN.length;i2++){
+    if(PE.ampN[i2].n.length>=3 && PE.ampN[i2].n!==provN && hay.indexOf(PE.ampN[i2].n)>=0){ AE=PE.ampN[i2].e; break; }
+  }
+  // The postcode can still name the amphoe when the text does not.
+  if(!AE && out.zip && _kpGeoIdx.zip[out.zip] && _kpGeoIdx.zip[out.zip].prov===out.prov){
+    var amps={};
+    _kpGeoIdx.zip[out.zip].list.forEach(function(t){ amps[t.amp]=1; });
+    var an=Object.keys(amps);
+    if(an.length===1) AE=PE.amp[kpGeoNorm(an[0])]||null;
+  }
+
+  // ── tambon: searched province-wide, then narrowed. A name that exists twice in
+  // the province and cannot be pinned to an amphoe or a postcode is AMBIGUOUS —
+  // we drop a level rather than guess (285 of the 7,436 names are).
+  var cands=[];
+  var pick=function(needle,mode){
+    for(var j=0;j<PE.tamN.length;j++){
+      var c=PE.tamN[j];
+      if(c.n.length<3) continue;
+      // A loose scan must never latch onto the PROVINCE's own name. Several
+      // provinces have a sub-district spelled exactly like themselves, and
+      // "จ.นครนายก" at the end of every Nakhon Nayok address would otherwise be
+      // read as ต.นครนายก — which is how #135 in อ.องครักษ์ was placed 26 km
+      // away in the provincial capital.
+      if(mode==='contains' && c.n===provN) continue;
+      // Same trap one level down: "อ.หาดใหญ่" in the text is not a mention of
+      // ต.หาดใหญ่. When the district stood behind its own marker, its name is
+      // already accounted for and must not be read as a sub-district too.
+      if(mode==='contains' && aeSure && AE && c.n===kpGeoNorm(AE.name)) continue;
+      var hitv = mode==='prefix' ? (needle.indexOf(c.n)===0) : (needle.indexOf(c.n)>=0);
+      if(hitv) return PE.tamN.filter(function(x){ return x.n===c.n; }).map(function(x){ return x.e; });
+    }
+    return [];
+  };
+  if(hayT) cands=pick(hayT,'prefix');
+  if(!cands.length) cands=pick(hay,'contains');
+  if(cands.length && AE){
+    var byAmp=cands.filter(function(t){ return t.amp===AE.name; });
+    // A district that stood behind an อ. marker outranks a sub-district found
+    // anywhere in the text: if they disagree, the sub-district is the wrong one
+    // (usually a misspelling that happened to match somewhere else). Drop to
+    // district level instead of moving the order into another district.
+    if(byAmp.length) cands=byAmp;
+    else if(aeSure) cands=[];
+  }
+  if(cands.length>1 && out.zip){
+    var byZip=cands.filter(function(t){ return t.zip===out.zip; });
+    if(byZip.length===1) cands=byZip;
+  }
+  var TE = cands.length===1 ? cands[0] : null;
+  if(cands.length>1) out.amb=true;
+
+  if(TE){
+    out.tambon=TE.name; out.amphoe=TE.amp; out.level='tambon'; out.lat=TE.lat; out.lng=TE.lng;
+  } else if(AE){
+    out.amphoe=AE.name; out.level='amphoe'; out.lat=AE.lat; out.lng=AE.lng;
+  } else if(out.zip && _kpGeoIdx.zip[out.zip] && _kpGeoIdx.zip[out.zip].prov===out.prov){
+    out.level='zip'; out.lat=_kpGeoIdx.zip[out.zip].lat; out.lng=_kpGeoIdx.zip[out.zip].lng;
+  } else {
+    out.level='prov';
+  }
+  return out;
+}
+// Parsed address of an order, cached on the order itself. The tour map re-renders
+// every 15 s over hundreds of orders — parsing them all each time would show.
+function kpAddrOf(o){
+  if(!o) return kpAddrParse('','');
+  var sig=(o.address||'')+'|'+(o.province||'')+'|'+(_kpGeoIdx?'i':'-');
+  if(o._addrSig===sig && o._addr) return o._addr;
+  o._addrSig=sig; o._addr=kpAddrParse(o.address||'', o.province||'');
+  return o._addr;
+}
+// The learning keys an address contributes to, most specific first.
+function kpAddrKeys(a){
+  var ks=[];
+  if(!a) return ks;
+  // Sanitised straight away, so the in-memory key and the Firebase path are the
+  // same string everywhere and a lookup can never miss because of an escape.
+  if(a.prov&&a.amphoe&&a.tambon) ks.push(kpGeoKeySafe('T~'+a.prov+'~'+a.amphoe+'~'+a.tambon));
+  if(a.prov&&a.amphoe) ks.push(kpGeoKeySafe('A~'+a.prov+'~'+a.amphoe));
+  return ks;
+}
+// Firebase forbids . # $ [ ] / in a key. Thai is fine, but a stray dot in a
+// hand-typed name would silently kill the write.
+function kpGeoKeySafe(k){ return String(k).replace(/[.#$/\[\]]/g,'_'); }
+
+// Nearest tambon to a point — "where does this pin actually sit?". 7,436 squared
+// distances, ~0.3 ms, and it is what makes a wrong pin explainable instead of
+// merely far away.
+function kpGeoReverse(lat,lng){
+  if(!_kpGeoIdx||!geoSane(lat,lng)) return null;
+  var F=_kpGeoIdx.flat, k=Math.cos(lat*Math.PI/180), best=null, bd=Infinity;
+  for(var i=0;i<F.length;i++){
+    var t=F[i], dy=t.lat-lat, dx=(t.lng-lng)*k, d=dy*dy+dx*dx;
+    if(d<bd){ bd=d; best=t; }
+  }
+  if(!best) return null;
+  return {prov:best.prov, amphoe:best.amp, tambon:best.name, zip:best.zip,
+          km:Math.round(kpKm(lat,lng,best.lat,best.lng)*10)/10};
+}
+
+// ── The learned layer ─────────────────────────────────────────────────────
+// geoLearn[key] = { n, lat, lng, sp, hit, miss, at, s:[{p:phone,a:lat,o:lng,t:ts}] }
+//   n    how many CUSTOMERS have contributed
+//   sp   median distance of the samples from the median point, in km — the
+//        honest "how sure are we" number, shown wherever the pin is shown
+//   s    the samples, ONE PER CUSTOMER (a customer with 12 orders must not
+//        out-vote eleven other customers) and capped at 24
+var geoLearn={};
+var KP_LEARN_MAX=24;
+function _kpMedPoint(s){
+  var la=s.map(function(x){return x.a;}).sort(function(x,y){return x-y;});
+  var ln=s.map(function(x){return x.o;}).sort(function(x,y){return x-y;});
+  var md=function(arr){ var n=arr.length; return n%2?arr[(n-1)/2]:(arr[n/2-1]+arr[n/2])/2; };
+  var lat=md(la), lng=md(ln);
+  var ds=s.map(function(x){ return kpKm(lat,lng,x.a,x.o); }).sort(function(x,y){return x-y;});
+  return {lat:+lat.toFixed(5), lng:+lng.toFixed(5), sp:+md(ds).toFixed(2)};
+}
+// Is this learned entry solid enough to route by? One sample is a fact about one
+// customer, not about the tambon.
+function kpLearnUsable(e,level){
+  if(!e||!e.n||!geoSane(e.lat,e.lng)) return false;
+  return level==='tambon' ? (e.n>=2 && (e.sp==null||e.sp<=8))
+                          : (e.n>=3 && (e.sp==null||e.sp<=20));
+}
+function _kpLearnPush(key, phone, lat, lng, km, write){
+  var e=geoLearn[key]||{n:0,s:[],hit:0,miss:0};
+  var s=(e.s||[]).filter(function(x){ return x.p!==phone; });
+  s.push({p:phone||('?'+s.length), a:+(+lat).toFixed(5), o:+(+lng).toFixed(5), t:Date.now()});
+  if(s.length>KP_LEARN_MAX) s=s.slice(-KP_LEARN_MAX);
+  e.s=s; e.n=s.length;
+  if(km!=null){ if(km<=3) e.hit=(e.hit||0)+1; else if(km>25) e.miss=(e.miss||0)+1; }
+  var med=_kpMedPoint(s);
+  e.lat=med.lat; e.lng=med.lng; e.sp=med.sp; e.at=Date.now();
+  geoLearn[key]=e;
+  if(write!==false && window.fbDB){ try{ window.fbDB.ref('geoLearn/'+kpGeoKeySafe(key)).set(e); }catch(err){} }
+  return e;
+}
+
+// ── The prediction ────────────────────────────────────────────────────────
+// Returns {lat,lng,level,src,n,sp,key,label,labelTh} or null.
+//   level  tambon | amphoe | zip | prov     — how fine
+//   src    learn  | gaz    | prov           — where it came from
+function kpGeoPredict(o, addr){
+  var a=addr||kpAddrOf(o);
+  if(!a) return null;
+  var L=function(level,src,lat,lng,e,key){
+    var n=e?e.n:0, sp=e?e.sp:null;
+    return {lat:lat,lng:lng,level:level,src:src,n:n,sp:sp,key:key||'',
+      label:(src==='learn' ? ('learned from '+n+' deliveries'+(sp!=null?' (±'+sp+' km)':''))
+            : level==='tambon' ? 'sub-district centre'
+            : level==='amphoe' ? 'district centre'
+            : level==='zip'    ? 'postal code' : 'province only'),
+      labelTh:(src==='learn' ? ('เรียนจากการส่งจริง '+n+' ราย'+(sp!=null?' (±'+sp+' กม.)':''))
+            : level==='tambon' ? 'กลางตำบล'
+            : level==='amphoe' ? 'กลางอำเภอ'
+            : level==='zip'    ? 'จากรหัสไปรษณีย์' : 'ประมาณจากจังหวัด')};
+  };
+  var ks=kpAddrKeys(a);
+  // learned tambon > gazetteer tambon > learned amphoe > gazetteer amphoe/zip > province
+  if(a.tambon && ks.length){
+    var eT=geoLearn[ks[0]];
+    if(kpLearnUsable(eT,'tambon')) return L('tambon','learn',eT.lat,eT.lng,eT,ks[0]);
+  }
+  if(a.level==='tambon' && geoSane(a.lat,a.lng)) return L('tambon','gaz',a.lat,a.lng,null,ks[0]||'');
+  if(a.amphoe && ks.length){
+    var kA=ks[ks.length-1], eA=geoLearn[kA];
+    if(kpLearnUsable(eA,'amphoe')) return L('amphoe','learn',eA.lat,eA.lng,eA,kA);
+  }
+  if((a.level==='amphoe'||a.level==='zip') && geoSane(a.lat,a.lng)) return L(a.level,'gaz',a.lat,a.lng,null,'');
+  var g=a.prov?KP_PROV_GEO[a.prov]:null;
+  return g?L('prov','prov',g[0],g[1],null,''):null;
+}
+
+// ── Why is this pin nowhere near its address? ─────────────────────────────
+// Rules only, no model. Each returns {code, hard, th, en}; hard = never learn
+// from this pin, and show it in the office pin-check list.
+function kpGeoWhy(o, lat, lng, pred, addr){
+  if(!geoSane(lat,lng)) return {code:'nogps',hard:true,th:'พิกัดไม่ถูกต้อง',en:'invalid coordinates'};
+  var a=addr||kpAddrOf(o);
+  // 1 — standing on a carrier's yard: a handover spot, never a home address.
+  try{
+    var bn='', bk=Infinity;
+    Object.keys(shipperLoc||{}).forEach(function(k){
+      var v=shipperLoc[k]||{};
+      if(typeof v.lat!=='number'||typeof v.lng!=='number') return;
+      var d=kpKm(lat,lng,v.lat,v.lng);
+      if(d<bk){ bk=d; bn=v.name||k; }
+    });
+    if(bk<0.4) return {code:'carrier',hard:true,th:'อยู่ที่ท่ารถ '+bn,en:'on the '+bn+' carrier yard'};
+  }catch(e){}
+  // 2 — taken at the shop: the button was pressed while loading, not on site.
+  try{
+    if(window.homeLoc && geoSane(homeLoc.lat,homeLoc.lng) && kpKm(lat,lng,homeLoc.lat,homeLoc.lng)<0.4)
+      return {code:'shop',hard:true,th:'อยู่ที่ร้าน/คลัง ไม่ใช่บ้านลูกค้า',en:'at the shop, not at the customer'};
+  }catch(e){}
+  // 3 — the pin is in a different province than the address says. With the
+  // gazetteer this is exact, not a 150-km guess.
+  // A pin 3 km from the address can still fall on the far side of a provincial
+  // boundary — that is a border, not a mistake, and half the first pin-check run
+  // was made of those. It only counts as wrong when it is also FAR.
+  var rv=kpGeoReverse(lat,lng);
+  if(rv && a.prov && rv.prov!==a.prov && (!pred || kpKm(lat,lng,pred.lat,pred.lng)>15))
+    return {code:'province',hard:true,got:rv,
+            th:'หมุดอยู่ใน จ.'+rv.prov+' แต่ที่อยู่เขียน จ.'+a.prov,
+            en:'pin is in '+rv.prov+', the address says '+a.prov};
+  // 4 — nothing to compare against: the address never resolved past the province.
+  if(!a.prov) return {code:'noaddr',hard:true,th:'ที่อยู่ไม่มีจังหวัด',en:'address has no province'};
+  if(a.level==='prov'||a.amb)
+    return {code:'vague',hard:true,
+            th:a.amb?'ชื่อตำบลซ้ำในจังหวัดนี้ ต้องระบุอำเภอด้วย':'ที่อยู่ไม่มี ต./อ. ที่รู้จัก',
+            en:a.amb?'sub-district name is ambiguous in this province — needs the district'
+                    :'no known sub-district/district in the address'};
+  // 5 — same phone, another order whose address is somewhere else entirely. One
+  // pin per phone cannot serve two building sites.
+  try{
+    var ph=normPhone(o&&o.phone), other=null;
+    if(ph && geoSane(a.lat,a.lng)) (orders||[]).some(function(x){
+      if(!x||x.id===(o&&o.id)||normPhone(x.phone)!==ph) return false;
+      var xa=kpAddrOf(x);
+      if(!xa||xa.level==='prov'||!geoSane(xa.lat,xa.lng)) return false;
+      if(kpKm(a.lat,a.lng,xa.lat,xa.lng)>25){ other=x; return true; }
+      return false;
+    });
+    if(other) return {code:'multi',hard:false,other:other.id,
+      th:'เบอร์เดียวกันมีอีกที่อยู่ห่างมาก ('+other.id+') — หมุดเดียวใช้ไม่ได้ทั้งสองที่',
+      en:'the same phone has a far-away second address ('+other.id+') — one pin cannot serve both'};
+  }catch(e){}
+  // 6 — plain distance from the prediction. The limit follows how sharp that
+  // prediction is: a tambon centre 25 km out is wrong, a province fallback
+  // 25 km out is perfectly normal.
+  if(pred){
+    var km=kpKm(lat,lng,pred.lat,pred.lng);
+    var lim=pred.level==='tambon'?25:pred.level==='amphoe'?40:pred.level==='zip'?45:150;
+    if(km>lim) return {code:'far',hard:true,km:Math.round(km),got:rv,
+      th:'ห่างจากที่อยู่ ~'+Math.round(km)+' กม.',en:'~'+Math.round(km)+' km from the address'};
+    if(pred.level==='tambon'&&km>8) return {code:'wide',hard:false,km:Math.round(km),
+      th:'ห่างจากกลางตำบล ~'+Math.round(km)+' กม.',en:'~'+Math.round(km)+' km from the sub-district centre'};
+  }
+  return null;
+}
+// Score a pin against what the address predicted, without changing anything.
+function kpGeoScore(o, lat, lng){
+  var a=kpAddrOf(o), pred=kpGeoPredict(o,a);
+  var km=pred?Math.round(kpKm(lat,lng,pred.lat,pred.lng)*10)/10:null;
+  var why=kpGeoWhy(o,lat,lng,pred,a);
+  var verdict=(why&&why.hard)?'conflict':(km==null?'seed':(km<=3?'hit':(km<=25?'near':'conflict')));
+  return {a:a, pred:pred, km:km, why:why, verdict:verdict};
+}
+// A real pin came in → learn from it, unless something says not to. Returns the
+// score object so the caller can show the driver what happened.
+function kpGeoLearnAdd(o, lat, lng, src){
+  if(!_kpGeoIdx||!o||!geoSane(lat,lng)) return null;
+  var sc=kpGeoScore(o,lat,lng);
+  sc.src=src||'';
+  if(sc.why&&sc.why.hard) return sc;                 // classified, not learned
+  var ph=normPhone(o.phone)||'';
+  kpAddrKeys(sc.a).forEach(function(k){ _kpLearnPush(k, ph, lat, lng, sc.km); });
+  sc.learned=true;
+  return sc;
+}
+// Full rebuild from everything already stored — the one-time jump start, and the
+// repair button when the learned data has gone wrong. Deterministic: the same
+// pins always produce the same result, so it is safe to press twice.
+function kpGeoRebuild(cb){
+  kpGeoLoad(function(ok){
+    if(!ok){ if(cb) cb(null); return; }
+    var fresh={}, seen={}, stats={pins:0, used:0, skipped:{}, keys:0};
+    // newest order per phone first, so a customer's CURRENT address is the one
+    // their pin is credited to
+    var list=(orders||[]).slice().sort(function(x,y){ return String(y.date||'').localeCompare(String(x.date||'')); });
+    list.forEach(function(o){
+      var ph=normPhone(o&&o.phone); if(!ph||seen[ph]) return;
+      var g=custGeoGet(ph); if(!g||!geoSane(g.lat,g.lng)) return;
+      seen[ph]=1; stats.pins++;
+      var a=kpAddrOf(o);
+      var why=kpGeoWhy(o,g.lat,g.lng,kpGeoPredict(o,a),a);
+      if(why&&why.hard&&!g.ok){ stats.skipped[why.code]=(stats.skipped[why.code]||0)+1; return; }
+      stats.used++;
+      kpAddrKeys(a).forEach(function(k){
+        var e=fresh[k]||{n:0,s:[],hit:0,miss:0};
+        e.s.push({p:ph,a:+g.lat.toFixed(5),o:+g.lng.toFixed(5),t:Date.parse(g.at||'')||Date.now()});
+        fresh[k]=e;
+      });
+    });
+    Object.keys(fresh).forEach(function(k){
+      var e=fresh[k];
+      if(e.s.length>KP_LEARN_MAX) e.s=e.s.sort(function(x,y){return y.t-x.t;}).slice(0,KP_LEARN_MAX);
+      var med=_kpMedPoint(e.s);
+      e.n=e.s.length; e.lat=med.lat; e.lng=med.lng; e.sp=med.sp; e.at=Date.now();
+    });
+    stats.keys=Object.keys(fresh).length;
+    geoLearn=fresh;
+    if(window.fbDB){
+      var payload={};
+      Object.keys(fresh).forEach(function(k){ payload[kpGeoKeySafe(k)]=fresh[k]; });
+      try{ window.fbDB.ref('geoLearn').set(payload); }catch(e){}
+    }
+    if(cb) cb(stats);
+  });
+}
+// Everything the app knows about one order's position, in one object — what the
+// map, the pin-check list and the driver warning all read.
+function orderGeoInfo(o){
+  var a=kpAddrOf(o), pred=kpGeoPredict(o,a), pin=orderLatLng(o);
+  var out={addr:a, pred:pred, pin:pin, why:null, km:null, ok:false, src:''};
+  if(pin){
+    var g=custGeoGet(o&&o.phone);
+    out.ok=!!(g&&g.ok);
+    out.src=(g&&g.src)||'link';
+    if(pred) out.km=Math.round(kpKm(pin.lat,pin.lng,pred.lat,pred.lng)*10)/10;
+    if(!out.ok) out.why=kpGeoWhy(o,pin.lat,pin.lng,pred,a);
+  }
+  return out;
+}
+
 // Best location URL for an order: driver/office GPS pin first (precise), else the
 // pasted Google Maps link from the order (works as-is, no coordinate parsing).
 // The driver's saved pin always wins, so it overrides any pasted link.
@@ -21646,7 +22179,7 @@ function ensureTourCoords(ids){
         if(g){
           found++;
           o._geo={lat:g.lat,lng:g.lng,at:new Date().toISOString(),by:'resolver',src:'maplink'};
-          try{ if(normPhone(o.phone)) custGeoSet(o.phone,o._geo); }catch(e){}
+          try{ if(normPhone(o.phone)) custGeoSet(o.phone,o._geo,o); }catch(e){}
           try{ syncOrders(); }catch(e){}
         }
         next();
@@ -21681,7 +22214,7 @@ function ofBackfillPins(btn){
     i++; if(btn){ btn.textContent='Resolving… '+i+'/'+N; }
     resolveShortLink(o.location.trim()).then(function(g){
       if(g){ ok++; o._geo={lat:g.lat,lng:g.lng,at:new Date().toISOString(),by:'resolver',src:'maplink'};
-        try{ if(normPhone(o.phone)) custGeoSet(o.phone,o._geo); }catch(e){}
+        try{ if(normPhone(o.phone)) custGeoSet(o.phone,o._geo,o); }catch(e){}
       }
       setTimeout(next, 120); // gentle throttle
     });
@@ -21734,8 +22267,21 @@ function dlSaveGeo(){
       if(st){ st.style.color='#b45309'; st.textContent='ไม่ได้บันทึก / not saved — '+_d; }
       return;
     }
-    custGeoSet(_deliveryPhone, { lat:+lat.toFixed(6), lng:+lng.toFixed(6), acc:Math.round(pos.coords.accuracy||0), at:new Date().toISOString(), by:drName, src:'driver' });
+    custGeoSet(_deliveryPhone, { lat:+lat.toFixed(6), lng:+lng.toFixed(6), acc:Math.round(pos.coords.accuracy||0), at:new Date().toISOString(), by:drName, src:'driver' }, _o);
     dlGeoRefresh();
+    // Tell the driver what the app just learned. A pin that lands where the
+    // address said it would is the whole point — showing it is what makes people
+    // keep pressing the button.
+    try{
+      var _sc=_o?kpGeoScore(_o,lat,lng):null;
+      if(_sc && _sc.km!=null && st){
+        st.style.color = _sc.verdict==='hit' ? '#16a34a' : _sc.verdict==='near' ? 'var(--text2)' : '#b45309';
+        st.innerHTML = (_sc.verdict==='hit'?'✅ ตรงกับที่อยู่ / matches the address':
+                        _sc.verdict==='near'?('📍 ห่างจากที่อยู่ '+_sc.km+' กม. / '+_sc.km+' km from the address'):
+                        ('⚠️ ห่างจากที่อยู่ '+_sc.km+' กม. / '+_sc.km+' km from the address'))
+                     + ' · <a href="https://www.google.com/maps/search/?api=1&query='+lat+','+lng+'" target="_blank" style="color:var(--blue)">map</a>';
+      }
+    }catch(e){}
   }, function(err){
     if(st){ st.style.color='#dc2626'; st.textContent = err && err.code===1 ? 'Location permission denied' : 'Could not get location — try again'; }
     if(btn) btn.style.animation='blink 1.2s infinite';
@@ -28091,6 +28637,22 @@ function calcViz() {
   </div>
 </div>
 
+<!-- 🎯 PIN CHECK — every position the address→pin machinery is unsure about -->
+<style>
+#ofgeo-modal{align-items:center;padding:12px}
+#ofgeo-modal .modal{border-radius:16px;max-width:820px;width:100%;max-height:92vh;display:flex;flex-direction:column;padding:12px}
+#ofgeo-body{overflow:auto;min-height:0;flex:1}
+</style>
+<div class="modal-overlay" id="ofgeo-modal">
+  <div class="modal">
+    <div class="mhdr">
+      <span class="mtit">🎯 ตรวจหมุด / Pin check</span>
+      <button type="button" class="mclose" onclick="ofGeoClose()"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="ofgeo-body"></div>
+  </div>
+</div>
+
 <!-- 🌐 TOUR ZONE MAP — every stop of a tour (numbered) + free same-zone orders (Leaflet, lazy) -->
 <style>
 /* Centred, not a bottom sheet: this one is a working window, not a quick action. */
@@ -28672,7 +29234,16 @@ function saveGeoEditor(){
   if(!_geoKey||!_geoMarker){ closeGeoEditor(); return; }
   var p=_geoMarker.getLatLng();
   if(!geoSane(p.lat,p.lng)){ alert('Invalid position'); return; }
-  custGeoSet(_geoKey, { lat:+p.lat.toFixed(6), lng:+p.lng.toFixed(6), at:new Date().toISOString(), by:'Office', src:'office' });
+  // Credit the pin to this customer's most recent order, so it carries an address
+  // key and can be scored and learned from like a driver pin.
+  var _no=null;
+  try{
+    (orders||[]).forEach(function(x){
+      if(normPhone(x.phone)!==normPhone(_geoKey)) return;
+      if(!_no||String(x.date||'')>String(_no.date||'')) _no=x;
+    });
+  }catch(e){}
+  custGeoSet(_geoKey, { lat:+p.lat.toFixed(6), lng:+p.lng.toFixed(6), at:new Date().toISOString(), by:'Office', src:'office' }, _no);
   closeGeoEditor();
   try{ custRender(); }catch(e){}
 }
@@ -28740,8 +29311,9 @@ function _tmapStopPos(o){
   var v=_tmapVia(o);
   if(!v) return _tmapPos(o);
   var cp=_tmapPos(o);
-  return { lat:v.lat, lng:v.lng, approx:false, via:v.via,
-           cust:cp||null, custSuspect:cp?cp.suspect:null, custProv:cp?cp.prov:'', custApprox:cp?!!cp.approx:false };
+  return { lat:v.lat, lng:v.lng, approx:false, plevel:'pin', via:v.via,
+           cust:cp||null, custSuspect:cp?cp.suspect:null, custProv:cp?cp.prov:'', custApprox:cp?!!cp.approx:false,
+           custLevel:cp?cp.plevel:'', custWhy:cp?cp.why:null };
 }
 // Clicking a row in the side list flies to that stop and opens its card.
 function tmapGoto(oid){
@@ -28770,8 +29342,8 @@ function _tmapRenderList(t){
     var mark=!pos?'<span title="ไม่มีพิกัด / no location" style="color:#b45309">🚫</span>'
              :pos.via?('<span title="ส่งที่ท่ารถ '+esc(pos.via)+' / handover at the '+esc(pos.via)+' depot" style="font-size:10px">🚚</span>'
                        +(pos.custSuspect?'<span title="หมุดลูกค้าอาจผิด ~'+pos.custSuspect+' กม. / customer pin looks wrong" style="color:#dc2626">⚠️</span>':''))
-             :pos.suspect?'<span title="หมุดอาจผิด / suspect pin" style="color:#dc2626">⚠️</span>'
-             :pos.approx?'<span title="ประมาณจากจังหวัด / province only" style="opacity:.5">◌</span>':'';
+             :pos.suspect?'<span title="'+esc(_tmapWhyTxt(pos.why)||'หมุดอาจผิด / suspect pin')+'" style="color:#dc2626">⚠️</span>'
+             :pos.approx?'<span title="'+esc(_tmapLvlTxt(pos.plevel))+'" style="opacity:.5">◌</span>':'';
     return '<div class="kmrow" data-oid="'+esc(id)+'" style="display:flex;align-items:center;gap:6px;font-size:12px;'+(can?'opacity:.5;':'')+'">'
       +(ro?'':'<span class="kmgrab" title="ลากเพื่อจัดลำดับ / drag to reorder" onpointerdown="ofKmDragStart(event,this)" onclick="event.stopPropagation()">☰</span>')
       +'<span onclick="tmapGoto(\''+String(id).replace(/['"\\]/g,'')+'\')" style="flex:1;min-width:0;cursor:pointer;display:flex;align-items:center;gap:6px">'
@@ -28798,21 +29370,29 @@ function _tmapZoneOf(o){
 // source is a delivery-photo EXIF pin taken somewhere else entirely (line ~19048
 // stores photo GPS as the customer pin), which then wins over everything.
 function _tmapPos(o){
-  var p=kpCanonProvince(((o&&o.province)||'').trim()||kpExtractProvince((o&&o.address)||''));
-  var g=p?KP_PROV_GEO[p]:null;
-  // Province typed in English ("Lampang") — same path kpProvinceZone supports.
-  if(!g&&p){ var th=(window.KP_PROV_EN2TH||{})[String(p).toLowerCase().replace(/[\s\-\.]/g,'')]; if(th&&KP_PROV_GEO[th]){ p=th; g=KP_PROV_GEO[th]; } }
+  var a=kpAddrOf(o), pred=kpGeoPredict(o,a);
   var c=orderLatLng(o);
   if(c){
-    var res={lat:c.lat,lng:c.lng,approx:false};
-    if(g){
-      var dLat=c.lat-g[0], dLng=(c.lng-g[1])*Math.cos(c.lat*Math.PI/180);
-      var km=Math.sqrt(dLat*dLat+dLng*dLng)*111;
-      if(km>150){ res.suspect=Math.round(km); res.prov=p; }
+    var res={lat:c.lat,lng:c.lng,approx:false,plevel:'pin',prov:a.prov||''};
+    if(pred){
+      var km=kpKm(c.lat,c.lng,pred.lat,pred.lng);
+      res.predKm=Math.round(km); res.pred=pred;
+      // The limit follows how sharp the prediction is — a tambon centre 25 km
+      // out is wrong, a province fallback 25 km out is perfectly normal.
+      var lim=pred.level==='tambon'?25:pred.level==='amphoe'?40:pred.level==='zip'?45:150;
+      if(km>lim){
+        var g0=custGeoGet(o&&o.phone);
+        if(!(g0&&g0.ok)){                      // the office can confirm a pin once and for all
+          res.suspect=Math.round(km);
+          res.why=kpGeoWhy(o,c.lat,c.lng,pred,a);
+        }
+      }
     }
     return res;
   }
-  return g?{lat:g[0],lng:g[1],approx:true,prov:p}:null;
+  // No pin: draw the address itself. Where that lands is now a sub-district
+  // centre (or the median of our own deliveries there), not a province capital.
+  return pred?{lat:pred.lat,lng:pred.lng,approx:true,plevel:pred.level,prov:a.prov||'',pred:pred}:null;
 }
 // Free orders worth showing next to this tour: not on ANY active tour, still
 // open (new/packing/ready), and in one of the tour's zones.
@@ -28824,6 +29404,15 @@ function _tmapFreeOrders(t){
   var ST={'new':1,'packing':1,'ready':1};
   return orders.filter(function(o){ return ST[o.status] && !used[o.id] && zones[_tmapZoneOf(o)]; });
 }
+// How precise is a drawn position — the honest label under every faded pin.
+function _tmapLvlTxt(level){
+  return level==='tambon' ? 'กลางตำบล ±2 กม. / sub-district centre'
+       : level==='amphoe' ? 'กลางอำเภอ ±10 กม. / district centre'
+       : level==='zip'    ? 'จากรหัสไปรษณีย์ / postal code'
+       : 'ประมาณจากจังหวัด / province only';
+}
+// One line out of a kpGeoWhy verdict, Thai first the way the rest of the app reads.
+function _tmapWhyTxt(w){ return w ? (w.th+' / '+w.en) : ''; }
 function _tmapIcon(label,color,approx,via){
   // The 🚚 badge marks a stop that is a CARRIER DEPOT, not the customer's address.
   var badge = via
@@ -28887,6 +29476,9 @@ function ofTourMap(tid){
   });
   // Background: pull coordinates out of pasted short links (stored as customer
   // pin + on the order — same resolver the route optimizer uses), then redraw.
+  // The sub-district table is what turns "somewhere in that province" into a real
+  // position — load it on first use and redraw once it lands.
+  try{ kpGeoLoad(function(ok){ if(ok && _tmapTid===tid && _tmapMap) _tmapRender(); }); }catch(e){}
   try{
     var ids=(t.orders||[]).slice();
     _tmapFreeOrders(t).forEach(function(o){ ids.push(o.id); });
@@ -28932,12 +29524,19 @@ function _tmapRender(){
       // 78 m they were three pins in the same 2 px. A depot ring is wide enough to
       // read, a province fallback wider still, a true duplicate customer pin stays
       // tight — that one is rare and should not wander off the address.
-      var r=p.approx?0.035:(p.via?0.006:0.0007), a=n*2.4;
+      // …and the ring only has to be as wide as the position is uncertain: a
+      // sub-district centre is good to ~2 km, so the old 3.9 km province ring
+      // would now throw a pin further than the prediction error itself.
+      var r=p.approx?(p.plevel==='tambon'?0.004:p.plevel==='amphoe'?0.012:p.plevel==='zip'?0.02:0.035)
+                    :(p.via?0.006:0.0007), a=n*2.4;
       p={lat:p.lat+r*Math.cos(a),lng:p.lng+r*Math.sin(a),approx:p.approx,prov:p.prov,suspect:p.suspect,via:p.via,
-         cust:p.cust,custSuspect:p.custSuspect,custProv:p.custProv,custApprox:p.custApprox};
+         plevel:p.plevel,pred:p.pred,why:p.why,predKm:p.predKm,
+         cust:p.cust,custSuspect:p.custSuspect,custProv:p.custProv,custApprox:p.custApprox,
+         custLevel:p.custLevel,custWhy:p.custWhy};
     }
     x.approx=p.approx; x.prov=p.prov; x.suspect=p.suspect; x.via=p.via;
-    x.custSuspect=p.custSuspect; x.custProv=p.custProv;
+    x.plevel=p.plevel; x.pred=p.pred; x.why=p.why; x.predKm=p.predKm;
+    x.custSuspect=p.custSuspect; x.custProv=p.custProv; x.custWhy=p.custWhy;
     if(p.suspect){ nSuspect++; color='#dc2626'; }
     // The depot pin itself is right; it is the customer pin behind it that is off.
     if(p.custSuspect) nSuspect++;
@@ -28968,13 +29567,13 @@ function _tmapRender(){
         .bindTooltip('<div style="font-size:11.5px;color:#111"><b>'+esc0(o.id)+'</b> · ปลายทางลูกค้า / final address'
           +'<div style="color:#555">'+esc0(o.customer||'')+'</div>'
           +'<div style="color:#3730a3;font-weight:700">🚚 ส่งต่อโดย '+esc0(p.via)+' / carried on by '+esc0(p.via)+'</div>'
-          +(bad?'<div style="color:#dc2626;font-weight:700">⚠️ หมุดห่างจาก จ.'+esc0(p.custProv||'')+' ~'+p.custSuspect+' กม. — พิกัดลูกค้าอาจผิด / customer pin looks wrong</div>':'')
-          +(cp.approx?'<div style="color:#b45309">◌ ประมาณจากจังหวัด / province only</div>':'')+'</div>',
+          +(bad?'<div style="color:#dc2626;font-weight:700">⚠️ '+esc0(_tmapWhyTxt(p.custWhy)||('หมุดห่างจากที่อยู่ ~'+p.custSuspect+' กม. / customer pin looks wrong'))+'</div>':'')
+          +(cp.approx?'<div style="color:#b45309">◌ '+esc0(_tmapLvlTxt(p.custLevel))+'</div>':'')+'</div>',
           {direction:'top',opacity:1,className:'tmap-tip'})
         .bindPopup('<div style="font-size:12px;color:#111;min-width:170px"><b>'+esc0(o.id)+'</b> · ปลายทางลูกค้า / final address'
           +'<div style="color:#555;margin-top:2px">'+esc0(o.customer||'')+'</div>'
           +'<div style="color:#555">'+esc0(o.address||'')+'</div>'
-          +(bad?'<div style="color:#dc2626;font-weight:700;margin-top:3px">⚠️ หมุดห่างจาก จ.'+esc0(p.custProv||'')+' ~'+p.custSuspect+' กม. — พิกัดลูกค้าอาจผิด (เช่น GPS จากรูปถ่ายที่ท่ารถ)<div style="font-weight:500">customer pin ~'+p.custSuspect+' km from the address province — probably a photo GPS taken at the depot</div></div>'
+          +(bad?'<div style="color:#dc2626;font-weight:700;margin-top:3px">⚠️ '+esc0(_tmapWhyTxt(p.custWhy)||('หมุดห่างจากที่อยู่ ~'+p.custSuspect+' กม.'))+'<div style="font-weight:500">customer pin ~'+p.custSuspect+' km from where the address points</div></div>'
               +(window.ofReadOnly?'':'<div style="margin-top:4px"><button type="button" onclick="ofTourMapClearPin(\''+oidJs2+'\')" style="border:none;background:#dc2626;color:#fff;border-radius:6px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer">🗑 ลบหมุดผิด / clear pin</button></div>'):'')
           +'</div>',{maxWidth:280})
         .addTo(_tmapLayer);
@@ -29014,7 +29613,8 @@ function _tmapRender(){
     +'<span><span style="color:#f97316;font-weight:800">●</span> ว่าง เพิ่มได้ / free in zone ('+nFree+')</span>'
     +(nVia?'<span>🚚 ท่ารถขนส่ง / carrier depot ('+nVia+') <span style="opacity:.65">· ○ = ที่อยู่ลูกค้า / customer address</span></span>':'')
     +(nSuspect?'<span><span style="color:#dc2626;font-weight:800">●</span> หมุดอาจผิด / suspect pin ('+nSuspect+')</span>':'')
-    +'<span style="opacity:.65">จาง = ประมาณจากจังหวัด / faded = province only</span>';
+    +'<span style="opacity:.65">จาง = ตำแหน่งจากที่อยู่ ไม่ใช่หมุดจริง / faded = position from the address, not a real pin</span>'
+    +(kpGeoReady()?'':'<span style="opacity:.65">⏳ กำลังโหลดฐานตำบล / loading the sub-district table…</span>');
   var ms=document.getElementById('tourmap-missing');
   if(ms) ms.innerHTML=noPos.length
     ? '🚫 ไม่มีพิกัด ไม่อยู่บนแผนที่ / no location, not on the map: '+noPos.map(function(o){ return '<b>'+String(o.id).replace(/</g,'&lt;')+'</b>'; }).join(', ')
@@ -29038,6 +29638,349 @@ function ofTourMapClearPin(oid){
   try{ auditAdd({type:'edit',orderId:oid,by:(typeof ofWho==='function'?ofWho():'Office'),detail:'🗑 ลบหมุด GPS ผิด / wrong GPS pin removed (tour map)'}); }catch(e){}
   _tmapRender();
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+//  🎯 ตรวจหมุด / PIN CHECK  (office)
+//  ------------------------------------------------------------------------
+//  Everything the address→pin machinery is unsure about, in one list, grouped
+//  by the REASON it is unsure — because "23 pins look wrong" is not actionable
+//  and "6 pins were photographed on a carrier yard" is. Four one-tap answers
+//  per row: drop the pin, confirm it, move it, or fix the address it is judged
+//  against. Confirming is not cosmetic: a confirmed pin stops being a warning
+//  AND starts being learned from.
+// ══════════════════════════════════════════════════════════════════════════
+// Claude relay for addresses the parser cannot read (apps-script/geo-clean.gs).
+// Empty = the 🤖 button says it is not deployed and changes nothing.
+var KP_GEOAI_URL = '';
+
+var _ofGeoRows=[], _ofGeoSum=null, _ofGeoFilter='', _ofGeoQ='';
+var KP_WHY_LABEL={
+  carrier:{th:'ถ่ายที่ท่ารถขนส่ง',en:'taken on a carrier yard',fix:'ลบหมุด / drop the pin'},
+  shop:{th:'ถ่ายที่ร้าน/คลัง',en:'taken at the shop',fix:'ลบหมุด / drop the pin'},
+  province:{th:'หมุดอยู่คนละจังหวัดกับที่อยู่',en:'pin is in a different province than the address',fix:'ตรวจว่าที่อยู่หรือหมุดผิด / check which of the two is wrong'},
+  far:{th:'หมุดห่างจากที่อยู่มาก',en:'pin is far from the address',fix:'ลบหรือย้ายหมุด / drop or move the pin'},
+  wide:{th:'ห่างจากกลางตำบลพอสมควร',en:'a bit far from the sub-district centre',fix:'ปกติในตำบลใหญ่ / normal in a large sub-district'},
+  vague:{th:'ที่อยู่ไม่มี ต./อ. ที่อ่านออก',en:'no readable sub-district in the address',fix:'เติมที่อยู่ / complete the address'},
+  noaddr:{th:'ที่อยู่ไม่มีจังหวัด',en:'address has no province',fix:'เติมจังหวัด / add the province'},
+  multi:{th:'เบอร์เดียวกัน 2 ที่อยู่ไกลกัน',en:'one phone, two far-apart addresses',fix:'หมุดเดียวใช้ไม่ได้ / one pin cannot serve both'},
+  nogps:{th:'พิกัดไม่ถูกต้อง',en:'invalid coordinates',fix:'ลบหมุด / drop the pin'}
+};
+function ofGeoOpen(){
+  var m=document.getElementById('ofgeo-modal'); if(!m) return;
+  m.classList.add('open');
+  var b=document.getElementById('ofgeo-body');
+  if(b) b.innerHTML='<div style="padding:26px;text-align:center;color:var(--text2);font-size:13px">⏳ กำลังโหลดฐานตำบล 7,436 แห่ง / loading the sub-district table…</div>';
+  kpGeoLoad(function(ok){
+    if(!ok){
+      if(b) b.innerHTML='<div style="padding:20px;text-align:center;color:#dc2626;font-size:13px">'
+        +'โหลด data/th-geo.json ไม่ได้ / could not load data/th-geo.json'
+        +'<div style="color:var(--text2);font-size:12px;margin-top:6px">The file has to sit next to index.html. Without it the app falls back to province capitals, exactly as before.</div></div>';
+      return;
+    }
+    ofGeoRender();
+  });
+}
+function ofGeoClose(){ var m=document.getElementById('ofgeo-modal'); if(m) m.classList.remove('open'); }
+// Walk every live order once: how precisely do we know where it is, and what is
+// wrong with the ones we think we know.
+function ofGeoScan(){
+  var sum={pin:0,pinOk:0,learn:0,tambon:0,amphoe:0,zip:0,prov:0,none:0,bad:0}, rows=[];
+  (orders||[]).forEach(function(o){
+    if(!o||o.status==='cancelled') return;
+    var gi;
+    try{ gi=orderGeoInfo(o); }catch(e){ return; }
+    if(gi.pin){ sum.pin++; if(gi.ok) sum.pinOk++; }
+    else if(gi.pred){
+      sum[gi.pred.src==='learn'?'learn'
+        :gi.pred.level==='tambon'?'tambon'
+        :gi.pred.level==='amphoe'?'amphoe'
+        :gi.pred.level==='zip'?'zip':'prov']++;
+    }
+    else sum.none++;
+    // An unreadable address is worth listing even without a pin — it is exactly
+    // what stops the next delivery from being routable.
+    if(gi.why) { rows.push({o:o,gi:gi,code:gi.why.code,hard:!!gi.why.hard}); if(gi.why.hard) sum.bad++; }
+    else if(!gi.pin && gi.pred && gi.pred.level==='prov')
+      rows.push({o:o,gi:gi,code:'vague',hard:true});
+  });
+  rows.sort(function(a,b){
+    if(a.hard!==b.hard) return a.hard?-1:1;
+    var ka=(a.gi.km==null?0:a.gi.km), kb=(b.gi.km==null?0:b.gi.km);
+    return kb-ka;
+  });
+  _ofGeoRows=rows; _ofGeoSum=sum;
+  return sum;
+}
+function ofGeoRender(){
+  var b=document.getElementById('ofgeo-body'); if(!b) return;
+  var sum=ofGeoScan(), ro=!!window.ofReadOnly;
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+  var chip=function(dot,col,label,n){
+    return '<span style="display:inline-flex;align-items:center;gap:5px;background:var(--bg2);border-radius:999px;padding:3px 10px;font-size:11.5px;white-space:nowrap">'
+      +'<span style="color:'+col+';font-weight:800">'+dot+'</span>'+esc(label)+' <b>'+n+'</b></span>';
+  };
+  // ── how well do we know where our orders are, right now
+  var head='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">'
+    +chip('●','#16a34a','หมุดจริง / real pin',sum.pin)
+    +chip('◐','#2563eb','เรียนรู้แล้ว / learned',sum.learn)
+    +chip('◔','#7c3aed','กลางตำบล / sub-district',sum.tambon)
+    +chip('◔','#b45309','กลางอำเภอ / district',sum.amphoe+sum.zip)
+    +chip('◌','#78716c','จังหวัดเท่านั้น / province only',sum.prov)
+    +chip('🚫','#dc2626','ไม่มีตำแหน่ง / no position',sum.none)
+    +'</div>';
+
+  // ── counts per reason, doubling as the filter
+  var byCode={};
+  _ofGeoRows.forEach(function(r){ byCode[r.code]=(byCode[r.code]||0)+1; });
+  var codes=Object.keys(byCode).sort(function(a,b){ return byCode[b]-byCode[a]; });
+  var tabs='<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">'
+    +'<button type="button" onclick="ofGeoSetFilter(\'\')" style="'+_ofGeoTabCss(_ofGeoFilter==='')+'">ทั้งหมด / all ('+_ofGeoRows.length+')</button>'
+    +codes.map(function(c){
+      var L=KP_WHY_LABEL[c]||{th:c,en:c};
+      return '<button type="button" onclick="ofGeoSetFilter(\''+c+'\')" style="'+_ofGeoTabCss(_ofGeoFilter===c)+'" title="'+esc(L.en)+'">'+esc(L.th)+' ('+byCode[c]+')</button>';
+    }).join('')
+    +'</div>';
+
+  var q=_ofGeoQ.trim().toLowerCase();
+  var list=_ofGeoRows.filter(function(r){
+    if(_ofGeoFilter && r.code!==_ofGeoFilter) return false;
+    if(!q) return true;
+    return (String(r.o.id)+' '+(r.o.customer||'')+' '+(r.o.address||'')+' '+(r.o.phone||'')).toLowerCase().indexOf(q)>=0;
+  });
+
+  var body=list.slice(0,120).map(function(r){ return _ofGeoRow(r,ro,esc); }).join('')
+    || '<div style="padding:18px;text-align:center;color:var(--text2);font-size:13px">✅ ไม่มีปัญหา / nothing to check here</div>';
+  var more=list.length>120?'<div style="text-align:center;font-size:11.5px;color:var(--text2);padding:6px">… อีก '+(list.length-120)+' รายการ ใช้ช่องค้นหา / '+(list.length-120)+' more — use the search box</div>':'';
+
+  // ── what the app has learned so far
+  var lk=Object.keys(geoLearn||{}).sort(function(a,b){ return (geoLearn[b].n||0)-(geoLearn[a].n||0); });
+  var learned='<div style="margin-top:14px"><div class="stit" style="display:flex;justify-content:space-between;align-items:center">'
+    +'<span>🧠 ที่เรียนรู้แล้ว / learned places ('+lk.length+')</span>'
+    +(ro?'':'<button type="button" onclick="ofGeoRebuild(this)" title="Recompute every learned centre from all saved pins" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:700">🔄 คำนวณใหม่ / Rebuild</button>')
+    +'</div>'
+    +(lk.length?('<div style="max-height:190px;overflow:auto;border:1px solid var(--border);border-radius:var(--rs)">'
+      +lk.slice(0,80).map(function(k){
+        var e=geoLearn[k], parts=String(k).split('~');
+        var nm=parts[0]==='T'?('ต.'+parts[3]+' อ.'+parts[2]):('อ.'+parts[2]);
+        var solid=kpLearnUsable(e,parts[0]==='T'?'tambon':'amphoe');
+        return '<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid var(--border);font-size:12px">'
+          +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+            +(solid?'<span style="color:#16a34a;font-weight:800">●</span> ':'<span style="color:var(--text3)" title="ยังน้อยเกินไป / not enough samples yet">○</span> ')
+            +esc(nm)+' <span style="color:var(--text2)">จ.'+esc(parts[1])+'</span></span>'
+          +'<span style="color:var(--text2);white-space:nowrap">'+(e.n||0)+' ราย · ±'+(e.sp==null?'?':e.sp)+' กม.'
+            +(e.hit?' · <span style="color:#16a34a">✓'+e.hit+'</span>':'')+(e.miss?' · <span style="color:#dc2626">✕'+e.miss+'</span>':'')+'</span>'
+          +'<a href="https://www.google.com/maps/search/?api=1&query='+e.lat+','+e.lng+'" target="_blank" style="text-decoration:none" title="Open in Maps">📍</a>'
+        +'</div>';
+      }).join('')+'</div>')
+     :'<div style="font-size:12px;color:var(--text2);padding:8px 2px">ยังไม่ได้เรียนรู้ — กด 🔄 คำนวณใหม่ เพื่อเริ่มจากหมุดที่มีอยู่ / nothing learned yet — press 🔄 Rebuild to start from the pins you already have</div>')
+    +'</div>';
+
+  var aiBtn=ro?'':'<button type="button" onclick="ofGeoAI(this)" style="font-size:11.5px;padding:5px 11px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:700">🤖 ให้ AI อ่านที่อยู่ที่เหลือ / let AI read the leftovers</button>';
+
+  b.innerHTML=head+tabs
+    +'<input type="text" value="'+esc(_ofGeoQ)+'" oninput="_ofGeoQ=this.value;ofGeoRender()" placeholder="ค้นหา / search: order id, ชื่อ, ที่อยู่, เบอร์" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:8px">'
+    +'<div style="border:1px solid var(--border);border-radius:var(--rs);overflow:hidden">'+body+'</div>'+more
+    +learned
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;justify-content:flex-end">'+aiBtn+'</div>';
+}
+function _ofGeoTabCss(on){
+  return 'font-size:11.5px;padding:4px 10px;border-radius:999px;cursor:pointer;font-weight:700;border:1px solid '
+    +(on?'#2563eb;background:#2563eb;color:#fff':'var(--border);background:var(--bg);color:var(--text2)');
+}
+function ofGeoSetFilter(c){ _ofGeoFilter=c; ofGeoRender(); }
+function _ofGeoRow(r,ro,esc){
+  var o=r.o, gi=r.gi, w=gi.why||{code:r.code,th:(KP_WHY_LABEL[r.code]||{}).th||r.code,en:''};
+  var L=KP_WHY_LABEL[r.code]||{th:r.code,en:'',fix:''};
+  var oid=String(o.id).replace(/['"\\]/g,'');
+  var a=gi.addr||{};
+  var where=a.tambon?('ต.'+a.tambon+' อ.'+a.amphoe+' จ.'+a.prov):a.amphoe?('อ.'+a.amphoe+' จ.'+a.prov):a.prov?('จ.'+a.prov):'—';
+  var rv=(w.got&&w.got.prov)?('ต.'+w.got.tambon+' อ.'+w.got.amphoe+' จ.'+w.got.prov):'';
+  return '<div style="padding:8px 9px;border-bottom:1px solid var(--border);font-size:12px">'
+    +'<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">'
+      +'<b style="font-size:12.5px">'+esc(o.id)+'</b>'
+      +'<span style="color:var(--text2);flex:1;min-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(o.customer||'—')+'</span>'
+      +'<span style="background:'+(r.hard?'#fee2e2':'#fef3c7')+';color:'+(r.hard?'#b91c1c':'#92400e')+';border-radius:8px;padding:1px 7px;font-size:10.5px;font-weight:700;white-space:nowrap">'
+        +esc(L.th)+(gi.km!=null?' · '+gi.km+' กม.':'')+'</span>'
+    +'</div>'
+    +'<div style="color:var(--text2);margin-top:2px;word-break:break-word">📍 '+esc(o.address||'—')+'</div>'
+    +'<div style="margin-top:2px"><span style="color:var(--text2)">ที่อยู่อ่านได้ / address reads as:</span> <b>'+esc(where)+'</b>'
+      +(gi.pred?' <span style="color:var(--text2)">· '+esc(gi.pred.labelTh)+'</span>':'')+'</div>'
+    +(rv?'<div style="color:#b91c1c">หมุดอยู่จริงที่ / the pin actually sits in: <b>'+esc(rv)+'</b></div>':'')
+    +'<div style="color:var(--text3);font-size:11px;margin-top:1px">'+esc(w.en||L.en)+(L.fix?' → '+esc(L.fix):'')+'</div>'
+    +(ro?'':'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">'
+      +(gi.pin?'<button type="button" onclick="ofGeoDrop(\''+oid+'\')" style="'+_ofGeoBtn('#fee2e2','#b91c1c')+'">🗑 ลบหมุด / drop pin</button>':'')
+      +(gi.pin?'<button type="button" onclick="ofGeoAccept(\''+oid+'\')" style="'+_ofGeoBtn('#dcfce7','#15803d')+'">✓ หมุดถูกต้อง / pin is right</button>':'')
+      +(o.phone?'<button type="button" onclick="ofGeoEditPin(\''+oid+'\')" style="'+_ofGeoBtn('var(--bg2)','var(--text)')+'">📍 ย้ายหมุด / move pin</button>':'')
+      +'<button type="button" onclick="ofGeoFixOpen(\''+oid+'\')" style="'+_ofGeoBtn('var(--bg2)','var(--text)')+'">✏️ แก้ที่อยู่ / fix address</button>'
+      +(gi.pin?'<a href="https://www.google.com/maps/search/?api=1&query='+gi.pin.lat+','+gi.pin.lng+'" target="_blank" style="'+_ofGeoBtn('var(--bg2)','var(--text)')+';text-decoration:none">🌐 map</a>':'')
+      +'</div>')
+    +'<div id="ofgeofix_'+esc(oid.replace(/[^a-zA-Z0-9]/g,'_'))+'"></div>'
+  +'</div>';
+}
+function _ofGeoBtn(bg,col){
+  return 'border:1px solid var(--border);background:'+bg+';color:'+col+';border-radius:6px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer';
+}
+// ── the four answers ──────────────────────────────────────────────────────
+function ofGeoDrop(oid){
+  if(window.ofReadOnly) return;
+  var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return;
+  var k=normPhone(o.phone); if(!k){ alert('ไม่มีเบอร์ลูกค้า / order has no phone number'); return; }
+  var g=custGeoGet(o.phone);
+  if(!confirm('🗑 ลบหมุด GPS ของ '+(o.customer||oid)+'?\n'
+    +(g?('ที่มา / source: '+(g.src==='exif'?'GPS จากรูปถ่าย / photo EXIF':g.src||'?')+(g.at?' · '+String(g.at).split('T')[0]:'')+'\n'):'')
+    +'แผนที่จะใช้ตำแหน่งจากที่อยู่แทน / the map falls back to the address position')) return;
+  if(customerMeta[k]) delete customerMeta[k].geo;
+  if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').remove();
+  try{ auditAdd({type:'edit',orderId:oid,by:(typeof ofWho==='function'?ofWho():'Office'),detail:'🗑 ลบหมุด GPS ผิด / wrong GPS pin removed (pin check)'}); }catch(e){}
+  ofGeoRender();
+}
+// "The pin is right, the warning is wrong." That is a real piece of knowledge —
+// it silences the row AND lets the learner use the pin from now on.
+function ofGeoAccept(oid){
+  if(window.ofReadOnly) return;
+  var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return;
+  var k=normPhone(o.phone); if(!k) return;
+  var g=custGeoGet(o.phone); if(!g) return;
+  if(!confirm('✓ ยืนยันว่าหมุดนี้ถูกต้อง?\nConfirm this pin is right — it stops warning and starts being learned from.')) return;
+  g.ok=true; g.okBy=(typeof ofWho==='function'?ofWho():'Office'); g.okAt=new Date().toISOString();
+  customerMeta[k]=customerMeta[k]||{}; customerMeta[k].geo=g;
+  if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').set(g);
+  try{ kpAddrKeys(kpAddrOf(o)).forEach(function(key){ _kpLearnPush(key, k, g.lat, g.lng, null); }); }catch(e){}
+  try{ auditAdd({type:'edit',orderId:oid,by:g.okBy,detail:'✓ ยืนยันหมุด GPS / GPS pin confirmed correct (pin check)'}); }catch(e){}
+  ofGeoRender();
+}
+function ofGeoEditPin(oid){
+  var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return;
+  var k=normPhone(o.phone); if(!k){ alert('ไม่มีเบอร์ลูกค้า / no phone number'); return; }
+  try{ openGeoEditor(k); }catch(e){ alert('Error: '+e); }
+}
+// Teach the parser one address it could not read. Stored per address text, so
+// every order with the same address — now and later — reads correctly.
+function ofGeoFixOpen(oid){
+  var box=document.getElementById('ofgeofix_'+String(oid).replace(/[^a-zA-Z0-9]/g,'_')); if(!box) return;
+  if(box.innerHTML){ box.innerHTML=''; return; }
+  var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return;
+  var a=kpAddrOf(o), esc=function(s){ return String(s==null?'':s).replace(/"/g,'&quot;').replace(/</g,'&lt;'); };
+  var provs=_kpGeoIdx?Object.keys(_kpGeoIdx.prov):[];
+  var amps=(a.prov&&_kpGeoIdx&&_kpGeoIdx.prov[a.prov])?Object.keys(KP_TH_GEO.p[a.prov]):[];
+  var tams=(a.prov&&a.amphoe&&KP_TH_GEO.p[a.prov]&&KP_TH_GEO.p[a.prov][a.amphoe])?Object.keys(KP_TH_GEO.p[a.prov][a.amphoe].t):[];
+  var sid=String(oid).replace(/[^a-zA-Z0-9]/g,'_');
+  var dl=function(id,arr){ return '<datalist id="'+id+'">'+arr.map(function(v){ return '<option value="'+esc(v)+'">'; }).join('')+'</datalist>'; };
+  var inp=function(id,val,list,ph){ return '<input id="'+id+'" list="'+list+'" value="'+esc(val)+'" placeholder="'+ph+'" oninput="ofGeoFixChain(\''+sid+'\')" style="flex:1;min-width:90px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text)">'; };
+  box.innerHTML='<div style="margin-top:6px;padding:7px;background:var(--bg2);border-radius:var(--rs)">'
+    +'<div style="font-size:11px;color:var(--text2);margin-bottom:5px">บอกระบบว่าที่อยู่นี้คือที่ไหน — จำไว้ใช้กับทุกออเดอร์ที่ใช้ที่อยู่เดียวกัน / tell the app what this address means; it is remembered for every order with the same address</div>'
+    +'<div style="display:flex;gap:5px;flex-wrap:wrap">'
+      +inp('ofgfp_'+sid,a.prov||'','ofgdlp_'+sid,'จังหวัด / province')
+      +inp('ofgfa_'+sid,a.amphoe||'','ofgdla_'+sid,'อำเภอ / district')
+      +inp('ofgft_'+sid,a.tambon||'','ofgdlt_'+sid,'ตำบล / sub-district')
+      +'<button type="button" onclick="ofGeoFixSave(\''+String(oid).replace(/['"\\]/g,'')+'\')" style="'+_ofGeoBtn('#dbeafe','#1d4ed8')+'">บันทึก / save</button>'
+    +'</div>'
+    +dl('ofgdlp_'+sid,provs)+dl('ofgdla_'+sid,amps)+dl('ofgdlt_'+sid,tams)
+    +'<div id="ofgfmsg_'+sid+'" style="font-size:11px;margin-top:4px;color:var(--text2)"></div>'
+  +'</div>';
+}
+// Retype the province → the district list follows; retype the district → the
+// sub-district list follows. Without this the datalists lie after the first edit.
+function ofGeoFixChain(sid){
+  if(!KP_TH_GEO) return;
+  var p=(document.getElementById('ofgfp_'+sid)||{}).value||'';
+  var a=(document.getElementById('ofgfa_'+sid)||{}).value||'';
+  var setDl=function(id,arr){
+    var d=document.getElementById(id); if(!d) return;
+    d.innerHTML=arr.map(function(v){ return '<option value="'+String(v).replace(/"/g,'&quot;')+'">'; }).join('');
+  };
+  setDl('ofgdla_'+sid, KP_TH_GEO.p[p]?Object.keys(KP_TH_GEO.p[p]):[]);
+  setDl('ofgdlt_'+sid, (KP_TH_GEO.p[p]&&KP_TH_GEO.p[p][a])?Object.keys(KP_TH_GEO.p[p][a].t):[]);
+}
+function ofGeoFixSave(oid){
+  if(window.ofReadOnly) return;
+  var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return;
+  var sid=String(oid).replace(/[^a-zA-Z0-9]/g,'_');
+  var msg=document.getElementById('ofgfmsg_'+sid);
+  var prov=(document.getElementById('ofgfp_'+sid)||{}).value||'';
+  var amp=(document.getElementById('ofgfa_'+sid)||{}).value||'';
+  var tam=(document.getElementById('ofgft_'+sid)||{}).value||'';
+  var say=function(t,col){ if(msg){ msg.textContent=t; msg.style.color=col||'var(--text2)'; } };
+  if(!KP_TH_GEO||!KP_TH_GEO.p[prov]){ say('ไม่รู้จักจังหวัดนี้ / unknown province','#dc2626'); return; }
+  if(amp && !KP_TH_GEO.p[prov][amp]){ say('ไม่รู้จักอำเภอนี้ในจังหวัดนี้ / unknown district in that province','#dc2626'); return; }
+  if(tam && (!amp || !KP_TH_GEO.p[prov][amp].t[tam])){ say('ไม่รู้จักตำบลนี้ในอำเภอนี้ / unknown sub-district in that district','#dc2626'); return; }
+  var rec={prov:prov, amphoe:amp, tambon:tam, by:(typeof ofWho==='function'?ofWho():'Office'), at:new Date().toISOString(), sample:String(o.address||'').slice(0,160)};
+  var h=kpAddrHash(o.address||'');
+  addrFix[h]=rec;
+  if(window.fbDB) window.fbDB.ref('addrFix/'+h).set(rec);
+  try{ (orders||[]).forEach(function(x){ x._addrSig=''; }); }catch(e){}
+  try{ auditAdd({type:'edit',orderId:oid,by:rec.by,detail:'✏️ แก้ที่อยู่ให้ระบบอ่านออก / address taught to the parser: '+prov+' '+amp+' '+tam}); }catch(e){}
+  say('✅ บันทึกแล้ว / saved','#16a34a');
+  setTimeout(ofGeoRender,400);
+}
+// One-time jump start / repair: recompute every learned centre from all saved pins.
+function ofGeoRebuild(btn){
+  if(window.ofReadOnly) return;
+  if(!confirm('🔄 คำนวณตำแหน่งที่เรียนรู้ใหม่ทั้งหมดจากหมุดที่มีอยู่?\nRecompute every learned centre from all saved pins. Safe to repeat — the same pins always give the same result.')) return;
+  if(btn){ btn.disabled=true; btn.textContent='⏳ …'; }
+  kpGeoRebuild(function(st){
+    if(btn){ btn.disabled=false; btn.textContent='🔄 คำนวณใหม่ / Rebuild'; }
+    if(!st){ alert('โหลดฐานตำบลไม่ได้ / could not load the sub-district table'); return; }
+    var sk=Object.keys(st.skipped||{}).map(function(c){ return (KP_WHY_LABEL[c]||{en:c}).en+': '+st.skipped[c]; }).join('\n  ');
+    alert('✅ '+st.used+' / '+st.pins+' หมุด → '+st.keys+' ตำบล/อำเภอ\n'
+      +st.used+' of '+st.pins+' saved pins fed '+st.keys+' learned places.'
+      +(sk?('\n\nไม่ใช้ / not used:\n  '+sk):''));
+    ofGeoRender();
+  });
+}
+// ── Stage 5: the leftovers go to Claude ───────────────────────────────────
+// Only the addresses the rules genuinely cannot read — never the whole book.
+// Whatever comes back is validated against the gazetteer before it is stored,
+// so a hallucinated sub-district simply does not survive.
+function ofGeoAI(btn){
+  if(window.ofReadOnly) return;
+  if(!KP_GEOAI_URL){
+    alert('ยังไม่ได้ติดตั้ง / not deployed yet.\n\nDeploy apps-script/geo-clean.gs as a web app and paste its /exec URL into KP_GEOAI_URL in index.html.');
+    return;
+  }
+  var seen={}, todo=[];
+  (orders||[]).forEach(function(o){
+    if(!o||o.status==='cancelled') return;
+    var a=kpAddrOf(o);
+    if(a.fixed || a.level==='tambon') return;
+    if(!(o.address||'').trim()) return;
+    var h=kpAddrHash(o.address);
+    if(seen[h]||addrFix[h]) return;
+    seen[h]=1;
+    todo.push({h:h, addr:String(o.address).slice(0,200), prov:a.prov||'', id:o.id});
+  });
+  if(!todo.length){ alert('✅ ไม่มีที่อยู่ค้าง / nothing left for the AI to read'); return; }
+  var batch=todo.slice(0,40);
+  if(!confirm('🤖 ส่ง '+batch.length+' ที่อยู่ให้ AI อ่าน?'+(todo.length>batch.length?(' (ค้างอีก '+(todo.length-batch.length)+')'):'')
+    +'\nSend '+batch.length+' unreadable addresses to Claude'+(todo.length>batch.length?(' — '+(todo.length-batch.length)+' more remain for the next run'):'')+'?')) return;
+  if(btn){ btn.disabled=true; btn.textContent='🤖 …'; }
+  fetch(KP_GEOAI_URL,{method:'POST',body:JSON.stringify({action:'geoclean',items:batch})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(btn){ btn.disabled=false; btn.textContent='🤖 ให้ AI อ่านที่อยู่ที่เหลือ / let AI read the leftovers'; }
+      var got=(j&&j.items)||[], ok=0, bad=0;
+      got.forEach(function(it){
+        if(!it||!it.h||!it.prov) return;
+        var P=KP_TH_GEO&&KP_TH_GEO.p[it.prov];
+        if(!P){ bad++; return; }
+        var amp=it.amphoe&&P[it.amphoe]?it.amphoe:'';
+        var tam=(amp&&it.tambon&&P[amp].t[it.tambon])?it.tambon:'';
+        if(!amp){ bad++; return; }                    // province alone is no gain
+        var rec={prov:it.prov,amphoe:amp,tambon:tam,by:'AI',at:new Date().toISOString(),sample:(it.addr||'').slice(0,160)};
+        addrFix[it.h]=rec; ok++;
+        if(window.fbDB) window.fbDB.ref('addrFix/'+it.h).set(rec);
+      });
+      try{ (orders||[]).forEach(function(x){ x._addrSig=''; }); }catch(e){}
+      alert('🤖 อ่านได้ '+ok+' / '+batch.length+' ที่อยู่'+(bad?(' · ทิ้ง '+bad+' (ไม่ตรงกับทะเบียน)'):'')
+        +'\n'+ok+' addresses resolved'+(bad?(', '+bad+' rejected because they do not exist in the official register'):'')+'.');
+      ofGeoRender();
+    })
+    .catch(function(e){
+      if(btn){ btn.disabled=false; btn.textContent='🤖 ให้ AI อ่านที่อยู่ที่เหลือ / let AI read the leftovers'; }
+      alert('❌ '+e);
+    });
+}
+
 // ➕ from the map popup — reuses the full add pipeline (status, audit, push, sync).
 // A Leaflet popup can sit open for minutes while Firebase keeps updating the data
 // underneath, so the click re-validates against the CURRENT state: the order must
