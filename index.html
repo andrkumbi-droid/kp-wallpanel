@@ -7779,7 +7779,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828004;
+var KP_BUILD = 20260828005;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -21966,7 +21966,7 @@ function orderRouteLatLng(o){
   if(g&&g.ok) return {lat:c.lat,lng:c.lng,from:'pin'};      // the office has vouched for it
   var pred=kpGeoPredict(o);
   // Only a SHARP address may overrule a pin. A province-level guess never does.
-  if(pred && (pred.level==='tambon'||pred.level==='amphoe') && kpKm(c.lat,c.lng,pred.lat,pred.lng)>40)
+  if(pred && (pred.level==='tambon'||pred.level==='amphoe') && kpKm(c.lat,c.lng,pred.lat,pred.lng)>KP_PIN_ADDR_LIMIT)
     return {lat:pred.lat,lng:pred.lng,from:'addr',pred:pred,rejected:{lat:c.lat,lng:c.lng}};
   return {lat:c.lat,lng:c.lng,from:'pin'};
 }
@@ -21991,7 +21991,9 @@ function orderLocUrl(o){
   var r=(typeof orderRouteLatLng==='function')?orderRouteLatLng(o):null;
   if(r && r.from==='pin') return 'https://www.google.com/maps/search/?api=1&query='+r.lat+','+r.lng;
   var lnk=(o.location||'').trim();
-  if(/^https?:\/\//i.test(lnk)) return lnk;
+  // …but never a link the app has already decided against — that is exactly the
+  // link that sends somebody 700 km the wrong way.
+  if(/^https?:\/\//i.test(lnk) && geoLinkTrusted(o,r&&r.pred)) return lnk;
   // No pin we trust and no link — the address still knows its sub-district.
   return r ? ('https://www.google.com/maps/search/?api=1&query='+r.lat+','+r.lng) : '';
 }
@@ -22001,7 +22003,7 @@ function orderNavUrl(o){
   var r=(typeof orderRouteLatLng==='function')?orderRouteLatLng(o):null;
   if(r && r.from==='pin') return 'https://www.google.com/maps/dir/?api=1&destination='+r.lat+','+r.lng;
   var lnk=(o.location||'').trim();
-  if(/^https?:\/\//i.test(lnk)) return lnk;
+  if(/^https?:\/\//i.test(lnk) && geoLinkTrusted(o,r&&r.pred)) return lnk;
   return r ? ('https://www.google.com/maps/dir/?api=1&destination='+r.lat+','+r.lng) : '';
 }
 
@@ -22278,18 +22280,54 @@ var KP_SLIPOK_URL = '';
 // Check a deployment: open <url>?action=ping → {"ok":true,"ctocr":true}.
 var KP_CT_OCR_URL = KP_TRANSLATE_URL;
 // Pull {lat,lng} for an order: saved pin → resolved coord on the order → parse link.
-function orderLatLng(o){
-  if(!o) return null;
-  var g=custGeoGet(o.phone);
-  if(g && geoSane(g.lat,g.lng)) return {lat:g.lat,lng:g.lng};
-  if(o._geo && geoSane(o._geo.lat,o._geo.lng)) return {lat:o._geo.lat,lng:o._geo.lng};
-  var s=(o.location||'').trim(); if(!s) return null;
+// ── the pasted Maps link, and when to stop believing it ───────────────────
+// A link somebody pasted into an order is data like any other, and it can be
+// plain wrong: order 4-246 carried a link to a second-hand clothes shop in
+// สมุทรปราการ for a customer on เกาะมุก, 713 km away. Three things make a
+// link-derived position stale, and each one hands the map back to the address:
+// the office threw the link away (geoBadLink), the link was removed from the
+// order, or it was replaced by a different one after we resolved it.
+var KP_PIN_ADDR_LIMIT = 40;      // km a SHARP address may overrule a pin by
+function geoLinkOf(o){ return String((o&&o.location)||'').trim(); }
+function geoLinkBad(o){
+  var l=geoLinkOf(o); if(!l) return false;
+  return String((o&&o.geoBadLink)||'').trim()===l;
+}
+// Where the ORDER's own link says the customer is — the customer's saved pin is
+// a separate store and is not consulted here.
+function orderLinkLatLng(o){
+  if(!o || geoLinkBad(o)) return null;
+  var s=geoLinkOf(o);
+  var g=o._geo;
+  if(g && geoSane(g.lat,g.lng)){
+    // A driver/office pin cached on the order does not hang on the link at all.
+    if(g.src!=='maplink') return {lat:g.lat,lng:g.lng};
+    if(s && (!g.url || String(g.url).trim()===s)) return {lat:g.lat,lng:g.lng};
+  }
+  if(!s) return null;
   var m = s.match(/[?&](?:q|query|destination)=(-?\d{1,3}\.\d+),\s*(-?\d{1,3}\.\d+)/i)
        || s.match(/@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/)
        || s.match(/!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/)
        || s.match(/^\s*(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/);
   if(m){ var la=parseFloat(m[1]), ln=parseFloat(m[2]); if(geoSane(la,ln)) return {lat:la,lng:ln}; }
   return null;
+}
+// Is the link worth handing to somebody who is about to drive? Only if we do not
+// already know better: not thrown away, and not contradicted by a sharp address.
+// An unresolved short link stays trusted — it is still the best we have.
+function geoLinkTrusted(o,pred){
+  if(!o || geoLinkBad(o)) return false;
+  var lp=orderLinkLatLng(o); if(!lp) return true;
+  var p=pred||((typeof kpGeoPredict==='function')?kpGeoPredict(o):null);
+  if(p && (p.level==='tambon'||p.level==='amphoe') && typeof kpKm==='function'
+     && kpKm(lp.lat,lp.lng,p.lat,p.lng)>KP_PIN_ADDR_LIMIT) return false;
+  return true;
+}
+function orderLatLng(o){
+  if(!o) return null;
+  var g=custGeoGet(o.phone);
+  if(g && geoSane(g.lat,g.lng)) return {lat:g.lat,lng:g.lng};
+  return orderLinkLatLng(o);
 }
 // Squared planar distance (good enough at city scale; longitude scaled by cos lat).
 function _routeD2(a,b){
@@ -22361,7 +22399,9 @@ function ensureTourCoords(ids){
   return new Promise(function(done){
     if(!KP_RESOLVER_URL){ done(0); return; }
     var queue=ids.map(function(id){return orders.find(function(x){return x.id===id;});})
-                 .filter(function(o){ return o && !orderLatLng(o) && /^https?:\/\//i.test((o.location||'').trim()); });
+                 // A link the office threw away must not come straight back on the
+                 // next tour — that is what geoBadLink is for.
+                 .filter(function(o){ return o && !orderLatLng(o) && !geoLinkBad(o) && /^https?:\/\//i.test((o.location||'').trim()); });
     var found=0;
     (function next(){
       var o=queue.shift();
@@ -22369,7 +22409,9 @@ function ensureTourCoords(ids){
       resolveShortLink(o.location.trim()).then(function(g){
         if(g){
           found++;
-          o._geo={lat:g.lat,lng:g.lng,at:new Date().toISOString(),by:'resolver',src:'maplink'};
+          // `url` records WHICH link this came from: replace the link and the old
+          // coordinates stop counting instead of quietly outliving it.
+          o._geo={lat:g.lat,lng:g.lng,at:new Date().toISOString(),by:'resolver',src:'maplink',url:o.location.trim()};
           try{ if(normPhone(o.phone)) custGeoSet(o.phone,o._geo,o); }catch(e){}
           try{ syncOrders(); }catch(e){}
         }
@@ -22394,7 +22436,7 @@ function ofOptimizeTour(tourId, silent){
 // future tours sort instantly. Throttled; safe to re-run (skips already-pinned).
 function ofBackfillPins(btn){
   if(!KP_RESOLVER_URL){ alert('Kein Resolver konfiguriert.\nBitte zuerst die Apps-Script /exec-URL in KP_RESOLVER_URL eintragen.'); return; }
-  var todo=orders.filter(function(o){ return o && !orderLatLng(o) && /^https?:\/\//i.test((o.location||'').trim()); });
+  var todo=orders.filter(function(o){ return o && !orderLatLng(o) && !geoLinkBad(o) && /^https?:\/\//i.test((o.location||'').trim()); });
   if(todo.length===0){ alert('Nichts zu tun — alle Orders mit Link haben schon Koordinaten.'); return; }
   if(!confirm('Resolve '+todo.length+' map links and save as pins? / แปลงลิงก์แผนที่เป็นพิกัด?\n~'+Math.ceil(todo.length*0.6)+'s')) return;
   if(btn){ btn.disabled=true; }
@@ -22404,7 +22446,7 @@ function ofBackfillPins(btn){
     if(!o){ if(btn){btn.disabled=false; btn.textContent='✓ '+ok+'/'+N+' Pins';} alert('Done / เสร็จ: '+ok+'/'+N+' links resolved.'); return; }
     i++; if(btn){ btn.textContent='Resolving… '+i+'/'+N; }
     resolveShortLink(o.location.trim()).then(function(g){
-      if(g){ ok++; o._geo={lat:g.lat,lng:g.lng,at:new Date().toISOString(),by:'resolver',src:'maplink'};
+      if(g){ ok++; o._geo={lat:g.lat,lng:g.lng,at:new Date().toISOString(),by:'resolver',src:'maplink',url:o.location.trim()};
         try{ if(normPhone(o.phone)) custGeoSet(o.phone,o._geo,o); }catch(e){}
       }
       setTimeout(next, 120); // gentle throttle
@@ -29645,7 +29687,12 @@ function _tmapCard(o,t,x){
     +(x.custSuspect?'<div style="color:#dc2626;font-weight:700;margin-top:2px">⚠️ หมุดลูกค้าห่างจาก จ.'+esc(x.custProv||'')+' ~'+x.custSuspect+' กม. — อาจผิด / the customer pin ~'+x.custSuspect+' km off, probably wrong'
       +(window.ofReadOnly?'':' <button type="button" onclick="ofTourMapClearPin(\''+oidJs+'\')" style="border:none;background:#dc2626;color:#fff;border-radius:6px;padding:1px 7px;font-size:10px;font-weight:700;cursor:pointer">🗑 ลบ / clear</button>')+'</div>':'')
     +(x.approx?'<div style="color:#b45309;margin-top:2px">⚠️ ตำแหน่งโดยประมาณ (จ.'+esc(x.prov||'')+') / approx. — no exact pin</div>':'')
-    +(x.suspect?'<div style="color:#dc2626;font-weight:700;margin-top:2px">⚠️ หมุดห่างจาก จ.'+esc(x.prov||'')+' ~'+x.suspect+' กม. — พิกัดอาจผิด (เช่น GPS จากรูปถ่าย) / pin ~'+x.suspect+' km from the address province — probably wrong (e.g. photo GPS)</div>':'')
+    // Name the SOURCE instead of guessing at one: a photo pin is deleted, a wrong
+    // pasted link is corrected in the order — different jobs, same red pin.
+    +(x.suspect?'<div style="color:#dc2626;font-weight:700;margin-top:2px">⚠️ หมุดห่างจาก จ.'+esc(x.prov||'')+' ~'+x.suspect+' กม. — พิกัดอาจผิด / pin ~'+x.suspect+' km from the address province — probably wrong'
+      +(function(){ var s=(typeof geoPosSrc==='function')?geoPosSrc(o):null;
+          return s?'<div style="font-weight:500">ที่มา / from: '+esc(s.th)+' · '+esc(s.en)+'</div>':''; })()
+      +'</div>':'')
     +'<div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
       +'<a href="'+esc(url)+'" target="_blank" style="color:#1d4ed8;font-weight:700;text-decoration:none">🗺️ Google Maps</a>'
       +(x.free&&!window.ofReadOnly?'<button type="button" onclick="ofTourMapAdd(\''+tidJs+'\',\''+oidJs+'\')" style="border:none;background:#f97316;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer">➕ เพิ่มเข้าทัวร์ / add</button>':'')
@@ -29817,22 +29864,66 @@ function _tmapRender(){
   if(bounds.length && !_tmapFitted){ _tmapFitted=true; try{ _tmapMap.fitBounds(bounds,{padding:[40,40],maxZoom:12}); }catch(e){} }
   else if(!bounds.length){ try{ _tmapMap.setView([13.75,100.5],6); }catch(e){} }
 }
-// 🗑 from a suspect-pin popup: drop the customer's saved GPS pin (usually a wrong
-// photo-EXIF pin) so the order falls back to its province position. Same removal
-// the Customers tab's "Remove pin" does; the order's own link/_geo stays untouched.
-function ofTourMapClearPin(oid){
-  if(window.ofReadOnly) return;
-  var o=orders.find(function(x){return x.id===oid;}); if(!o) return;
-  var k=normPhone(o.phone); if(!k){ alert('ไม่มีเบอร์ลูกค้า / order has no phone number'); return; }
-  var g=custGeoGet(o.phone);
-  if(!confirm('🗑 ลบหมุด GPS ของ '+(o.customer||oid)+'?\n'
-    +(g?('ที่มา / source: '+(g.src==='exif'?'GPS จากรูปถ่าย / photo EXIF':g.src||'?')+(g.at?' · '+String(g.at).split('T')[0]:'')+'\n'):'')
-    +'แผนที่จะใช้ตำแหน่งจังหวัดแทน / the map falls back to the province position')) return;
-  if(customerMeta[k]) delete customerMeta[k].geo;
-  if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').remove();
-  try{ auditAdd({type:'edit',orderId:oid,by:(typeof ofWho==='function'?ofWho():'Office'),detail:'🗑 ลบหมุด GPS ผิด / wrong GPS pin removed (tour map)'}); }catch(e){}
-  _tmapRender();
+// ── 🗑 one wrong position, every place it can hide ────────────────────────
+// A wrong position on an order comes out of one of two stores, and the person
+// looking at the red pin cannot see which: the customer's saved GPS pin (photo
+// EXIF, the driver, "save location"), or the Google-Maps link pasted onto the
+// order itself. Clearing only the first one left the ⚠️ standing and made the
+// button look broken — an order whose only pin is a wrong link (4-246: a link
+// to a shop in สมุทรปราการ for a customer on เกาะมุก) could not be fixed here
+// at all. This clears whichever is really there.
+//
+// The link TEXT stays on the order — it is evidence, and somebody may want to
+// see what was pasted. It just stops being believed, here and in every "open in
+// Maps" button, and the resolver does not put it back on the next tour.
+// Where the position on this order actually comes from. The office's next step
+// depends on it: a photo pin gets deleted, a wrong pasted link gets corrected.
+function geoPosSrc(o){
+  var g=custGeoGet(o&&o.phone);
+  if(g && geoSane(g.lat,g.lng)){
+    return g.src==='exif'   ? {k:'exif',   th:'GPS จากรูปถ่าย',   en:'photo GPS'}
+         : g.src==='driver' ? {k:'driver', th:'คนขับบันทึกไว้',    en:'saved by the driver'}
+         : g.src==='maplink'? {k:'link',   th:'ลิงก์แผนที่',       en:'the pasted Maps link'}
+         :                    {k:'pin',    th:'หมุดที่บันทึกไว้',   en:'a saved pin'};
+  }
+  if(orderLinkLatLng(o)) return {k:'link', th:'ลิงก์แผนที่ที่แปะไว้ในออเดอร์', en:'the Maps link pasted on the order'};
+  return null;
 }
+function geoDropPos(oid, where, after){
+  if(window.ofReadOnly) return false;
+  var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return false;
+  var k=normPhone(o.phone), g=k?custGeoGet(o.phone):null, lp=orderLinkLatLng(o);
+  if(!g && !lp){ alert('ไม่มีหมุดให้ลบ / there is no pin to remove on this order'); return false; }
+  var srcTxt=function(s){
+    return s==='exif' ? 'GPS จากรูปถ่าย / photo EXIF'
+         : s==='driver' ? 'คนขับบันทึกไว้ / saved by the driver'
+         : s==='maplink' ? 'ลิงก์แผนที่ / from the Maps link'
+         : (s||'?');
+  };
+  var what=[];
+  if(g)  what.push('• หมุดลูกค้า / customer pin — '+srcTxt(g.src)+(g.at?' · '+String(g.at).split('T')[0]:''));
+  if(lp) what.push('• ลิงก์แผนที่ที่แปะไว้ในออเดอร์ / the Maps link pasted on this order');
+  if(!confirm('🗑 ลบตำแหน่งของ '+(o.customer||oid)+'?\n'+what.join('\n')
+    +'\n\nแผนที่จะใช้ตำแหน่งจากที่อยู่แทน (ตำบล/อำเภอ)\nthe map falls back to the position the address gives')) return false;
+  var who=(typeof ofWho==='function'?ofWho():'Office');
+  if(g && k){
+    // Recoverable, like every other pin this app throws away.
+    if(window.fbDB) window.fbDB.ref('pinTrash/'+k).set({geo:g, reason:'wrong', orders:[String(oid)],
+      customer:o.customer||'', address:String(o.address||'').slice(0,160), by:who, at:new Date().toISOString()});
+    if(customerMeta[k]) delete customerMeta[k].geo;
+    if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').remove();
+  }
+  if(lp){
+    delete o._geo;
+    if(geoLinkOf(o)) o.geoBadLink=geoLinkOf(o);
+    try{ syncOrders(); }catch(e){}
+  }
+  try{ auditAdd({type:'edit',orderId:oid,by:who,
+    detail:'🗑 ลบตำแหน่งผิด / wrong position removed — '+(g?'pin':'')+(g&&lp?' + ':'')+(lp?'maps link':'')+' ('+(where||'')+')'}); }catch(e){}
+  if(after) after();
+  return true;
+}
+function ofTourMapClearPin(oid){ geoDropPos(oid,'tour map',function(){ _tmapRender(); }); }
 
 // ══════════════════════════════════════════════════════════════════════════
 //  🎯 ตรวจหมุด / PIN CHECK  (office)
@@ -30002,6 +30093,8 @@ function _ofGeoRow(r,ro,esc){
     +'<div style="margin-top:2px"><span style="color:var(--text2)">ที่อยู่อ่านได้ / address reads as:</span> <b>'+esc(where)+'</b>'
       +(gi.pred?' <span style="color:var(--text2)">· '+esc(gi.pred.labelTh)+'</span>':'')+'</div>'
     +(rv?'<div style="color:#b91c1c">หมุดอยู่จริงที่ / the pin actually sits in: <b>'+esc(rv)+'</b></div>':'')
+    +(function(){ var s=gi.pin?geoPosSrc(o):null;
+        return s?'<div style="color:var(--text2)">ที่มาหมุด / pin from: <b>'+esc(s.th)+'</b> · '+esc(s.en)+'</div>':''; })()
     +'<div style="color:var(--text3);font-size:11px;margin-top:1px">'+esc(w.en||L.en)+(L.fix?' → '+esc(L.fix):'')+'</div>'
     +(ro?'':'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">'
       +(gi.pin?'<button type="button" onclick="ofGeoDrop(\''+oid+'\')" style="'+_ofGeoBtn('#fee2e2','#b91c1c')+'">🗑 ลบหมุด / drop pin</button>':'')
@@ -30018,26 +30111,20 @@ function _ofGeoBtn(bg,col){
   return 'border:1px solid var(--border);background:'+bg+';color:'+col+';border-radius:6px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer';
 }
 // ── the four answers ──────────────────────────────────────────────────────
-function ofGeoDrop(oid){
-  if(window.ofReadOnly) return;
-  var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return;
-  var k=normPhone(o.phone); if(!k){ alert('ไม่มีเบอร์ลูกค้า / order has no phone number'); return; }
-  var g=custGeoGet(o.phone);
-  if(!confirm('🗑 ลบหมุด GPS ของ '+(o.customer||oid)+'?\n'
-    +(g?('ที่มา / source: '+(g.src==='exif'?'GPS จากรูปถ่าย / photo EXIF':g.src||'?')+(g.at?' · '+String(g.at).split('T')[0]:'')+'\n'):'')
-    +'แผนที่จะใช้ตำแหน่งจากที่อยู่แทน / the map falls back to the address position')) return;
-  if(customerMeta[k]) delete customerMeta[k].geo;
-  if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').remove();
-  try{ auditAdd({type:'edit',orderId:oid,by:(typeof ofWho==='function'?ofWho():'Office'),detail:'🗑 ลบหมุด GPS ผิด / wrong GPS pin removed (pin check)'}); }catch(e){}
-  ofGeoRender();
-}
+function ofGeoDrop(oid){ geoDropPos(oid,'pin check',function(){ ofGeoRender(); }); }
 // "The pin is right, the warning is wrong." That is a real piece of knowledge —
 // it silences the row AND lets the learner use the pin from now on.
 function ofGeoAccept(oid){
   if(window.ofReadOnly) return;
   var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return;
-  var k=normPhone(o.phone); if(!k) return;
-  var g=custGeoGet(o.phone); if(!g) return;
+  var k=normPhone(o.phone); if(!k){ alert('ไม่มีเบอร์ลูกค้า / order has no phone number'); return; }
+  var g=custGeoGet(o.phone);
+  // "The pasted link is right" is an answer too. Confirming turns it into the
+  // customer's own pin, so it no longer depends on a link somebody may edit.
+  if(!g){
+    var lp=orderLinkLatLng(o); if(!lp){ alert('ไม่มีหมุด / no pin on this order'); return; }
+    g={lat:lp.lat, lng:lp.lng, src:'maplink', at:new Date().toISOString(), by:(typeof ofWho==='function'?ofWho():'Office')};
+  }
   if(!confirm('✓ ยืนยันว่าหมุดนี้ถูกต้อง?\nConfirm this pin is right — it stops warning and starts being learned from.')) return;
   g.ok=true; g.okBy=(typeof ofWho==='function'?ofWho():'Office'); g.okAt=new Date().toISOString();
   customerMeta[k]=customerMeta[k]||{}; customerMeta[k].geo=g;
@@ -30054,7 +30141,13 @@ function ofGeoHandover(oid){
   if(window.ofReadOnly) return;
   var o=(orders||[]).find(function(x){return x.id===oid;}); if(!o) return;
   var k=normPhone(o.phone); if(!k) return;
-  var g=custGeoGet(o.phone); if(!g||!geoSane(g.lat,g.lng)){ alert('ไม่มีหมุด / no pin on this order'); return; }
+  var g=custGeoGet(o.phone);
+  // A pier is just as often the pasted link as a saved pin.
+  if(!g||!geoSane(g.lat,g.lng)){
+    var lp=orderLinkLatLng(o);
+    g=lp?{lat:lp.lat, lng:lp.lng, src:'maplink', at:new Date().toISOString()}:null;
+  }
+  if(!g||!geoSane(g.lat,g.lng)){ alert('ไม่มีหมุด / no pin on this order'); return; }
   var rv=kpGeoReverse(g.lat,g.lng);
   var sug=rv?('ท่า'+rv.tambon):'';
   var name=prompt('🚢 ชื่อจุดส่งต่อนี้? / name this handover point\n'
@@ -30075,6 +30168,13 @@ function ofGeoHandover(oid){
     orders:[String(oid)], customer:o.customer||'', address:String(o.address||'').slice(0,160), by:who, at:new Date().toISOString()});
   if(customerMeta[k]) delete customerMeta[k].geo;
   if(window.fbDB) window.fbDB.ref('customerMeta/'+k+'/geo').remove();
+  // If the pier came in as a pasted link, that link has to go with it — otherwise
+  // the same coordinates walk back in on the next render.
+  if(orderLinkLatLng(o)){
+    delete o._geo;
+    if(geoLinkOf(o)) o.geoBadLink=geoLinkOf(o);
+    try{ syncOrders(); }catch(e){}
+  }
   try{ auditAdd({type:'edit',orderId:oid,by:who,detail:'🚢 บันทึกจุดส่งต่อ "'+name+'" (รัศมี '+rkm+' กม.) และลบหมุดที่นั่น / handover point recorded, pin dropped'}); }catch(e){}
   ofGeoRender();
 }
