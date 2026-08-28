@@ -627,6 +627,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 .pg-c:disabled{cursor:default}
 .pg-c:disabled:active{transform:none}
 .pg-c.fut{opacity:.45}
+/* a box somebody wrote a reason on — amber corner, text on hover */
+.pg-c.pg-nt{position:relative}
+.pg-c.pg-nt::after{content:'';position:absolute;top:0;right:0;border-top:6px solid #f59e0b;border-left:6px solid transparent;border-top-right-radius:4px}
+.pg-nts{font-size:10px;color:#92400e;margin-top:3px;line-height:1.35;white-space:normal;word-break:break-word;max-width:100%;text-align:right}
 /* filled by the system (tour pay) — dashed, so nobody tries to type in it */
 .pg-auto{background:var(--bg2);border-style:dashed;opacity:.65}
 .pg-on{background:#16a34a;border-color:#15803d;color:#fff}
@@ -1245,6 +1249,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         payGridData = snap.val() || {};
         try{ if(_pgTabOpen()) pgRender(); }catch(e){}
         try{ if(typeof myPayRefresh==='function') myPayRefresh(); }catch(e){}
+      });
+      // Why a box says what it says — kept beside the numbers, never inside them.
+      db.ref('payGridNote').on('value', function(snap) {
+        payGridNoteData = snap.val() || {};
+        try{ if(_pgTabOpen()) pgRender(); }catch(e){}
       });
       db.ref('attEntries').on('value', function(snap) {
         attEntries = snap.val() ? Object.values(snap.val()) : [];
@@ -7782,7 +7791,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828007;
+var KP_BUILD = 20260828008;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -33077,6 +33086,11 @@ function _auditRenderNow() {
 var payRates={};    // fb 'payRates'
 var payRowsDef={};  // fb 'payRows'
 var payGridData={}; // fb 'payGrid'
+// Why the box says what it says: payGridNote/<mk>/<sid>/<row>/d<day> = free text
+// ("หลอดไฟแตก", "forgot to clock out"). A SEPARATE node on purpose — the grid
+// values are numbers that a dozen places add up, and a note must never end up
+// inside one of those sums.
+var payGridNoteData={}; // fb 'payGridNote'
 var pgMK='';        // month being looked at
 var _pgPop=null, _pgRateSid='', _pgRowSid='', _pgRowId='', _pgRowSign=1, _pgRowMode='total', _pgRowDur='one';
 var _pgNet={};      // sid → net, for the grand total
@@ -33322,6 +33336,37 @@ function pgContAmt(n, R){
 
 // ── grid values ──────────────────────────────────────────────────────
 function pgVal(mk,sid,rk,d){ try{ return (((payGridData[mk]||{})[sid]||{})[rk]||{})['d'+d]; }catch(e){ return undefined; } }
+function pgNote(mk,sid,rk,d){ try{ return String((((payGridNoteData[mk]||{})[sid]||{})[rk]||{})['d'+d]||''); }catch(e){ return ''; } }
+// Every note of one row this month, day → text, so the row summary and the
+// payslip can say WHY without walking the grid again.
+function pgNotesOf(mk,sid,rk){
+  var o=(((payGridNoteData[mk]||{})[sid]||{})[rk])||{}, out=[];
+  Object.keys(o).forEach(function(k){
+    var t=String(o[k]||'').trim(); if(!t) return;
+    var d=parseInt(String(k).replace(/^d/,''),10); if(!d) return;
+    out.push({d:d, t:t});
+  });
+  return out.sort(function(a,b){ return a.d-b.d; });
+}
+function pgSetNote(mk,sid,rk,d,txt){
+  txt=String(txt==null?'':txt).trim().slice(0,300);
+  var old=pgNote(mk,sid,rk,d);
+  if(old===txt) return;
+  payGridNoteData[mk]=payGridNoteData[mk]||{};
+  payGridNoteData[mk][sid]=payGridNoteData[mk][sid]||{};
+  payGridNoteData[mk][sid][rk]=payGridNoteData[mk][sid][rk]||{};
+  var path='payGridNote/'+mk+'/'+sid+'/'+rk+'/d'+d;
+  if(!txt){ delete payGridNoteData[mk][sid][rk]['d'+d]; if(window.fbDB) window.fbDB.ref(path).remove(); }
+  else    { payGridNoteData[mk][sid][rk]['d'+d]=txt;    if(window.fbDB) window.fbDB.ref(path).set(txt); }
+  // Payroll is money — a reason that is changed or wiped is logged like an amount.
+  try{
+    var row=pgFindRow(sid,mk,rk)||{ic:'',en:rk};
+    auditAdd({ type:'payroll', area:'payroll', orderId:'💰 '+pgStaffName(sid),
+      detail:'📝 '+(row.ic?row.ic+' ':'')+(row.en||rk)+' · '+mk+'-'+String(d).padStart(2,'0')+' · '
+             +(old?'"'+old+'"':'—')+' → '+(txt?'"'+txt+'"':'—'),
+      by:pgWho() });
+  }catch(e){}
+}
 function pgSet(mk,sid,rk,d,v){
   var old=parseFloat(pgVal(mk,sid,rk,d))||0;
   payGridData[mk]=payGridData[mk]||{};
@@ -33492,16 +33537,25 @@ function pgCalc(sid, mk){
 function pgMirror(mk, sid){
   if(!window.fbDB) return;
   var st=(staffList||[]).find(function(x){return x.id===sid;})||{};
-  var c=pgCalc(sid,mk), want={}, pre='pg-'+mk+'-'+sid+'-';
+  var c=pgCalc(sid,mk), want={}, wantN={}, pre='pg-'+mk+'-'+sid+'-';
   // the Tour Pay row is NOT mirrored — its lines are already real payLog entries
-  c.rows.forEach(function(r){ if(r.k==='tour') return; var a=r._c.amt; if(!a) return; want[(r.custom?'pgx_'+r.id:'pg_'+r.k)]=Math.abs(a); });
+  c.rows.forEach(function(r){
+    if(r.k==='tour') return;
+    var a=r._c.amt; if(!a) return;
+    var cat=(r.custom?'pgx_'+r.id:'pg_'+r.k);
+    want[cat]=Math.abs(a);
+    // …and the reasons ride along, so Bills and Accounting say what a deduction
+    // was for instead of just how much it was.
+    wantN[cat]=pgNotesOf(mk,sid,r.key).map(function(n){ return n.d+': '+n.t; }).join(' · ').slice(0,400);
+  });
   if(c.R.monthly>0) want['pg_base']=c.R.monthly;
   Object.keys(want).forEach(function(cat){
-    var id=pre+cat;
+    var id=pre+cat, nt=wantN[cat]||'';
     var cur=(payLog||[]).find(function(e){ return e && e.id===id; });
-    if(cur && Math.abs((parseFloat(cur.amount)||0)-want[cat])<0.005 && cur.whoName===(st.name||'')) return;
+    if(cur && Math.abs((parseFloat(cur.amount)||0)-want[cat])<0.005 && cur.whoName===(st.name||'')
+       && String(cur.note||'')===nt) return;
     window.fbDB.ref('payLog/'+id).set({ id:id, who:'staff:'+sid, whoName:st.name||'', cat:cat,
-      amount:want[cat], date:mk+'-01', ts:Date.now(), note:'', by:'payroll-grid', pg:1, photoUrl:'' });
+      amount:want[cat], date:mk+'-01', ts:Date.now(), note:nt, by:'payroll-grid', pg:1, photoUrl:'' });
   });
   (payLog||[]).forEach(function(e){
     if(!e || !e.id || String(e.id).indexOf(pre)!==0) return;
@@ -33662,6 +33716,9 @@ function pgPrint(sid){
       ? Object.keys(pgTourByDay(sid,mk)).sort(function(x,y){return x-y;}).join(', ')
       : pgPrintDays(sid,mk,r);
     if(dl) det+='<div class="dl">'+esc(dl)+'</div>';
+    // A deduction on a payslip somebody signs has to say what it was for.
+    var nts=pgNotesOf(mk,sid,r.key);
+    if(nts.length) det+='<div class="nt">'+nts.map(function(n){ return '📝 '+n.d+': '+esc(n.t); }).join('<br>')+'</div>';
     lines+='<tr><td>'+esc(r.en)+(r.th?' / '+esc(r.th):'')+'</td><td>'+det+'</td>'
       +'<td class="am'+(r.sign<0?' neg':'')+'">'+(r.sign<0?'−':'+')+pgN(Math.abs(a))+'</td></tr>';
   });
@@ -33692,6 +33749,7 @@ function pgPrint(sid){
     +'td{padding:7px 6px;border-bottom:1px solid #e2e2e2;vertical-align:top}'
     +'td:nth-child(2){color:#555;font-size:11.5px}'
     +'.dl{font-size:10.5px;color:#777;margin-top:2px}'
+    +'.nt{font-size:10.5px;color:#92400e;margin-top:2px;line-height:1.35}'
     +'.am{text-align:right;white-space:nowrap;font-weight:700;font-variant-numeric:tabular-nums}'
     +'.neg{color:#b91c1c}'
     +'.sum{margin-top:12px;font-size:13px}'
@@ -33759,7 +33817,11 @@ function pgRowHtml(sid, mk, row, dim, todayD, isCur, isPast){
       } else {
         if(v>0){ cls+=(row.sign<0?' pg-neg':' pg-pos'); txt=pgN(v); } else if(future){ cls+=' fut'; }
       }
-      h+='<button type="button" class="'+cls+'"'+(ttl?' title="'+ttl+'"':'')+' onclick="pgTap(event,\''+sid+'\',\''+row.key+'\','+d+')">'+txt+'</button>';
+      // A written reason has to be visible on the grid itself, or nobody knows it
+      // is there: amber corner on the box, full text on hover.
+      var _nt=pgNote(mk,sid,row.key,d);
+      if(_nt){ cls+=' pg-nt'; ttl=(ttl?ttl+' — ':'')+_nt; }
+      h+='<button type="button" class="'+cls+'"'+(ttl?' title="'+_esc(ttl)+'"':'')+' onclick="pgTap(event,\''+sid+'\',\''+row.key+'\','+d+')">'+txt+'</button>';
     }
     cells='<div class="pg-cells">'+h+'</div>';
   }
@@ -33767,8 +33829,16 @@ function pgRowHtml(sid, mk, row, dim, todayD, isCur, isPast){
   // Boxes ticked but nothing comes out — that is always a missing rate, and it used
   // to look like the app had swallowed the entry. Say it where the money should be.
   var noRate = (c.cnt>0 && !c.amt && ['work','ot','abs','cont'].indexOf(row.k)>=0);
+  // The reasons written into this row's boxes, next to the money they explain.
+  var _rn=pgNotesOf(mk,sid,row.key);
+  var _rnH=_rn.length
+    ? '<div class="pg-nts" title="'+_esc(_rn.map(function(n){ return n.d+': '+n.t; }).join(' · '))+'">'
+      +_rn.slice(0,4).map(function(n){ return '📝 '+n.d+': '+_esc(n.t); }).join('<br>')
+      +(_rn.length>4?'<br>+'+(_rn.length-4)+' …':'')+'</div>'
+    : '';
+  // …as its own block, not inside .pg-ex — that one is one clipped line by design.
   var sum='<div class="pg-sum"><div class="pg-ex"'+(noRate?' style="color:#c2410c;font-weight:700"':'')+'>'+_esc(c.expl)
-      +(noRate?'<br><span style="font-size:10px">⚠ ยังไม่ตั้งอัตรา — กดที่ชื่อ / no rate yet, tap the name</span>':'')+'</div>'
+      +(noRate?'<br><span style="font-size:10px">⚠ ยังไม่ตั้งอัตรา — กดที่ชื่อ / no rate yet, tap the name</span>':'')+'</div>'+_rnH
     +'<div class="pg-am" style="color:'+(noRate?'#c2410c':(c.amt?col:'var(--text2)'))+'">'+(c.amt?(row.sign<0?'−':'+'):'')+pgN(c.amt)+' ฿</div></div>';
   return '<div class="pg-row">'+lbl+cells+sum+'</div>';
 }
@@ -33779,26 +33849,37 @@ function pgTap(ev, sid, rk, d){
   if(row.k==='work'){ var v=parseFloat(pgVal(mk,sid,rk,d))||0; pgSet(mk,sid,rk,d, v===1?2:(v===2?0:1)); return; }
   if(row.k==='abs'){  var a=parseFloat(pgVal(mk,sid,rk,d))||0; pgSet(mk,sid,rk,d, a?0:1); return; }
   _pgPop={sid:sid, rk:rk, d:d};
-  if(row.type==='half')     pgPopOpen(ev, pgPopHalf());
-  else if(row.type==='int') pgPopOpen(ev, pgPopInt());
-  else                      pgPopOpen(ev, pgPopAmt(pgVal(mk,sid,rk,d)));
+  var nt=pgNote(mk,sid,rk,d);
+  if(row.type==='half')     pgPopOpen(ev, pgPopHalf(nt));
+  else if(row.type==='int') pgPopOpen(ev, pgPopInt(nt));
+  else                      pgPopOpen(ev, pgPopAmt(pgVal(mk,sid,rk,d), nt));
 }
-function pgPopHalf(){
+function pgPopHalf(nt){
   var h='<div style="font-size:11px;font-weight:800;color:var(--text2);margin-bottom:6px">⏱ Hours / ชั่วโมง</div><div class="pgp-g">';
   for(var v=0.5; v<=12.0001; v+=0.5) h+='<button type="button" class="pgp-b" onclick="pgPick('+v+')">'+(v%1?v.toFixed(1):v)+'</button>';
-  return h+'</div>'+pgPopClear();
+  return h+'</div>'+pgPopNote(nt)+pgPopClear();
 }
-function pgPopInt(){
+function pgPopInt(nt){
   var h='<div style="font-size:11px;font-weight:800;color:var(--text2);margin-bottom:6px">🔢 Count / จำนวน</div><div class="pgp-g">';
   for(var v=1; v<=12; v++) h+='<button type="button" class="pgp-b" onclick="pgPick('+v+')">'+v+'</button>';
-  return h+'</div>'+pgPopClear();
+  return h+'</div>'+pgPopNote(nt)+pgPopClear();
 }
-function pgPopAmt(cur){
+function pgPopAmt(cur, nt){
   return '<div style="font-size:11px;font-weight:800;color:var(--text2);margin-bottom:6px">💵 Amount ฿ / จำนวนเงิน</div>'
     +'<input type="number" id="pg-pop-amt" value="'+((parseFloat(cur)||'')||'')+'" style="width:170px;padding:9px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:16px;font-weight:800;text-align:right" '
     +'onkeydown="if(event.key===\'Enter\')pgPickAmt()">'
     +'<button type="button" class="pgp-b" style="width:64px;margin-left:6px;background:var(--green);color:#fff;border-color:var(--green)" onclick="pgPickAmt()">OK</button>'
-    +pgPopClear();
+    +pgPopNote(nt)+pgPopClear();
+}
+// Why this box exists — what broke, what was forgotten, what was agreed. Saved
+// together with the number, so it can never sit on a box that was never filled.
+function pgPopNote(nt){
+  return '<div style="margin-top:8px">'
+    +'<div style="font-size:11px;font-weight:800;color:var(--text2);margin-bottom:4px">📝 เหตุผล / reason <span style="font-weight:500">— ไม่บังคับ / optional</span></div>'
+    +'<input type="text" id="pg-pop-note" maxlength="300" value="'+_esc(nt||'')+'" placeholder="เช่น หลอดไฟแตก / e.g. broke a lamp, forgot to clock out" '
+      +'style="width:100%;box-sizing:border-box;padding:8px 9px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px" '
+      +'onkeydown="if(event.key===\'Enter\')pgNoteEnter()">'
+  +'</div>';
 }
 function pgPopClear(){ return '<button type="button" class="pgp-b" style="width:100%;margin-top:7px" onclick="pgPick(0)">✕ Clear / ล้าง</button>'; }
 // The tours behind one Tour Pay box — read-only money, but the day can still be
@@ -33836,8 +33917,27 @@ function pgPopClose(){
   if(bd) bd.style.display='none';
   _pgPop=null;
 }
-function pgPick(v){ if(!_pgPop) return; var q=_pgPop; pgPopClose(); pgSet(pgMonth(), q.sid, q.rk, q.d, v); }
+// v = the number picked; null/undefined = "keep the number, I only wrote a reason".
+function pgPick(v){
+  if(!_pgPop) return;
+  var q=_pgPop, mk=pgMonth();
+  var ni=document.getElementById('pg-pop-note'), nt=ni?ni.value:null;
+  var keep=(v===null||v===undefined);
+  var cur=parseFloat(pgVal(mk,q.sid,q.rk,q.d))||0;
+  pgPopClose();
+  // A reason belongs to a filled box. Clearing the box — or writing a reason next
+  // to an empty one — leaves nothing to explain, so the note goes with it.
+  if(nt!==null){
+    var willBe = keep ? cur : (parseFloat(v)||0);
+    pgSetNote(mk, q.sid, q.rk, q.d, willBe ? nt : '');
+  }
+  if(keep){ pgRenderEmp(q.sid); pgRenderTotal(); return; }
+  pgSet(mk, q.sid, q.rk, q.d, v);
+}
 function pgPickAmt(){ var i=document.getElementById('pg-pop-amt'); pgPick(i?(parseFloat(i.value)||0):0); }
+// Enter in the reason field: on the amount pop it saves the amount too, on the
+// hours/count pops there is no amount field — keep the number, store the reason.
+function pgNoteEnter(){ if(document.getElementById('pg-pop-amt')) pgPickAmt(); else pgPick(null); }
 
 // ── rates modal ──────────────────────────────────────────────────────
 function pgRateOpen(sid){
