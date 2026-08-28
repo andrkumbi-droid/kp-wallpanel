@@ -315,6 +315,21 @@ body.kmdragging{user-select:none;-webkit-user-select:none}
 /* What the PI was read as — sits above the papers sheet and the sheet viewer. */
 #clpi-modal{align-items:center;padding:14px;z-index:340}
 #clpi-modal .modal{border-radius:16px;max-width:560px}
+/* The goods check sheet, filled in the app instead of only on paper. Below the
+   file viewer (320), so a photo of the signed sheet opens on top of it. */
+#clchk-modal{align-items:center;padding:14px;z-index:300}
+#clchk-modal .modal{border-radius:16px;max-width:620px;max-height:92vh}
+.chkrow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:5px;background:var(--bg)}
+.chkrow.ok{background:var(--green-bg);border-color:var(--green-l)}
+.chkrow.bad{background:var(--orange-l);border-color:var(--orange)}
+.chkrow input.chk-ctn{width:66px;text-align:center;font-weight:800;font-size:14px;padding:6px 2px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text)}
+.chkrow .chk-ok{flex-shrink:0;width:34px;height:34px;padding:0;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg);color:var(--text2);font-size:15px;font-weight:800;cursor:pointer}
+.chkrow .chk-ok.on{border-color:var(--green);background:var(--green);color:#fff}
+.chkrow input.chk-note{flex-basis:100%;padding:5px 8px;font-size:12px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text)}
+.chkf{width:100%;box-sizing:border-box;padding:7px 9px;font-size:13px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text)}
+/* Who was there: tapped, not typed — the same names the paper sheet prints. */
+.chknm{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;border:1px solid var(--border);border-radius:20px;padding:5px 10px;cursor:pointer;background:var(--bg);color:var(--text2);user-select:none}
+.chknm.on{border-color:var(--green);background:var(--green-bg);color:var(--green-t)}
 .clsheet{border-collapse:collapse;font-size:12px;background:var(--bg)}
 .clsheet td,.clsheet th{border:1px solid var(--border);padding:3px 7px;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis}
 .clsheet th{background:var(--bg2);position:sticky;top:0;font-weight:700;z-index:1}
@@ -7764,7 +7779,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828003;
+var KP_BUILD = 20260828004;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -11756,6 +11771,15 @@ function ofRenderInc() {
     if((c.piNo||'').toLowerCase().includes(q)) return true;
     if((c.notes||'').toLowerCase().includes(q)) return true;
     if(c.items && c.items.some(function(i){ return (i.code||'').toLowerCase().includes(q); })) return true;
+    // "who unloaded that container?" — the goods check is searchable too: the
+    // person who counted, everybody who was ticked, and the notes written that day.
+    var k=clChkGet(c);
+    if(k){
+      if((k.by||'').toLowerCase().includes(q)) return true;
+      if((k.note||'').toLowerCase().includes(q)) return true;
+      if((k.crew||[]).some(function(n){ return String(n||'').toLowerCase().includes(q); })) return true;
+      if(clChkLines(k).some(function(l){ return String(l.note||'').toLowerCase().includes(q); })) return true;
+    }
     return false;
   }
 
@@ -11888,8 +11912,9 @@ function ofIncCard(c) {
       +'</div></details>';
   }
   // The office never books unload helpers from here — what it needs at this card
-  // is the list to tick off against the truck, the same sheet Management prints.
-  if(items.length) html += '<button type="button" class="btnsm" style="width:100%;justify-content:center;margin-top:6px;padding:7px 4px;font-size:11.5px" onclick="clPrintCheck(\''+c.id+'\')">🖨️ ใบตรวจรับสินค้า / print the goods check sheet</button>';
+  // is the list to tick off against the truck, the same sheet Management prints,
+  // and the place to put the counted cartons back in afterwards.
+  if(items.length) html += clChkChip(c) + clChkBtns(c);
 
   if(c.notes) html += '<div style="font-size:11px;color:var(--text2);margin-top:6px">📝 '+c.notes+'</div>';
   html += '</div>';
@@ -28592,6 +28617,10 @@ function calcViz() {
   <div id="clprev-frame"></div>
 </div></div>
 <input type="file" id="cldoc-file" accept="image/*,.pdf,.xls,.xlsx,.csv,.doc,.docx" multiple style="display:none" onchange="clDocOnFile(this)">
+<!-- The goods check, entered in the app: what was really counted off the truck,
+     when, and who was there. Lives on the container, next to the PI. -->
+<div class="modal-overlay" id="clchk-modal"><div class="modal" id="clchk-body" style="overflow-y:auto"></div></div>
+<input type="file" id="clchk-file" accept="image/*,.pdf" multiple style="display:none" onchange="clChkOnFile(this)">
 <!-- "📄 from PI" on a container that has none filed yet: read the sheet now, file it on save. -->
 <input type="file" id="clpi-file" accept=".xls,.xlsx,.xlsm,.csv" style="display:none" onchange="clPiOnFile(this)">
 
@@ -30477,7 +30506,11 @@ function clGetAvgStats() {
 // ════════════════════════════════════════════════════════════════════════════
 var CL_DOCS=[['pi','📄 PI / ใบแจ้งราคา','#4f46e5'],
              ['depositSlip','💰 สลิปมัดจำ / Deposit slip','#16a34a'],
-             ['balanceSlip','💳 สลิปยอดคงเหลือ / Balance slip','#b45309']];
+             ['balanceSlip','💳 สลิปยอดคงเหลือ / Balance slip','#b45309'],
+             // The paper that was carried to the truck, photographed after it was
+             // filled in and signed. Never required before booking in — the numbers
+             // themselves go into the container's check record.
+             ['checkSheet','📋 ใบตรวจรับที่เซ็นแล้ว / Signed check sheet','#0891b2']];
 var CL_DOC_MAXB64 = 5*1024*1024;  // a PI runs 0.5–4.4 MB; past this ask for a smaller export
 var _clDocBlob = {};              // key → data-url, fetched on demand, kept for the session
 function clDocsOf(c,kind){
@@ -31369,11 +31402,18 @@ function clChkCat(code){
   if(/^U[\d-]/.test(c))  return 'u';
   return 'other';
 }
-function clPrintCheck(id){
+// Two sheets out of one: blank to carry to the truck, or — with `filled` — the
+// same sheet with what was really counted, so the finished check can go in a
+// folder or to the supplier exactly as it was entered.
+function clPrintCheck(id, filled){
   var c=(containerLog||[]).find(function(x){return x.id===id;}); if(!c) return;
   var items=(c.items||[]).filter(function(i){ return i && i.code && (parseInt(i.qty)||0)>0; });
   if(!items.length){ alert('ตู้นี้ยังไม่มีรายการสินค้า / this container has no product list yet\n\nใส่จากไฟล์ PI ได้ที่ปุ่ม 📄 จาก PI / fill it from the PI file'); return; }
   var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  // What was entered in the app, looked up per code as the rows are drawn.
+  var rec=filled?clChkGet(c):null, recBy={};
+  if(rec) clChkLines(rec).forEach(function(r){ var kc=String(r.code||'').toUpperCase(); (recBy[kc]=recBy[kc]||[]).push(r); });
+  var recOf=function(code){ var a=recBy[String(code||'').toUpperCase()]; return (a&&a.length)?a.shift():null; };
   var groups={};
   items.forEach(function(i){ var k=clChkCat(i.code); (groups[k]=groups[k]||[]).push(i); });
   Object.keys(groups).forEach(function(k){
@@ -31393,6 +31433,8 @@ function clPrintCheck(id){
       +'</tr></thead><tbody>'
       +arr.map(function(i){
         var ctn=parseInt(i.ctn)||0, per=parseInt(i.pcsPerCtn)||0, qty=parseInt(i.qty)||0;
+        var r=rec?recOf(i.code):null;
+        var got=(r&&r.ctn!=null&&r.ctn!=='')?(parseInt(r.ctn)||0):null;
         return '<tr>'
           +'<td class="c muted">'+(++nRow)+'</td>'
           +'<td class="cd">'+esc(i.code)+'</td>'
@@ -31400,8 +31442,13 @@ function clPrintCheck(id){
           +'<td class="c">'+(per?per.toLocaleString():'—')+'</td>'
           +'<td class="c b tot">'+qty.toLocaleString()+'</td>'
           // count the cartons, tick the square when the line is complete, and only
-          // write something when it is not.
-          +'<td class="box"></td><td class="c box"><span class="tick"></span></td><td class="box"></td>'
+          // write something when it is not. On the filled sheet the same three
+          // columns carry what was entered in the app.
+          +(rec
+            ? '<td class="c b'+((got!=null&&ctn&&got!==ctn)?' diff':'')+'">'+(got!=null?got.toLocaleString():'—')+'</td>'
+              +'<td class="c b">'+(r&&r.ok?'✔':'✗')+'</td>'
+              +'<td style="font-size:8.5pt">'+esc(r&&r.note||'')+'</td>'
+            : '<td class="box"></td><td class="c box"><span class="tick"></span></td><td class="box"></td>')
         +'</tr>';
       }).join('')
       +'</tbody></table></div>';
@@ -31436,11 +31483,15 @@ function clPrintCheck(id){
     +'.cd{font-weight:800;font-size:11pt}'
     +'.box{background:#fcfcfc}'
     +'.tot{background:#fffbeb}'
+    +'.diff{background:#fee2e2;color:#b91c1c}'
+    +'.fill{border:1px solid #111;border-radius:4px;padding:4px 8px;min-height:11mm}'
+    +'.fill span{color:#666;display:block;font-size:8pt}'
+    +'.fill b{font-size:11pt}'
     +'.w-n{width:8mm}.w-cd{width:26mm}.w-ctn{width:16mm}.w-pc{width:20mm}.w-tot{width:22mm}'
     +'.w-got{width:22mm}.w-ok{width:14mm}'
     // A real square to tick, not a word — it has to be findable while standing at
     // a truck with a pen.
-    +'.tick{display:inline-block;width:5mm;height:5mm;border:1.5px solid #333;border-radius:1mm}'
+    +'.tick{display:inline-block;width:5mm;height:5mm;border:1.5px solid #333;border-radius:1mm;text-align:center;line-height:4.4mm;font-size:9pt}'
     +'.crew{border:1px solid #111;border-radius:4px;padding:4px 7px 5px;margin:4px 0 2px}'
     +'.crewt{font-size:8.5pt;font-weight:800;margin-bottom:3px}'
     +'.nms{display:flex;flex-wrap:wrap;gap:3px 10px}'
@@ -31449,7 +31500,7 @@ function clPrintCheck(id){
     +'.crewn>div{flex:1;display:flex;align-items:center;gap:4px}'
     +'.crewn .ln{flex:1;border-bottom:1px solid #111;min-width:14mm;height:5mm}'
     +'</style></head><body>'
-    +'<div class="hd"><h1>📦 ใบตรวจรับตู้ / Container check sheet</h1>'
+    +'<div class="hd"><h1>📦 ใบตรวจรับตู้ / Container check sheet'+(rec?' — บันทึกแล้ว / recorded':'')+'</h1>'
       +'<div class="d"><b>'+esc(c.supplier||'')+'</b><br>'+esc(dateStr)+'</div></div>'
     // Only what identifies the container. The dates of the journey are on the
     // card, not on the sheet somebody stands next to a truck with.
@@ -31458,44 +31509,355 @@ function clPrintCheck(id){
       +info('PI', c.piNo)
     +'</div>'
     // Written on the spot: who counted, when the container arrived, when it was
-    // empty, and with how many people it was done.
+    // empty, and with how many people it was done. On the filled sheet the same
+    // four boxes carry what the app has.
     +'<div class="who">'
-      +'<div>ผู้ตรวจนับ / Checked by:</div>'
-      +'<div>วันที่ / Date:</div>'
-      +'<div>🕐 เวลาที่ถึง / Arrived at:</div>'
-      +'<div>🏁 ลงของเสร็จ / Finished at:</div>'
+      +(rec
+        ? '<div class="fill"><span>ผู้ตรวจนับ / Checked by</span><b>'+esc(rec.by||'—')+'</b></div>'
+          +'<div class="fill"><span>วันที่ / Date</span><b>'+esc(rec.date?clFmtD(rec.date):'—')+'</b></div>'
+          +'<div class="fill"><span>🕐 เวลาที่ถึง / Arrived at</span><b>'+esc(rec.arrAt||'—')+'</b></div>'
+          +'<div class="fill"><span>🏁 ลงของเสร็จ / Finished at</span><b>'+esc(rec.finAt||'—')+'</b></div>'
+        : '<div>ผู้ตรวจนับ / Checked by:</div>'
+          +'<div>วันที่ / Date:</div>'
+          +'<div>🕐 เวลาที่ถึง / Arrived at:</div>'
+          +'<div>🏁 ลงของเสร็จ / Finished at:</div>')
     +'</div>'
     // Who carried it: the crew comes off the staff list, so a new hire is on the
     // next sheet without anybody editing a form. Warehouse people first, then the
     // office people who help when a container lands. Hired hands have no names in
     // advance — they get a count and a line to write them on.
     +(function(){
-      var st=[]; try{ st=(typeof staffList!=='undefined'?staffList:[])||[]; }catch(e){}
-      var pick=function(f){ return st.filter(function(x){ return clCrewOn(x) && f(x); })
-        .map(function(x){ return String(x.name||'').trim(); }).filter(Boolean); };
-      // warehouse first, then everybody else who is on the sheet
-      var wh=pick(function(x){ return x.warehouseAccess && x.payrollOn; });
-      var of=pick(function(x){ return !(x.warehouseAccess && x.payrollOn); });
-      var names=wh.concat(of);
-      var box=function(n){ return '<span class="nm"><span class="tick"></span>'+esc(n)+'</span>'; };
+      var names=clCrewNames();
+      var was=(rec&&rec.crew)?rec.crew.slice():[];
+      // Somebody who was there but has since left the staff list still belongs on
+      // the record of that day.
+      was.forEach(function(n){ if(names.indexOf(n)<0) names.push(n); });
+      var on=function(n){ return was.indexOf(n)>=0; };
+      var box=function(n){ return '<span class="nm"><span class="tick">'+(rec&&on(n)?'✔':'')+'</span>'+esc(n)+'</span>'; };
+      var ln=function(v){ return rec?('<b class="ln" style="text-align:center">'+esc(v)+'</b>'):'<b class="ln"></b>'; };
+      var hired=parseInt(rec&&rec.hired)||0, help=parseInt(rec&&rec.helpers)||0;
       return '<div class="crew">'
-        +'<div class="crewt">👥 ใครมาลงของ / Who unloaded — ติ๊กคนที่มา / tick who was there</div>'
+        +'<div class="crewt">👥 ใครมาลงของ / Who unloaded'+(rec?'':' — ติ๊กคนที่มา / tick who was there')+'</div>'
         +(names.length?'<div class="nms">'+names.map(box).join('')+'</div>':'')
         +'<div class="crewn">'
-          +'<div>👷 จ้างเพิ่ม / Extra hired: <b class="ln"></b> คน</div>'
-          +'<div>➕ คนช่วยอื่น ๆ / Other helpers: <b class="ln"></b> คน</div>'
-          +'<div>Σ รวมคนลงของ / people in total: <b class="ln"></b> คน</div>'
+          +'<div>👷 จ้างเพิ่ม / Extra hired: '+ln(hired)+' คน</div>'
+          +'<div>➕ คนช่วยอื่น ๆ / Other helpers: '+ln(help)+' คน</div>'
+          +'<div>Σ รวมคนลงของ / people in total: '+ln(was.length+hired+help)+' คน</div>'
         +'</div>'
+        +(rec&&rec.note?'<div style="margin-top:4px;font-size:9pt">📝 '+esc(rec.note)+'</div>':'')
       +'</div>';
     })()
-    +'<div class="note"><b>ตัวเลขซ้ายคือที่สั่งไว้ตาม PI</b> / the figures on the left are what the PI says. '
-      +'นับลังจริงแล้วเขียนในช่อง “นับได้ ลัง” · ครบแล้วให้ติ๊ก ☐ · ไม่ตรงให้เขียนหมายเหตุ / '
-      +'count the cartons, tick the box when a line is complete, and write a note only where it is not.</div>'
+    +(rec
+      ? '<div class="note"><b>บันทึกในแอปแล้ว</b> โดย '+esc(rec.savedBy||rec.by||'')+' '
+          +esc(rec.savedAt?new Date(rec.savedAt).toLocaleString('th-TH',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}):'')
+          +' / recorded in the app — ช่องขวาคือที่นับได้จริง / the right-hand columns are what was really counted.</div>'
+      : '<div class="note"><b>ตัวเลขซ้ายคือที่สั่งไว้ตาม PI</b> / the figures on the left are what the PI says. '
+          +'นับลังจริงแล้วเขียนในช่อง “นับได้ ลัง” · ครบแล้วให้ติ๊ก ☐ · ไม่ตรงให้เขียนหมายเหตุ / '
+          +'count the cartons, tick the box when a line is complete, and write a note only where it is not.</div>')
     +body
         +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
   var w=window.open('','_blank');
   if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
   w.document.open(); w.document.write(full); w.document.close(); w.focus();
+}
+
+// ── THE SAME CHECK, ENTERED IN THE APP ───────────────────────────────────────
+// The printed sheet is what somebody stands next to the truck with, pen in hand.
+// What was written on it has to come back into the app afterwards — otherwise the
+// only record of that morning is a sheet of paper in a folder, and the questions
+// that come months later ("which container had the short L-corner? who unloaded
+// it? when was it empty?") have no answer.
+//
+// It is kept on the container itself, containerLog/<id>/check:
+//   { date, arrAt, finAt, by, crew[], hired, helpers, note,
+//     lines:[ {code, exp, ctn, ok, note} ], savedAt, savedBy }
+// `exp` is the carton count the PI said AT THE TIME OF THE CHECK — a later
+// correction of the product list must not silently rewrite what was counted.
+// The photo of the signed paper goes next to the PI, as the 'checkSheet' paper.
+var _clChkId=null;
+
+// The crew the sheet offers — used by the printed sheet and by the form.
+function clCrewNames(){
+  var st=[]; try{ st=(typeof staffList!=='undefined'?staffList:[])||[]; }catch(e){}
+  var pick=function(f){ return st.filter(function(x){ return clCrewOn(x) && f(x); })
+    .map(function(x){ return String(x.name||'').trim(); }).filter(Boolean); };
+  // warehouse first, then everybody else who is on the sheet
+  var wh=pick(function(x){ return x.warehouseAccess && x.payrollOn; });
+  var of=pick(function(x){ return !(x.warehouseAccess && x.payrollOn); });
+  return wh.concat(of);
+}
+function clChkGet(c){ return (c && c.check && typeof c.check==='object') ? c.check : null; }
+function clChkLines(k){
+  var l=k&&k.lines; if(!l) return [];
+  return (Array.isArray(l)?l:Object.keys(l).map(function(x){return l[x];})).filter(Boolean);
+}
+// Everything the cards and the search want, in one pass.
+function clChkStats(c){
+  var k=clChkGet(c); if(!k) return null;
+  var rows=clChkLines(k), got=0, exp=0, bad=0;
+  rows.forEach(function(r){
+    got+=parseInt(r.ctn)||0; exp+=parseInt(r.exp)||0;
+    if(!r.ok) bad++;
+  });
+  return { k:k, rows:rows.length, got:got, exp:exp, bad:bad,
+           people:((k.crew||[]).length)+(parseInt(k.hired)||0)+(parseInt(k.helpers)||0) };
+}
+function clChkOpen(id){
+  var c=(containerLog||[]).find(function(x){return x.id===id;}); if(!c) return;
+  var items=(c.items||[]).filter(function(i){ return i && i.code && (parseInt(i.qty)||0)>0; });
+  if(!items.length){ alert('ตู้นี้ยังไม่มีรายการสินค้า / this container has no product list yet\n\nใส่จากไฟล์ PI ได้ที่ปุ่ม 📄 จาก PI / fill it from the PI file'); return; }
+  _clChkId=id;
+  clChkRender();
+  var m=document.getElementById('clchk-modal'); if(m) m.classList.add('open');
+  // Pictures of the signed paper, fetched the same way the papers sheet does it.
+  if(!window.fbDB) return;
+  clDocsOf(c,'checkSheet').forEach(function(f){
+    if(!f.k || f.url || _clDocBlob[f.k] || !clDocIsImg(f)) return;
+    window.fbDB.ref('containerDocs/'+c.id+'/'+f.k).once('value', function(s){
+      var v=s.val(); if(!v) return;
+      _clDocBlob[f.k]=v;
+      if(_clChkId===c.id) clChkPhotos();
+    });
+  });
+}
+function clChkClose(){ var m=document.getElementById('clchk-modal'); if(m) m.classList.remove('open'); _clChkId=null; }
+// Built once, when the sheet is opened. NEVER from the live listener — somebody
+// is typing counted cartons into it while containers keep changing around them.
+function clChkRender(){
+  var body=document.getElementById('clchk-body'); if(!body) return;
+  var c=(containerLog||[]).find(function(x){return x.id===_clChkId;}); if(!c) return;
+  var k=clChkGet(c)||{};
+  var stored={};
+  clChkLines(k).forEach(function(r){ var kc=String(r.code||'').toUpperCase(); (stored[kc]=stored[kc]||[]).push(r); });
+  var take=function(code){ var a=stored[String(code||'').toUpperCase()]; return (a&&a.length)?a.shift():null; };
+  var items=(c.items||[]).filter(function(i){ return i && i.code && (parseInt(i.qty)||0)>0; });
+  var groups={};
+  items.forEach(function(i){ var g=clChkCat(i.code); (groups[g]=groups[g]||[]).push(i); });
+  Object.keys(groups).forEach(function(g){
+    groups[g].sort(function(a,b){ return String(a.code).localeCompare(String(b.code), undefined, {numeric:true}); });
+  });
+  var row=function(i){
+    var exp=parseInt(i.ctn)||0, qty=parseInt(i.qty)||0, per=parseInt(i.pcsPerCtn)||0;
+    var r=take(i.code);
+    var v=(r&&r.ctn!=null&&r.ctn!=='')?String(parseInt(r.ctn)||0):'';
+    var ok=r?!!r.ok:false, note=(r&&r.note)||'';
+    return '<div class="chkrow'+(r?(ok?' ok':' bad'):'')+'" data-code="'+_esc(i.code)+'" data-exp="'+exp+'">'
+      +'<div style="flex:1;min-width:104px">'
+        +'<div style="font-size:13px;font-weight:800">'+_esc(i.code)+'</div>'
+        +'<div style="font-size:10.5px;color:var(--text2)">ตาม PI <b>'+(exp?exp.toLocaleString():'—')+'</b> ลัง · '+qty.toLocaleString()+' แผ่น'+(per?' ('+per+'/ลัง)':'')+'</div>'
+      +'</div>'
+      +'<input class="chk-ctn" type="number" inputmode="numeric" min="0" placeholder="ลัง" value="'+v+'" oninput="clChkTouch(this)">'
+      +'<button type="button" class="chk-ok'+(ok?' on':'')+'" title="ครบ / complete" onclick="clChkTick(this)">✓</button>'
+      +'<input class="chk-note" type="text" placeholder="หมายเหตุ เช่น ขาด 2 ลัง / note, e.g. 2 cartons short" value="'+_esc(note)+'"'
+        +((note||(r&&!ok))?'':' style="display:none"')+'>'
+    +'</div>';
+  };
+  var names=clCrewNames(), was=(k.crew||[]).slice();
+  // Somebody who was there but has since left the staff list stays on that day.
+  was.forEach(function(n){ if(names.indexOf(n)<0) names.push(n); });
+
+  var h='<div class="mhdr"><span class="mtit">📋 ผลตรวจรับสินค้า / Goods check</span>'
+      +'<button type="button" class="mclose" onclick="clChkClose()"><i class="ti ti-x"></i></button></div>'
+    +'<div style="font-size:12px;color:var(--text2);margin-bottom:8px"><b style="color:var(--text)">'+_esc(c.supplier||'')+'</b> · '
+      +_esc(c.containerNo||'ไม่มีเลขตู้ / no container #')+(c.piNo?' · '+_esc(c.piNo):'')+'</div>';
+  if(k.savedAt){
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11.5px;background:var(--green-bg);color:var(--green-t);border-radius:var(--rs);padding:6px 9px;margin-bottom:10px">'
+      +'<span>💾 บันทึกโดย / saved by <b>'+_esc(k.savedBy||k.by||'')+'</b> · '+_esc(new Date(k.savedAt).toLocaleString('th-TH',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}))+'</span>'
+      +'<button type="button" class="btnsm" style="flex-shrink:0;padding:3px 9px;font-size:11px" onclick="clPrintCheck(\''+c.id+'\',1)">🖨️ พิมพ์ / print</button>'
+    +'</div>';
+  }
+  h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;margin-bottom:10px">'
+      +'<div><label class="fl" style="margin-top:0">📅 วันที่ตรวจ / Date</label><input class="chkf" type="date" lang="en-GB" id="clchk-date" value="'+_esc(k.date||c.arrivedWh||kpTodayStr())+'"></div>'
+      +'<div><label class="fl" style="margin-top:0">✍️ ผู้ตรวจนับ / Checked by</label><input class="chkf" type="text" id="clchk-by" value="'+_esc(k.by||clDocWho())+'"></div>'
+      +'<div><label class="fl" style="margin-top:0">🕐 เวลาที่ถึง / Arrived</label><input class="chkf" type="time" id="clchk-arr" value="'+_esc(k.arrAt||'')+'"></div>'
+      +'<div><label class="fl" style="margin-top:0">🏁 ลงของเสร็จ / Finished</label><input class="chkf" type="time" id="clchk-fin" value="'+_esc(k.finAt||'')+'"></div>'
+    +'</div>'
+    +'<div style="font-size:12px;font-weight:800;margin-bottom:5px">👥 ใครมาลงของ / Who unloaded <span style="font-weight:400;color:var(--text2)">— แตะชื่อ / tap a name</span></div>'
+    +'<div id="clchk-crew" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">'
+      +(names.length?names.map(function(n){ return '<span class="chknm'+(was.indexOf(n)>=0?' on':'')+'" data-nm="'+_esc(n)+'" onclick="clChkNm(this)">'+_esc(n)+'</span>'; }).join('')
+                    :'<span style="font-size:11.5px;color:var(--text3)">— ไม่มีรายชื่อ / no names —</span>')
+    +'</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px">'
+      +'<div><label class="fl" style="margin-top:0">👷 จ้างเพิ่ม / hired</label><input class="chkf" type="number" min="0" id="clchk-hired" value="'+((parseInt(k.hired)||0)||'')+'" oninput="clChkPeople()"></div>'
+      +'<div><label class="fl" style="margin-top:0">➕ คนช่วยอื่น / helpers</label><input class="chkf" type="number" min="0" id="clchk-help" value="'+((parseInt(k.helpers)||0)||'')+'" oninput="clChkPeople()"></div>'
+    +'</div>'
+    +'<div style="font-size:11.5px;color:var(--text2);text-align:right;margin:4px 0 2px">Σ รวมคนลงของ / people in total: <b style="color:var(--text)" id="clchk-people">0</b> คน</div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid var(--border);padding-top:8px;margin-top:6px">'
+      +'<button type="button" class="btnsm" style="flex-shrink:0;padding:6px 10px;font-size:11.5px" onclick="clChkAll()">✓ ครบทุกรายการ / all complete</button>'
+      +'<span id="clchk-sum" style="font-size:11.5px;color:var(--text2);text-align:right"></span>'
+    +'</div>'
+    +'<div id="clchk-lines">'
+      + CL_CHK_SEC.map(function(s){
+          var arr=groups[s[0]]; if(!arr||!arr.length) return '';
+          return '<div style="margin-top:10px">'
+            +'<div style="font-size:11.5px;font-weight:800;background:var(--bg2);border-radius:var(--rs);padding:5px 9px;margin-bottom:5px">'+s[1]
+              +' <span style="color:var(--text2);font-weight:600">('+arr.length+')</span></div>'
+            +arr.map(row).join('')
+          +'</div>';
+        }).join('')
+    +'</div>'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 5px">'
+      +'<span style="font-size:12px;font-weight:800">📎 รูปใบกระดาษ / photo of the paper sheet</span>'
+      +'<button type="button" class="btnsm" style="padding:4px 9px;font-size:11px" onclick="clChkPick()">＋ ถ่ายรูป / add</button>'
+    +'</div>'
+    +'<div id="clchk-upl" style="font-size:11.5px;font-weight:700;color:var(--blue)"></div>'
+    +'<div id="clchk-photos"></div>'
+    +'<label class="fl">📝 หมายเหตุรวม / overall note</label>'
+    +'<textarea id="clchk-note" rows="2" class="chkf" placeholder="เช่น ตู้มาสาย ของเปียก / e.g. the container was late">'+_esc(k.note||'')+'</textarea>'
+    +'<button type="button" class="btn btnp" style="margin-top:12px" onclick="clChkSave()"><i class="ti ti-device-floppy"></i> บันทึกผลตรวจ / Save the check</button>';
+  body.innerHTML=h;
+  body.scrollTop=0;
+  clChkPeople(); clChkTotals(); clChkPhotos();
+}
+function clChkNm(el){ el.classList.toggle('on'); clChkPeople(); }
+function clChkPeople(){
+  var el=document.getElementById('clchk-people'); if(!el) return;
+  var crew=document.querySelectorAll('#clchk-crew .chknm.on').length;
+  var hd=document.getElementById('clchk-hired'), hp=document.getElementById('clchk-help');
+  el.textContent=crew+(parseInt(hd&&hd.value)||0)+(parseInt(hp&&hp.value)||0);
+}
+// Typing the number the PI expects ticks the line off by itself — that is the
+// normal case and nobody should have to tap twice for it. Anything else leaves
+// the line open and puts the note field in front of the person counting.
+function clChkTouch(el){
+  var row=el.closest('.chkrow'); if(!row) return;
+  var exp=parseInt(row.getAttribute('data-exp'))||0, v=String(el.value||'').trim();
+  var btn=row.querySelector('.chk-ok');
+  if(v!=='' && btn){
+    if(exp>0 && (parseInt(v)||0)===exp) btn.classList.add('on'); else btn.classList.remove('on');
+  }
+  clChkRowState(row); clChkTotals();
+}
+function clChkTick(btn){ btn.classList.toggle('on'); clChkRowState(btn.closest('.chkrow')); clChkTotals(); }
+function clChkRowState(row){
+  if(!row) return;
+  var inp=row.querySelector('.chk-ctn'), note=row.querySelector('.chk-note'), btn=row.querySelector('.chk-ok');
+  var v=String(inp&&inp.value||'').trim(), ok=!!(btn&&btn.classList.contains('on'));
+  row.classList.remove('ok'); row.classList.remove('bad');
+  if(ok) row.classList.add('ok'); else if(v!=='') row.classList.add('bad');
+  if(note){
+    if(!ok && (v!=='' || note.value)) note.style.display='';
+    else if(!note.value) note.style.display='none';
+  }
+}
+function clChkTotals(){
+  var el=document.getElementById('clchk-sum'); if(!el) return;
+  var got=0, exp=0, ok=0, n=0, typed=0;
+  document.querySelectorAll('#clchk-lines .chkrow').forEach(function(r){
+    n++; exp+=parseInt(r.getAttribute('data-exp'))||0;
+    var inp=r.querySelector('.chk-ctn'), v=String(inp&&inp.value||'').trim();
+    if(v!==''){ got+=parseInt(v)||0; typed++; }
+    var btn=r.querySelector('.chk-ok');
+    if(btn&&btn.classList.contains('on')) ok++;
+  });
+  el.innerHTML='นับได้ <b style="color:var(--text)">'+got.toLocaleString()+'</b> / '+exp.toLocaleString()+' ลัง'
+    +' · ครบ <b style="color:'+(ok<n?'var(--orange)':'var(--green)')+'">'+ok+'/'+n+'</b>'
+    +(typed<n?' · <span style="color:var(--text3)">ยังไม่กรอก '+(n-typed)+'</span>':'');
+}
+// The whole truck was fine — one tap instead of eleven.
+function clChkAll(){
+  document.querySelectorAll('#clchk-lines .chkrow').forEach(function(r){
+    var exp=parseInt(r.getAttribute('data-exp'))||0, inp=r.querySelector('.chk-ctn'), btn=r.querySelector('.chk-ok');
+    if(inp && exp>0) inp.value=exp;
+    if(btn) btn.classList.add('on');
+    clChkRowState(r);
+  });
+  clChkTotals();
+}
+function clChkPick(){ var i=document.getElementById('clchk-file'); if(i){ i.value=''; i.click(); } }
+function clChkOnFile(input){
+  var files=(input&&input.files)?Array.prototype.slice.call(input.files):[];
+  input.value='';
+  if(!files.length || !_clChkId) return;
+  _clDocId=_clChkId;                       // the uploader files it on this container
+  var st=document.getElementById('clchk-upl'), i=0;
+  // Only the photo strip is redrawn afterwards, never the whole sheet — there are
+  // counted cartons in those fields that nobody typed twice.
+  (function next(){
+    if(i>=files.length){ if(st) st.textContent=''; clChkPhotos(); return; }
+    if(st) st.textContent='⏳ '+(i+1)+'/'+files.length+' กำลังอัปโหลด… / uploading…';
+    _clDocUpload(files[i++],'checkSheet',next);
+  })();
+}
+function clChkPhotos(){
+  var el=document.getElementById('clchk-photos'); if(!el) return;
+  var c=(containerLog||[]).find(function(x){return x.id===_clChkId;});
+  var files=c?clDocsOf(c,'checkSheet'):[];
+  if(!files.length){ el.innerHTML='<div style="font-size:11px;color:var(--text3)">— ยังไม่มีรูป / no photo yet —</div>'; return; }
+  el.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px">'
+    + files.map(function(f,i){
+        var src=clDocIsImg(f)?clDocUrl(f):'';
+        if(clDocIsImg(f)) return src
+          ? '<img src="'+src+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:pointer">'
+          : '<div style="aspect-ratio:1;border:1px dashed var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text2)">…</div>';
+        return '<div onclick="clChkDocOpen('+i+')" title="'+_esc(f.name||'')+'" style="aspect-ratio:1;border:1px solid var(--border);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer">'+clDocIcon(f)+'</div>';
+      }).join('')
+  +'</div>';
+}
+function clChkDocOpen(i){ _clDocId=_clChkId; clDocFetch('checkSheet', i); }
+function clChkSave(){
+  var id=_clChkId;
+  var c=(containerLog||[]).find(function(x){return x.id===id;}); if(!c) return;
+  var g=function(x){ var e=document.getElementById(x); return e?String(e.value||'').trim():''; };
+  var lines=[], got=0, exp=0, bad=0, typed=0;
+  document.querySelectorAll('#clchk-lines .chkrow').forEach(function(r){
+    var e=parseInt(r.getAttribute('data-exp'))||0;
+    var inp=r.querySelector('.chk-ctn'), btn=r.querySelector('.chk-ok'), nt=r.querySelector('.chk-note');
+    var v=String(inp&&inp.value||'').trim();
+    var ok=!!(btn&&btn.classList.contains('on'));
+    var note=String(nt&&nt.value||'').trim();
+    var line={ code:r.getAttribute('data-code')||'', exp:e, ok:ok?1:0 };
+    if(v!==''){ line.ctn=parseInt(v)||0; got+=line.ctn; typed++; }
+    if(note) line.note=note;
+    lines.push(line);
+    exp+=e; if(!ok) bad++;
+  });
+  if(!typed && !lines.some(function(l){return l.ok;})){
+    if(!confirm('ยังไม่ได้กรอกอะไรเลย / nothing has been entered yet.\nบันทึกต่อไหม? / save anyway?')) return;
+  }
+  var crew=[];
+  document.querySelectorAll('#clchk-crew .chknm.on').forEach(function(x){ var n=x.getAttribute('data-nm'); if(n) crew.push(n); });
+  var k={ date:g('clchk-date')||kpTodayStr(), arrAt:g('clchk-arr'), finAt:g('clchk-fin'),
+          by:g('clchk-by')||clDocWho(), crew:crew,
+          hired:parseInt(g('clchk-hired'))||0, helpers:parseInt(g('clchk-help'))||0,
+          note:g('clchk-note'), lines:lines,
+          savedAt:Date.now(), savedBy:clDocWho() };
+  c.check=k;
+  // A child write, never a .set() of the whole container — the papers, the dates
+  // and the product list belong to whoever is editing them right now.
+  if(window.fbDB) window.fbDB.ref('containerLog/'+id+'/check').set(k);
+  try{ auditAdd({ type:'edit', area:'container', orderId:'🚢 '+(c.supplier||'')+' '+(c.containerNo||''),
+        note:'ตรวจรับสินค้า / goods check '+got+'/'+exp+' CTN'+(bad?(' · '+bad+' ไม่ครบ / short'):' · ครบ / complete'), by:k.by }); }catch(e){}
+  clChkClose();
+  try{ clRender(); }catch(e){}
+  try{ if(document.getElementById('ofv-inc')) ofRenderInc(); }catch(e){}
+}
+// What the cards show: one line that answers "was it checked, when, by whom, and
+// did anything come up short" without opening anything.
+function clChkChip(c){
+  var s=clChkStats(c); if(!s) return '';
+  var k=s.k, bad=s.bad;
+  return '<div onclick="clChkOpen(\''+c.id+'\')" title="ดูผลตรวจรับ / open the goods check"'
+    +' style="cursor:pointer;font-size:11.5px;line-height:1.45;border-radius:var(--rs);padding:6px 9px;margin-bottom:8px;'
+    +'background:'+(bad?'var(--orange-l)':'var(--green-bg)')+';color:'+(bad?'#92400e':'var(--green-t)')+'">'
+    +'<b>'+(bad?'⚠️':'✅')+' ตรวจรับแล้ว / checked</b>'
+    +(k.date?' '+clFmtD(k.date):'')+(k.by?' · '+_esc(k.by):'')
+    +(k.arrAt||k.finAt?' · '+_esc(k.arrAt||'—')+'–'+_esc(k.finAt||'—'):'')
+    +'<br>'+s.got.toLocaleString()+'/'+s.exp.toLocaleString()+' ลัง'
+    +(bad?' · <b>'+bad+' รายการไม่ครบ / short</b>':' · ครบทุกรายการ / all complete')
+    +(s.people?' · 👥 '+s.people:'')
+  +'</div>';
+}
+// Print it blank, or fill it in here. Same pair on the Management card and on the
+// office's Incoming card, so it does not matter who has the phone.
+function clChkBtns(c){
+  var has=!!clChkGet(c);
+  return '<div style="display:flex;gap:6px;margin:6px 0 8px">'
+    +'<button type="button" class="btnsm" style="flex:1;min-width:0;justify-content:center;padding:7px 4px;font-size:11.5px" onclick="clPrintCheck(\''+c.id+'\')">🖨️ พิมพ์ใบตรวจ / print</button>'
+    +'<button type="button" class="btnsm" style="flex:1;min-width:0;justify-content:center;padding:7px 4px;font-size:11.5px'
+      +(has?'':';background:var(--blue);color:#fff;border-color:var(--blue);font-weight:700')+'" onclick="clChkOpen(\''+c.id+'\')">'
+      +(has?'📋 ดูผลตรวจ / view':'📋 กรอกผลตรวจ / enter')+'</button>'
+  +'</div>';
 }
 
 function clCard(c, isPending) {
@@ -31554,8 +31916,9 @@ function clCard(c, isPending) {
         }).join('')
       +'</div></details>'
       // On paper, per code, in cartons and pieces — what the warehouse ticks off
-      // against the truck. Stays on the card after arrival so it can be reprinted.
-      +'<button type="button" class="btnsm" style="width:100%;justify-content:center;margin-bottom:8px;padding:6px 4px;font-size:11.5px" onclick="clPrintCheck(\''+c.id+'\')">🖨️ ใบตรวจรับสินค้า / print the goods check sheet</button>';
+      // against the truck. Stays on the card after arrival so it can be reprinted,
+      // and right next to it what came back off that sheet.
+      + clChkChip(c) + clChkBtns(c);
   }
 
   // ── What has to sell before THIS container gets its turn ──────────────────
@@ -31677,6 +32040,15 @@ function clArrived(id) {
   syncStockItems();
   clRender();
   mgStock();
+  // The truck has just been emptied — this is the one moment the counted cartons
+  // are still in somebody's head. Asked once, never in the way: Cancel and it is gone,
+  // the sheet stays reachable from the card for good.
+  if(!clChkGet(c) && items.some(function(i){ return i.code && (parseInt(i.qty)||0)>0; })){
+    setTimeout(function(){
+      if(confirm('บันทึกผลตรวจรับสินค้าตอนนี้ไหม? / record the goods check now?\n\n'
+        +'นับได้กี่ลัง · ใครมาลงของ · กี่โมงเสร็จ\nhow many cartons were counted, who unloaded, when it was done')) clChkOpen(id);
+    },80);
+  }
 }
 
 function clRenderStats() {
