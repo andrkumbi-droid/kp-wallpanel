@@ -10,7 +10,7 @@
 // has not checked in 24 hours — on ordinary fetch events too. So a device that is simply
 // left running picks the new build up by itself within a day, and one where somebody
 // opens the app picks it up at once.
-const BUILD = 20260828005;
+const BUILD = 20260828006;
 const CACHE = 'kp-' + BUILD;
 const SHELL = [
   '/kp-wallpanel/',
