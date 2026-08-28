@@ -7782,7 +7782,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828006;
+var KP_BUILD = 20260828007;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -12003,6 +12003,98 @@ function ofTourMiniAll(on){
   try{ localStorage.setItem('kpTourMini',JSON.stringify(_tourMini)); }catch(e){}
   try{ ofRenderTour(); }catch(e){}
 }
+// ══════════════════════════════════════════════════════════════════════════
+//  📝 โน้ตออฟฟิศ / OFFICE NOTE on a tour card
+//  ------------------------------------------------------------------------
+//  Things the office has to remember about a running tour and nobody else may
+//  read: "customer 4-231 only answers after 4pm", "Chan owes 2,000 from
+//  Tuesday", "do not send this one through the pier again". It rides on the
+//  tour (activeTours/<id>/onote) and is drawn ONLY here, in the office's tour
+//  list — the driver app, the delivery sheet and the receipts never touch it.
+//
+//  Open state is kept per tab, not stored: a live update rebuilds this whole
+//  list every few seconds, and the box has to survive that. Typing is already
+//  protected — kpHoldWhileTyping holds the rebuild while a field in the list
+//  has the focus.
+// ══════════════════════════════════════════════════════════════════════════
+var _tourNoteOpen={};
+function tourNoteOf(t){
+  var n=t&&t.onote;
+  if(!n) return null;
+  if(typeof n==='string') return n.trim()?{t:n,by:'',at:0}:null;   // tolerate a plain string
+  return (n.t&&String(n.t).trim())?n:null;
+}
+function ofTourNoteBtn(t){
+  // An empty draft is still an open box — undefined is what 'closed' means here.
+  var n=tourNoteOf(t), on=(_tourNoteOpen[t.id]!==undefined);
+  return '<button type="button" onclick="event.stopPropagation();ofTourNoteToggle(\''+String(t.id).replace(/['\\]/g,'')+'\')"'
+    +' title="โน้ตสำหรับออฟฟิศ — คนขับไม่เห็น / office note, the driver never sees it"'
+    +' style="font-size:11px;padding:3px 7px;border:none;background:'+(n?'#f59e0b':(on?'#64748b':'#94a3b8'))+';color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">📝</button>';
+}
+function ofTourNoteBox(t,ro){
+  var n=tourNoteOf(t), open=(_tourNoteOpen[t.id]!==undefined);
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+  var tid=String(t.id).replace(/['\\]/g,'');
+  if(!open){
+    if(!n) return '';
+    // Closed but written on: the note is the point, so it stays readable without
+    // opening anything. A tap opens it for editing.
+    return '<div onclick="event.stopPropagation();'+(ro?'':'ofTourNoteToggle(\''+tid+'\')')+'"'
+      +' style="'+(ro?'':'cursor:pointer;')+'background:#fffbeb;border:1px solid #fcd34d;border-radius:var(--rs);padding:6px 9px;margin-bottom:8px;font-size:12px;color:#78350f;white-space:pre-wrap;word-break:break-word">'
+      +'<span style="font-size:10.5px;font-weight:700;opacity:.75">📝 ออฟฟิศเท่านั้น / office only'
+      +(n.by?' · '+esc(n.by):'')+(n.at?' · '+new Date(n.at).toLocaleDateString('th-TH',{day:'numeric',month:'short'}):'')+'</span><br>'
+      +esc(n.t)
+    +'</div>';
+  }
+  if(ro) return '';
+  // What is being typed lives in the open-state itself, so a live rebuild of the
+  // list (they arrive every few seconds) redraws the box with the draft in it
+  // instead of throwing half a sentence away.
+  var draft=(typeof _tourNoteOpen[t.id]==='string')?_tourNoteOpen[t.id]:(n?n.t:'');
+  return '<div onclick="event.stopPropagation()" style="background:#fffbeb;border:1px solid #fcd34d;border-radius:var(--rs);padding:7px 9px;margin-bottom:8px">'
+    +'<div style="font-size:10.5px;font-weight:700;color:#92400e;margin-bottom:4px">📝 โน้ตออฟฟิศ / office note <span style="font-weight:500">— คนขับไม่เห็นโน้ตนี้ / the driver never sees this</span></div>'
+    +'<textarea id="tnote-'+tid+'" rows="2" placeholder="เช่น ลูกค้า 4-231 รับสายหลังบ่าย 4 / e.g. customer 4-231 only answers after 4pm"'
+      +' oninput="_tourNoteOpen[\''+tid+'\']=this.value"'
+      +' onkeydown="if(event.key===\'Enter\'&&(event.ctrlKey||event.metaKey)){event.preventDefault();ofTourNoteSave(\''+tid+'\');}"'
+      +' style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #fcd34d;border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;resize:vertical">'+esc(draft)+'</textarea>'
+    +'<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:5px">'
+      +(n?'<button type="button" onclick="ofTourNoteSave(\''+tid+'\',1)" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:#dc2626;border-radius:var(--rs);cursor:pointer;font-weight:700">🗑 ลบ / delete</button>':'')
+      +'<button type="button" onclick="ofTourNoteToggle(\''+tid+'\',1)" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text2);border-radius:var(--rs);cursor:pointer;font-weight:700">ยกเลิก / cancel</button>'
+      +'<button type="button" onclick="ofTourNoteSave(\''+tid+'\')" style="font-size:11px;padding:3px 11px;border:none;background:#f59e0b;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:700">✓ บันทึก / save</button>'
+    +'</div>'
+  +'</div>';
+}
+// The list holds its rebuild while a field inside it has the focus — which is
+// exactly the field we are closing. Let go of it first, or the box stays on
+// screen after Save until somebody clicks elsewhere.
+function _tourNoteBlur(tid){ try{ var el=document.getElementById('tnote-'+tid); if(el) el.blur(); }catch(e){} }
+function ofTourNoteToggle(tid, forceClose){
+  if(forceClose || _tourNoteOpen[tid]!==undefined) delete _tourNoteOpen[tid]; else _tourNoteOpen[tid]=1;
+  if(_tourNoteOpen[tid]===undefined) _tourNoteBlur(tid);
+  try{ ofRenderTour(); }catch(e){}
+  if(_tourNoteOpen[tid]!==undefined) setTimeout(function(){
+    var el=document.getElementById('tnote-'+tid);
+    if(el){ el.focus(); el.selectionStart=el.selectionEnd=el.value.length; }
+  },30);
+}
+function ofTourNoteSave(tid, wipe){
+  if(window.ofReadOnly) return;
+  var t=(activeTours||[]).find(function(x){return x.id===tid;}); if(!t) return;
+  var el=document.getElementById('tnote-'+tid);
+  var txt=wipe?'':String(el?el.value:(typeof _tourNoteOpen[tid]==='string'?_tourNoteOpen[tid]:'')).trim();
+  if(wipe && !confirm('ลบโน้ตนี้? / delete this note?')) return;
+  var had=tourNoteOf(t);
+  if(!txt) delete t.onote;
+  else t.onote={ t:txt.slice(0,2000), by:(typeof ofWho==='function'?ofWho():'Office'), at:Date.now() };
+  // syncTours writes only the fields this device changed — and clears one that
+  // disappeared locally, so an emptied note does not live on in the database.
+  try{ syncTours(); }catch(e){}
+  if(had||txt){ try{ auditTour('note','🚚 '+(t.driverName||t.tid||tid),
+    txt ? ('📝 โน้ตออฟฟิศ / office note: '+txt.slice(0,120)) : '🗑 ลบโน้ตออฟฟิศ / office note removed'); }catch(e){} }
+  delete _tourNoteOpen[tid];
+  _tourNoteBlur(tid);
+  try{ ofRenderTour(); }catch(e){}
+}
 function _tourMiniBtn(id,folded){
   return '<button type="button" onclick="event.stopPropagation();ofTourMini(\''+String(id).replace(/['\\]/g,'')+'\')" '+
     'title="'+(folded?'ขยาย / expand':'ย่อการ์ด / fold the card')+'" '+
@@ -12255,6 +12347,9 @@ function ofRenderTour(){
           (tidOk(t.tid)?'<span title="Tour ID / รหัสทัวร์" style="flex-shrink:0;font-size:11px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px">'+t.tid+'</span>':'')+
           '<span style="flex:1;min-width:0;font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:5px;color:var(--blue)"></i>'+t.driverName+'</span>'+
           '<span style="flex-shrink:0;font-size:11px;font-weight:700;color:#166534;background:#dcfce7;border-radius:999px;padding:1px 8px">📦 '+t.orders.length+'</span>'+
+          // A note the office wrote must not be what folding hides — the marker
+          // unfolds the card straight into it.
+          (tourNoteOf(t)?'<span onclick="event.stopPropagation();ofTourMini(\''+String(t.id).replace(/[\'\\]/g,'')+'\',false);ofTourNoteToggle(\''+String(t.id).replace(/[\'\\]/g,'')+'\')" title="มีโน้ตออฟฟิศ / office note" style="flex-shrink:0;cursor:pointer;font-size:11px">📝</span>':'')+
           _tourMiniBtn(t.id,true)+
         '</div>'+
         ((_slipsBtn||_mWhen)?'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px">'+_slipsBtn+_mWhen+'</div>':'')+
@@ -12451,8 +12546,12 @@ function ofRenderTour(){
       (ro?'':'<button type="button" onclick="event.stopPropagation();ofToggleKmMode(\''+t.id+'\')" title="คิดค่าจ้างตามกิโลเมตร — กำหนดลำดับส่ง + คนขับถ่ายรูปเลขไมล์ / Pay this tour per kilometre" style="font-size:11px;padding:3px 8px;border:none;background:'+(_kmOn?'#1d4ed8':'#94a3b8')+';color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🛣️ KM '+(_kmOn?'ON':'OFF')+'</button>')+
       (ro?'':'<button type="button" onclick="event.stopPropagation();ofAddOrderToTour(\''+t.id+'\')" title="Add a ready order to this tour / เพิ่มออเดอร์เข้าทัวร์" style="font-size:11px;padding:3px 8px;border:none;background:#0ea5e9;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">➕ Add</button>')+
       '<button type="button" onclick="event.stopPropagation();ofTourMap(\''+t.id+'\')" title="แผนที่โซน — จุดส่งของทัวร์ + ออเดอร์ว่างในโซนเดียวกัน / Zone map — tour stops + free orders in the same zone" style="font-size:11px;padding:3px 8px;border:none;background:#0d9488;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">🌐 Map</button>'+
+      ofTourNoteBtn(t)+
       '</div>'+
       '</div>'+
+      // Outside the header on purpose: everything inside it opens the tour detail
+      // on a tap, and a note is written into, not opened.
+      ofTourNoteBox(t,ro)+
       // ── TOP: loaded pickup + Departed on one line ──────────────────────
       // They belong together in the yard: photograph the loaded truck, then send it
       // off. Departed is amber, not green — green is the finished state (the orders
