@@ -7791,7 +7791,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828008;
+var KP_BUILD = 20260828009;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -12489,7 +12489,13 @@ function ofRenderTour(){
             : (st==='shipped'
               ? '<span class="badge bshipped" style="font-size:10px">🚚 At shipper</span>'
                 +'<button type="button" onclick="ofTourDeliver(\''+t.id+'\',\''+id+'\')" title="Customer received — mark delivered / ลูกค้าได้รับแล้ว" style="font-size:11px;padding:2px 8px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:600">✓ Delivered</button>'
-              : '<span class="badge" style="font-size:10px;'+_sbg+'">'+st+'</span>')))); })()+
+              // A cancelled stop is not work the driver did — it can leave the list
+              // like any other row. Its status stays cancelled (rmFromTour releases
+              // only what the tour itself loaded). Delivered stays: that IS the tour.
+              : (st==='cancelled'
+                ? '<span class="badge" style="font-size:10px;'+_sbg+'">'+st+'</span>'
+                  +'<button type="button" data-tid="'+t.id+'" data-oid="'+id+'" onclick="rmFromTour(this)" title="เอาออกจากทัวร์ — ยังคงเป็นยกเลิก / take it off the tour, it stays cancelled" style="font-size:11px;padding:2px 8px;border:1px solid #dc2626;background:#fee2e2;color:#dc2626;border-radius:var(--rs);cursor:pointer">✕ ลบ</button>'
+                : '<span class="badge" style="font-size:10px;'+_sbg+'">'+st+'</span>'))))); })()+
         '</div>'+
         '</div>'+
         ofDelNoteHTML(ord,'margin-top:3px')+
@@ -16666,11 +16672,15 @@ function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.
       }
     }
   }catch(e){}
-  // Back to ready — but ONLY for an order that really is packed. An order still in
-  // new/packing keeps its own status (assigning it to a tour left it there on purpose,
-  // so pulling it off the tour must not claim it is suddenly packed).
+  // Back to ready — but ONLY from 'loaded', which is the status the tour itself gave
+  // it. An order still in new/packing keeps its own (assigning it to a tour left it
+  // there on purpose, so pulling it off must not claim it is suddenly packed), and
+  // anything already finished keeps what it is: taking a CANCELLED stop off a tour
+  // must never un-cancel the order, and a delivered one must never reopen. This used
+  // to be a blacklist, which meant every state that was not new/packing/ready — the
+  // finished ones included — came back as "ready".
   var ord = orders.find(function(x){return x.id===orderId;});
-  if(ord && ord.status!=='new' && ord.status!=='packing' && ord.status!=='ready'){
+  if(ord && ord.status==='loaded'){
     var _o=ord.status; ord.status='ready'; addStatusLog(ord,'ready',ofWho()); auditStatus(orderId,_o,'ready',ofWho());
   }
   // If tour is now empty, remove it — its tour ID is burnt ("T012 — deleted").
