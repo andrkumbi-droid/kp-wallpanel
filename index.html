@@ -7801,7 +7801,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828013;
+var KP_BUILD = 20260828014;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -12005,6 +12005,15 @@ function ofBackfillTourDrivers(){
 // in localStorage, so a live re-render (or a reload) does not pop the cards open
 // again. Per browser on purpose — one office tab folding a card must not fold it
 // away for everyone else.
+// Which driver's tours the active list is narrowed to ('' = all). Per tab and NOT
+// stored: the filter is a moment's grip on a moving list, not a setting — after a
+// reload the office wants to see everything again.
+var _tourFilterDrv='';
+function ofTourFilterDrv(btn){
+  var k=btn?String(btn.getAttribute('data-drv')||''):'';
+  _tourFilterDrv=(_tourFilterDrv===k)?'':k;   // tapping the active chip lifts the filter
+  try{ ofRenderTour(); }catch(e){}
+}
 var _tourMini={};
 try{ _tourMini=JSON.parse(localStorage.getItem('kpTourMini')||'{}')||{}; }catch(e){ _tourMini={}; }
 function ofTourMini(id,on){
@@ -12727,16 +12736,49 @@ function ofRenderTour(){
   };
   // Split active tours: Lalamove (outsourced carrier) on top, the rest below.
   var _tlist = activeTours.filter(function(t){return t&&t.orders;});
-  var _lalaT = _tlist.filter(ofIsLala);
-  var _restT = _tlist.filter(function(t){return !ofIsLala(t);});
+  // With six or eight tours running, finding ONE driver's card means scrolling a
+  // list that live updates keep reshuffling under the finger. One chip per driver
+  // above the cards pins the list to that driver — a tap, not a search, because
+  // the driver names ARE the complete search space here.
+  var _drvChips='';
+  if(_tlist.length>1 || _tourFilterDrv){
+    var _byDrv={}, _order=[];
+    _tlist.forEach(function(t){
+      var k=(t.driverName||'').trim()||'⏳ ยังไม่กำหนด';
+      if(!_byDrv[k]){ _byDrv[k]={n:0, driving:false}; _order.push(k); }
+      _byDrv[k].n++; if(t.driving) _byDrv[k].driving=true;
+    });
+    // A filter for a driver whose tours are all gone (ended elsewhere) must not
+    // leave the office staring at an empty list.
+    if(_tourFilterDrv && !_byDrv[_tourFilterDrv]) _tourFilterDrv='';
+    var _chip=function(label,key,extra){
+      var on=(_tourFilterDrv===key);
+      return '<button type="button" class="tfdrv" data-drv="'+_esc(key)+'" onclick="ofTourFilterDrv(this)"'
+        +' style="font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:999px;cursor:pointer;white-space:nowrap;border:1px solid '
+        +(on?'#1d4ed8;background:#1d4ed8;color:#fff':'var(--border);background:var(--bg);color:var(--text2)')+'">'
+        +label+(extra||'')+'</button>';
+    };
+    _drvChips='<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">'
+      +_chip('ทั้งหมด / all ('+_tlist.length+')','')
+      +_order.map(function(k){
+          var d=_byDrv[k];
+          return _chip('🚚 '+_esc(k), k, (d.n>1?' ('+d.n+')':'')+(d.driving?' <span style="color:'+(_tourFilterDrv===k?'#bbf7d0':'#16a34a')+'">●</span>':''));
+        }).join('')
+    +'</div>';
+  } else { _tourFilterDrv=''; }
+  var _tshow = _tourFilterDrv
+    ? _tlist.filter(function(t){ return ((t.driverName||'').trim()||'⏳ ยังไม่กำหนด')===_tourFilterDrv; })
+    : _tlist;
+  var _lalaT = _tshow.filter(ofIsLala);
+  var _restT = _tshow.filter(function(t){return !ofIsLala(t);});
   var _grpHdr = function(txt){ return '<div style="font-size:11px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:2px 0 8px">'+txt+'</div>'; };
   // Folded cards survive a reload, so there has to be a way back that does not
   // depend on finding each folded card first. Only shown while something is folded.
-  var _miniN = _tlist.filter(function(t){ return t && _tourMini[t.id]; }).length;
+  var _miniN = _tshow.filter(function(t){ return t && _tourMini[t.id]; }).length;
   var _miniBar = _miniN
     ? '<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button type="button" onclick="ofTourMiniAll(false)" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg2);color:var(--text2);border-radius:var(--rs);cursor:pointer;font-weight:600">▾ ขยายทั้งหมด / expand all ('+_miniN+')</button></div>'
     : '';
-  var tourCards = _miniBar+
+  var tourCards = _drvChips+_miniBar+
     (_lalaT.length ? _grpHdr('🛺 Lalamove')+_lalaT.map(_tourCardHTML).join('') : '')+
     (_restT.length ? (_lalaT.length?_grpHdr('🚚 Tours'):'')+_restT.map(_tourCardHTML).join('') : '');
 
