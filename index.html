@@ -1149,6 +1149,13 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
           bills = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}) : [];
           try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
           try{ if(document.getElementById('ofv-food')&&document.getElementById('ofv-food').classList.contains('active')) foodListRender(); }catch(e){}
+          try{ advUpdateBadge(); }catch(e){}
+        });
+        // What a driver paid for us out of his own pocket and still needs a receipt for.
+        db.ref('advPending').on('value', function(snap) {
+          advPending = snap.val() ? Object.values(snap.val()) : [];
+          try{ advUpdateBadge(); }catch(e){}
+          try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
         });
       };
       // Tour-ID registry (T001…): running numbers incl. ended/deleted ones.
@@ -2875,6 +2882,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" class="btnsm" onclick="billsRestoreOpen()" title="Restore closed / detached categories"><i class="ti ti-history"></i> ♻️ Restore</button>
       <button type="button" class="btnsm btnsmp" onclick="billsReportOpen()" title="Report + charts"><i class="ti ti-chart-pie"></i> Report / รายงาน</button>
     </div>
+    <!-- ⛽ What a driver paid for us and still needs a receipt for -->
+    <div id="bills-adv"></div>
     <!-- Receipt entry (top) -->
     <div id="bills-entry" style="margin-bottom:14px"></div>
     <!-- Month selector -->
@@ -4681,6 +4690,7 @@ var containerLog=[];
 var auditLog=[];
 var stockAudit=[];   // own book for stock edits — see stAudit()
 var bills=[];
+var advPending=[];  // fb 'advPending' — driver laid it out, receipt not filed yet
 var costFixed={};                     // Bills: {"YYYY-MM":[{id,label,amount}]} per-month fixed costs (manual, carried over)
 var costCats={utilities:[],food:[],other:[]}; // Bills: sub-category defs per section (office add/remove); amounts come from receipts
 // Finance tab — payments outside Bills/Payroll. Same shape as the Bills tree, but a
@@ -6200,7 +6210,7 @@ function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filte
 // Management view "End tour". It never archived the tour, so a tour ended here was
 // missing from the Drivers tab entirely — archiveTour is idempotent, so calling it
 // from both end paths is safe.
-function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!tourEndOpenGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndShipWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}try{ tourReleaseLoaded(t); }catch(e){}var _rid=t&&t.id;var _oids=(t.orders||[]).slice();activeTours.splice(i,1);fbRemoveTour(_rid);try{var _ch=false;_oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; });if(_ch) syncOrders();}catch(e){}mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!tourEndOpenGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndShipWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}try{tourAdvBook(t);}catch(e){}try{ tourReleaseLoaded(t); }catch(e){}var _rid=t&&t.id;var _oids=(t.orders||[]).slice();activeTours.splice(i,1);fbRemoveTour(_rid);try{var _ch=false;_oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; });if(_ch) syncOrders();}catch(e){}mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').value = kpTodayStr();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -7791,7 +7801,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828011;
+var KP_BUILD = 20260828012;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9401,6 +9411,7 @@ function ofEndTourFromDetail() {
   try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders', _pinBy); }catch(e){}
   try{ archiveTour(t); }catch(e){}
   try{ endTourPayroll(t); }catch(e){}
+  try{ tourAdvBook(t); }catch(e){}
   try{ tourReleaseLoaded(t); }catch(e){}
   var _rid = t && t.id;
   var _oids = (t.orders||[]).slice();
@@ -15453,6 +15464,18 @@ function tourAdjOf(t, oid){ return tourAdjArr(t).filter(function(e){ return Stri
 function tourAdjSign(e){ var s=parseInt(e&&e.sign,10); return (s===-1||s===1)?s:0; }
 function tourAdjVal(e){ return tourAdjSign(e) * Math.abs(parseFloat(e&&e.amt)||0); }
 function tourAdjTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+tourAdjVal(e); },0); }
+// ── pay, or money he laid out for us ──────────────────────────────────────
+// A line on a tour is one of two different things, and the difference decides
+// where the money is BOOKED — never how much cash changes hands:
+//   pay   he earned it, or lost it            → his payroll
+//   cost  he paid for the shop out of his own pocket (fuel, ferry, toll) and
+//         gets it straight back out of the bag → NOT payroll. That would inflate
+//         his wage and hide the fuel among the wages. The expense itself is the
+//         receipt, and the receipt is filed in Bills by whoever does the books.
+// Both are handed over at the end of the tour, so the settlement counts both.
+function tourAdjIsCost(e){ return String((e&&e.kind)||'')==='cost'; }
+function tourAdjPayTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+(tourAdjIsCost(e)?0:tourAdjVal(e)); },0); }
+function tourAdjCostTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+(tourAdjIsCost(e)?tourAdjVal(e):0); },0); }
 // A line with no order on it belongs to the WHOLE tour — a ferry ticket, a fine, a
 // bonus for the day. Same list, same total, same settle-up: only the empty oid
 // tells them apart, so everything that already counts adjustments counts these too.
@@ -15609,7 +15632,7 @@ function ofTourSettle(tourId){
   var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
     var v=tourAdjVal(e);
     return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:1px 0;color:var(--text2)">'
-      +'<span>'+esc(tourAdjWho(e))+' · '+esc(e.note||'—')+'</span>'
+      +'<span>'+esc(tourAdjWho(e))+' · '+(tourAdjIsCost(e)?'⛽ ':'')+esc(e.note||'—')+'</span>'
       +'<span style="font-weight:700;color:'+(v<0?'#b91c1c':'#166534')+';white-space:nowrap">'+tourAdjFmt(v)+'</span></div>';
   }).join('');
   // The settlement STATE belongs in the snapshot as well, not just the figures: a
@@ -15742,7 +15765,7 @@ function ofTourSettlePrint(tourId){
       +'<tfoot><tr><td colspan="2" class="sumlbl">'+label+'</td><td class="r sumlbl">'+money(sum)+'</td></tr></tfoot></table>';
   };
   var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
-    return '<tr><td>'+esc(tourAdjWho(e))+'</td><td>'+esc(e.note||'')+'</td><td class="r">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
+    return '<tr><td>'+esc(tourAdjWho(e))+'</td><td>'+(tourAdjIsCost(e)?'⛽ สำรองจ่าย / laid out · ':'')+esc(e.note||'')+'</td><td class="r">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
   }).join('');
   // A km tour that has readings: the legs the pay is built from, so the driver can
   // check his own odometer against the sheet he is signing. Nothing to list when the
@@ -15970,6 +15993,18 @@ function ofTourAdjSign(tourId, adjId){
       +(h.e.note?' · '+h.e.note:'')); }catch(e){}
   }
 }
+// 💰 pay ⇄ ⛽ laid out for the shop. Only the booking changes, never the cash.
+function ofTourAdjKind(tourId, adjId){
+  if(window.ofReadOnly) return;
+  var h=_tourAdjFind(tourId, adjId); if(!h) return;
+  var was=tourAdjIsCost(h.e);
+  if(was) delete h.e.kind; else h.e.kind='cost';
+  h.e.by=ofWho(); h.e.ts=Date.now();
+  _tourAdjSave(h.t);
+  try{ auditTour('adjust','🚚 '+(h.t.driverName||''),
+    (was?'💰 นับเป็นค่าจ้าง / counted as pay':'⛽ นับเป็นสำรองจ่าย ไม่เข้าเงินเดือน / counted as an expense he laid out, not payroll')
+    +' · '+(h.e.oid||'ทั้งทัวร์')+' · '+tourAdjFmt(tourAdjVal(h.e))+(h.e.note?' · '+h.e.note:'')); }catch(e){}
+}
 function ofTourAdjNote(tourId, adjId, val){
   if(window.ofReadOnly) return;
   var h=_tourAdjFind(tourId, adjId); if(!h) return;
@@ -16029,14 +16064,20 @@ function tourAdjRowsInner(t, oid, ro){
     var s=tourAdjSign(e), m=SG[String(s)];
     var aid=String(e.id).replace(/['"\\]/g,'');
     var who=(e.by?e.by:'')+(e.ts?' · '+new Date(e.ts).toISOString().slice(0,10):'');
+    var isC=tourAdjIsCost(e);
     if(ro){
       return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11.5px">'
         +'<span style="font-weight:800;color:'+m.c+';white-space:nowrap">'+m.t+'</span>'
-        +'<span style="flex:1;min-width:0;color:var(--text)">'+esc(e.note||'—')+'</span>'
+        +'<span style="flex:1;min-width:0;color:var(--text)">'+(isC?'⛽ ':'')+esc(e.note||'—')+'</span>'
         +'<span style="font-weight:800;color:'+m.c+';white-space:nowrap">'+tourAdjFmt(tourAdjVal(e))+'</span>'
         +'</div>';
     }
     return '<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;min-width:0" onclick="event.stopPropagation()">'
+      // 💰 or ⛽ — the one thing that decides whether this lands in his wage.
+      +'<button type="button" onclick="event.stopPropagation();ofTourAdjKind(\''+tidJs+'\',\''+aid+'\')"'
+        +' title="'+(isC?'สำรองจ่าย — คืนเงินสด ไม่เข้าเงินเดือน (บันทึกใบเสร็จใน Bills) / laid out for the shop: paid back in cash, kept out of payroll — the receipt goes into Bills'
+                        :'ค่าจ้าง — เข้าเงินเดือน / pay: goes into his payroll')+'"'
+        +' style="flex-shrink:0;width:30px;height:29px;padding:0;border:1px solid '+(isC?'#fed7aa':'var(--border)')+';background:'+(isC?'#ffedd5':'var(--bg2)')+';border-radius:var(--rs);font-size:13px;cursor:pointer;line-height:1">'+(isC?'⛽':'💰')+'</button>'
       +'<input type="text" value="'+esc(e.note)+'" placeholder="เหตุผล / reason — e.g. เสียหายจากการขนส่ง, ค่าเรือ"'
         +' onchange="ofTourAdjNote(\''+tidJs+'\',\''+aid+'\',this.value)" title="'+esc(who)+'"'
         +' style="flex:1 1 90px;min-width:0;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11.5px">'
@@ -16125,7 +16166,7 @@ function recAdjHTML(rec, oid){
     var v=tourAdjVal(e), c=v<0?'#b91c1c':v>0?'#166534':'var(--text2)';
     return '<div style="display:flex;gap:6px;align-items:baseline;padding:1px 0">'
       +(oid==null?'<span style="font-weight:700;white-space:nowrap">'+esc(tourAdjWho(e))+'</span>':'')
-      +'<span style="flex:1;min-width:0;color:var(--text2)">📝 '+esc(e.note||'—')+'</span>'
+      +'<span style="flex:1;min-width:0;color:var(--text2)">'+(tourAdjIsCost(e)?'⛽':'📝')+' '+esc(e.note||'—')+'</span>'
       +'<span style="font-weight:800;color:'+c+';white-space:nowrap">'+(tourAdjSign(e)===0?'—':tourAdjFmt(v))+'</span>'
       +'</div>';
   }).join('');
@@ -16227,6 +16268,37 @@ function tourPayTid(t){
 }
 // Category key for tour pay: the office-managed "Tour Pay" category if present, else 'tour_pay'.
 function payTourCatKey(){ try{ var c=payCats().find(function(x){ return x.key==='tour_pay' || /tour\s*pay/i.test(x.label||''); }); return c?c.key:'tour_pay'; }catch(e){ return 'tour_pay'; } }
+// ══════════════════════════════════════════════════════════════════════════
+//  ⛽ WHAT THE DRIVER LAID OUT FOR US
+//  ------------------------------------------------------------------------
+//  He filled the tank three times and paid out of his own pocket; he gets the
+//  money straight back out of the tour's cash. That is a cash movement, not a
+//  wage — and the COST only exists once, on the receipt in his hand.
+//
+//  So the tour hands the accountant a prepared job instead of booking anything
+//  itself: advPending/<adjId> = what, how much, which tour, which driver, which
+//  day. It shows up in Bills as "waiting for a receipt", she picks the category,
+//  photographs the slip and presses save — and the pending entry is gone. The
+//  app never invents the expense on its own: a receipt filed twice is worse than
+//  one filed late, and only she can see which category and which vendor it was.
+// ══════════════════════════════════════════════════════════════════════════
+function tourAdvBook(t){
+  if(!t || !window.fbDB) return;
+  tourAdjArr(t).forEach(function(e){
+    // Only money that went OUT to him. A cost line with a minus would be the shop
+    // taking money back — that is not an expense waiting for a receipt.
+    if(!tourAdjIsCost(e) || tourAdjSign(e)!==1) return;
+    var amt=Math.abs(parseFloat(e.amt)||0); if(amt<=0) return;
+    var rec={ id:String(e.id), tid:tourPayTid(t)||'', tourId:t.id||'',
+              driverId:t.driverId||'', driverName:t.driverName||'',
+              date:tourPayDate(t), amount:amt, note:String(e.note||''), oid:String(e.oid||''),
+              by:(typeof ofWho==='function'?ofWho():'Office'), at:Date.now() };
+    window.fbDB.ref('advPending/'+rec.id).set(rec);
+    try{ auditTour('adjust','🚚 '+(t.driverName||''),
+      '⛽ สำรองจ่ายรอบันทึกใบเสร็จ / laid out, waiting for a receipt in Bills · '
+      +amt.toLocaleString()+' ฿'+(rec.note?' · '+rec.note:'')); }catch(e2){}
+  });
+}
 // On End tour: book the FULL tour pay into the driver's payroll (that's the total they
 // earned). The advance is only a timing split — it was paid at start, remainder at end —
 // so it does NOT reduce the payroll total, only the cash handed over at tour end.
@@ -16234,7 +16306,11 @@ function endTourPayroll(t){
   if(!t) return;
   // Deductions and extras booked on single stops change what the driver EARNED, so
   // they belong in the payroll figure — not only in the cash handed over at the end.
-  var _base=parseFloat(t.driverPay)||0, _adjT=tourAdjTotal(t);
+  // …but only the lines that are PAY. What he laid out for the shop (fuel, ferry,
+  // toll) comes back to him out of the same bag, and booking it here would call it
+  // a wage: his payroll too high, and the fuel cost hidden inside the wages. Those
+  // lines are handed to Bills instead — see tourAdvBook.
+  var _base=parseFloat(t.driverPay)||0, _adjT=tourAdjPayTotal(t), _costT=tourAdjCostTotal(t);
   var amt=Math.max(0, _base+_adjT); if(amt<=0) return;
   var adv=parseFloat(t.driverAdvance)||0;
   var s=(staffList||[]).find(function(x){return x.driverId && x.driverId===t.driverId;})
@@ -16249,8 +16325,9 @@ function endTourPayroll(t){
     date: tourPayDate(t), ts:Date.now(),
     note:'Tour'+(t.created?' '+t.created:'')
       +(_adjT!==0?' · '+_base.toLocaleString()+' '+(_adjT<0?'−':'+')+' '+Math.abs(_adjT).toLocaleString()+' ('
-        +tourAdjArr(t).filter(function(e){return tourAdjSign(e)!==0;})
+        +tourAdjArr(t).filter(function(e){return tourAdjSign(e)!==0 && !tourAdjIsCost(e);})
           .map(function(e){ return (e.oid||'')+' '+tourAdjFmt(tourAdjVal(e))+(e.note?' '+e.note:''); }).join('; ')+')':'')
+      +(_costT!==0?' · ไม่รวมสำรองจ่าย / excl. '+Math.abs(_costT).toLocaleString()+' ฿ laid out (filed in Bills)':'')
       +(adv>0?' (incl. advance '+adv.toLocaleString()+' paid at start, '+tourNetPay(t).toLocaleString()+' at end)':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
   if(window.fbDB) window.fbDB.ref('payLog/'+rec.id).set(rec);
   // Money landing in payroll must be visible in the Payroll filter of the audit
@@ -35799,6 +35876,7 @@ function costsRender(){
 function billsRender(){
   try{ if(window.kpHeavyListeners) window.kpHeavyListeners(); }catch(e){}   // this view needs the heavy node
   try{ if(!document.getElementById('bills-e-section')) billsEntryRender(); }catch(e){}
+  try{ advBannerRender(); advUpdateBadge(); }catch(e){}
   // Never swallow this one silently — a throw in here empties the whole cost
   // dashboard and the tab just looks "gone" (06.08.2026).
   try{ costsRender(); }catch(e){ console.error('costsRender failed:',e); }
@@ -35868,6 +35946,93 @@ function billsRender(){
 }
 
 // Receipt entry (top of Bills tab): pick section → sub-category, amount, photo.
+// ══════════════════════════════════════════════════════════════════════════
+//  ⛽ สำรองจ่ายรอใบเสร็จ / ADVANCED BY A DRIVER, WAITING FOR ITS RECEIPT
+//  The tour hands these over (tourAdvBook); the accountant turns each one into
+//  a real receipt. The app prepares the entry — amount, day, tour, note — and
+//  she does the two things only she can do: pick the category and photograph
+//  the slip. Nothing is booked before she presses save, so a receipt she enters
+//  by hand can never end up in the books twice.
+// ══════════════════════════════════════════════════════════════════════════
+var _advFilingId='';
+function advPendingOpen(){
+  return (advPending||[]).filter(function(e){
+    return e && e.id && !(bills||[]).some(function(b){ return b && String(b.advId||'')===String(e.id); });
+  }).sort(function(a,b){ return String(a.date||'').localeCompare(String(b.date||'')) || (a.at||0)-(b.at||0); });
+}
+function advUpdateBadge(){
+  var el=document.getElementById('oft-bills-cnt'); if(!el) return;
+  var n=advPendingOpen().length;
+  if(n>0){ el.textContent=n; el.style.display='inline-flex'; } else { el.style.display='none'; }
+}
+function advBannerRender(){
+  var el=document.getElementById('bills-adv'); if(!el) return;
+  var list=advPendingOpen();
+  if(!list.length){ el.innerHTML=''; return; }
+  var tot=list.reduce(function(a,e){ return a+(parseFloat(e.amount)||0); },0);
+  el.innerHTML='<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:var(--rs);padding:11px 12px;margin-bottom:14px">'
+    +'<div style="font-size:13px;font-weight:800;color:#9a3412;margin-bottom:2px">⛽ สำรองจ่ายรอใบเสร็จ / paid by a driver, receipt still missing ('+list.length+')</div>'
+    +'<div style="font-size:11.5px;color:#9a3412;margin-bottom:8px">คนขับจ่ายไปก่อนและรับเงินคืนจากทัวร์แล้ว — ยังไม่ได้บันทึกเป็นค่าใช้จ่าย รวม <b>'+tot.toLocaleString()+' ฿</b>'
+      +'<div>He was paid back out of the tour cash; the cost is not in the books until the receipt is filed here.</div></div>'
+    + list.map(function(e){
+        var idJs=String(e.id).replace(/['"\\]/g,'');
+        return '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);padding:8px 9px;margin-bottom:6px">'
+          +'<div style="flex:1;min-width:120px">'
+            +'<div style="font-size:12.5px;font-weight:700">'+_esc(e.note||'—')+'</div>'
+            +'<div style="font-size:11px;color:var(--text2)">🚚 '+_esc(e.driverName||'')+(e.tid?' · '+_esc(e.tid):'')+' · '+_esc(e.date||'')+'</div>'
+          +'</div>'
+          +'<div style="font-size:14px;font-weight:900;color:#9a3412;white-space:nowrap">'+(parseFloat(e.amount)||0).toLocaleString()+' ฿</div>'
+          +'<button type="button" onclick="advFile(\''+idJs+'\')" style="flex-shrink:0;padding:7px 11px;border:none;border-radius:var(--rs);background:var(--blue);color:#fff;font-size:11.5px;font-weight:700;cursor:pointer">📝 บันทึกใบเสร็จ / file it</button>'
+          +'<button type="button" onclick="advDismiss(\''+idJs+'\')" title="ไม่มีใบเสร็จ / no receipt — take it off this list" style="flex-shrink:0;width:28px;height:28px;padding:0;border:1px solid var(--border);background:var(--bg2);color:var(--text2);border-radius:var(--rs);font-size:12px;cursor:pointer">✕</button>'
+        +'</div>';
+      }).join('')
+  +'</div>';
+}
+// Prepare the entry form and put her in front of the two open questions.
+function advFile(id){
+  var e=(advPending||[]).find(function(x){ return String(x.id)===String(id); }); if(!e) return;
+  _advFilingId=String(id);
+  try{ if(!document.getElementById('bills-e-section')) billsEntryRender(); }catch(err){}
+  var set=function(i,v){ var el=document.getElementById(i); if(el) el.value=v; };
+  set('bills-e-amount', parseFloat(e.amount)||0);
+  set('bills-e-date', e.date||kpTodayStr());
+  set('bills-e-what', (e.note||'')+(e.driverName?' · '+e.driverName:''));
+  // A category that may carry a tour link is the one this belongs in (fuel, gas,
+  // toll) — preselect the first, she can still change it.
+  try{
+    var sSel=document.getElementById('bills-e-section'), cSel=document.getElementById('bills-e-subcat');
+    var found=null;
+    billSecs().forEach(function(s){
+      if(found) return;
+      (costCats[s.id]||[]).forEach(function(c){ if(!found && c.tourLink) found={sec:s.id, cat:c.id}; });
+    });
+    if(found && sSel && cSel){ sSel.value=found.sec; billsFillSubcats(); cSel.value=found.cat; }
+  }catch(err){}
+  _billEntryTid=e.tid||'';
+  try{ billsEntryTourRow(); }catch(err){}
+  try{ advBannerRender(); }catch(err){}
+  var box=document.getElementById('bills-entry');
+  if(box){
+    box.scrollIntoView({block:'center'});
+    box.style.outline='2px solid var(--blue)'; box.style.borderRadius='var(--rs)';
+    setTimeout(function(){ try{ box.style.outline=''; }catch(err){} }, 2500);
+  }
+  try{ var ph=document.getElementById('bills-e-photo'); if(ph) ph.focus(); }catch(err){}
+  alert('⛽ '+(parseFloat(e.amount)||0).toLocaleString()+' ฿ · '+(e.note||'')+'\n'
+    +'เลือกหมวด แนบรูปใบเสร็จ แล้วกดบันทึก\nPick the category, attach the receipt photo, then press save.');
+}
+function advDismiss(id){
+  var e=(advPending||[]).find(function(x){ return String(x.id)===String(id); }); if(!e) return;
+  if(!confirm('เอาออกจากรายการโดยไม่บันทึกใบเสร็จ?\nTake this off the list without filing a receipt?\n\n'
+    +(parseFloat(e.amount)||0).toLocaleString()+' ฿ · '+(e.note||'')+'\n\n'
+    +'เงินจ่ายคืนคนขับไปแล้ว แต่จะไม่มีค่าใช้จ่ายนี้ในบัญชี / the driver was paid back, but this cost will not be in the books.')) return;
+  if(window.fbDB) window.fbDB.ref('advPending/'+String(id)).remove();
+  try{ auditAdd({type:'edit', area:'bills', orderId:'⛽ '+(e.driverName||''),
+    detail:'ไม่บันทึกใบเสร็จ / advance dismissed without a receipt · '+(parseFloat(e.amount)||0).toLocaleString()+' ฿'
+      +(e.note?' · '+e.note:'')+(e.tid?' · '+e.tid:''),
+    by:(typeof ofWho==='function'?ofWho():'Office')}); }catch(err){}
+  try{ advBannerRender(); advUpdateBadge(); }catch(err){}
+}
 function billsEntryRender(){
   var el=document.getElementById('bills-entry'); if(!el) return;
   var inp='padding:9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)';
@@ -35931,6 +36096,14 @@ function billsEntrySubmit(){
   var date=document.getElementById('bills-e-date').value || new Date().toISOString().slice(0,10);
   var what=document.getElementById('bills-e-what').value.trim();
   var photoFile=document.getElementById('bills-e-photo').files[0];
+  // Money that has already left the till needs its slip. Not a hurdle for ordinary
+  // receipts — only for the ones being filed off the waiting list, where the whole
+  // point is the proof. Genuinely no slip → ✕ on the waiting list says so out loud.
+  if(_advFilingId && !photoFile){
+    alert('⛽ แนบรูปใบเสร็จก่อนบันทึก / attach the receipt photo before saving.\n\n'
+      +'ถ้าไม่มีใบเสร็จจริง ๆ ให้กด ✕ ในรายการรอ / if there really is no receipt, use the ✕ on the waiting list instead.');
+    return;
+  }
   var by=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office';
   function persist(url){
     var id='bill-'+Date.now();
@@ -35940,6 +36113,19 @@ function billsEntrySubmit(){
     if(_billEntryTid && cat.tourLink){
       var reg=(typeof tourRegRec==='function'?tourRegRec(_billEntryTid):null)||{};
       rec.tourTid=_billEntryTid; rec.tourDriver=reg.driverName||''; rec.tourDate=reg.createdDate||'';
+    }
+    // Filing a driver's advance: the receipt carries the line it settles, which is
+    // what takes it off the waiting list — and what makes a second, hand-typed
+    // receipt for the same money impossible to confuse with this one.
+    if(_advFilingId){
+      rec.advId=_advFilingId;
+      var _p=(advPending||[]).find(function(x){ return String(x.id)===String(_advFilingId); })||{};
+      rec.advDriver=_p.driverName||'';
+      if(window.fbDB) window.fbDB.ref('advPending/'+_advFilingId).remove();
+      try{ auditAdd({type:'edit', area:'bills', orderId:'⛽ '+(_p.driverName||''),
+        detail:'บันทึกใบเสร็จสำรองจ่าย / advance filed as a receipt · '+amt.toLocaleString()+' ฿'
+          +(what?' · '+what:'')+(_p.tid?' · '+_p.tid:''), by:by}); }catch(e2){}
+      _advFilingId='';
     }
     if(window.fbDB) window.fbDB.ref('bills/'+id).set(rec);
     var a=document.getElementById('bills-e-amount'); if(a)a.value='';
