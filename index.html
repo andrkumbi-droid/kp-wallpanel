@@ -7791,7 +7791,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260828009;
+var KP_BUILD = 20260828010;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -13325,6 +13325,10 @@ function archiveTour(t){
     // distance is gone the moment the tour is ended — together with its pay basis.
     kmManual:kmManualOf(t)||null, kmManualBy:t.kmManualBy||'', kmManualAt:t.kmManualAt||0,
     payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
+    // What was actually handed over, and the carton basis the pay was built on:
+    // without them a reprinted settlement has to ASSUME the amount and re-derive
+    // the rate from today's zone mix.
+    paidAmtTour:parseFloat(t.paidAmtTour)||0, ctnCount:parseFloat(t.ctnCount)||0, ctnRate:parseFloat(t.ctnRate)||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now() };
   // The photographs go BESIDE the record (see kpTourPhotoHTML): a tour record must stay
   // small enough that every device can hold the whole history without noticing. That
@@ -15547,11 +15551,50 @@ function tourCtnCount(t, fallback){
   var c=parseFloat(t&&t.ctnCount);
   return (c>0)?c:(fallback||0);
 }
+// ── the same settlement, for a tour that is already in the history ────────
+// The Drivers tab keeps every finished tour, and that is where somebody looks
+// when a driver comes back three days later with the paper. The archived record
+// is shaped differently — its orders are snapshots, not ids — so it is
+// translated into the shape the ONE calculation expects. Writing a second
+// calculation for old tours is exactly how a settlement sheet starts
+// contradicting itself.
+function tsetHistTour(rec){
+  if(!rec) return null;
+  var ids=[], st={};
+  (rec.orders||[]).forEach(function(o){
+    var id=(o && o.id!=null) ? o.id : o; if(!id) return;
+    id=String(id); ids.push(id); st[id]=(o && o.status)||'';
+  });
+  return {
+    id:rec.tourId||'', tid:rec.tid||'', driverId:rec.driverId||'', driverName:rec.driverName||'',
+    orders:ids, status:st,
+    departedDate:rec.departedDate||'', departedAt:rec.departedAt||'',
+    driverPay:rec.driverPay, driverAdvance:rec.driverAdvance, adj:rec.adj,
+    payMethodTour:rec.payMethodTour||'', paidByTour:rec.paidByTour||'', paidAtTour:rec.paidAtTour||0,
+    paidAmtTour:rec.paidAmtTour||0,
+    // Only the NUMBER of slips survives archiving — the pictures live beside the
+    // record, and tourPayState asks nothing but "are there any".
+    carFeeSlips:(rec.carFeeSlips&&rec.carFeeSlips.length) ? rec.carFeeSlips
+                : (rec.carSlipN>0 ? new Array(rec.carSlipN).join('.').split('.') : []),
+    kmMode:!!rec.kmMode, kmRate:rec.kmRate, kmLog:rec.kmLog||[], kmManual:rec.kmManual||0,
+    ctnCount:rec.ctnCount||0, ctnRate:rec.ctnRate||0,
+    _hist:true
+  };
+}
+// An active tour by its id, or an archived one as 'h:<driverKey>:<historyKey>'.
+function tsetFind(ref){
+  ref=String(ref||'');
+  var t=(activeTours||[]).find(function(x){ return x.id===ref; });
+  if(t) return t;
+  var m=ref.match(/^h:([^:]+):(.+)$/); if(!m) return null;
+  var rec=(((typeof tourHistory!=='undefined'&&tourHistory)||{})[m[1]]||{})[m[2]];
+  return rec ? tsetHistTour(rec) : null;
+}
 // The hand-over window: what the driver brought back, what he keeps, what the shop
 // gets. Read-only arithmetic over what is already on the card — it books nothing,
 // so it can be opened and closed as often as anyone likes.
 function ofTourSettle(tourId){
-  var t=activeTours.find(function(x){return x.id===tourId;}); if(!t) return;
+  var t=tsetFind(tourId); if(!t) return;
   var s=tourSettleCalc(t);
   var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;'); };
   // Same worked-out sum as the printed sheet: operator column, rule, result.
@@ -15635,10 +15678,13 @@ function ofTourSettle(tourId){
 function ofTourSettleClose(){ var m=document.getElementById('tset-modal'); if(m) m.remove(); }
 // One A4 page: the same figures, room for two signatures.
 function ofTourSettlePrint(tourId){
-  var t=activeTours.find(function(x){return x.id===tourId;});
+  var t=tsetFind(tourId);
   // Another tab may have ended the tour while this window stood open. Saying so
   // beats a button that quietly does nothing.
-  if(!t){ alert('ทัวร์นี้ไม่ได้เปิดอยู่แล้ว / this tour is no longer open — it was ended somewhere else'); ofTourSettleClose(); return; }
+  if(!t){ alert(/^h:/.test(String(tourId))
+      ? 'ไม่พบทัวร์นี้ในประวัติแล้ว / this tour is no longer in the history'
+      : 'ทัวร์นี้ไม่ได้เปิดอยู่แล้ว / this tour is no longer open — it was ended somewhere else');
+    ofTourSettleClose(); return; }
   var s=tourSettleCalc(t);
   // The window is a snapshot; the data behind it keeps moving (stops being ticked
   // off from the driver app, the pay edited in another tab). Never print figures
@@ -16255,6 +16301,10 @@ function ofActiveTourRec(t){
     // distance is gone the moment the tour is ended — together with its pay basis.
     kmManual:kmManualOf(t)||null, kmManualBy:t.kmManualBy||'', kmManualAt:t.kmManualAt||0,
     payMethodTour:t.payMethodTour||'', paidByTour:t.paidByTour||'', paidAtTour:t.paidAtTour||0,
+    // What was actually handed over, and the carton basis the pay was built on:
+    // without them a reprinted settlement has to ASSUME the amount and re-derive
+    // the rate from today's zone mix.
+    paidAmtTour:parseFloat(t.paidAmtTour)||0, ctnCount:parseFloat(t.ctnCount)||0, ctnRate:parseFloat(t.ctnRate)||0,
     orderCount:ordersSnap.length, orders:ordersSnap, ts:Date.now(), _active:true };
 }
 // Add a vehicle photo to a tour from the Drivers tab. Live (still active) tours write
@@ -16468,8 +16518,13 @@ function ofDriversRender(){
         +'<button type="button" onclick="event.stopPropagation();document.getElementById(\''+pgal+'\').click()" style="flex:1;padding:7px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11px;font-weight:700;cursor:pointer">🖼️ Gallery / แกลเลอรี</button>'
         +'</div>';
       // Reprint the driver delivery sheet later (same sheet as in the active tour).
+      // Next to it the settlement: the sheet that says what he kept and what the
+      // shop got. A driver comes back days later with his copy — this opens the
+      // same window the tour card had, over the archived record, and prints again.
+      var _tsetRef=(t._active&&t.tourId)?String(t.tourId):('h:'+key+':'+t._k);
       var printHTML='<div style="padding:0 0 4px">'
         +'<button type="button" onclick="event.stopPropagation();ofDrvPrintSheet(\''+key+'\',\''+t._k+'\',\''+(t.tourId||'')+'\')" title="Driver delivery sheet / ใบส่งของคนขับ" style="width:100%;padding:7px 4px;border:none;border-radius:var(--rs);background:#16a34a;color:#fff;font-size:11px;font-weight:700;cursor:pointer"><i class="ti ti-clipboard-list"></i> Delivery sheet / ใบส่งของ (print)</button>'
+        +'<button type="button" onclick="event.stopPropagation();ofTourSettle(\''+_tsetRef.replace(/['\\]/g,'')+'\')" title="ดูใบปิดยอดอีกครั้ง แล้วพิมพ์ซ้ำได้ / look at the settlement again and print another copy" style="width:100%;margin-top:5px;padding:7px 4px;border:none;border-radius:var(--rs);background:#1d4ed8;color:#fff;font-size:11px;font-weight:700;cursor:pointer">🧮 ปิดยอดทัวร์ / Settlement (view + print)</button>'
         +'</div>';
       // Tour pay entered/corrected after the fact (forgotten on "End tour", or extra work).
       var payInpId='drvpay_'+key+'_'+t._k;
