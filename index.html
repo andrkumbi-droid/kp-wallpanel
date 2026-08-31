@@ -7805,7 +7805,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260829004;
+var KP_BUILD = 20260829005;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -33528,19 +33528,34 @@ function pgRate(sid){
            contEach:n(r.contEach,0), absMult:n(r.absMult,2), monthly:n(r.monthly,0),
            comm:n(r.comm,0) };
 }
-/* Panels sold in a month — the same number the Sales tab shows as
-   "Total Panels / แผ่นรวม": every non-cancelled order dated in that month, panel
-   codes parsed out of o.panels ("KP009 × 50 · KP027 × 100"), CL* (clips) skipped.
+/* Panels the commission of a month is paid on. NOT the calendar month, and NOT
+   the Sales tab's "Total Panels": the accountant closes the payroll one day
+   before the month ends, so a month's own last day can never be in its own
+   commission. It is not lost — it opens the NEXT month. The window for 2026-08
+   runs 31.07 … 30.08, September's runs 31.08 … 29.09; every day lands in exactly
+   one month. Panel codes parsed out of o.panels ("KP009 × 50 · KP027 × 100"),
+   CL* (clips) skipped, cancelled orders skipped.
    Cached per month because the commission row asks for it once per person. */
+function pgCommWindow(mk){
+  var p=String(mk).split('-'), y=+p[0], m=+p[1];
+  var f=function(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+  var from=new Date(y, m-1, 0);                       // last day of the month before
+  var to=new Date(y, m, 0); to.setDate(to.getDate()-1); // second-to-last day of mk
+  return { from:f(from), to:f(to) };
+}
 var _pgPanelCache={};
 function pgPanelsOfMonth(mk){
   var sig=(orders||[]).length+'|'+mk;
   if(_pgPanelCache[mk] && _pgPanelCache[mk].sig===sig) return _pgPanelCache[mk].n;
-  var total=0;
+  var w=pgCommWindow(mk), total=0;
   (orders||[]).forEach(function(o){
     if(!o || o.status==='cancelled' || !o.date) return;
-    var d=new Date((o.date||'')+'T00:00:00'); if(isNaN(d)) return;
-    if(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')!==mk) return;
+    var ds=String(o.date).slice(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(ds)){
+      var d=new Date((o.date||'')+'T00:00:00'); if(isNaN(d)) return;
+      ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    }
+    if(ds<w.from || ds>w.to) return;
     if(!o.panels || o.panels==='—') return;
     String(o.panels).split('·').forEach(function(p){
       var m=p.trim().match(/^([A-Z0-9\-]+)\s*[×x]\s*(\d+)/i);
@@ -33551,6 +33566,12 @@ function pgPanelsOfMonth(mk){
   });
   _pgPanelCache[mk]={sig:sig,n:total};
   return total;
+}
+// "31/07 – 30/08" — the window, the way a person writes it.
+function pgCommWinTxt(mk){
+  var w=pgCommWindow(mk);
+  var s=function(x){ var p=x.split('-'); return p[2]+'/'+p[1]; };
+  return s(w.from)+' – '+s(w.to);
 }
 // 1 container = the "1" price, 2 = the "2" price, from the 3rd on: "2" + each further.
 function pgContAmt(n, R){
@@ -33987,6 +34008,11 @@ function pgSlipHtml(sid){
     else if(r.k==='tour')
       det=esc(r._c.expl||'')
         +'<div class="dl">📅 '+esc(Object.keys(pgTourByDay(sid,mk)).sort(function(x,y){return x-y;}).join(', '))+'</div>';
+    // The commission window is shifted by one day — the slip has to say which
+    // days the figure covers, or the count looks wrong next to the Sales tab.
+    else if(r.k==='comm')
+      det=esc(r._c.expl||'')
+        +'<div class="dl">📅 '+esc(pgCommWinTxt(mk))+' — นับถึงวันก่อนสิ้นเดือน วันสุดท้ายไปเดือนถัดไป / counted to the day before month-end; the last day opens the next month</div>';
     // Free-amount rows (advance, damage): which day, how much — spelled out, not
     // a bracket puzzle like "6 (500), 9 (200)".
     else if(r.type==='amt')
@@ -34207,7 +34233,8 @@ function pgRowHtml(sid, mk, row, dim, todayD, isCur, isPast){
     // name dialog. One read-only pill instead of 31 dead boxes.
     var _R2=pgRate(sid);
     cells='<div class="pg-cells"><button type="button" class="pg-c pg-auto" disabled style="width:auto;flex:0 0 auto;padding:0 12px;font-size:11px;opacity:1">'
-      +pgN(c.cnt)+' แผ่น / panels × '+pgN(_R2.comm)+' ฿</button></div>';
+      +pgN(c.cnt)+' แผ่น / panels × '+pgN(_R2.comm)+' ฿'
+      +' <span style="font-weight:600;opacity:.75">· 📅 '+pgCommWinTxt(mk)+'</span></button></div>';
   } else if(row.custom && row.mode==='total'){
     cells='<div class="pg-cells"><button type="button" class="pg-c '+(row.sign<0?'pg-neg':'pg-pos')+'" style="width:auto;flex:0 0 auto;padding:0 12px;font-size:11px" '
       +'onclick="pgRowOpen(\''+sid+'\',\''+row.id+'\')">'+(row.sign<0?'−':'+')+pgN(row.amount)+' ฿ · whole month / ทั้งเดือน</button></div>';
