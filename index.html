@@ -2623,6 +2623,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="view" id="ofv-attend"><div class="sec">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
       <div class="stit" style="margin-bottom:0;flex:1;min-width:130px">💰 Payroll / เงินเดือน</div>
+      <!-- Every payslip of the month in one go — one sheet per person, same layout
+           as the buttons on each card, only stacked. -->
+      <button type="button" class="pg-xbtn" onclick="pgPrintAll()" title="พิมพ์สลิปทุกคนในเดือนนี้ — คนละหน้า / print every payslip of this month, one page each">🖨 ทุกคน / all</button>
+      <button type="button" class="pg-xbtn" onclick="pgPdfAll(this)" title="สลิปทุกคนเป็นไฟล์ PDF เดียว / every payslip in one PDF file">📄 ทุกคน / all</button>
       <select id="pg-month" onchange="pgSetMonth(this.value)" style="flex:0 0 auto;width:auto;padding:7px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:13px;font-weight:800;cursor:pointer"></select>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:10.5px;color:var(--text2);font-weight:600;margin-bottom:10px">
@@ -7801,7 +7805,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260829003;
+var KP_BUILD = 20260829004;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -33947,27 +33951,60 @@ function pgSlipHtml(sid){
   var st=(staffList||[]).find(function(x){return x.id===sid;})||{name:'—'};
   var c=pgCalc(sid,mk), R=c.R;
   function esc(s){ return _esc(String(s==null?'':s)); }
-  var lines='';
+  // One entry per line item, collected first so the sheet can print all the
+  // income before any deduction — the reader adds downward, plus then minus,
+  // instead of jumping between signs mid-table.
+  var items=[];
+  var push=function(label, det, amt, sign){
+    items.push({ sign:sign,
+      h:'<tr><td>'+label+'</td><td>'+det+'</td><td class="am'+(sign<0?' neg':'')+'">'+(sign<0?'−':'+')+pgN(Math.abs(amt))+'</td></tr>' });
+  };
+  // The filled boxes of one row, day-sorted — the raw material for the detail cell.
+  var cellsOf=function(row){
+    var cells=(((payGridData[mk]||{})[sid]||{})[row.key])||{}, out=[];
+    Object.keys(cells).forEach(function(k){
+      var v=parseFloat(cells[k])||0; if(!v) return;
+      var d=parseInt(String(k).replace(/^d/,''),10); if(!d) return;
+      if(row.k==='work' && v!==1) return;
+      out.push({d:d, v:v});
+    });
+    return out.sort(function(a,b){ return a.d-b.d; });
+  };
+  if(R.monthly>0) push('Monthly base / เงินเดือน','ทั้งเดือน / whole month',R.monthly,1);
   c.rows.forEach(function(r){
     var a=r._c?r._c.amt:0, cnt=r._c?r._c.cnt:0;
     if(!a && !cnt) return;
-    var det=esc(r._c.expl||'');
-    var dl = r.k==='tour'
-      ? Object.keys(pgTourByDay(sid,mk)).sort(function(x,y){return x-y;}).join(', ')
-      : pgPrintDays(sid,mk,r);
-    if(dl) det+='<div class="dl">'+esc(dl)+'</div>';
+    var det='';
+    // Work and overtime are a product, nothing more: the twenty day numbers under
+    // "Days(20) × 350" said the same thing a third time and buried the sheet.
+    if(r.k==='work')      det=cnt+' วัน × '+pgN(R.day)+' ฿';
+    else if(r.k==='ot')   det=pgN(cnt)+' ชม. × '+pgN(R.ot)+' ฿';
+    else if(r.k==='abs')  det=cnt+' วัน × '+pgN(R.day*R.absMult)+' ฿'
+      +'<div class="dl">📅 '+esc(cellsOf(r).map(function(e){return e.d;}).join(', '))+'</div>';
+    else if(r.k==='cont' || (r.custom && r.mode==='daily'))
+      det=esc(r._c.expl||'')
+        +'<div class="dl">📅 '+esc(cellsOf(r).map(function(e){ return e.d+(e.v!==1?' ('+pgN(e.v)+')':''); }).join(', '))+'</div>';
+    else if(r.k==='tour')
+      det=esc(r._c.expl||'')
+        +'<div class="dl">📅 '+esc(Object.keys(pgTourByDay(sid,mk)).sort(function(x,y){return x-y;}).join(', '))+'</div>';
+    // Free-amount rows (advance, damage): which day, how much — spelled out, not
+    // a bracket puzzle like "6 (500), 9 (200)".
+    else if(r.type==='amt')
+      det=esc(r._c.expl||'')
+        +'<div class="dl">'+cellsOf(r).map(function(e){ return '📅 '+e.d+' → '+pgN(e.v)+' ฿'; }).join(' &nbsp;·&nbsp; ')+'</div>';
+    else det=esc(r._c.expl||'');
     // A deduction on a payslip somebody signs has to say what it was for.
     var nts=pgNotesOf(mk,sid,r.key);
     if(nts.length) det+='<div class="nt">'+nts.map(function(n){ return '📝 '+n.d+': '+esc(n.t); }).join('<br>')+'</div>';
-    lines+='<tr><td>'+esc(r.en)+(r.th?' / '+esc(r.th):'')+'</td><td>'+det+'</td>'
-      +'<td class="am'+(r.sign<0?' neg':'')+'">'+(r.sign<0?'−':'+')+pgN(Math.abs(a))+'</td></tr>';
+    push(esc(r.en)+(r.th?' / '+esc(r.th):''), det, a, r.sign);
   });
-  if(R.monthly>0) lines+='<tr><td>Monthly base / เงินเดือน</td><td>whole month / ทั้งเดือน</td><td class="am">+'+pgN(R.monthly)+'</td></tr>';
   c.extras.forEach(function(e){
     var m=payCatMeta(e.cat), neg=m.sign<0, a=Math.abs(parseFloat(e.amount)||0);
-    lines+='<tr><td>'+esc(m.label||'')+'</td><td>'+esc(e.date||'')+(e.note?' · '+esc(e.note):'')+'</td>'
-      +'<td class="am'+(neg?' neg':'')+'">'+(neg?'−':'+')+pgN(a)+'</td></tr>';
+    push(esc(m.label||''), esc(e.date||'')+(e.note?' · '+esc(e.note):''), a, neg?-1:1);
   });
+  // Income first, deductions after — a stable partition, not a shuffle.
+  var lines=items.filter(function(i){return i.sign>=0;}).map(function(i){return i.h;}).join('')
+           +items.filter(function(i){return i.sign<0;}).map(function(i){return i.h;}).join('');
   if(!lines) lines='<tr><td colspan="3" style="text-align:center;color:#666;padding:16px">— nothing this month / ไม่มีรายการ —</td></tr>';
 
   var rate = R.day>0
@@ -33990,8 +34027,11 @@ function pgSlipHtml(sid){
     +'.nt{font-size:10.5px;color:#92400e;margin-top:2px;line-height:1.35}'
     +'.am{text-align:right;white-space:nowrap;font-weight:700;font-variant-numeric:tabular-nums}'
     +'.neg{color:#b91c1c}'
-    +'.sum{margin-top:12px;font-size:13px}'
+    // The sums are a different thing than the rows above them — give them air and
+    // their own rule, or "Income" reads like one more line item.
+    +'.sum{margin-top:22px;font-size:13px;border-top:2px solid #000;padding-top:10px}'
     +'.sum div{display:flex;justify-content:space-between;padding:3px 6px}'
+    +'.sum span{color:#555;font-size:12px;text-transform:uppercase;letter-spacing:.04em}'
     +'.pay{display:flex;justify-content:space-between;margin-top:8px;padding:11px 12px;border:2px solid #000;font-size:17px;font-weight:800}'
     +'.sig{display:flex;gap:40px;margin-top:46px;font-size:11.5px;color:#555}'
     +'.sig div{flex:1;border-top:1px solid #000;padding-top:5px;text-align:center}'
@@ -34038,52 +34078,122 @@ function pgPdfLibs(cb){
     document.head.appendChild(el);
   });
 }
+// Photograph ONE slip page off-screen. done(canvas) — null when it failed.
+function _pgSlipShot(html, done){
+  // A4 at 96dpi is 794px wide — the iframe is the sheet of paper.
+  var f=document.createElement('iframe');
+  f.style.cssText='position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;visibility:hidden';
+  document.body.appendChild(f);
+  var fin=function(c){ try{ f.remove(); }catch(e){} done(c||null); };
+  f.onload=function(){
+    // Fonts first, or the shot is taken of the fallback face mid-swap. Run
+    // exactly once, whichever path gets there.
+    var did=false, once=function(){
+      if(did) return; did=true;
+      try{
+        window.html2canvas(f.contentDocument.body, {scale:2, backgroundColor:'#ffffff', windowWidth:794})
+          .then(fin, function(){ fin(null); });
+      }catch(e){ fin(null); }
+    };
+    try{ f.contentDocument.fonts.ready.then(once,once); }catch(e){}
+    setTimeout(once, 600);
+  };
+  f.srcdoc=html;
+}
+// Lay one canvas onto the PDF as full A4 pages. first=true starts on the page
+// jsPDF opens with; afterwards every canvas begins on a fresh page.
+function _pgPdfAdd(pdf, canvas, first){
+  var pageHpx=Math.floor(canvas.width*297/210);          // one A4 page, in canvas pixels
+  var pages=Math.max(1, Math.ceil(canvas.height/pageHpx));
+  // Rounding can leave a last "page" a few pixels tall — nobody wants a second
+  // sheet carrying one white line.
+  if(pages>1 && (canvas.height-(pages-1)*pageHpx)<24) pages--;
+  for(var p=0;p<pages;p++){
+    if(!first || p) pdf.addPage();
+    var sliceH=Math.min(pageHpx, canvas.height-p*pageHpx);
+    var cut=document.createElement('canvas');
+    cut.width=canvas.width; cut.height=sliceH;
+    cut.getContext('2d').drawImage(canvas, 0, p*pageHpx, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+    pdf.addImage(cut.toDataURL('image/jpeg',0.93), 'JPEG', 0, 0, 210, sliceH*210/canvas.width);
+  }
+}
+var _PG_PDF_FAIL='โหลดตัวสร้าง PDF ไม่ได้ — ต้องมีอินเทอร์เน็ต / could not load the PDF library (needs internet). ใช้ 🖨 แล้วเลือก Save as PDF แทนได้ / the 🖨 button with "Save as PDF" does the same.';
 function pgPdf(sid, btn){
   var s=pgSlipHtml(sid); if(!s) return;
   var old=btn?btn.textContent:''; if(btn){ btn.textContent='⏳'; btn.disabled=true; }
   var fin=function(msg){ if(btn){ btn.textContent=old||'📄'; btn.disabled=false; } if(msg) alert(msg); };
   pgPdfLibs(function(ok){
-    if(!ok){ fin('โหลดตัวสร้าง PDF ไม่ได้ — ต้องมีอินเทอร์เน็ต / could not load the PDF library (needs internet). ใช้ 🖨 แล้วเลือก Save as PDF แทนได้ / the 🖨 button with "Save as PDF" does the same.'); return; }
-    // A4 at 96dpi is 794px wide — the iframe is the sheet of paper.
-    var f=document.createElement('iframe');
-    f.style.cssText='position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;visibility:hidden';
-    document.body.appendChild(f);
-    var cleanup=function(){ try{ f.remove(); }catch(e){} };
-    f.onload=function(){
-      var run=function(){
-        try{
-          window.html2canvas(f.contentDocument.body, {scale:2, backgroundColor:'#ffffff', windowWidth:794})
-            .then(function(canvas){
-              var pdf=new window.jspdf.jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
-              var pageHpx=Math.floor(canvas.width*297/210);          // one A4 page, in canvas pixels
-              var pages=Math.max(1, Math.ceil(canvas.height/pageHpx));
-              // Rounding can leave a last "page" a few pixels tall — nobody wants
-              // a second sheet carrying one white line.
-              if(pages>1 && (canvas.height-(pages-1)*pageHpx)<24) pages--;
-              for(var p=0;p<pages;p++){
-                if(p) pdf.addPage();
-                var sliceH=Math.min(pageHpx, canvas.height-p*pageHpx);
-                var cut=document.createElement('canvas');
-                cut.width=canvas.width; cut.height=sliceH;
-                cut.getContext('2d').drawImage(canvas, 0, p*pageHpx, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-                pdf.addImage(cut.toDataURL('image/jpeg',0.93), 'JPEG', 0, 0, 210, sliceH*210/canvas.width);
-              }
-              pdf.save('payslip-'+String(s.name).replace(/[\\/:*?"<>|]/g,'_')+'-'+s.mk+'.pdf');
-              cleanup(); fin('');
-            })
-            .catch(function(e){ cleanup(); fin('สร้าง PDF ไม่สำเร็จ / could not build the PDF: '+(e&&e.message||e)); });
-        }catch(e){ cleanup(); fin('สร้าง PDF ไม่สำเร็จ / could not build the PDF: '+(e&&e.message||e)); }
-      };
-      // Fonts first, or the shot is taken of the fallback face mid-swap. Run
-      // exactly once, whichever path gets there.
-      var did=false, once=function(){ if(did) return; did=true; run(); };
-      try{ f.contentDocument.fonts.ready.then(once,once); }catch(e){}
-      setTimeout(once, 600);
-    };
-    f.srcdoc=s.html;
+    if(!ok){ fin(_PG_PDF_FAIL); return; }
+    _pgSlipShot(s.html, function(canvas){
+      if(!canvas){ fin('สร้าง PDF ไม่สำเร็จ / could not build the PDF'); return; }
+      try{
+        var pdf=new window.jspdf.jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
+        _pgPdfAdd(pdf, canvas, true);
+        pdf.save('payslip-'+String(s.name).replace(/[\/:*?"<>|]/g,'_')+'-'+s.mk+'.pdf');
+        fin('');
+      }catch(e){ fin('สร้าง PDF ไม่สำเร็จ / could not build the PDF: '+(e&&e.message||e)); }
+    });
   });
 }
-
+// ── every payslip of the month in one go ──────────────────────────────────
+// Same sheets as the per-person buttons, only stacked: everyone the payroll tab
+// lists, skipping whoever has nothing this month — a page saying "nothing" helps
+// no one at the pay table.
+function pgSlipsAll(){
+  var mk=pgMonth(), out=[];
+  (pgStaff()||[]).forEach(function(s){
+    try{
+      var c=pgCalc(s.id, mk);
+      if(!c || (c.inc<=0 && c.ded<=0)) return;
+      var sl=pgSlipHtml(s.id); if(sl) out.push(sl);
+    }catch(e){}
+  });
+  return out;
+}
+function pgPrintAll(){
+  var slips=pgSlipsAll();
+  if(!slips.length){ alert('ไม่มีสลิปในเดือนนี้ / nothing to print this month'); return; }
+  // One document, one slip per sheet: shared style from the first slip, each
+  // body stacked with a page break after it.
+  var style=(slips[0].html.split('<style>')[1]||'').split('</style>')[0];
+  var bodies=slips.map(function(s){ return (s.html.split('<body>')[1]||'').split('</body>')[0]; });
+  var html='<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslips — '+_esc(kpMLabel(slips[0].mk))+'</title>'
+    +'<style>'+style+'.wrap{page-break-after:always}.wrap:last-child{page-break-after:auto}</style></head><body>'
+    +bodies.join('')+'</body></html>';
+  var w=window.open('','_blank','width=760,height=900');
+  if(!w){ alert('Popup blocked / เปิดหน้าต่างไม่ได้ — please allow popups'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+  w.focus();
+  setTimeout(function(){ try{ w.print(); }catch(e){} }, 400);
+}
+function pgPdfAll(btn){
+  var slips=pgSlipsAll();
+  if(!slips.length){ alert('ไม่มีสลิปในเดือนนี้ / nothing this month'); return; }
+  var old=btn?btn.textContent:''; if(btn){ btn.disabled=true; }
+  var fin=function(msg){ if(btn){ btn.textContent=old; btn.disabled=false; } if(msg) alert(msg); };
+  pgPdfLibs(function(ok){
+    if(!ok){ fin(_PG_PDF_FAIL); return; }
+    var pdf=new window.jspdf.jsPDF({orientation:'portrait', unit:'mm', format:'a4'});
+    var i=0, added=0, failed=[];
+    (function next(){
+      if(i>=slips.length){
+        if(!added){ fin('สร้าง PDF ไม่สำเร็จ / could not build the PDF'); return; }
+        try{
+          pdf.save('payslips-'+slips[0].mk+'.pdf');
+          fin(failed.length?('ขาดไป '+failed.length+' คน / '+failed.length+' slip(s) failed: '+failed.join(', ')):'');
+        }catch(e){ fin('สร้าง PDF ไม่สำเร็จ / could not build the PDF: '+(e&&e.message||e)); }
+        return;
+      }
+      var s=slips[i++];
+      if(btn) btn.textContent='⏳ '+i+'/'+slips.length;
+      _pgSlipShot(s.html, function(canvas){
+        if(canvas){ try{ _pgPdfAdd(pdf, canvas, added===0); added++; }catch(e){ failed.push(s.name); } }
+        else failed.push(s.name);
+        next();
+      });
+    })();
+  });
+}
 function pgRowHtml(sid, mk, row, dim, todayD, isCur, isPast){
   var c=row._c||pgRowCalc(sid,mk,row);
   var lblInner=row.ic+' '+_esc(row.en)+(row.th?'<small>'+row.th+'</small>':'');
