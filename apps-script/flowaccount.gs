@@ -30,7 +30,8 @@
  * SANDBOX vs LIVE is only the TOKEN endpoint (verified against the live host on
  * 26.08.2026, unauthenticated):
  *   POST /test/token   → 200 {"error":"invalid_client"}  ← the sandbox door, open
- *   POST /token        → 403 {"message":"Forbidden"}     ← live, closed to us
+ *   POST /v1/token     → 200 {"error":"invalid_client"}  ← the LIVE door (01.09.2026)
+ *   POST /token        → 403 {"message":"Forbidden"}     ← gateway wall, never checks credentials
  * Three stages exist, and they are shaped differently (401 = the path is there):
  *   /test/tax-invoices/inline         → 401   sandbox, NO culture segment
  *   /test/th/tax-invoices/inline      → 404   …a culture in front breaks it
@@ -80,7 +81,7 @@ function _faProps() {
     // 500 "Requested value 'TEST' was not found".
     docCulture: p.getProperty('FA_CULTURE_DOC') || 'th',
     tokenUrl: p.getProperty('FA_TOKEN_URL')
-      || (mode === 'live' ? 'https://openapi.flowaccount.com/token'
+      || (mode === 'live' ? 'https://openapi.flowaccount.com/v1/token'
                           : 'https://openapi.flowaccount.com/test/token'),
     base: mode === 'live'
       ? (p.getProperty('FA_BASE_LIVE') || 'https://openapi.flowaccount.com/v1')
