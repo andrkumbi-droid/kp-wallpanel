@@ -19,10 +19,10 @@
  *   FA_CLIENT_ID      = <from FlowAccount MyCompany → Connections>
  *   FA_CLIENT_SECRET  = <same place>                    NEVER commit these.
  *   FA_MODE           = sandbox | live                  (start with sandbox!)
- *   FA_CULTURE        = (optional; live defaults to th, sandbox to none)
+ *   FA_CULTURE        = (optional; default none — only /v3-alpha wants th)
  *   FA_TOKEN_URL      = (optional override; default depends on FA_MODE, see below)
  *   FA_BASE_SANDBOX   = (optional; default https://openapi.flowaccount.com/test)
- *   FA_BASE_LIVE      = (optional; default https://openapi.flowaccount.com/v3-alpha)
+ *   FA_BASE_LIVE      = (optional; default https://openapi.flowaccount.com/v1 — from the production-key mail)
  *   FA_PATH_CREATE    = (optional; default /tax-invoices/inline)
  *   FA_PATH_PDF       = (optional; default /tax-invoices/{id}/export-pdf/base64)
  *   FA_CULTURE_DOC    = (optional; default th — the language INSIDE the PDF)
@@ -64,13 +64,14 @@ function _faProps() {
     id: p.getProperty('FA_CLIENT_ID') || '',
     secret: p.getProperty('FA_CLIENT_SECRET') || '',
     mode: mode,
-    // The two stages are shaped differently: /v3-alpha carries the culture in the
-    // path (/th/tax-invoices/…), the /test stage does not (/tax-invoices/… — 404
-    // with a culture in front). So sandbox defaults to no culture segment; set
-    // FA_CULTURE only if a stage actually wants one.
+    // The production key mail (31.08.2026) names the gateway
+    // https://openapi.flowaccount.com/v1 — and /v1, like /test, carries NO
+    // culture segment (/v1/th/… is a 404). So neither stage defaults to one any
+    // more; FA_CULTURE exists only for the old /v3-alpha shape ('th'), and
+    // 'none' spells out empty for a stage whose default ever grows one back.
     culture: (function(){
       var c = p.getProperty('FA_CULTURE');
-      if (c == null || c === '') return (mode === 'live') ? 'th' : '';
+      if (c == null || c === '' || c === 'none') return '';
       return c;
     })(),
     // The language INSIDE a document is not the same thing as the culture segment
@@ -82,7 +83,7 @@ function _faProps() {
       || (mode === 'live' ? 'https://openapi.flowaccount.com/token'
                           : 'https://openapi.flowaccount.com/test/token'),
     base: mode === 'live'
-      ? (p.getProperty('FA_BASE_LIVE') || 'https://openapi.flowaccount.com/v3-alpha')
+      ? (p.getProperty('FA_BASE_LIVE') || 'https://openapi.flowaccount.com/v1')
       : (p.getProperty('FA_BASE_SANDBOX') || 'https://openapi.flowaccount.com/test'),
     // The one path that was guessed wrong for two weeks. It is a property now, so
     // the next surprise from FlowAccount costs a line in the settings, not a redeploy.
