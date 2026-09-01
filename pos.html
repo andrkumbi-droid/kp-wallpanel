@@ -1239,7 +1239,7 @@ function chime(ok){
 }
 
 /* ═══════════════ DATA ═══════════════ */
-var staffList=[], products=[], soldOut={}, stockMap={}, stockKeyMap={}, posPending={}, incomingEta={};
+var staffList=[], products=[], soldOut={}, stockMap={}, stockKeyMap={}, posPending={}, incomingEta={}, contEta={};
 var SESSION_MS=4*3600*1000;
 var me=null;               // logged-in staff record
 var cart={ lines:[] };     // {code,name,qty,price,listPrice,type,grade}
@@ -1296,21 +1296,51 @@ function attach(){
     });
     renderGrid();
   });
+  // …and the container/PI tracking (containerLog) — the office's richer Incoming
+  // view. Same arrival estimate as index.html's _estArr, with its default legs:
+  // Thailand→warehouse ~14d, loading→TH ~30d, deposit→loading ~45d.
+  var CL_AVG={depToLoad:45, loadToTh:30, thToWh:5};
+  PDB.ref('containerLog').on('value', function(s){
+    var v=s.val()||{}; contEta={};
+    Object.keys(v).forEach(function(k){
+      var c=v[k]; if(!c || c.arrivedWh || !c.items) return;
+      var base=null, add=0;
+      var thRef=c.arrivedThAct||c.arrivedTh;
+      if(thRef){ base=thRef; add=CL_AVG.thToWh; }
+      else if(c.loading){ base=c.loading; add=CL_AVG.loadToTh+CL_AVG.thToWh; }
+      else if(c.deposit){ base=c.deposit; add=CL_AVG.depToLoad+CL_AVG.loadToTh+CL_AVG.thToWh; }
+      if(!base) return;
+      var d=new Date(String(base).slice(0,10)+'T00:00:00'); if(isNaN(d)) return;
+      d.setDate(d.getDate()+add);
+      var iso=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+      var items=Array.isArray(c.items)?c.items:Object.values(c.items||{});
+      items.forEach(function(it){
+        if(!it||!it.code) return;
+        var nc=normCode(it.code);
+        if(!contEta[nc] || iso<contEta[nc]) contEta[nc]=iso;
+      });
+    });
+    renderGrid();
+  });
 }
 /* expected restock text: earliest incoming ETA + 2 weeks slack (containers run
    late). Past the padded date → "soon". Empty when the code is not incoming. */
 function restockTxt(code){
-  var eta=incomingEta[normCode(code)]; if(!eta) return '';
-  var d=new Date(eta+'T00:00:00'); if(isNaN(d)) return '';
-  d.setDate(d.getDate()+14);
+  var nc=normCode(code);
   var today=new Date(todayStr()+'T00:00:00');
-  if(d<=today){
-    // long past even the padded date = a stale Incoming record (the office
-    // rarely clears arrived containers) — say nothing rather than "soon" forever
-    if((today-d)/86400000 > 30) return '';
-    return 'ของกำลังเข้า เร็วๆ นี้ / restock soon';
-  }
-  return 'เข้าประมาณ ~'+String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+' / back in stock';
+  // each source is judged for staleness ON ITS OWN — otherwise one forgotten
+  // June entry hides a fresh container forever. Then the earliest valid wins.
+  var best=null;
+  [incomingEta[nc], contEta[nc]].forEach(function(eta){
+    if(!eta) return;
+    var d=new Date(eta+'T00:00:00'); if(isNaN(d)) return;
+    d.setDate(d.getDate()+14);                      // 2 weeks slack — containers run late
+    if((today-d)/86400000 > 30) return;             // stale record, ignore
+    if(!best || d<best) best=d;
+  });
+  if(!best) return '';
+  if(best<=today) return 'ของกำลังเข้า เร็วๆ นี้ / restock soon';
+  return 'เข้าประมาณ ~'+String(best.getDate()).padStart(2,'0')+'/'+String(best.getMonth()+1).padStart(2,'0')+' / back in stock';
 }
 function mergeCatalog(items){
   var by={}; products.forEach(function(p){ by[p.code]=p; });
