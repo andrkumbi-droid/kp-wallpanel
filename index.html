@@ -7823,7 +7823,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901019;
+var KP_BUILD = 20260901020;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17346,7 +17346,16 @@ function ofRenderSwapDrvList(){
   var t=activeTours.find(function(x){return x.id===ofSwapTourId;});
   if(!t){ wrap.innerHTML=''; return; }
   if(!drivers.length){ wrap.innerHTML='<div style="font-size:13px;color:var(--text2);padding:16px;text-align:center">No drivers / ไม่มีคนขับ</div>'; return; }
-  wrap.innerHTML = drivers.map(function(d){
+  // First row: take the driver OFF — the tour goes back to "no driver yet" and the
+  // office picks someone later. Not offered once the tour departed (someone IS driving).
+  var freeRow=(tourHasDriver(t) && !t.driving)
+    ? '<div class="avrow" onclick="ofSwapDrvFree()" style="margin-bottom:4px;align-items:center;cursor:pointer;border:1px dashed var(--border)">'
+      +'<div style="width:32px;height:32px;border-radius:50%;background:var(--bg2);display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;margin-right:8px">⏳</div>'
+      +'<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700">ยังไม่กำหนดคนขับ / No driver yet</div>'
+      +'<div style="font-size:11px;color:var(--text2)">เอาคนขับออก ปล่อยทัวร์ว่างไว้ก่อน / remove the driver, leave the tour free</div></div>'
+      +'<i class="ti ti-chevron-right" style="font-size:16px;color:var(--text2);flex-shrink:0"></i></div>'
+    : '';
+  wrap.innerHTML = freeRow + drivers.map(function(d){
     var cur = d.id===t.driverId;
     var busy = activeTours.find(function(x){return x!==t && x.driverId===d.id && x.orders && x.orders.length;});
     return '<div class="avrow" '+(cur?'':'onclick="ofSwapDrvPick(\''+d.id+'\')" ')+'style="margin-bottom:4px;align-items:center;'+(cur?'background:var(--bg2);opacity:.75;cursor:default':'cursor:pointer')+'">'+
@@ -17371,6 +17380,35 @@ function closeTourDrv(){ var m=document.getElementById('tour-drv-modal'); if(m) 
 function stampSelfDriver(o, name){
   if(!o || !name) return;
   if(!o.shipper || o.shipper==='ส่งเอง' || o.driver) o.driver=name;
+}
+// Unassign: the tour goes back to "no driver yet" (the ⏳ filter chip) — orders,
+// pay and notes stay on it, only the name comes off. Departed tours are refused:
+// somebody IS driving that truck, take it back first.
+function ofSwapDrvFree(){
+  var t=activeTours.find(function(x){return x.id===ofSwapTourId;}); if(!t){ closeTourDrv(); return; }
+  if(!tourHasDriver(t)){ closeTourDrv(); return; }
+  if(t.driving){ alert('ทัวร์ออกรถแล้ว เอาคนขับออกไม่ได้ / tour already departed — bring it back first'); return; }
+  var oldId=t.driverId, oldName=t.driverName||'—', n=(t.orders||[]).length;
+  if(!confirm('เอาคนขับออก ปล่อยทัวร์ว่าง / Remove the driver, leave the tour free?\n\n'+oldName+'  →  ⏳ ยังไม่กำหนดคนขับ / no driver yet\n'+n+' order'+(n!==1?'s':''))) return;
+  t.driverId=''; t.driverName='';
+  // The stops stop naming him too — a printed sheet must not say "ส่งเอง (Go)" on a
+  // tour nobody owns. Only names this assignment stamped are cleared; carriers stay.
+  (t.orders||[]).forEach(function(oid){
+    var o=orders.find(function(x){return x.id===oid;});
+    if(o){
+      if(o.deliveredBy===oldName) o.deliveredBy='';
+      if(o.driver===oldName && (!o.shipper||o.shipper==='ส่งเอง')) o.driver='';
+      try{ sheetsSyncOrder(o); }catch(e){}
+    }
+  });
+  try{ tourRegUpsert(t); }catch(e){}
+  auditTour('driver','🚚 '+oldName,'เอาคนขับออก ทัวร์ว่างรอกำหนดใหม่ / driver removed — tour left free ('+n+' order'+(n!==1?'s':'')+')');
+  try{ if(oldId) pushSend('driver_'+oldId,'🔄 ทัวร์ถูกย้าย / Tour reassigned','ทัวร์ของคุณกลับไปที่ออฟฟิศ / your tour went back to the office',{tag:'tour'}); }catch(e){}
+  try{ addLog('Tour driver '+oldName+' → (free) ('+n+' orders)','🔄'); }catch(e){}
+  closeTourDrv();
+  ofRenderTour(); try{ ofRenderOrders(); }catch(e){} try{ mgRender(); }catch(e){}
+  try{ ofRenderLala(); }catch(e){}
+  syncTours(); syncOrders();
 }
 function ofSwapDrvPick(driverId){
   var t = activeTours.find(function(x){return x.id===ofSwapTourId;}); if(!t){ closeTourDrv(); return; }
