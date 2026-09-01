@@ -87,15 +87,21 @@ function _posAcRetry(){
   }catch(e){}
   return false;
 }
-var posAuthReady = posAppCheckReady
-  .then(function(){ return firebase.auth().signInAnonymously(); })
-  .then(function(){ window._posAuthOk=true; return true; })
-  .catch(function(e){
-    console.error('[POS] anonymous sign-in failed:', e&&e.code, e&&e.message);
-    window._posAuthOk=false;
-    _posAcRetry();
-    return false;
-  });
+// Shop wifi is flaky and the first request after a cold start can fail — one
+// failed sign-in must not leave the tablet dead until somebody reloads it.
+// Retry with backoff (2s → 4s → 8s → 16s → 30s, then every 30s).
+function _posSignIn(attempt){
+  return firebase.auth().signInAnonymously()
+    .then(function(){ window._posAuthOk=true; return true; })
+    .catch(function(e){
+      console.error('[POS] anonymous sign-in failed (try '+attempt+'):', e&&e.code, e&&e.message);
+      window._posAuthOk=false;
+      if(_posAcRetry()) return false;         // App Check was the culprit → reload
+      var wait=Math.min(30000, 2000*Math.pow(2, Math.min(attempt-1,4)));
+      return new Promise(function(res){ setTimeout(function(){ res(_posSignIn(attempt+1)); }, wait); });
+    });
+}
+var posAuthReady = posAppCheckReady.then(function(){ return _posSignIn(1); });
 </script>
 
 <style>
