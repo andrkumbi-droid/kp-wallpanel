@@ -7810,7 +7810,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901006;
+var KP_BUILD = 20260901007;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -35395,7 +35395,11 @@ function billsCostData(mk){
                missing:g.missing, rows:g.rows, orders:g.rows.map(function(r){ return r.o; }) };
     }) });
 
-  // 4) Staff — net per person from the payroll log, split Driver / Warehouse / Lalamove / Other
+  // 4) Staff — INCOME per person from the payroll log, split Driver / Warehouse / Lalamove / Other.
+  // Income, not payout: the advance cash already left the till earlier in the
+  // month, the damage deduction goes to the snack box, an installment repays a
+  // loan — deducting them made the report claim the work cost 8,319 when Amy
+  // earned 17,319. The signed lines stay underneath, so the payout is still visible.
   // Office people (Management → Staff → 👔 Office salary) belong to the Finance
   // tab and ONLY there — their payroll-grid lines are mirrored into payLog, so
   // without this filter every one of them showed up under "Other" as well.
@@ -35408,16 +35412,17 @@ function billsCostData(mk){
     if(billsMKey(e.date)!==mk) return;
     if(_finOnly[e.who]) return;
     var amt=(typeof payCatMeta==='function'?payCatMeta(e.cat).sign:1)*(parseFloat(e.amount)||0);
-    if(!perP[e.who]) perP[e.who]={who:e.who,name:e.whoName||e.who,net:0,lines:[]};
+    if(!perP[e.who]) perP[e.who]={who:e.who,name:e.whoName||e.who,net:0,inc:0,lines:[]};
     perP[e.who].net+=amt;
+    if(amt>0) perP[e.who].inc+=amt;
     perP[e.who].lines.push({ date:e.date||'', cat:e.cat||'', amount:amt, note:e.note||'', by:e.by||'' });
   });
   var sg={Driver:[],Warehouse:[],Lalamove:[],Other:[]};
   Object.keys(perP).forEach(function(k){ var p=perP[k]; sg[_billStaffGroup(p.who,p.name)].push(p); });
   [['Driver','🚗 Driver / คนขับ',true],['Warehouse','🏭 Warehouse / คลัง',true],['Lalamove','🛺 Lalamove',true],['Other','👤 Other / อื่นๆ',false]].forEach(function(p){
-    var rows=sg[p[0]].sort(function(a,b){ return b.net-a.net; });
+    var rows=sg[p[0]].sort(function(a,b){ return b.inc-a.inc; });
     var kids=rows.map(function(r){
-      return { id:r.who, label:r.name, total:r.net,
+      return { id:r.who, label:r.name, total:r.inc, payout:r.net,
                lines:r.lines.sort(function(a,b){ return String(b.date).localeCompare(String(a.date)); }),
                tours:billsStaffTours(r.who, r.name, mk) }; });
     // The shipping costs the Shipper block handed over belong to the SAME Lalamove
@@ -38327,7 +38332,9 @@ function finReportData(mk){
   var sal={ key:'sal', label:'👔 เงินเดือนออฟฟิศ / Office salaries', topics:[] }, byRole={};
   try{
     finPayNames(mk).forEach(function(s){
-      var net=0; try{ net=pgCalc(s.id,mk).net||0; }catch(e){}
+      // Income, same reason as the Bills report: the report asks what the month's
+      // work cost, not what was still open at pay day.
+      var net=0; try{ net=pgCalc(s.id,mk).inc||0; }catch(e){}
       var rl=_finRoleLabel(s.role)||'—';
       if(!byRole[rl]){ byRole[rl]={ label:rl, person:true, items:[] }; sal.topics.push(byRole[rl]); }
       byRole[rl].items.push({ label:s.name||'—', grey:!!s.grey, value:net, leaves:null });
@@ -38597,7 +38604,8 @@ function finMonthTotals(mk){
   var salB=0, salG=0;
   try{
     finPayNames(mk).forEach(function(s){
-      var net=0; try{ net=pgCalc(s.id,mk).net||0; }catch(e){}
+      // Income, not payout — the overview is a cost line, not a transfer list.
+      var net=0; try{ net=pgCalc(s.id,mk).inc||0; }catch(e){}
       if(s.grey) salG+=net; else salB+=net;
     });
   }catch(e){}
