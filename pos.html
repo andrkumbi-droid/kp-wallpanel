@@ -905,6 +905,18 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   </div>
 </section>
 
+<!-- custom confirm — native confirm() is suppressed in embedded browsers and
+     looks cheap on a customer-facing tablet -->
+<div class="pin-sheet" id="conf-sheet">
+  <div class="pin-card">
+    <div class="who" id="conf-msg" style="line-height:1.5">—</div>
+    <div style="display:flex;gap:12px;margin-top:22px">
+      <button class="btn btn-ghost-d press" style="flex:1" onclick="posConfirmNo()">ยกเลิก<span class="sub-en">cancel</span></button>
+      <button class="btn btn-gold press" style="flex:1" onclick="posConfirmYes()">ตกลง ✓<span class="sub-en">yes</span></button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -1015,6 +1027,10 @@ function normCode(c){
   return c;
 }
 function toast(msg,ms){ var t=$('toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(t._t); t._t=setTimeout(function(){ t.classList.remove('on'); }, ms||2600); }
+var _confCb=null;
+function posConfirm(msg, cb){ $('conf-msg').textContent=msg; _confCb=cb; $('conf-sheet').classList.add('on'); }
+function posConfirmNo(){ $('conf-sheet').classList.remove('on'); _confCb=null; }
+function posConfirmYes(){ var cb=_confCb; posConfirmNo(); if(cb) cb(); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function chime(ok){
   try{
@@ -1161,7 +1177,10 @@ setInterval(function(){
   }catch(e){}
 }, 60000);
 function posLogout(silent){
-  if(!silent && !confirm('ออกจากระบบ? / log out?')) return;
+  if(silent){ _posLogoutDo(); return; }
+  posConfirm('ออกจากระบบ? / log out?', _posLogoutDo);
+}
+function _posLogoutDo(){
   localStorage.removeItem('kp-pos-session'); me=null;
   posGo('login');
 }
@@ -1355,7 +1374,15 @@ function cartAddLine(l){
 function saveCart(){ try{ localStorage.setItem('kp-pos-cart', JSON.stringify(cart)); }catch(e){} }
 function restoreCart(){ try{ var c=JSON.parse(localStorage.getItem('kp-pos-cart')||'null'); if(c&&c.lines) cart=c; }catch(e){} }
 function posCartOpen(){ posGo('cart'); }
-function posCartClear(){ if(!cart.lines.length || confirm('ล้างตะกร้า? / clear cart?')){ cart={lines:[]}; ['cart-gift','cart-freeminus','cart-packs','cart-extra','cart-discount','cart-delivery','cart-extra-label'].forEach(function(i){ $(i).value=''; }); saveCart(); renderCart(); } }
+function posCartClear(){
+  if(!cart.lines.length){ _posCartClearDo(); return; }
+  posConfirm('ล้างตะกร้าทั้งหมด? / clear the cart?', _posCartClearDo);
+}
+function _posCartClearDo(){
+  cart={lines:[]};
+  ['cart-gift','cart-freeminus','cart-packs','cart-extra','cart-discount','cart-delivery','cart-extra-label'].forEach(function(i){ $(i).value=''; });
+  saveCart(); renderCart();
+}
 function renderCart(){
   var host=$('cart-lines');
   if(!cart.lines.length){
@@ -1740,11 +1767,11 @@ function posCreate(){
     }).catch(function(e){
       console.error(e);
       _creating=false; $('ck-create-btn').disabled=false;
-      alert('บันทึกไม่สำเร็จ ลองใหม่ / save failed: '+e);
+      toast('⚠️ บันทึกไม่สำเร็จ ลองใหม่ / save failed', 6000); chime(false);
     });
   }).catch(function(e){
     _creating=false; $('ck-create-btn').disabled=false;
-    alert('ออกเลขออเดอร์ไม่สำเร็จ / order number failed: '+e);
+    toast('⚠️ ออกเลขออเดอร์ไม่สำเร็จ ลองใหม่ / order number failed', 6000); chime(false);
   });
 }
 /* delivery order with unclear zone → office approval queue, no number yet */
@@ -1780,7 +1807,7 @@ function posCreatePending(b){
     chime();
   }).catch(function(e){
     _creating=false; $('ck-create-btn').disabled=false;
-    alert('ส่งไม่สำเร็จ / failed: '+e);
+    toast('⚠️ ส่งไม่สำเร็จ ลองใหม่ / failed', 6000); chime(false);
   });
 }
 
@@ -1908,12 +1935,11 @@ function posPayConfirm(){
     });
   }).catch(function(e){
     $('pay-confirm-btn').disabled=false;
-    alert('บันทึกเงินไม่สำเร็จ / failed: '+e);
+    toast('⚠️ บันทึกเงินไม่สำเร็จ ลองใหม่ / payment save failed', 6000); chime(false);
   });
 }
 function posPaySkip(){
-  if(!confirm('ยังไม่รับเงินตอนนี้? ออเดอร์จะค้างเป็น "ยังไม่จ่าย"')) return;
-  posDone();
+  posConfirm('ยังไม่รับเงินตอนนี้? ออเดอร์จะค้างเป็น "ยังไม่จ่าย" / order stays unpaid', posDone);
 }
 function posDone(){
   var o=lastOrder&&lastOrder.o;
