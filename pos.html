@@ -261,6 +261,12 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
 }
 .pin-pad button:active{ transform:scale(.93); background:rgba(212,175,55,.3); }
 .pin-err{ color:#F87171; min-height:20px; font-size:14px; margin-top:10px; }
+.num-display{
+  background:rgba(255,255,255,.05); border:1.5px solid rgba(212,175,55,.45); border-radius:14px;
+  color:var(--gold); font-size:34px; font-weight:800; text-align:right;
+  padding:10px 18px; margin-bottom:16px; min-height:62px; letter-spacing:.5px;
+  overflow:hidden; white-space:nowrap;
+}
 .pin-x{ margin-top:12px; background:none; border:none; color:var(--cream2); font-size:15px; padding:10px; }
 
 /* ═══════════════ PRODUCT GRID ═══════════════ */
@@ -934,6 +940,23 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   </div>
 </section>
 
+<!-- custom number pad — replaces the system keyboard on every number field.
+     Thai convention: "." decimal, "," thousands (added automatically in the display). -->
+<div class="pin-sheet" id="num-sheet" onclick="if(event.target===this)numPadClose()">
+  <div class="pin-card" style="max-width:360px">
+    <div class="hint" id="num-label" style="margin-bottom:6px">—</div>
+    <div class="num-display num" id="num-display">0</div>
+    <div class="pin-pad">
+      <button onclick="numKey('7')">7</button><button onclick="numKey('8')">8</button><button onclick="numKey('9')">9</button>
+      <button onclick="numKey('4')">4</button><button onclick="numKey('5')">5</button><button onclick="numKey('6')">6</button>
+      <button onclick="numKey('1')">1</button><button onclick="numKey('2')">2</button><button onclick="numKey('3')">3</button>
+      <button onclick="numKey('.')">·</button><button onclick="numKey('0')">0</button><button onclick="numDel()" style="font-size:19px">⌫</button>
+    </div>
+    <button onclick="numPadOk()" style="width:100%;margin-top:12px;min-height:60px;border:none;border-radius:16px;background:linear-gradient(135deg,#E6C55A,#C9A227);color:#241B05;font-size:20px;font-weight:800;cursor:pointer;font-family:inherit">OK ✓</button>
+    <button class="pin-x" onclick="numPadClose()">ยกเลิก / cancel</button>
+  </div>
+</div>
+
 <!-- trim code picker -->
 <div class="accpick" id="accpick-sheet">
   <div class="card">
@@ -1104,6 +1127,66 @@ var _confCb=null;
 function posConfirm(msg, cb){ $('conf-msg').textContent=msg; _confCb=cb; $('conf-sheet').classList.add('on'); }
 function posConfirmNo(){ $('conf-sheet').classList.remove('on'); _confCb=null; }
 function posConfirmYes(){ var cb=_confCb; posConfirmNo(); if(cb) cb(); }
+
+/* ── custom number pad ──
+   Every <input type=number> opens OUR pad instead of the tablet keyboard:
+   pointerdown is cancelled before the input can take focus, so the system
+   keyboard never appears. OK writes the value back and fires input+change,
+   so all the oninput/onchange recalcs run exactly as if it was typed. */
+var _numTarget=null, _numRaw='';
+document.addEventListener('pointerdown', function(e){
+  var t=e.target;
+  if(t && t.tagName==='INPUT' && t.type==='number' && !t.disabled && !t.readOnly){
+    e.preventDefault();
+    numPadOpen(t);
+  }
+}, true);
+function numLabelFor(inp){
+  if(inp.dataset && inp.dataset.label) return inp.dataset.label;
+  var el=inp, hops=0;
+  while(el && hops<3){
+    el=el.parentElement; hops++;
+    if(!el) break;
+    var l=el.querySelector('label, .fl, .t');
+    if(l && l.textContent.trim()) return l.textContent.trim().replace(/\s+/g,' ').slice(0,60);
+  }
+  return inp.placeholder || 'ใส่ตัวเลข / enter number';
+}
+function numFmt(s){
+  if(!s) return '0';
+  var i=s.indexOf('.');
+  var ip=(i<0?s:s.slice(0,i)).replace(/^0+(?=\d)/,'') || '0';
+  var rest=i<0?'':s.slice(i);
+  return ip.replace(/\B(?=(\d{3})+(?!\d))/g,',')+rest;
+}
+function numPadOpen(inp){
+  _numTarget=inp;
+  _numRaw=String(inp.value||'').replace(/[^0-9.]/g,'');
+  $('num-label').textContent=numLabelFor(inp);
+  numPadPaint();
+  $('num-sheet').classList.add('on');
+}
+function numPadPaint(){ $('num-display').textContent=numFmt(_numRaw); }
+function numKey(k){
+  if(k==='.'){
+    if(_numRaw.indexOf('.')>=0) return;
+    _numRaw=_numRaw===''?'0.':_numRaw+'.';
+  } else {
+    if(_numRaw.replace('.','').length>=10) return;
+    _numRaw=(_numRaw==='0'?'':_numRaw)+k;
+  }
+  numPadPaint();
+}
+function numDel(){ _numRaw=_numRaw.slice(0,-1); numPadPaint(); }
+function numPadClose(){ $('num-sheet').classList.remove('on'); _numTarget=null; _numRaw=''; }
+function numPadOk(){
+  var t=_numTarget; if(!t){ numPadClose(); return; }
+  var v = _numRaw==='' ? '' : String(parseFloat(_numRaw)||0);
+  numPadClose();
+  t.value=v;
+  try{ t.dispatchEvent(new Event('input',{bubbles:true})); }catch(e){}
+  try{ t.dispatchEvent(new Event('change',{bubbles:true})); }catch(e){}
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function chime(ok){
   try{
@@ -1215,6 +1298,14 @@ function posPinDel(){ _pinEntry=_pinEntry.slice(0,-1); pinDots(); }
 // Physical keyboard (incl. numpad — ev.key is '0'-'9' there too): works on the
 // PIN pad and on the confirm sheet. Enter = ✓, Backspace = ⌫, Esc = cancel.
 document.addEventListener('keydown', function(ev){
+  var np=$('num-sheet');
+  if(np && np.classList.contains('on')){
+    if(/^[0-9.]$/.test(ev.key)){ numKey(ev.key); ev.preventDefault(); }
+    else if(ev.key==='Backspace'){ numDel(); ev.preventDefault(); }
+    else if(ev.key==='Enter'){ numPadOk(); ev.preventDefault(); }
+    else if(ev.key==='Escape'){ numPadClose(); ev.preventDefault(); }
+    return;
+  }
   var ap=$('accpick-sheet');
   if(ap && ap.classList.contains('on')){
     if(ev.key==='Escape'){ accPickClose(); ev.preventDefault(); }
