@@ -2272,6 +2272,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   </div>
   </div></div>
   <div class="view" id="ofv-orders"><div class="sec">
+    <!-- POS tablet: delivery drafts whose province/zone the seller couldn't match —
+         the office confirms the zone here, the form is prefilled, Create issues the number. -->
+    <div id="pos-pending-box" style="display:none"></div>
     <div class="of-searchwrap">
       <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:15px;color:var(--text2)"></i>
       <input type="text" id="of-search" placeholder="Search order, tour ID, customer, phone... / ค้นหา" oninput="ofRenderOrders()" style="width:100%;padding:9px 10px 9px 34px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">
@@ -2671,6 +2674,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="pgr-row"><label>🚫 Unexcused absent day<small>ขาดงาน = × ค่าแรงต่อวัน</small></label><input type="number" id="pgr-absmult" step="0.5" placeholder="2"></div>
       <div class="pgr-row"><label>💰 Monthly base <span style="font-weight:600;color:var(--text2)">(optional)</span><small>เงินเดือนประจำ (฿) — 0 = ไม่ใช้</small></label><input type="number" id="pgr-monthly" placeholder="0"></div>
       <div class="pgr-row"><label>💹 Commission ฿/panel <span style="font-weight:600;color:var(--text2)">(optional)</span><small>คอมมิชชั่นต่อแผ่นที่ขายได้ — 0 = ไม่ใช้</small></label><input type="number" id="pgr-comm" step="0.05" placeholder="0"></div>
+      <div class="pgr-row"><label>🏪 POS commission ฿/panel <span style="font-weight:600;color:var(--text2)">(optional)</span><small>ค่าคอมหน้าร้าน — แผ่นที่คนนี้ขายเองบนแท็บเล็ต · 0 = ใช้ค่า default</small></label><input type="number" id="pgr-poscomm" step="0.05" placeholder="0"></div>
+      <div class="pgr-row"><label>🏪 POS default ฿/panel <span style="font-weight:600;color:#b45309">(ทุกคน / ALL sellers)</span><small>ค่า default สำหรับทุกคนที่ไม่มีอัตราของตัวเอง — แก้ที่นี่มีผลทุกคน</small></label><input type="number" id="pgr-poscomm-all" step="0.05" placeholder="0"></div>
       <!-- Only for people in the office-salary list: which of the two totals they land in -->
       <div class="pgr-row" id="pgr-grey-row" style="border-bottom:none;display:none"><label>🎨 สีของยอด / Colour<small>น้ำเงิน = รวมในยอดออฟฟิศ · เทา = นับแยก / blue counts in the office total, grey is counted separately</small></label>
         <button type="button" id="pgr-grey-btn" onclick="pgRateGreyToggle()" title="แตะเพื่อสลับ / tap to switch" style="width:44px;height:34px;border-radius:6px;border:1.5px solid var(--blue);background:var(--blue);cursor:pointer"></button></div>
@@ -4102,6 +4107,8 @@ function _enterOffice(s){
   const batchTab = document.getElementById('oft-batch');
   if(batchTab) batchTab.style.display = (s.batchAccess || _nm==='andre' || _nm==='nicky' || _nm==='nickey') ? '' : 'none';
   try{ poUpdateBadge(); }catch(e){}
+  // POS orders → master sheet, once the office's order list has arrived.
+  try{ clearTimeout(_posSweepT); _posSweepT=setTimeout(posSheetSweep, 8000); }catch(e){}
   // Logistics/Mittelsmann (e.g. Milk): Orders read-only, no revenue/home, only
   // Orders/Stock/Incoming/Lalamove. Lalamove tab is shown to ALL office staff.
   // Instore sellers (Milk/Shop) are never treated as logistics — they must be able to
@@ -7823,7 +7830,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901020;
+var KP_BUILD = 20260901021;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -10686,6 +10693,19 @@ function ofCreate(){
     // not in `orders` yet at this point, so the feed cannot look them up.
     try{ kpPayFeedAdd({amt:pre, id:no, cust:o.customer, zone:o.zone, kind:'office', by:createdBy}); }catch(e){}
   })();
+  // Approving a POS draft: the sale stays the tablet seller's (commission,
+  // 🏪 marker) and their tax-invoice request rides onto the real order.
+  if(window._posPendingDraft){
+    var _pd=window._posPendingDraft;
+    o.posSale=true; o.posSeller=_pd.seller||''; o.posSellerId=_pd.sellerId||'';
+    if(_pd.taxReq){
+      o.taxReq=_pd.taxReq;
+      if(_pd.taxReq.tin) o.taxTIN=_pd.taxReq.tin;
+      if(_pd.taxReq.name) o.taxName=_pd.taxReq.name;
+      if(_pd.taxReq.addr) o.taxAddr=_pd.taxReq.addr;
+      if(_pd.taxReq.branch) o.taxBranch=_pd.taxReq.branch;
+    }
+  }
   orders.unshift(o);wOrders.unshift({id:no,zone,boxes:o.boxes,panels:panStr,lcorner:lcStr,clips,packed:false,packedAt:null});
   // The slips were held in memory because the order had no id yet — attach them now.
   if(_ofPreSlips.length){
@@ -10726,6 +10746,23 @@ function ofCreate(){
   _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofReorderClose();}catch(e){}try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
   if(_ofPriority){ try{ pushSend('warehouse','⭐ Priority order: '+no, _ofPriorityReason||'Important order', {tag:'priority'}); }catch(e){} }
   _ofPriority=false;_ofPriorityReason='';try{ofUpdatePriorityBtn();}catch(e){}
+  // POS draft approved → tell the tablet (it shows "✓ ออกเลข <no>") and bump the
+  // seller's monthly panel counter for the tablet's own display.
+  if(window._posPendingKey){
+    try{
+      var _pk=window._posPendingKey, _pdd=window._posPendingDraft||{};
+      window.fbDB.ref('posPending/'+_pk).update({status:'created', orderId:no, by:createdBy, doneTs:Date.now()});
+      if(_pdd.sellerId){
+        window.fbDB.ref('posStats/'+mkey(new Date().toISOString())+'/'+_pdd.sellerId).transaction(function(cur){
+          cur=cur||{name:_pdd.seller||'',orders:0,panels:0,amount:0};
+          cur.orders=(cur.orders||0)+1; cur.panels=(cur.panels||0)+tq;
+          return cur;
+        });
+      }
+      auditAdd({type:'pos', orderId:no, by:createdBy, detail:'✅ ยืนยันโซน POS draft ของ '+(_pdd.seller||'')+' → '+no});
+    }catch(e){}
+    posPendFillCancel();
+  }
   oft('orders');mgRender();syncOrders();syncWOrders();syncStockItems();
   try{ sheetsSyncToMaster(o); }catch(e){ console.error('Master sync failed (non-blocking):', e); }
   try{var cByN=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';auditAdd({type:'create',orderId:no,by:cByN});}catch(e){}
@@ -10999,6 +11036,133 @@ function ofAgeBadge(o){
   var bg =n>=7?'#fee2e2':(n>=3?'#fef3c7':'var(--bg2)');
   return '<span title="days since order / กี่วันแล้วตั้งแต่สั่ง" style="font-size:10px;font-weight:800;color:'+col+';background:'+bg+';border-radius:8px;padding:1px 6px;white-space:nowrap">⏳ '+(n===0?'วันนี้':n+' วัน')+'</span>';
 }
+// ════════════════════════════════════════════════════════════════════════════
+//  POS TABLET (pos.html) — office side.
+//  The tablet writes normal orders itself; only two things land here:
+//  · posPending  — delivery drafts whose province didn't match a zone. The office
+//    confirms the zone, the New Order form is prefilled, and the normal Create
+//    button issues the number (all existing checks/stock/sheet logic run).
+//  · a sheet sweep — the tablet cannot talk to the master sheet, so the first
+//    office device that sees a POS order pushes it there once.
+// ════════════════════════════════════════════════════════════════════════════
+var posPendingData={};
+var _posCommRate=0;              // global POS commission default ฿/panel (fb 'posCommRate')
+window._posPendingKey='';
+window._posPendingDraft=null;
+if(window.fbDB){
+  window.fbDB.ref('posPending').limitToLast(40).on('value', function(s){
+    posPendingData=s.val()||{};
+    try{ posPendRender(); }catch(e){}
+  });
+  window.fbDB.ref('posCommRate').on('value', function(s){
+    var v=s.val(); _posCommRate=v?(parseFloat(v.rate)||0):0;
+  });
+}
+function posPendWaiting(){
+  return Object.keys(posPendingData).map(function(k){ var p=posPendingData[k]; if(p) p._k=k; return p; })
+    .filter(function(p){ return p && p.status==='waiting'; })
+    .sort(function(a,b){ return (a.ts||0)-(b.ts||0); });
+}
+function posPendRender(){
+  var box=document.getElementById('pos-pending-box'); if(!box) return;
+  var list=posPendWaiting();
+  if(!list.length){ box.style.display='none'; box.innerHTML=''; return; }
+  box.style.display='block';
+  box.innerHTML='<div style="background:#f3e8ff;border:1.5px solid #c4b5fd;border-radius:var(--r);padding:10px 12px;margin-bottom:10px">'
+    +'<div style="font-weight:800;font-size:13px;color:#6d28d9;margin-bottom:8px">🏪 POS — รอยืนยันโซน / waiting for zone ('+list.length+')</div>'
+    +list.map(function(p){
+      var guess=kpProvinceZone(p.province||'');
+      var zones=['Bangkok','Northern','Northeastern','Eastern','Southern'];
+      var sel='<select id="ppz-'+p._k+'" style="padding:6px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--bg);color:var(--text)">'
+        +zones.map(function(z){ return '<option value="'+z+'"'+(z===guess?' selected':'')+'>'+z+'</option>'; }).join('')+'</select>';
+      return '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;margin-bottom:6px">'
+        +'<div style="font-size:12.5px;font-weight:700">'+(p.customer||'—')+' · '+(p.phone||'')+' <span style="color:#7c3aed">('+(p.province||'ไม่มีจังหวัด')+')</span></div>'
+        +'<div style="font-size:11.5px;color:var(--text2);margin:2px 0">'+(p.address||'')+'</div>'
+        +'<div style="font-size:11.5px;margin:2px 0">'+(p.panels||'')+(p.lcorner?' · '+p.lcorner:'')+' — <b>'+((p.totals&&p.totals.grand)||0).toLocaleString()+' ฿</b>'
+        +(p.taxReq?' · <span style="color:#b45309;font-weight:700">🧾 ขอใบกำกับ</span>':'')+'</div>'
+        +'<div style="font-size:11px;color:var(--text2)">ผู้ขาย / seller: '+(p.seller||'—')+' · '+new Date(p.ts||0).toLocaleString()+'</div>'
+        +'<div style="display:flex;gap:6px;margin-top:6px;align-items:center">โซน: '+sel
+        +'<button type="button" onclick="posPendFill(\''+p._k+'\')" style="flex:1;padding:8px;border:none;border-radius:var(--rs);background:#7c3aed;color:#fff;font-weight:700;font-size:12px;cursor:pointer">📋 เปิดในฟอร์ม / open in form</button>'
+        +'<button type="button" onclick="posPendReject(\''+p._k+'\')" style="padding:8px 10px;border:1px solid #fca5a5;border-radius:var(--rs);background:#fef2f2;color:#dc2626;font-weight:700;font-size:12px;cursor:pointer">✗</button>'
+        +'</div></div>';
+    }).join('')+'</div>';
+}
+function posPendFill(key){
+  var p=posPendingData[key]; if(!p){ alert('draft is gone'); return; }
+  var zone=(document.getElementById('ppz-'+key)||{}).value || kpProvinceZone(p.province||'') || 'Bangkok';
+  window._posPendingKey=key; window._posPendingDraft=p;
+  oft('new');
+  try{ selectZone(zone); }catch(e){}
+  function set(id,v){ var e=document.getElementById(id); if(e) e.value=(v==null?'':v); }
+  set('of-cust',p.customer); set('of-phone',p.phone); set('of-addr',p.address);
+  set('of-province',p.province); set('of-loc',p.location);
+  set('of-deliveround',p.deliveryRound); set('of-reqdate',p.reqDate);
+  // contact comes as "channel · name"
+  try{
+    var c=String(p.contact||''), ch='', nm=c;
+    var ix=c.indexOf(' · '); if(ix>0){ ch=c.slice(0,ix); nm=c.slice(ix+3); }
+    else { var selc=document.getElementById('of-contact-ch');
+           if(selc && Array.prototype.some.call(selc.options,function(o){return o.value===c;})){ ch=c; nm=''; } }
+    set('of-contact-ch',ch); set('of-contact-name',nm);
+  }catch(e){}
+  // product lines
+  var ph=document.getElementById('of-panels'), eh=document.getElementById('of-edges');
+  ph.innerHTML=''; eh.innerHTML='';
+  var EDGE={lcorner:'lcorner',utrim:'utrim',ttrim:'ttrim',uedge:'utrim',tedge:'ttrim'};
+  (p.lineItems||[]).forEach(function(li){
+    if(li.type==='panel'){
+      ofAddP();
+      var l=ph.lastElementChild, ins=l.querySelectorAll('input');
+      ins[0].value=li.code||''; ins[1].value=li.qty||0; ins[2].value=li.unitPrice||0;
+      var g=l.querySelector('select.grsel'); if(g){ g.value=li.grade||'A'; try{ kpGradeColor(g); }catch(e){} }
+    } else if(EDGE[li.type]){
+      ofAddE();
+      var le=eh.lastElementChild, ie=le.querySelectorAll('input');
+      le.querySelector('select').value=EDGE[li.type];
+      ie[0].value=li.code||''; ie[1].value=li.qty||0; ie[2].value=li.unitPrice||0;
+    }
+  });
+  if(!ph.children.length) ofAddP();
+  var t=p.totals||{};
+  set('of-clip-packs',t.packs||''); set('of-free-clips',t.gift||''); set('of-free-minus',t.freeMinus||'');
+  set('of-discount',t.discount||''); set('of-delivery',t.delivery||'');
+  set('of-extra-label',t.extraLabel||''); set('of-extra-price',t.extra||'');
+  var note=document.getElementById('of-reorder-note');
+  if(note){
+    note.style.display='block';
+    note.innerHTML='<div style="background:#f3e8ff;border:1.5px solid #c4b5fd;border-radius:var(--rs);padding:8px 10px;margin-bottom:10px;font-size:12px;color:#6d28d9;font-weight:700">🏪 POS draft — ผู้ขาย '+(p.seller||'')+' · ตรวจแล้วกด Create order ตามปกติ <button type="button" onclick="posPendFillCancel()" style="float:right;border:none;background:none;color:#7c3aed;cursor:pointer;font-weight:700">ยกเลิก ✕</button></div>';
+  }
+  try{ ofCalc(); }catch(e){}
+  window.scrollTo(0,0);
+}
+function posPendFillCancel(){
+  window._posPendingKey=''; window._posPendingDraft=null;
+  var note=document.getElementById('of-reorder-note');
+  if(note){ note.style.display='none'; note.innerHTML=''; }
+}
+function posPendReject(key){
+  var p=posPendingData[key]; if(!p) return;
+  var reason=prompt('เหตุผลที่ตีกลับ / reason (POS tablet will show it):','');
+  if(reason===null) return;
+  window.fbDB.ref('posPending/'+key).update({status:'rejected', reason:String(reason||'').trim(), by:(typeof currentStaffName!=='undefined'?currentStaffName:''), doneTs:Date.now()});
+  try{ auditAdd({type:'pos', orderId:'⏳ POS', by:currentStaffName, detail:'ตีกลับ POS draft — '+(p.customer||'')+(reason?' · '+reason:'')}); }catch(e){}
+}
+// POS orders → master sheet, once, from the first office device that sees them.
+var _posSweepT=null;
+function posSheetSweep(){
+  try{
+    if(typeof orders==='undefined' || !orders.length) return;
+    var todo=orders.filter(function(o){ return o && o.posSale && !o._posSheetDone; }).slice(0,25);
+    if(!todo.length) return;
+    todo.forEach(function(o){ try{ sheetsSyncToMaster(o); }catch(e){} o._posSheetDone=true; });
+    syncOrders();
+  }catch(e){}
+}
+setInterval(function(){
+  var sc=document.getElementById('s-office');
+  if(sc && sc.classList.contains('active')) posSheetSweep();
+}, 5*60*1000);
+
 function ofOrderCard(o, sfx){
   sfx = (typeof sfx==='string')?sfx:'';
   var logHTML = '';
@@ -11015,7 +11179,7 @@ function ofOrderCard(o, sfx){
     quickBtns += ' <button type="button" onclick="ofOrderShip(\''+o.id+'\')" title="Handed over to the carrier / ส่งให้ขนส่งแล้ว" style="padding:3px 8px;font-size:11px;font-weight:700;border-radius:20px;border:1px solid #c7d2fe;background:#eef2ff;cursor:pointer;color:#4f46e5;margin-bottom:2px">🚚 at shipper</button>';
   }
   var noteHTML = o.notes?'<div style="font-size:12px;color:#EF9F27;margin-top:4px"><i class="ti ti-note" style="font-size:12px;vertical-align:-1px"></i> '+o.notes+'</div>':'';
-  var createdHTML = o.createdBy?'<div style="font-size:11px;color:var(--text2);margin-top:2px">Created: '+o.createdBy+(o.editedBy?' · Edited: '+o.editedBy:'')+'</div>':'';
+  var createdHTML = o.createdBy?'<div style="font-size:11px;color:var(--text2);margin-top:2px">Created: '+o.createdBy+(o.posSale?' · 🏪 POS'+(o.posSeller&&o.posSeller!==o.createdBy?' ('+o.posSeller+')':''):'')+(o.editedBy?' · Edited: '+o.editedBy:'')+'</div>':'';
   var s = '';
   var cardStyle='';
   // Priority = packing priority: big banner + border only while it still needs packing
@@ -11035,6 +11199,14 @@ function ofOrderCard(o, sfx){
       +'<div style="margin-top:4px;color:#888"><s>เดิม / Original: '+coProdText(_cr.oldItems)+'</s></div>'
       +'<div style="font-weight:700;color:#16a34a">ใหม่ / New: '+coProdText(_cr.newItems)+'</div>'
       +'</div>';
+  }
+  // POS tax-invoice request: the seller already typed the customer's tax data on
+  // the tablet (stored as o.taxTIN/taxName/… so the 🧾 dialog prefills) — this
+  // banner is the office's cue to actually issue + print it.
+  if(o.taxReq && !o.taxInv){
+    s += '<div style="background:#fffbeb;color:#b45309;border:1.5px solid #fcd34d;border-radius:var(--rs);padding:6px 9px;font-size:11px;font-weight:700;margin-bottom:6px">🧾 ลูกค้าขอใบกำกับภาษี (POS)'
+      +(o.taxReq.name?' — '+o.taxReq.name:'')+(o.taxReq.tin?' · '+o.taxReq.tin:'')
+      +'<div style="font-weight:500;margin-top:2px">'+(window._fataxReady?'กดปุ่ม 🧾 ข้างล่างเพื่อออกใบกำกับ / use the 🧾 button below':'เตรียมออกใบกำกับให้ลูกค้า / prepare the tax invoice')+'</div></div>';
   }
   var _drvTour = (o.status==='loaded'||o.status==='ready') ? activeTours.find(function(t){return t.orders && t.orders.indexOf(o.id)>=0;}) : null;
   s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:15px;font-weight:700">'+(_prioActive?'⭐ ':'')+o.id+(tidOk(o.tourNo)?' <span title="Tour ID / รหัสทัวร์" style="font-size:10px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:1px 6px;vertical-align:2px">'+o.tourNo+'</span>':'')+'</span><div style="display:flex;align-items:center;gap:6px">'+(_drvTour?'<span style="font-size:11px;color:#1d4ed8;font-weight:700"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> '+_drvTour.driverName+'</span>':'')+ofAgeBadge(o)+'<span onclick="kpcDiscussOrder(\''+o.id+'\')" title="Ask team / ถามทีม" style="cursor:pointer;font-size:15px;line-height:1">💬</span><span class="badge '+BC[o.status]+'">'+SL[o.status]+'</span></div></div>';
@@ -25565,6 +25737,7 @@ function openStaffM(id) {
     document.getElementById('staffm-bills').checked = !!s.billsAccess;
     document.getElementById('staffm-fin').checked = !!s.finAccess;
     document.getElementById('staffm-cash').checked = !!s.cashFeedAccess;
+    document.getElementById('staffm-pos').checked = !!s.posAccess;
     document.getElementById('staffm-finpay').checked = !!s.finPayrollOn;
     document.getElementById('staffm-fingrey').checked = !!s.finPayGrey;
     document.getElementById('staffm-food').checked = !!s.foodAccess;
@@ -25599,6 +25772,7 @@ function openStaffM(id) {
     document.getElementById('staffm-bills').checked = false;
     document.getElementById('staffm-fin').checked = false;
     document.getElementById('staffm-cash').checked = false;
+    document.getElementById('staffm-pos').checked = false;
     document.getElementById('staffm-finpay').checked = false;
     document.getElementById('staffm-fingrey').checked = false;
     document.getElementById('staffm-food').checked = false;
@@ -25634,6 +25808,7 @@ function saveStaffM() {
   const billsAccess = document.getElementById('staffm-bills').checked;
   const finAccess = document.getElementById('staffm-fin').checked;
   const cashFeedAccess = document.getElementById('staffm-cash').checked;
+  const posAccess = document.getElementById('staffm-pos').checked;
   const finPayrollOn = document.getElementById('staffm-finpay').checked;
   const finPayGrey = document.getElementById('staffm-fingrey').checked;
   const foodAccess = document.getElementById('staffm-food').checked;
@@ -25650,14 +25825,14 @@ function saveStaffM() {
   const lang = document.getElementById('staffm-lang').value || 'th';
   if(editStaffId) {
     const s = staffList.find(x => x.id === editStaffId);
-    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.finAccess = finAccess; s.cashFeedAccess = cashFeedAccess; s.finPayrollOn = finPayrollOn; s.finPayGrey = finPayGrey; s.foodAccess = foodAccess; s.stockEdit = stockEdit; clCrewSet(s, crewWanted); s.payrollOn = payrollOn;
+    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.finAccess = finAccess; s.cashFeedAccess = cashFeedAccess; s.posAccess = posAccess; s.finPayrollOn = finPayrollOn; s.finPayGrey = finPayGrey; s.foodAccess = foodAccess; s.stockEdit = stockEdit; clCrewSet(s, crewWanted); s.payrollOn = payrollOn;
     var _awayNow=document.getElementById('staffm-away').checked;
     if(_awayNow && !s.away) s.awayFrom=kpNowMK();      // the month the leave began
     if(!_awayNow) delete s.awayFrom;
     s.away=_awayNow; s.isDriver = isDriver; s.calcAccess = calcAccess; s.quoteAccess = quoteAccess; s.countAccess = countAccess; s.payAccess = payAccess; s.phone = phone; s.vehicle = vehicle; s.lang = lang;
     if(isDriver && !s.driverId) s.driverId = 'd' + Date.now();
   } else {
-    var ns = { id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, acctAccess, officeAccess, warehouseAccess, logisticsMode, preorderAccess, billsAccess, finAccess, cashFeedAccess, finPayrollOn, finPayGrey, foodAccess, stockEdit, payrollOn, isDriver, calcAccess, quoteAccess, countAccess, payAccess, phone, vehicle, lang };
+    var ns = { id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, acctAccess, officeAccess, warehouseAccess, logisticsMode, preorderAccess, billsAccess, finAccess, cashFeedAccess, posAccess, finPayrollOn, finPayGrey, foodAccess, stockEdit, payrollOn, isDriver, calcAccess, quoteAccess, countAccess, payAccess, phone, vehicle, lang };
     if(isDriver) ns.driverId = 'd' + Date.now();
     clCrewSet(ns, crewWanted);
     staffList.push(ns);
@@ -29032,6 +29207,13 @@ function calcViz() {
     <div>
       <div style="font-size:13px;font-weight:600">💰 Live payments / เงินเข้าสด</div>
       <div style="font-size:11px;color:var(--text2)">Sees the 💰 Live tab: slips + confirmed deliveries as they arrive, with sound / เห็นเงินเข้าทันทีพร้อมเสียง</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
+    <input type="checkbox" id="staffm-pos" style="width:18px;height:18px;cursor:pointer">
+    <div>
+      <div style="font-size:13px;font-weight:600">🏪 POS tablet / จอขายหน้าร้าน</div>
+      <div style="font-size:11px;color:var(--text2)">Can log into pos.html with their PIN and sell in-store. Office staff can always log in — this flag adds NON-office staff / ให้พนักงานที่ไม่ใช่ออฟฟิศเข้าระบบขายหน้าร้านได้</div>
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:10px;margin-top:8px;padding:10px;background:var(--bg2);border-radius:var(--rs)">
@@ -33732,6 +33914,10 @@ var PG_FIX=[
   // Sales commission: panels sold this month × the person's ฿/panel. Only shows
   // for whoever has a rate — the warehouse never sees this row.
   {k:'comm', ic:'💹', en:'Commission',  th:'คอมมิชชั่น (auto)', type:'auto', sign:1},
+  // POS commission: panels THIS PERSON sold on the pos.html tablet × their
+  // ฿/panel POS rate (personal rate, else the global default). Separate from
+  // 'comm', which counts ALL orders company-wide.
+  {k:'poscomm', ic:'🏪', en:'POS Commission', th:'ค่าคอมหน้าร้าน (auto)', type:'auto', sign:1},
   {k:'adv',  ic:'💵', en:'Advance',     th:'เบิกล่วงหน้า',    type:'amt',  sign:-1},
   {k:'dmg',  ic:'💥', en:'Damage',      th:'ค่าเสียหาย',      type:'amt',  sign:-1},
   {k:'abs',  ic:'🚫', en:'Absent day',  th:'ขาดงาน',         type:'day',  sign:-1}
@@ -33742,6 +33928,8 @@ var PG_CAT={
   pg_work:{label:'📆 Work days / ค่าแรงรายวัน',   sign: 1},
   pg_ot  :{label:'⏱ Overtime / โอที',            sign: 1},
   pg_cont:{label:'📦 Container / ลงตู้',          sign: 1},
+  pg_comm:{label:'💹 Commission / คอมมิชชั่น',    sign: 1},
+  pg_poscomm:{label:'🏪 POS commission / ค่าคอมหน้าร้าน', sign: 1},
   pg_adv :{label:'💵 Advance / เบิกล่วงหน้า',     sign:-1},
   pg_dmg :{label:'💥 Damage / ค่าเสียหาย',        sign:-1},
   pg_abs :{label:'🚫 Absent day / ขาดงาน',        sign:-1}
@@ -33923,7 +34111,7 @@ function pgRate(sid){
   function n(v,dflt){ v=parseFloat(v); return isNaN(v)?dflt:v; }
   return { day:n(r.day,0), ot:n(r.ot,0), cont1:n(r.cont1,0), cont2:n(r.cont2,0),
            contEach:n(r.contEach,0), absMult:n(r.absMult,2), monthly:n(r.monthly,0),
-           comm:n(r.comm,0) };
+           comm:n(r.comm,0), posComm:n(r.posComm,0) };
 }
 /* Panels the commission of a month is paid on. NOT the calendar month, and NOT
    the Sales tab's "Total Panels": the accountant closes the payroll one day
@@ -33964,6 +34152,34 @@ function pgPanelsOfMonth(mk){
   _pgPanelCache[mk]={sig:sig,n:total};
   return total;
 }
+/* POS commission: same payroll window, but only panels THIS seller sold on the
+   POS tablet (o.posSale; seller = o.posSeller, falling back to o.createdBy for
+   tablet-created orders where they are the same person). */
+var _pgPosPanelCache={};
+function pgPosPanels(mk, sid){
+  var st=(staffList||[]).find(function(x){return x.id===sid;})||{};
+  var nm=String(st.name||'').trim().toLowerCase(); if(!nm) return 0;
+  var ck=mk+'|'+sid, sig=(orders||[]).length+'|'+mk;
+  if(_pgPosPanelCache[ck] && _pgPosPanelCache[ck].sig===sig) return _pgPosPanelCache[ck].n;
+  var w=pgCommWindow(mk), total=0;
+  (orders||[]).forEach(function(o){
+    if(!o || !o.posSale || o.status==='cancelled' || !o.date) return;
+    var seller=String(o.posSeller||o.createdBy||'').trim().toLowerCase();
+    if(seller!==nm) return;
+    var ds=String(o.date).slice(0,10);
+    if(ds<w.from || ds>w.to) return;
+    if(!o.panels || o.panels==='—') return;
+    String(o.panels).split('·').forEach(function(p){
+      var m=p.trim().match(/^([A-Z0-9\-]+)\s*[×x]\s*(\d+)/i);
+      if(!m) return;
+      if(/^CL/i.test(m[1])) return;
+      total+=parseInt(m[2],10)||0;
+    });
+  });
+  _pgPosPanelCache[ck]={sig:sig,n:total};
+  return total;
+}
+function pgPosRate(R){ return (R.posComm>0) ? R.posComm : (_posCommRate||0); }
 // "31/07 – 30/08" — the window, the way a person writes it.
 function pgCommWinTxt(mk){
   var w=pgCommWindow(mk);
@@ -34086,6 +34302,9 @@ function pgRows(sid, mk){
   // needs an extra line that can only ever say 0.
   var out=PG_FIX.filter(function(r){
       if(r.k==='comm' && !(_R.comm>0)) return false;
+      // POS commission row: only with a personal rate, or when a global default
+      // exists AND this person actually sold on the tablet this month.
+      if(r.k==='poscomm' && !(_R.posComm>0) && !(pgPosRate(_R)>0 && pgPosPanels(mk,sid)>0)) return false;
       if(r.k==='work' && hideWork) return false;
       return true;
     })
@@ -34127,6 +34346,11 @@ function pgRowCalc(sid, mk, row){
     cnt=pgPanelsOfMonth(mk);
     amt=cnt*R.comm;
     expl='Panels('+pgN(cnt)+') × '+pgN(R.comm);
+  } else if(row.k==='poscomm'){
+    cnt=pgPosPanels(mk,sid);
+    var _pr=pgPosRate(R);
+    amt=cnt*_pr;
+    expl='POS panels('+pgN(cnt)+') × '+pgN(_pr);
   } else if(row.k==='abs'){
     each(function(v){ if(v>0) cnt++; });
     amt=cnt*R.day*R.absMult; expl='Days('+cnt+') × '+pgN(R.day*R.absMult);
@@ -34815,6 +35039,8 @@ function pgRateOpen(sid){
   set('pgr-day',R.day); set('pgr-ot',R.ot); set('pgr-c1',R.cont1); set('pgr-c2',R.cont2);
   set('pgr-ce',R.contEach); set('pgr-absmult',R.absMult); set('pgr-monthly',R.monthly);
   set('pgr-comm',R.comm);
+  set('pgr-poscomm',R.posComm);
+  set('pgr-poscomm-all',_posCommRate);
   // The colour square belongs to the office-salary list, so it only shows for
   // someone who is actually in it.
   _pgRateGrey=!!st.finPayGrey;
@@ -34838,14 +35064,22 @@ function pgRateSave(){
   var was=pgRate(sid);
   var r={ day:num('pgr-day'), ot:num('pgr-ot'), cont1:num('pgr-c1'), cont2:num('pgr-c2'),
           contEach:num('pgr-ce'), absMult:(isNaN(am)?2:am), monthly:num('pgr-monthly'),
-          comm:num('pgr-comm') };
+          comm:num('pgr-comm'), posComm:num('pgr-poscomm') };
   payRates[sid]=r;
   if(window.fbDB) window.fbDB.ref('payRates/'+sid).set(r);
+  // The global POS default lives in its own node — one value for everyone.
+  var _pcAll=num('pgr-poscomm-all');
+  if(_pcAll!==_posCommRate){
+    var _pcWas=_posCommRate; _posCommRate=_pcAll;
+    if(window.fbDB) window.fbDB.ref('posCommRate').set({rate:_pcAll, by:pgWho(), ts:Date.now()});
+    try{ auditAdd({ type:'payroll', area:'payroll', orderId:'💰 POS',
+      detail:'🏪 POS default ฿/panel '+pgN(_pcWas)+' → '+pgN(_pcAll)+' (ทุกคน / all sellers)', by:pgWho() }); }catch(e){}
+  }
   // Only what actually moved goes into the audit log — a rate change silently
   // rewrites the whole month, so it has to be readable at a glance later.
   var LB={day:'💵 Daily wage', ot:'⏱ OT ฿/h', cont1:'📦 Container 1', cont2:'📦 Container 2',
           contEach:'📦 Each further', absMult:'🚫 Absent ×', monthly:'💰 Monthly base',
-          comm:'💹 Commission ฿/panel'};
+          comm:'💹 Commission ฿/panel', posComm:'🏪 POS commission ฿/panel'};
   var diff=Object.keys(LB).filter(function(k){ return was[k]!==r[k]; })
     .map(function(k){ return LB[k]+' '+pgN(was[k])+' → '+pgN(r[k]); });
   if(diff.length){

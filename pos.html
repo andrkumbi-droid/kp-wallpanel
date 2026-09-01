@@ -1,0 +1,1915 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14100A">
+<title>KP Wallpanel · POS ขายหน้าร้าน</title>
+<link rel="manifest" href="pos-manifest.webmanifest">
+<link rel="icon" href="pos-icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- ═══════════════ FIREBASE (same project as index.html) ═══════════════ -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script>
+firebase.initializeApp({
+  apiKey: "AIzaSyBhUzwMR28dvulez9q6AZ4gZS80Y9VK0qQ",
+  authDomain: "kp-wallpanel.firebaseapp.com",
+  databaseURL: "https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "kp-wallpanel",
+  storageBucket: "kp-wallpanel.firebasestorage.app",
+  messagingSenderId: "794246593779",
+  appId: "1:794246593779:web:703fc0a4ba89ba58734b86"
+});
+// APP CHECK — same site key as index.html. On localhost we SKIP activation
+// entirely (like index.html): an unregistered debug token makes the RTDB
+// connection hang forever (see memory: kp-appcheck-localhost). Enforcement is off.
+var APPCHECK_SITE_KEY = '6LebwYgtAAAAAB9LWZ91x3eZfllT9mPsV3Y8Vfpv';
+try{
+  var _isLocal=/^(localhost|127\.0\.0\.1)$/.test(location.hostname) || location.protocol==='file:';
+  if(APPCHECK_SITE_KEY && firebase.appCheck && !_isLocal){
+    firebase.appCheck().activate(APPCHECK_SITE_KEY, true);
+  } else if(_isLocal){
+    console.warn('[POS] localhost — App Check skipped');
+  }
+}catch(e){}
+// SEASON ROOT — must match index.html (v2/). See index.html lines 846-857.
+var SEASON='v2';
+var _rootDb = firebase.database();
+var PDB = { ref:function(p){ return _rootDb.ref(SEASON+'/'+(p==null?'':p)); } };
+var PROOT = _rootDb; // unscoped (pub/ mirror — not used here, kept for parity)
+// Anonymous auth — DB rules require auth != null.
+var posAuthReady = firebase.auth().signInAnonymously().catch(function(e){ console.error('auth', e); });
+</script>
+
+<style>
+/* ═══════════════ DESIGN TOKENS ═══════════════
+   Hybrid: dark-gold "luxe" chrome (login, customer-facing screens)
+   + light warm neutral work screens (product grid, forms) for older eyes. */
+:root{
+  --gold:#D4AF37; --gold2:#C9A227; --gold3:#A8842C; --gold-deep:#8a6d1f;
+  --ink:#14100A; --ink2:#1E1812; --ink3:#292117;
+  --cream:#F5EFE0; --cream2:#BFB49E;
+  --bg:#F6F4EF; --card:#FFFFFF; --text:#221C11; --text2:#6B6355;
+  --border:#E5E0D4; --border2:#D5CEBF;
+  --green:#15803D; --green-bg:#EAF7EE; --red:#B91C1C; --red-bg:#FDECEC;
+  --blue:#1D4ED8; --blue-bg:#EFF4FF;
+  --r:18px; --rs:12px;
+  --shadow:0 2px 10px rgba(30,24,10,.07);
+  --shadow-lg:0 12px 40px rgba(20,16,10,.16);
+}
+*{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body{ margin:0; padding:0; }
+body{
+  font-family:'Prompt','Leelawadee UI','Segoe UI',system-ui,sans-serif;
+  background:var(--bg); color:var(--text);
+  font-size:16px; line-height:1.5;
+  touch-action:manipulation;
+  min-height:100dvh;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+button{ font-family:inherit; cursor:pointer; touch-action:manipulation; user-select:none; -webkit-user-select:none; }
+input,select,textarea{ font-family:inherit; font-size:17px; color:var(--text); }
+input,select,textarea{
+  width:100%; padding:14px 16px; min-height:54px;
+  border:1.5px solid var(--border2); border-radius:var(--rs);
+  background:#fff; outline:none;
+}
+input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0 0 0 3px rgba(212,175,55,.22); }
+.num{ font-variant-numeric:tabular-nums; }
+@media (prefers-reduced-motion: reduce){ *{ animation-duration:.001s !important; transition-duration:.001s !important; } }
+
+/* screens */
+.scr{ display:none; min-height:100dvh; }
+.scr.on{ display:block; }
+.dark{ background:radial-gradient(1200px 700px at 70% -10%, #2b2214 0%, var(--ink) 55%); color:var(--cream); }
+
+/* ── generic pieces ── */
+.wrap{ max-width:1080px; margin:0 auto; padding:0 20px; }
+.press{ transition:transform .15s ease, filter .15s ease; }
+.press:active{ transform:scale(.97); filter:brightness(.96); }
+.hidden{ display:none !important; }
+
+.btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:10px;
+  min-height:56px; padding:14px 22px; border-radius:var(--rs);
+  border:none; font-size:17px; font-weight:600;
+  transition:transform .15s ease, filter .15s ease, opacity .2s;
+}
+.btn:active{ transform:scale(.97); }
+.btn:disabled{ opacity:.45; pointer-events:none; }
+.btn-gold{ background:linear-gradient(135deg,#E6C55A,#C9A227); color:#241B05; box-shadow:0 4px 16px rgba(201,162,39,.35); }
+.btn-dark{ background:var(--ink2); color:var(--cream); border:1px solid rgba(212,175,55,.35); }
+.btn-ghost{ background:#fff; color:var(--text); border:1.5px solid var(--border2); }
+.btn-ghost-d{ background:transparent; color:var(--cream); border:1.5px solid rgba(245,239,224,.35); }
+.btn-green{ background:var(--green); color:#fff; }
+.btn-big{ min-height:66px; font-size:19px; font-weight:700; border-radius:16px; width:100%; }
+.sub-en{ display:block; font-size:12px; font-weight:500; opacity:.75; margin-top:1px; }
+
+.chip{ display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:99px; font-size:13px; font-weight:600; }
+
+/* top bar (light screens) */
+.topbar{
+  position:sticky; top:0; z-index:50;
+  background:rgba(246,244,239,.92); backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+  padding:10px 16px calc(10px);
+  display:flex; align-items:center; gap:12px;
+}
+.topbar .brand{ display:flex; flex-direction:column; line-height:1.05; }
+.topbar .brand b{ font-size:19px; letter-spacing:.5px; }
+.topbar .brand span{ font-size:10.5px; letter-spacing:3.5px; color:var(--gold3); font-weight:600; }
+.iconbtn{
+  width:52px; height:52px; border-radius:14px; border:1.5px solid var(--border2);
+  background:#fff; display:inline-flex; align-items:center; justify-content:center;
+  position:relative; transition:transform .15s;
+}
+.iconbtn:active{ transform:scale(.94); }
+.iconbtn svg{ width:24px; height:24px; stroke:var(--text); }
+.badge{
+  position:absolute; top:-6px; right:-6px; min-width:22px; height:22px; padding:0 5px;
+  border-radius:99px; background:var(--red); color:#fff; font-size:12.5px; font-weight:700;
+  display:flex; align-items:center; justify-content:center;
+}
+.badge.gold{ background:var(--gold2); color:#241B05; }
+
+/* ═══════════════ LOGIN ═══════════════ */
+#scr-login{ display:none; }
+#scr-login.on{ display:flex; flex-direction:column; }
+.login-hero{ text-align:center; padding:46px 20px 8px; }
+.login-hero .kp{ font-size:46px; font-weight:800; letter-spacing:1px; color:#fff; }
+.login-hero .kp em{ font-style:normal; background:linear-gradient(135deg,#E9CD6B,#C9A227); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.login-hero .wp{ font-size:13px; letter-spacing:8px; color:var(--cream2); font-weight:500; margin-top:2px; }
+.login-hero .line{ width:70px; height:2.5px; margin:18px auto 14px; background:linear-gradient(90deg,transparent,var(--gold),transparent); }
+.login-hero h1{ font-size:22px; font-weight:600; margin:0; color:var(--cream); }
+.login-hero p{ margin:4px 0 0; color:var(--cream2); font-size:14px; }
+.staff-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; max-width:860px; margin:26px auto; padding:0 24px; width:100%; }
+.staff-tile{
+  background:linear-gradient(160deg,rgba(255,255,255,.055),rgba(255,255,255,.015));
+  border:1px solid rgba(212,175,55,.28); border-radius:20px;
+  padding:20px 12px 16px; text-align:center; color:var(--cream);
+  transition:transform .16s ease, border-color .16s;
+}
+.staff-tile:active{ transform:scale(.95); border-color:var(--gold); }
+.staff-tile .ava{
+  width:62px; height:62px; border-radius:50%; margin:0 auto 10px;
+  background:linear-gradient(135deg,#E6C55A,#B08D22); color:#241B05;
+  font-size:26px; font-weight:800; display:flex; align-items:center; justify-content:center;
+}
+.staff-tile .nm{ font-size:17px; font-weight:600; }
+.staff-tile .rl{ font-size:12px; color:var(--cream2); margin-top:2px; min-height:16px; }
+/* PIN sheet */
+.pin-sheet{
+  position:fixed; inset:0; z-index:100; display:none;
+  background:rgba(10,8,4,.72); backdrop-filter:blur(6px);
+  align-items:center; justify-content:center; padding:20px;
+}
+.pin-sheet.on{ display:flex; }
+.pin-card{
+  background:linear-gradient(170deg,#241D12,#181209); border:1px solid rgba(212,175,55,.4);
+  border-radius:26px; padding:26px 26px 22px; width:100%; max-width:380px; text-align:center;
+  box-shadow:var(--shadow-lg); animation:pop .22s ease;
+}
+@keyframes pop{ from{ transform:scale(.92); opacity:0; } to{ transform:scale(1); opacity:1; } }
+.pin-card .who{ color:var(--cream); font-size:19px; font-weight:700; }
+.pin-card .hint{ color:var(--cream2); font-size:13.5px; margin:2px 0 14px; }
+.pin-dots{ display:flex; gap:14px; justify-content:center; margin:10px 0 18px; min-height:18px; }
+.pin-dots i{ width:15px; height:15px; border-radius:50%; border:1.5px solid var(--gold); background:transparent; transition:background .15s; }
+.pin-dots i.f{ background:var(--gold); }
+.pin-pad{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.pin-pad button{
+  height:64px; border-radius:16px; font-size:24px; font-weight:600;
+  background:rgba(255,255,255,.06); color:var(--cream); border:1px solid rgba(255,255,255,.12);
+  transition:transform .12s, background .12s;
+}
+.pin-pad button:active{ transform:scale(.93); background:rgba(212,175,55,.3); }
+.pin-err{ color:#F87171; min-height:20px; font-size:14px; margin-top:10px; }
+.pin-x{ margin-top:12px; background:none; border:none; color:var(--cream2); font-size:15px; padding:10px; }
+
+/* ═══════════════ PRODUCT GRID ═══════════════ */
+.filters{ display:flex; gap:10px; overflow-x:auto; padding:14px 16px 4px; scrollbar-width:none; }
+.filters::-webkit-scrollbar{ display:none; }
+.fchip{
+  flex:0 0 auto; padding:11px 20px; min-height:48px; border-radius:99px;
+  border:1.5px solid var(--border2); background:#fff; font-size:15.5px; font-weight:600; color:var(--text2);
+  transition:all .16s;
+}
+.fchip.on{ background:var(--ink); color:var(--gold); border-color:var(--ink); }
+.pgrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:14px; padding:14px 16px 90px; }
+.pcard{
+  background:var(--card); border:1px solid var(--border); border-radius:var(--r);
+  overflow:hidden; box-shadow:var(--shadow); position:relative;
+  transition:transform .16s ease; text-align:left; padding:0;
+}
+.pcard:active{ transform:scale(.96); }
+.pcard .ph{ aspect-ratio:1/1.02; background:#EDE9DF; position:relative; overflow:hidden; }
+.pcard .ph img{ width:100%; height:100%; object-fit:cover; display:block; }
+.pcard .ph .nopic{
+  position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  color:var(--gold3); font-weight:800; font-size:22px; letter-spacing:1px;
+  background:repeating-linear-gradient(90deg,#EFEAD F0 0 14px,#E9E3D5 14px 16px);
+}
+.pcard .mat{ position:absolute; top:10px; left:10px; }
+.chip.wpc{ background:rgba(20,16,10,.82); color:var(--gold); }
+.chip.pvc{ background:rgba(29,78,216,.88); color:#fff; }
+.pcard .body{ padding:10px 12px 12px; }
+.pcard .code{ font-size:15.5px; font-weight:800; letter-spacing:.3px; }
+.pcard .nm{ font-size:13.5px; color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pcard .row{ display:flex; align-items:baseline; justify-content:space-between; margin-top:6px; }
+.pcard .price{ font-size:19px; font-weight:800; color:var(--gold-deep); }
+.pcard .price small{ font-size:12px; font-weight:500; color:var(--text2); }
+.pcard .w{ font-size:12.5px; color:var(--text2); }
+.pcard.sold::after{
+  content:'สินค้าหมด / SOLD OUT'; position:absolute; inset:0;
+  background:rgba(250,248,244,.78); backdrop-filter:blur(1px) grayscale(1);
+  display:flex; align-items:center; justify-content:center;
+  font-weight:800; color:var(--red); font-size:15px; letter-spacing:.5px;
+}
+.stock-chip{ font-size:12px; font-weight:600; color:var(--green); }
+.stock-chip.low{ color:#B45309; }
+
+/* ═══════════════ CALC SHEET ═══════════════ */
+.sheet{
+  position:fixed; inset:0; z-index:90; display:none; background:var(--bg);
+  overflow-y:auto; animation:up .24s ease;
+}
+.sheet.on{ display:block; }
+@keyframes up{ from{ transform:translateY(28px); opacity:0; } to{ transform:none; opacity:1; } }
+.sheet-top{
+  position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:12px;
+  padding:12px 16px; background:rgba(246,244,239,.94); backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+}
+.sheet-top h2{ margin:0; font-size:19px; font-weight:700; flex:1; }
+.calc-cols{ display:grid; grid-template-columns:340px 1fr; gap:18px; padding:18px 20px 110px; max-width:1080px; margin:0 auto; }
+@media(max-width:820px){ .calc-cols{ grid-template-columns:1fr; } }
+.pd-card{ background:#fff; border:1px solid var(--border); border-radius:var(--r); overflow:hidden; box-shadow:var(--shadow); }
+.pd-card .ph{ aspect-ratio:1/1; background:#EDE9DF; position:relative; }
+.pd-card .ph img{ width:100%; height:100%; object-fit:cover; }
+.pd-card .info{ padding:14px 16px; }
+.pd-card .code{ font-size:20px; font-weight:800; }
+.pd-card .nm{ color:var(--text2); }
+.pd-card .pr{ font-size:26px; font-weight:800; color:var(--gold-deep); margin-top:6px; }
+.pd-card .pr small{ font-size:13px; font-weight:500; color:var(--text2); }
+.pd-meta{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.pd-meta .chip{ background:var(--bg); border:1px solid var(--border); color:var(--text2); }
+.calc-card{ background:#fff; border:1px solid var(--border); border-radius:var(--r); box-shadow:var(--shadow); padding:18px; }
+.calc-card h3{ margin:0 0 4px; font-size:18px; }
+.calc-card .sub{ color:var(--text2); font-size:13.5px; margin-bottom:14px; }
+.modes{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }
+.mode{
+  min-height:62px; border-radius:14px; border:1.5px solid var(--border2); background:#fff;
+  font-size:15.5px; font-weight:600; color:var(--text2); line-height:1.25; padding:8px;
+}
+.mode small{ display:block; font-size:11.5px; font-weight:500; opacity:.8; }
+.mode.on{ border-color:var(--gold3); background:#FBF6E7; color:var(--text); box-shadow:0 0 0 3px rgba(212,175,55,.18); }
+.dims{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.dims.one{ grid-template-columns:1fr; }
+.fl{ display:block; font-size:15px; font-weight:600; margin:0 0 6px; }
+.fl small{ color:var(--text2); font-weight:500; font-size:12px; }
+.biginput{ font-size:26px; font-weight:700; text-align:center; min-height:64px; }
+.mathrow{ display:flex; justify-content:space-between; font-size:14.5px; color:var(--text2); padding:5px 2px; }
+.mathrow b{ color:var(--text); }
+.mathbox{ background:var(--bg); border-radius:var(--rs); padding:10px 14px; margin-top:14px; }
+.buffer-toggle{ display:flex; align-items:center; gap:10px; margin-top:10px; font-size:14.5px; color:var(--text2); }
+.switch{ position:relative; width:56px; height:32px; flex:0 0 auto; }
+.switch input{ opacity:0; width:100%; height:100%; position:absolute; margin:0; z-index:2; }
+.switch i{ position:absolute; inset:0; border-radius:99px; background:#D8D2C4; transition:.2s; }
+.switch i::after{ content:''; position:absolute; top:3px; left:3px; width:26px; height:26px; border-radius:50%; background:#fff; transition:.2s; box-shadow:0 1px 4px rgba(0,0,0,.2); }
+.switch input:checked + i{ background:var(--green); }
+.switch input:checked + i::after{ left:27px; }
+.qty-hero{ text-align:center; margin:18px 0 6px; }
+.qty-hero .lbl{ font-size:15px; color:var(--text2); }
+.stepper{ display:flex; align-items:center; justify-content:center; gap:16px; margin-top:8px; }
+.stepper button{
+  width:64px; height:64px; border-radius:18px; font-size:30px; font-weight:700;
+  border:1.5px solid var(--border2); background:#fff; color:var(--text);
+}
+.stepper button:active{ transform:scale(.92); background:var(--bg); }
+.stepper input{ width:130px; min-height:64px; font-size:34px; font-weight:800; text-align:center; border-radius:18px; }
+.acc-row{
+  display:flex; align-items:center; gap:12px; padding:12px 4px; border-top:1px dashed var(--border2);
+}
+.acc-row .t{ flex:1; }
+.acc-row .t b{ font-size:15.5px; }
+.acc-row .t small{ display:block; color:var(--text2); font-size:12.5px; }
+.acc-row .st{ display:flex; align-items:center; gap:8px; }
+.acc-row .st button{ width:46px; height:46px; border-radius:12px; font-size:20px; border:1.5px solid var(--border2); background:#fff; }
+.acc-row .st input{ width:70px; min-height:46px; text-align:center; font-size:18px; font-weight:700; padding:6px; }
+.codechips{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+.codechips button{ padding:8px 12px; min-height:40px; border-radius:9px; border:1.5px solid var(--border2); background:#fff; font-size:13.5px; font-weight:600; }
+.codechips button.on{ background:var(--ink); color:var(--gold); border-color:var(--ink); }
+.sheet-bar{
+  position:fixed; left:0; right:0; bottom:0; z-index:95;
+  background:rgba(255,255,255,.95); backdrop-filter:blur(10px);
+  border-top:1px solid var(--border); padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+  display:flex; align-items:center; gap:14px;
+}
+.sheet-bar .tot{ flex:1; }
+.sheet-bar .tot small{ display:block; color:var(--text2); font-size:12.5px; }
+.sheet-bar .tot b{ font-size:23px; }
+
+/* ═══════════════ CART ═══════════════ */
+.cart-list{ max-width:840px; margin:0 auto; padding:16px 16px 130px; }
+.cline{
+  background:#fff; border:1px solid var(--border); border-radius:var(--r); box-shadow:var(--shadow);
+  padding:14px 16px; margin-bottom:12px; display:flex; gap:14px; align-items:center;
+}
+.cline .pic{ width:64px; height:64px; border-radius:12px; background:#EDE9DF; overflow:hidden; flex:0 0 auto; }
+.cline .pic img{ width:100%; height:100%; object-fit:cover; }
+.cline .pic .noimg{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--gold3); font-size:13px; }
+.cline .mid{ flex:1; min-width:0; }
+.cline .mid b{ font-size:16.5px; }
+.cline .mid .nm{ font-size:13px; color:var(--text2); }
+.cline .mid .pr{ font-size:14px; margin-top:3px; }
+.cline .mid .pr input{ width:96px; min-height:44px; padding:6px 8px; text-align:right; font-weight:700; display:inline-block; }
+.cline .mid .pr.mod input{ border-color:#D97706; background:#FFF7E6; }
+.cline .st{ display:flex; align-items:center; gap:8px; }
+.cline .st button{ width:50px; height:50px; border-radius:12px; font-size:22px; border:1.5px solid var(--border2); background:#fff; }
+.cline .st .q{ min-width:44px; text-align:center; font-size:20px; font-weight:800; }
+.cline .del{ background:none; border:none; padding:10px; color:var(--red); }
+.gr-b{ font-size:11.5px; font-weight:700; color:#B45309; background:#FEF3C7; border-radius:6px; padding:2px 7px; margin-left:6px; }
+.opt-card{ background:#fff; border:1px solid var(--border); border-radius:var(--r); box-shadow:var(--shadow); padding:16px; margin-bottom:12px; }
+.opt-card h4{ margin:0 0 10px; font-size:16px; }
+.opt-row{ display:flex; align-items:center; gap:12px; padding:8px 0; }
+.opt-row .t{ flex:1; font-size:15px; }
+.opt-row .t small{ display:block; color:var(--text2); font-size:12.5px; }
+.opt-row input{ width:130px; text-align:right; font-weight:700; }
+.opt-row input.wide{ width:100%; text-align:left; font-weight:500; }
+.sumcard{ background:#fff; border:1.5px solid var(--gold2); border-radius:var(--r); padding:16px 18px; box-shadow:var(--shadow); }
+.sumrow{ display:flex; justify-content:space-between; padding:5px 0; font-size:15.5px; }
+.sumrow.small{ font-size:13.5px; color:var(--text2); }
+.sumrow.grand{ border-top:1.5px solid var(--border2); margin-top:8px; padding-top:12px; font-size:19px; font-weight:800; }
+.sumrow.grand b{ color:var(--gold-deep); font-size:24px; }
+
+/* ═══════════════ CHECKOUT ═══════════════ */
+.ck-wrap{ max-width:760px; margin:0 auto; padding:18px 16px 130px; }
+.fulfil{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px; }
+@media(max-width:640px){ .fulfil{ grid-template-columns:1fr; } }
+.fulfil button{
+  border:2px solid var(--border2); background:#fff; border-radius:20px; padding:22px 16px;
+  text-align:center; transition:all .16s;
+}
+.fulfil button .ic{ font-size:38px; line-height:1; }
+.fulfil button .h{ font-size:18px; font-weight:800; margin-top:8px; }
+.fulfil button .s{ font-size:13px; color:var(--text2); margin-top:2px; }
+.fulfil button.on{ border-color:var(--gold2); background:#FBF6E7; box-shadow:0 0 0 3px rgba(212,175,55,.2); }
+.formcard{ background:#fff; border:1px solid var(--border); border-radius:var(--r); box-shadow:var(--shadow); padding:18px; margin-bottom:14px; }
+.formcard h4{ margin:0 0 12px; font-size:16.5px; display:flex; align-items:center; gap:8px; }
+.fgrid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.fgrid .full{ grid-column:1/-1; }
+@media(max-width:640px){ .fgrid{ grid-template-columns:1fr; } }
+.err-t{ color:var(--red); font-size:13px; margin-top:4px; display:none; }
+.f-err input, .f-err textarea{ border-color:var(--red); }
+.f-err .err-t{ display:block; }
+.zone-note{ display:flex; align-items:center; gap:10px; border-radius:var(--rs); padding:12px 14px; font-size:14.5px; font-weight:600; margin-top:6px; }
+.zone-ok{ background:var(--green-bg); color:var(--green); }
+.zone-warn{ background:#FEF3C7; color:#92400E; }
+.insmode{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+@media(max-width:640px){ .insmode{ grid-template-columns:1fr; } }
+.insmode button{ border:2px solid var(--border2); background:#fff; border-radius:16px; padding:16px 12px; text-align:center; }
+.insmode button .h{ font-weight:700; font-size:16px; margin-top:4px; }
+.insmode button .s{ font-size:12.5px; color:var(--text2); }
+.insmode button.on{ border-color:var(--green); background:var(--green-bg); }
+.taxbox{ border:1.5px dashed var(--border2); border-radius:var(--r); padding:14px 16px; }
+.taxbox .head{ display:flex; align-items:center; gap:12px; }
+.taxbox .head .t{ flex:1; font-weight:700; font-size:15.5px; }
+.taxbox .head .t small{ display:block; font-weight:500; color:var(--text2); font-size:12.5px; }
+
+/* ═══════════════ CUSTOMER-FACING (dark) ═══════════════ */
+.cf-wrap{ max-width:820px; margin:0 auto; padding:26px 20px 130px; }
+.cf-head{ text-align:center; margin-bottom:20px; }
+.cf-head .kp{ font-size:26px; font-weight:800; color:#fff; }
+.cf-head .kp em{ font-style:normal; color:var(--gold); }
+.cf-head .wp{ font-size:10px; letter-spacing:6px; color:var(--cream2); }
+.cf-head .tt{ margin-top:14px; font-size:21px; font-weight:600; color:var(--cream); }
+.cf-head .dt{ color:var(--cream2); font-size:13.5px; }
+.cf-no{ text-align:center; margin:6px 0 16px; }
+.cf-no .lbl{ color:var(--cream2); font-size:13.5px; letter-spacing:1px; }
+.cf-no .no{ font-size:44px; font-weight:800; color:var(--gold); letter-spacing:2px; }
+.cf-card{
+  background:linear-gradient(165deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+  border:1px solid rgba(212,175,55,.3); border-radius:22px; padding:20px 22px; margin-bottom:14px;
+}
+.cf-line{ display:flex; justify-content:space-between; gap:14px; padding:9px 0; border-bottom:1px dashed rgba(245,239,224,.14); font-size:16px; }
+.cf-line:last-child{ border-bottom:none; }
+.cf-line .l small{ display:block; color:var(--cream2); font-size:12.5px; }
+.cf-line .r{ font-weight:700; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.cf-line .free{ color:#7FD99A; }
+.cf-total{ display:flex; justify-content:space-between; align-items:baseline; padding-top:14px; }
+.cf-total .t{ font-size:17px; color:var(--cream); }
+.cf-total .v{ font-size:40px; font-weight:800; color:var(--gold); font-variant-numeric:tabular-nums; }
+.cf-foot{ text-align:center; color:var(--cream2); font-size:12.5px; margin-top:14px; }
+.darkbar{
+  position:fixed; left:0; right:0; bottom:0; z-index:95;
+  background:rgba(20,16,10,.92); backdrop-filter:blur(10px);
+  border-top:1px solid rgba(212,175,55,.3);
+  padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+  display:flex; gap:12px; align-items:center;
+}
+.darkbar .btn{ flex:1; }
+
+/* pay */
+.paymodes{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.paymodes button{
+  border:2px solid rgba(245,239,224,.25); background:rgba(255,255,255,.04); color:var(--cream);
+  border-radius:20px; padding:24px 14px; text-align:center;
+}
+.paymodes button .ic{ font-size:40px; line-height:1; }
+.paymodes button .h{ font-size:18.5px; font-weight:700; margin-top:8px; }
+.paymodes button .s{ font-size:12.5px; color:var(--cream2); }
+.paymodes button.on{ border-color:var(--gold); background:rgba(212,175,55,.14); }
+.bank-card{
+  background:linear-gradient(140deg,#4A2E8C,#5B3AA8 55%,#6C46C4); border-radius:22px; padding:22px 24px;
+  color:#fff; box-shadow:0 14px 40px rgba(70,42,150,.45); margin-top:16px;
+}
+.bank-card .bk{ font-size:14px; opacity:.85; letter-spacing:1px; font-weight:600; }
+.bank-card .an{ font-size:38px; font-weight:800; letter-spacing:2.5px; margin:8px 0 4px; font-variant-numeric:tabular-nums; }
+.bank-card .nm{ font-size:15px; opacity:.92; }
+.amt-input{ background:rgba(255,255,255,.06); border-color:rgba(245,239,224,.3); color:var(--cream); font-size:30px; font-weight:800; text-align:center; min-height:70px; border-radius:16px; }
+.amt-input:focus{ border-color:var(--gold); box-shadow:0 0 0 3px rgba(212,175,55,.25); }
+.slip-thumbs{ display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+.slip-thumbs img{ width:86px; height:86px; object-fit:cover; border-radius:12px; border:2px solid var(--gold); }
+.paysplit{ display:flex; gap:10px; margin-top:14px; }
+.paysplit button{ flex:1; min-height:52px; border-radius:12px; border:1.5px solid rgba(245,239,224,.3); background:transparent; color:var(--cream); font-size:15px; font-weight:600; }
+.paysplit button.on{ background:rgba(212,175,55,.18); border-color:var(--gold); }
+
+/* done */
+.done-wrap{ min-height:100dvh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:30px 24px; }
+.done-ring{
+  width:130px; height:130px; border-radius:50%; margin-bottom:22px;
+  background:radial-gradient(circle at 35% 30%, #EFD98B, #C9A227);
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 0 0 12px rgba(212,175,55,.14), 0 0 0 26px rgba(212,175,55,.06);
+  animation:pop .4s ease;
+}
+.done-ring svg{ width:64px; height:64px; stroke:#241B05; stroke-width:3; }
+.done-wrap h2{ color:var(--cream); font-size:26px; margin:0; }
+.done-wrap .no{ color:var(--gold); font-size:40px; font-weight:800; margin:6px 0; letter-spacing:1.5px; }
+.done-wrap p{ color:var(--cream2); margin:4px 0 26px; font-size:15.5px; }
+
+/* toast */
+#toast{
+  position:fixed; top:16px; left:50%; transform:translateX(-50%) translateY(-90px); z-index:400;
+  background:var(--ink); color:var(--cream); border:1px solid rgba(212,175,55,.45);
+  padding:14px 22px; border-radius:14px; font-size:15.5px; font-weight:600;
+  box-shadow:var(--shadow-lg); transition:transform .28s ease; max-width:88vw; text-align:center;
+}
+#toast.on{ transform:translateX(-50%) translateY(0); }
+
+/* mysales + pending */
+.ms-wrap{ max-width:760px; margin:0 auto; padding:18px 16px 40px; }
+.ms-hero{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:16px; }
+.ms-stat{ background:#fff; border:1px solid var(--border); border-radius:var(--r); box-shadow:var(--shadow); text-align:center; padding:16px 8px; }
+.ms-stat .v{ font-size:28px; font-weight:800; color:var(--gold-deep); }
+.ms-stat .l{ font-size:12.5px; color:var(--text2); }
+.ms-item{ background:#fff; border:1px solid var(--border); border-radius:var(--r); padding:13px 16px; margin-bottom:10px; display:flex; align-items:center; gap:12px; box-shadow:var(--shadow); }
+.ms-item .no{ font-weight:800; font-size:16px; }
+.ms-item .mid{ flex:1; min-width:0; font-size:13.5px; color:var(--text2); }
+.ms-item .amt{ font-weight:800; font-size:16px; white-space:nowrap; }
+.st-pill{ font-size:11.5px; font-weight:700; border-radius:99px; padding:3px 10px; }
+.st-packing{ background:#FEF3C7; color:#92400E; }
+.st-delivered{ background:var(--green-bg); color:var(--green); }
+.st-new{ background:var(--blue-bg); color:var(--blue); }
+.st-wait{ background:#F3E8FF; color:#7C3AED; }
+.st-rejected{ background:var(--red-bg); color:var(--red); }
+
+@media print{
+  body *{ visibility:hidden; }
+  #scr-quote, #scr-quote *{ visibility:visible; }
+  #scr-quote{ position:absolute; inset:0; background:#fff !important; color:#000 !important; }
+  #scr-quote .darkbar{ display:none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ LOGIN ═══════════════ -->
+<section id="scr-login" class="scr dark on">
+  <div class="login-hero">
+    <div class="kp">K<em>P</em></div>
+    <div class="wp">WALLPANEL</div>
+    <div class="line"></div>
+    <h1>ระบบขายหน้าร้าน</h1>
+    <p>In-store Sales · เลือกชื่อของคุณเพื่อเริ่มขาย</p>
+  </div>
+  <div class="staff-grid" id="staff-grid">
+    <div style="grid-column:1/-1;text-align:center;color:var(--cream2);padding:30px">กำลังโหลดรายชื่อ… / loading staff…</div>
+  </div>
+  <div style="text-align:center;color:#5b5344;font-size:11.5px;padding:0 0 22px">KP Wallpanel POS · <span id="pos-ver"></span></div>
+</section>
+
+<!-- PIN sheet -->
+<div class="pin-sheet" id="pin-sheet">
+  <div class="pin-card">
+    <div class="who" id="pin-who">—</div>
+    <div class="hint">ใส่รหัส PIN ของคุณ / enter your PIN</div>
+    <div class="pin-dots" id="pin-dots"></div>
+    <div class="pin-pad">
+      <button onclick="posPinKey('1')">1</button><button onclick="posPinKey('2')">2</button><button onclick="posPinKey('3')">3</button>
+      <button onclick="posPinKey('4')">4</button><button onclick="posPinKey('5')">5</button><button onclick="posPinKey('6')">6</button>
+      <button onclick="posPinKey('7')">7</button><button onclick="posPinKey('8')">8</button><button onclick="posPinKey('9')">9</button>
+      <button onclick="posPinDel()" style="font-size:19px">⌫</button><button onclick="posPinKey('0')">0</button>
+      <button onclick="posPinOk()" style="background:linear-gradient(135deg,#E6C55A,#C9A227);color:#241B05;font-size:20px">✓</button>
+    </div>
+    <div class="pin-err" id="pin-err"></div>
+    <button class="pin-x" onclick="posPinClose()">ยกเลิก / cancel</button>
+  </div>
+</div>
+
+<!-- ═══════════════ SHOP (product grid) ═══════════════ -->
+<section id="scr-shop" class="scr">
+  <div class="topbar">
+    <div class="brand"><b>KP <span style="color:var(--gold3)">POS</span></b><span>WALLPANEL</span></div>
+    <div style="flex:1"></div>
+    <div class="chip" id="seller-chip" style="background:#FBF6E7;border:1px solid var(--gold2);color:var(--gold-deep);min-height:40px;font-size:14px" onclick="posGo('mysales')">👤 —</div>
+    <button class="iconbtn press" onclick="posGo('mysales')" title="ยอดขายของฉัน / my sales">
+      <svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M3 17l5-5 4 4 8-8"/><path stroke-linecap="round" d="M14 7h6v6"/></svg>
+      <span class="badge gold hidden" id="pend-badge">0</span>
+    </button>
+    <button class="iconbtn press" onclick="posCartOpen()" title="ตะกร้า / cart">
+      <svg fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.6"/><circle cx="17" cy="20" r="1.6"/><path stroke-linecap="round" d="M3 4h2l2.6 11.2a1.5 1.5 0 0 0 1.47 1.15h7.9a1.5 1.5 0 0 0 1.45-1.1L20.5 8H6"/></svg>
+      <span class="badge hidden" id="cart-badge">0</span>
+    </button>
+    <button class="iconbtn press" onclick="posFullscreen()" title="เต็มจอ / fullscreen">
+      <svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+    </button>
+    <button class="iconbtn press" onclick="posLogout()" title="ออกจากระบบ / logout">
+      <svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M15 12H4m0 0 3.5-3.5M4 12l3.5 3.5"/><path stroke-linecap="round" d="M10 5V4a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-1"/></svg>
+    </button>
+  </div>
+  <div class="filters" id="filters"></div>
+  <div class="pgrid" id="pgrid"></div>
+</section>
+
+<!-- ═══════════════ CALCULATOR SHEET ═══════════════ -->
+<section id="scr-calc" class="sheet">
+  <div class="sheet-top">
+    <button class="iconbtn press" onclick="posCalcClose()"><svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M15 5l-7 7 7 7"/></svg></button>
+    <h2 id="calc-title">—</h2>
+  </div>
+  <div class="calc-cols">
+    <div class="pd-card">
+      <div class="ph" id="calc-ph"></div>
+      <div class="info">
+        <div class="code" id="calc-code">—</div>
+        <div class="nm" id="calc-nm">—</div>
+        <div class="pr num" id="calc-pr">— ฿ <small>/ แผ่น</small></div>
+        <div class="pd-meta" id="calc-meta"></div>
+      </div>
+    </div>
+    <div>
+      <div class="calc-card">
+        <h3>คำนวณจำนวนแผ่น <small style="font-weight:500;color:var(--text2);font-size:13px">/ panel calculator</small></h3>
+        <div class="sub">ใส่ขนาดที่ลูกค้าบอก ระบบคำนวณให้อัตโนมัติ</div>
+        <div class="modes">
+          <button class="mode on" id="cm-wh" onclick="posCalcMode('wh')">📐 กว้าง × สูง<small>W × H (เมตร)</small></button>
+          <button class="mode" id="cm-sqm" onclick="posCalcMode('sqm')">▦ ตารางเมตร<small>sqm รวม</small></button>
+          <button class="mode" id="cm-run" onclick="posCalcMode('run')">↔ ความยาวผนัง<small>แนวกว้าง (เมตร)</small></button>
+        </div>
+        <div id="calc-in-wh" class="dims">
+          <div><label class="fl">กว้าง <small>(เมตร / m)</small></label><input type="number" inputmode="decimal" min="0" step="0.1" id="ci-w" class="biginput num" placeholder="0" oninput="posCalcRun()"></div>
+          <div><label class="fl">สูง <small>(เมตร / m)</small></label><input type="number" inputmode="decimal" min="0" step="0.1" id="ci-h" class="biginput num" placeholder="0" oninput="posCalcRun()"></div>
+        </div>
+        <div id="calc-in-sqm" class="dims one hidden">
+          <div><label class="fl">พื้นที่รวม <small>(ตร.ม. / sqm)</small></label><input type="number" inputmode="decimal" min="0" step="0.1" id="ci-sqm" class="biginput num" placeholder="0" oninput="posCalcRun()"></div>
+        </div>
+        <div id="calc-in-run" class="dims one hidden">
+          <div><label class="fl">ความยาวผนัง <small>(เมตร — สูงไม่เกิน 2.9 ม.)</small></label><input type="number" inputmode="decimal" min="0" step="0.1" id="ci-run" class="biginput num" placeholder="0" oninput="posCalcRun()"></div>
+        </div>
+        <div class="mathbox" id="calc-math" style="display:none">
+          <div class="mathrow"><span>พื้นที่ / area</span><b id="cm-area" class="num">—</b></div>
+          <div class="mathrow"><span>แผ่นพอดี / exact</span><b id="cm-exact" class="num">—</b></div>
+          <div class="mathrow" id="cm-bufrow"><span>เผื่อ 10% + 2 แผ่น / buffer</span><b id="cm-buf" class="num">—</b></div>
+        </div>
+        <div class="buffer-toggle">
+          <label class="switch"><input type="checkbox" id="ci-buffer" checked onchange="posCalcRun()"><i></i></label>
+          <span>เผื่อเสีย 10% + 2 แผ่น (แนะนำ)<br><small style="font-size:12px">add 10% waste + 2 spare panels</small></span>
+        </div>
+        <div class="qty-hero">
+          <div class="lbl">จำนวนแผ่นที่จะขาย / panels to sell</div>
+          <div class="stepper">
+            <button onclick="posQtyStep(-1)">−</button>
+            <input type="number" inputmode="numeric" min="0" id="calc-qty" class="num" value="0" oninput="posCalcTotals()">
+            <button onclick="posQtyStep(1)">+</button>
+          </div>
+          <div style="font-size:13.5px;color:var(--text2);margin-top:8px">🔩 คลิปฟรี <b id="calc-clips" class="num">0</b> ตัว (×10/แผ่น)</div>
+        </div>
+      </div>
+
+      <div class="calc-card" style="margin-top:14px">
+        <h3>อุปกรณ์เข้าขอบ <small style="font-weight:500;color:var(--text2);font-size:13px">/ trims — แก้จำนวนได้</small></h3>
+        <div id="acc-rows"></div>
+      </div>
+    </div>
+  </div>
+  <div class="sheet-bar">
+    <div class="tot"><small>รวมรายการนี้ / this item</small><b class="num" id="calc-sub">0 ฿</b></div>
+    <button class="btn btn-ghost press" onclick="posCalcClose()">ยกเลิก</button>
+    <button class="btn btn-gold press" style="min-width:220px" onclick="posCalcAdd()">➕ เพิ่มลงตะกร้า<span class="sub-en">add to cart</span></button>
+  </div>
+</section>
+
+<!-- ═══════════════ CART ═══════════════ -->
+<section id="scr-cart" class="sheet">
+  <div class="sheet-top">
+    <button class="iconbtn press" onclick="posGo('shop')"><svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M15 5l-7 7 7 7"/></svg></button>
+    <h2>ตะกร้าสินค้า <small style="color:var(--text2);font-size:13px;font-weight:500">/ cart</small></h2>
+    <button class="btn btn-ghost press" style="min-height:48px" onclick="posCartClear()">🗑 ล้าง</button>
+  </div>
+  <div class="cart-list">
+    <div id="cart-lines"></div>
+    <div class="opt-card">
+      <h4>🔩 คลิป / Clips</h4>
+      <div class="opt-row"><div class="t">คลิปฟรีอัตโนมัติ ×10/แผ่น<small>auto free clips</small></div><div style="font-weight:800;font-size:18px" class="num" id="cart-freeclips">0</div></div>
+      <div class="opt-row"><div class="t">คลิปแถมเพิ่ม 🎁<small>extra gift clips (free)</small></div><input type="number" inputmode="numeric" min="0" id="cart-gift" placeholder="0" oninput="posCartCalc()"></div>
+      <div class="opt-row"><div class="t">หักคลิปฟรีออก (−)<small>deduct free clips</small></div><input type="number" inputmode="numeric" min="0" id="cart-freeminus" placeholder="0" oninput="posCartCalc()"></div>
+      <div class="opt-row"><div class="t">คลิปแพ็คขาย (199 ฿/แพ็ค)<small>clip packs</small></div><input type="number" inputmode="numeric" min="0" id="cart-packs" placeholder="0" oninput="posCartCalc()"></div>
+    </div>
+    <div class="opt-card">
+      <h4>➕ เพิ่มเติม / ส่วนลด</h4>
+      <div class="opt-row"><div class="t">งานพิเศษ เช่น ตัดแผ่น<small>extra work label</small></div></div>
+      <div class="opt-row"><input type="text" class="wide" id="cart-extra-label" placeholder="เช่น ตัดแผ่น / cutting"><input type="number" inputmode="numeric" min="0" id="cart-extra" placeholder="0 ฿" oninput="posCartCalc()"></div>
+      <div class="opt-row"><div class="t">ส่วนลด (−)<small>discount</small></div><input type="number" inputmode="numeric" min="0" id="cart-discount" placeholder="0 ฿" oninput="posCartCalc()"></div>
+      <div class="opt-row" id="cart-delivery-row" style="display:none"><div class="t">ค่าจัดส่ง (+)<small>delivery fee</small></div><input type="number" inputmode="numeric" min="0" id="cart-delivery" placeholder="0 ฿" oninput="posCartCalc()"></div>
+    </div>
+    <div class="sumcard">
+      <div class="sumrow"><span>แผ่นวอลล์ <span class="num" id="sum-pq">0</span> แผ่น</span><span class="num" id="sum-pp">0 ฿</span></div>
+      <div class="sumrow"><span>อุปกรณ์เข้าขอบ</span><span class="num" id="sum-ep">0 ฿</span></div>
+      <div class="sumrow"><span>คลิปแพ็ค</span><span class="num" id="sum-cc">0 ฿</span></div>
+      <div class="sumrow small" id="sum-extra-row" style="display:none"><span id="sum-extra-lbl">งานพิเศษ</span><span class="num" id="sum-ex">0 ฿</span></div>
+      <div class="sumrow small" id="sum-disc-row" style="display:none"><span>ส่วนลด</span><span class="num" id="sum-disc">−0 ฿</span></div>
+      <div class="sumrow small" id="sum-del-row" style="display:none"><span>ค่าจัดส่ง</span><span class="num" id="sum-del">+0 ฿</span></div>
+      <div class="sumrow small"><span>คลิปฟรีรวม</span><span class="num" id="sum-clips">0 ตัว</span></div>
+      <div class="sumrow grand"><span>ยอดรวม / total</span><b class="num" id="sum-grand">0 ฿</b></div>
+    </div>
+  </div>
+  <div class="sheet-bar">
+    <button class="btn btn-ghost press" style="min-width:170px" onclick="posQuoteShow()">📄 ใบเสนอราคา<span class="sub-en">quotation</span></button>
+    <button class="btn btn-gold press" style="flex:1" onclick="posCheckoutOpen()">ดำเนินการขาย →<span class="sub-en">checkout</span></button>
+  </div>
+</section>
+
+<!-- ═══════════════ QUOTATION (customer-facing, printable) ═══════════════ -->
+<section id="scr-quote" class="scr dark">
+  <div class="cf-wrap">
+    <div class="cf-head">
+      <div class="kp">K<em>P</em> WALLPANEL</div>
+      <div class="wp">PREMIUM WALL PANELS</div>
+      <div class="tt">ใบเสนอราคา / Quotation</div>
+      <div class="dt" id="quote-date">—</div>
+    </div>
+    <div class="cf-card" id="quote-lines"></div>
+    <div class="cf-card">
+      <div class="cf-total"><span class="t">ยอดรวมทั้งหมด / Grand total</span><span class="v num" id="quote-total">0 ฿</span></div>
+    </div>
+    <div class="cf-foot">ราคานี้รวมคลิปล็อคฟรีแล้ว · ใบเสนอราคาไม่ใช่ใบเสร็จรับเงิน<br>KP Wallpanel · โทร 063 749 8655 · kp-wallpanel.com</div>
+  </div>
+  <div class="darkbar">
+    <button class="btn btn-ghost-d press" onclick="posGo('cart')">← กลับ</button>
+    <button class="btn btn-ghost-d press" onclick="window.print()">🖨 พิมพ์</button>
+    <button class="btn btn-gold press" onclick="posCheckoutOpen()">ดำเนินการขาย →</button>
+  </div>
+</section>
+
+<!-- ═══════════════ CHECKOUT ═══════════════ -->
+<section id="scr-checkout" class="sheet">
+  <div class="sheet-top">
+    <button class="iconbtn press" onclick="posGo('cart')"><svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M15 5l-7 7 7 7"/></svg></button>
+    <h2>ข้อมูลการขาย <small style="color:var(--text2);font-size:13px;font-weight:500">/ checkout</small></h2>
+  </div>
+  <div class="ck-wrap">
+    <div class="fulfil">
+      <button id="ff-pickup" class="press" onclick="posFulfil('pickup')"><div class="ic">🛍️</div><div class="h">ลูกค้ารับของเลย</div><div class="s">ขายหน้าร้าน Zone 5 · customer takes goods now</div></button>
+      <button id="ff-delivery" class="press" onclick="posFulfil('delivery')"><div class="ic">🚚</div><div class="h">จัดส่งให้ลูกค้า</div><div class="s">ส่งตามโซนจังหวัด · we deliver</div></button>
+    </div>
+
+    <div class="formcard">
+      <h4>👤 ข้อมูลลูกค้า <small style="color:var(--text2);font-weight:500">/ customer</small></h4>
+      <div class="fgrid">
+        <div id="f-cust"><label class="fl">ชื่อลูกค้า <small id="cust-opt">(ไม่บังคับ / optional)</small></label><input type="text" id="ck-cust" placeholder="ชื่อ / name"><div class="err-t">กรุณาใส่ชื่อลูกค้า</div></div>
+        <div id="f-phone"><label class="fl">เบอร์โทร <small>/ phone</small></label><input type="tel" inputmode="tel" id="ck-phone" placeholder="08x-xxx-xxxx"><div class="err-t">กรุณาใส่เบอร์โทร 10 หลัก</div></div>
+        <div><label class="fl">ช่องทางติดต่อ <small>(ไม่บังคับ)</small></label>
+          <select id="ck-contact-ch">
+            <option value="">— เลือก / select —</option>
+            <option value="หน้าร้าน / Walk-in">หน้าร้าน / Walk-in</option>
+            <option value="Facebook">Facebook</option>
+            <option value="Website">Website / เว็บไซต์</option>
+            <option value="TikTok">TikTok</option>
+            <option value="Line Official">Line Official</option>
+            <option value="Line Admin">Line Admin</option>
+            <option value="Line Pim">Line Pim</option>
+            <option value="Line Bobby">Line Bobby</option>
+            <option value="Line Noy">Line Noy</option>
+          </select>
+        </div>
+        <div><label class="fl">ชื่อในช่องทาง <small>(ไม่บังคับ / account name)</small></label><input type="text" id="ck-contact-name" placeholder="เช่น ชื่อเฟส / ไลน์"></div>
+      </div>
+    </div>
+
+    <div class="formcard hidden" id="card-delivery">
+      <h4>📦 ที่อยู่จัดส่ง <small style="color:var(--text2);font-weight:500">/ delivery address</small></h4>
+      <div class="fgrid">
+        <div class="full" id="f-addr"><label class="fl">ที่อยู่ <small>/ address</small></label><textarea id="ck-addr" rows="3" placeholder="บ้านเลขที่ หมู่ ตำบล อำเภอ"></textarea><div class="err-t">กรุณาใส่ที่อยู่จัดส่ง</div></div>
+        <div id="f-prov"><label class="fl">จังหวัด <small>/ province</small></label><input type="text" id="ck-province" list="prov-list" placeholder="เช่น ลำปาง" oninput="posZoneCheck()"><datalist id="prov-list"></datalist><div class="err-t">กรุณาใส่จังหวัด</div></div>
+        <div><label class="fl">ลิงก์แผนที่ <small>(ไม่บังคับ / Google Maps)</small></label><input type="text" id="ck-loc" placeholder="วางลิงก์ Google Maps"></div>
+        <div class="full"><div class="zone-note zone-warn" id="zone-note" style="display:none"></div></div>
+        <div><label class="fl">รอบจัดส่ง <small>(ไม่บังคับ)</small></label><input type="text" id="ck-round" placeholder="เช่น รอบเหนือ"></div>
+        <div><label class="fl">วันที่ลูกค้าต้องการ <small>(ไม่บังคับ)</small></label><input type="date" id="ck-reqdate"></div>
+      </div>
+    </div>
+
+    <div class="formcard hidden" id="card-insmode">
+      <h4>📦 ของพร้อมหรือยัง? <small style="color:var(--text2);font-weight:500">/ handover</small></h4>
+      <div class="insmode">
+        <button id="im-pack" class="press" onclick="posInsMode('pack')"><div style="font-size:30px">📦</div><div class="h">ส่งไปแพ็คก่อน</div><div class="s">คลังแพ็คเสร็จ ลูกค้ารับได้เลย</div></button>
+        <button id="im-done" class="press" onclick="posInsMode('done')"><div style="font-size:30px">✅</div><div class="h">รับของเลย</div><div class="s">ของพร้อมแล้ว ลูกค้าถือกลับ</div></button>
+      </div>
+    </div>
+
+    <div class="formcard">
+      <div class="taxbox">
+        <div class="head">
+          <label class="switch"><input type="checkbox" id="ck-tax" onchange="posTaxToggle()"><i></i></label>
+          <div class="t">🧾 ลูกค้าขอใบกำกับภาษี<small>request tax invoice — แจ้งออฟฟิศเตรียมให้ทันที</small></div>
+        </div>
+        <div class="fgrid hidden" id="tax-fields" style="margin-top:14px">
+          <div class="full"><label class="fl">ชื่อบริษัท / ชื่อผู้ซื้อ</label><input type="text" id="tax-name" placeholder="บริษัท … จำกัด"></div>
+          <div><label class="fl">เลขผู้เสียภาษี <small>(13 หลัก)</small></label><input type="text" inputmode="numeric" maxlength="13" id="tax-tin" placeholder="0000000000000"></div>
+          <div><label class="fl">สาขา</label><input type="text" id="tax-branch" placeholder="สำนักงานใหญ่" value="สำนักงานใหญ่"></div>
+          <div class="full"><label class="fl">ที่อยู่ใบกำกับ</label><textarea id="tax-addr" rows="2" placeholder="ที่อยู่ตามใบทะเบียน"></textarea></div>
+          <div><label class="fl">เบอร์โทร (ใบกำกับ)</label><input type="tel" id="tax-phone" placeholder="ไม่บังคับ"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="sheet-bar">
+    <div class="tot"><small>ยอดรวม / total</small><b class="num" id="ck-total">0 ฿</b></div>
+    <button class="btn btn-gold press" style="flex:1;max-width:420px" id="ck-create-btn" onclick="posCreate()">สร้างออเดอร์ ✓<span class="sub-en">create order</span></button>
+  </div>
+</section>
+
+<!-- ═══════════════ CONFIRM (customer summary) ═══════════════ -->
+<section id="scr-confirm" class="scr dark">
+  <div class="cf-wrap">
+    <div class="cf-head">
+      <div class="kp">K<em>P</em> WALLPANEL</div>
+      <div class="wp">THANK YOU</div>
+      <div class="tt">สรุปรายการสั่งซื้อ / Order Summary</div>
+      <div class="dt" id="cf-date">—</div>
+    </div>
+    <div class="cf-no"><div class="lbl">เลขที่ออเดอร์ / ORDER NO.</div><div class="no num" id="cf-no">—</div></div>
+    <div class="cf-card" id="cf-lines"></div>
+    <div class="cf-card">
+      <div class="cf-total"><span class="t">ยอดรวมทั้งหมด / Grand total</span><span class="v num" id="cf-total">0 ฿</span></div>
+    </div>
+    <div class="cf-foot" id="cf-note">กรุณาตรวจสอบรายการ ก่อนชำระเงิน</div>
+  </div>
+  <div class="darkbar">
+    <button class="btn btn-gold press" style="flex:1" onclick="posGo('pay')">💰 ชำระเงิน<span class="sub-en">payment</span></button>
+  </div>
+</section>
+
+<!-- ═══════════════ PAY ═══════════════ -->
+<section id="scr-pay" class="scr dark">
+  <div class="cf-wrap" style="max-width:640px">
+    <div class="cf-head">
+      <div class="tt">ชำระเงิน / Payment</div>
+      <div class="dt">ออเดอร์ <b id="pay-no" style="color:var(--gold)">—</b></div>
+    </div>
+    <div class="cf-card" style="text-align:center">
+      <div style="color:var(--cream2);font-size:14px">ยอดที่ต้องชำระ / amount due</div>
+      <div style="font-size:46px;font-weight:800;color:var(--gold)" class="num" id="pay-due">0 ฿</div>
+    </div>
+    <div class="paymodes">
+      <button id="pm-cash" class="press" onclick="posPayMode('cash')"><div class="ic">💵</div><div class="h">เงินสด</div><div class="s">cash</div></button>
+      <button id="pm-online" class="press" onclick="posPayMode('online')"><div class="ic">🏦</div><div class="h">โอนเงิน</div><div class="s">bank transfer</div></button>
+    </div>
+    <div class="paysplit">
+      <button id="ps-full" class="press on" onclick="posPayPart(false)">ชำระเต็มจำนวน<br><small style="opacity:.7">full payment</small></button>
+      <button id="ps-part" class="press" onclick="posPayPart(true)">มัดจำ / บางส่วน<br><small style="opacity:.7">deposit</small></button>
+    </div>
+    <div id="pay-amt-wrap" class="hidden" style="margin-top:14px">
+      <label class="fl" style="color:var(--cream)">จำนวนเงินที่รับ <small style="color:var(--cream2)">(฿)</small></label>
+      <input type="number" inputmode="numeric" min="0" id="pay-amt" class="amt-input num" placeholder="0">
+    </div>
+    <div id="bank-wrap" class="hidden">
+      <div class="bank-card">
+        <div class="bk">SCB · ธนาคารไทยพาณิชย์</div>
+        <div class="an">330-282-3788</div>
+        <div class="nm">บริษัท พิมมิแกรนด์ จำกัด</div>
+      </div>
+      <button class="btn btn-ghost-d press" style="width:100%;margin-top:12px" onclick="posCopyAcct()">📋 คัดลอกเลขบัญชี / copy account no.</button>
+      <div style="margin-top:16px">
+        <label for="slip-file" class="btn btn-dark press" style="width:100%">📷 ถ่ายรูปสลิปโอนเงิน<span class="sub-en">photograph the transfer slip</span></label>
+        <input type="file" id="slip-file" accept="image/*" capture="environment" class="hidden" onchange="posSlipPick(this)">
+        <div class="slip-thumbs" id="slip-thumbs"></div>
+      </div>
+    </div>
+    <div style="margin-top:22px;display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-gold btn-big press" id="pay-confirm-btn" onclick="posPayConfirm()" disabled>✓ ยืนยันรับเงิน<span class="sub-en">confirm payment received</span></button>
+      <button class="btn btn-ghost-d press" onclick="posPaySkip()">ยังไม่ชำระตอนนี้ / pay later</button>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ DONE ═══════════════ -->
+<section id="scr-done" class="scr dark">
+  <div class="done-wrap">
+    <div class="done-ring"><svg fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.5l5 5 10-11"/></svg></div>
+    <h2 id="done-title">เรียบร้อย!</h2>
+    <div class="no num" id="done-no">—</div>
+    <p id="done-sub">—</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
+      <button class="btn btn-gold btn-big press" style="min-width:280px;width:auto" onclick="posNewSale()">🛒 ขายรายการใหม่<span class="sub-en">new sale</span></button>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ MY SALES ═══════════════ -->
+<section id="scr-mysales" class="sheet">
+  <div class="sheet-top">
+    <button class="iconbtn press" onclick="posGo('shop')"><svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M15 5l-7 7 7 7"/></svg></button>
+    <h2>ยอดขายของฉัน <small style="color:var(--text2);font-size:13px;font-weight:500">/ my sales</small></h2>
+  </div>
+  <div class="ms-wrap">
+    <div class="ms-hero">
+      <div class="ms-stat"><div class="v num" id="ms-today-orders">0</div><div class="l">ออเดอร์วันนี้</div></div>
+      <div class="ms-stat"><div class="v num" id="ms-today-panels">0</div><div class="l">แผ่นวันนี้</div></div>
+      <div class="ms-stat"><div class="v num" id="ms-month-panels">0</div><div class="l">แผ่นเดือนนี้ 💹</div></div>
+    </div>
+    <div id="ms-pending"></div>
+    <div id="ms-list"></div>
+  </div>
+</section>
+
+<div id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   KP POS — in-store sales tablet app.
+   Writes the SAME data shapes as index.html (orders, wOrders, revOrders,
+   payFeed, orderPhotos, auditLog, pushQueue) so office/warehouse/kiosk
+   pick everything up without changes. Season-scoped via PDB (v2/).
+   ═══════════════════════════════════════════════════════════════════════ */
+var POS_BUILD='pos-1.0.0';
+document.getElementById('pos-ver').textContent=POS_BUILD;
+var KP_DEV_ID='pos'+Math.random().toString(36).slice(2,9)+Date.now().toString(36);
+
+/* ── catalog base (mirror of index.html QT_PRODUCTS; live overrides come from
+      Firebase assistant/productCatalog + catalog/<code>) ── */
+var POS_BASE=[
+  {code:'KP009',name:'สีไม้มูจิ',price:179,w:16.5,mat:'WPC',profile:'4ลึก'},
+  {code:'KP011',name:'สีไม้โอ๊ค',price:199,w:20,mat:'WPC',profile:'3กลาง'},
+  {code:'KP019',name:'สีไม้มูจิ',price:199,w:20,mat:'WPC',profile:'3กลาง'},
+  {code:'KP027',name:'สีเทาลายไม้',price:179,w:16.5,mat:'WPC',profile:'4ลึก'},
+  {code:'KP028',name:'สีคาราเมล',price:179,w:16.5,mat:'WPC',profile:'4ลึก'},
+  {code:'KP042',name:'สีวอร์มเบจ',price:179,w:16.5,mat:'WPC',profile:'4ลึก'},
+  {code:'KP045',name:'สีครีมโอ๊ค',price:179,w:16.5,mat:'WPC',profile:'เรียบ'},
+  {code:'KP048',name:'สีไม้มะฮอกกานี',price:199,w:20,mat:'WPC',profile:'3ลึก'},
+  {code:'KP049',name:'สีไม้มูจิ',price:199,w:20,mat:'WPC',profile:'3ลึก'},
+  {code:'KP050',name:'สีบีช',price:179,w:15.5,mat:'WPC',profile:'5ตื้น'},
+  {code:'KP051',name:'สีสักทอง',price:179,w:15.5,mat:'WPC',profile:'5ตื้น'},
+  {code:'KP052',name:'สีเมเปิ้ลอ่อน',price:199,w:20,mat:'WPC',profile:'2เรียบ'},
+  {code:'KP053',name:'สีเชอรี่วูด',price:199,w:20,mat:'WPC',profile:'2เรียบ'},
+  {code:'KP054',name:'สีโกลเด้นท์บราว',price:199,w:20,mat:'WPC',profile:'2เรียบ'},
+  {code:'KP055',name:'สีเทา',price:199,w:20,mat:'WPC',profile:'2เรียบ'},
+  {code:'KP056',name:'สีขาวลายไม้',price:199,w:20,mat:'WPC',profile:'2เรียบ'},
+  {code:'KP057',name:'สีขาวงาช้าง',price:199,w:20,mat:'WPC',profile:'3ลึก'},
+  {code:'KP058',name:'สีไม้สักทอง',price:199,w:20,mat:'WPC',profile:'3ลึก'},
+  {code:'KP059',name:'สีขาวงาช้าง',price:199,w:20,mat:'WPC',profile:'2เรียบ'},
+  {code:'KP060',name:'สีขาวงาช้าง',price:199,w:20,mat:'WPC',profile:'5กลาง'},
+  {code:'KP061',name:'สีบีช',price:179,w:16.5,mat:'WPC',profile:'4ลึก'},
+  {code:'KP062',name:'สีเมเปิ้ลอ่อน',price:179,w:16.5,mat:'WPC',profile:'4ลึก'},
+  {code:'KP063',name:'สีโอ๊คน้ำตาล',price:179,w:16.9,mat:'WPC',profile:'6ลึก'},
+  {code:'KP064',name:'สีบีช',price:179,w:16.9,mat:'WPC',profile:'6ลึก'},
+  {code:'KP065',name:'สีไม้ชิงชัน',price:179,w:16.5,mat:'WPC',profile:'4ลึก'},
+  {code:'K-PVC-03',name:'สีเมเปิ้ลอ่อน',price:189,w:26.5,mat:'PVC',profile:'pvc26'},
+  {code:'K-PVC-06',name:'สีขาวลายไม้',price:189,w:26.5,mat:'PVC',profile:'pvc26'},
+  {code:'K-PVC-07',name:'สีไม้มะค่า',price:269,w:40,mat:'PVC',profile:'pvc40'},
+  {code:'K-PVC-08',name:'สีเมเปิ้ลอ่อน',price:269,w:40,mat:'PVC',profile:'pvc40'}
+];
+var IMG_BASE='img/products/';
+var EDGE_PRICE=89, CLIP_PACK_PRICE=199, PANEL_LEN_M=2.9;
+/* sqm covered per panel by face width — from the office calculation sheet
+   (effective tongue-and-groove coverage × 2.9 m length). */
+var SQM_PER_PANEL={ '15.5':0.4321, '16.5':0.46, '16.9':0.47, '17':0.4785, '20':0.58, '21':0.6, '26.5':0.725, '30':0.87, '40':1.16 };
+/* effective coverage width in cm for the "wall run" mode (sheet: หารแนวกว้าง). */
+var EFF_W={ '15.5':15, '16.5':15.5, '16.9':16, '17':16.5, '20':19.5, '21':20.5, '26.5':25, '30':30, '40':40 };
+function sqmPerPanel(w){ var k=String(w); if(SQM_PER_PANEL[k]) return SQM_PER_PANEL[k]; var W=parseFloat(w)||16.5; return Math.round((Math.max(5,W-0.6))/100*PANEL_LEN_M*1000)/1000; }
+function effW(w){ var k=String(w); if(EFF_W[k]) return EFF_W[k]; return Math.max(5,(parseFloat(w)||16.5)-0.6); }
+function lcornerCode(code){ if(/^KP(\d+)$/i.test(code)) return 'L'+code.replace(/^KP/i,''); if(/^K-PVC-(.+)$/i.test(code)) return 'L-P-'+code.replace(/^K-PVC-/i,''); return ''; }
+
+/* province → zone (same table as index.html KP_PROV_ZONE) */
+var PROV_Z=(function(){
+  var Z={
+    Northern:{th:['เชียงราย','เชียงใหม่','แม่ฮ่องสอน','พะเยา','น่าน','ลำปาง','ลำพูน','แพร่','อุตรดิตถ์','ตาก','สุโขทัย','พิษณุโลก','กำแพงเพชร','เพชรบูรณ์','พิจิตร','นครสวรรค์','อุทัยธานี','ชัยนาท','ลพบุรี','สิงห์บุรี','อ่างทอง'],
+      en:['Chiang Rai','Chiang Mai','Mae Hong Son','Phayao','Nan','Lampang','Lamphun','Phrae','Uttaradit','Tak','Sukhothai','Phitsanulok','Kamphaeng Phet','Phetchabun','Phichit','Nakhon Sawan','Uthai Thani','Chai Nat','Lopburi','Sing Buri','Ang Thong']},
+    Bangkok:{th:['สระบุรี','สุพรรณบุรี','พระนครศรีอยุธยา','กาญจนบุรี','นครนายก','ปทุมธานี','นนทบุรี','กรุงเทพมหานคร','สมุทรปราการ','นครปฐม','สมุทรสาคร','ราชบุรี','สมุทรสงคราม'],
+      en:['Saraburi','Suphan Buri','Ayutthaya','Kanchanaburi','Nakhon Nayok','Pathum Thani','Nonthaburi','Bangkok','Samut Prakan','Nakhon Pathom','Samut Sakhon','Ratchaburi','Samut Songkhram']},
+    Northeastern:{th:['บึงกาฬ','หนองคาย','เลย','หนองบัวลำภู','อุดรธานี','สกลนคร','นครพนม','ขอนแก่น','กาฬสินธุ์','มหาสารคาม','มุกดาหาร','ร้อยเอ็ด','ยโสธร','อำนาจเจริญ','ชัยภูมิ','นครราชสีมา','บุรีรัมย์','สุรินทร์','ศรีสะเกษ','อุบลราชธานี'],
+      en:['Bueng Kan','Nong Khai','Loei','Nong Bua Lamphu','Udon Thani','Sakon Nakhon','Nakhon Phanom','Khon Kaen','Kalasin','Maha Sarakham','Mukdahan','Roi Et','Yasothon','Amnat Charoen','Chaiyaphum','Nakhon Ratchasima','Buriram','Surin','Sisaket','Ubon Ratchathani']},
+    Eastern:{th:['ปราจีนบุรี','ฉะเชิงเทรา','สระแก้ว','ชลบุรี','จันทบุรี','ระยอง','ตราด'],
+      en:['Prachin Buri','Chachoengsao','Sa Kaeo','Chon Buri','Chanthaburi','Rayong','Trat']},
+    Southern:{th:['เพชรบุรี','ประจวบคีรีขันธ์','ชุมพร','ระนอง','สุราษฎร์ธานี','พังงา','กระบี่','ภูเก็ต','นครศรีธรรมราช','ตรัง','พัทลุง','สตูล','สงขลา','ปัตตานี','ยะลา','นราธิวาส'],
+      en:['Phetchaburi','Prachuap Khiri Khan','Chumphon','Ranong','Surat Thani','Phang Nga','Krabi','Phuket','Nakhon Si Thammarat','Trang','Phatthalung','Satun','Songkhla','Pattani','Yala','Narathiwat']}
+  };
+  var map={},names=[];
+  function norm(s){ return String(s).toLowerCase().replace(/[\s\-\.]/g,''); }
+  Object.keys(Z).forEach(function(zone){
+    Z[zone].th.forEach(function(n){ map[n]=zone; names.push(n); });
+    Z[zone].en.forEach(function(n){ map[norm(n)]=zone; names.push(n); });
+  });
+  window.PROV_NAMES=names;
+  return map;
+})();
+function provZone(prov){
+  var t=String(prov||'').trim(); if(!t) return '';
+  if(/กรุงเทพ|กทม|bangkok/i.test(t)) return 'Bangkok';
+  if(PROV_Z[t]) return PROV_Z[t];
+  var n=t.toLowerCase().replace(/[\s\-\.]/g,'');
+  if(PROV_Z[n]) return PROV_Z[n];
+  for(var k in PROV_Z){ if(/[ก-๙]/.test(k) && t.indexOf(k)>=0) return PROV_Z[k]; }
+  return '';
+}
+var ZONE_PREFIX={Bangkok:'#',Northern:'1-',Northeastern:'2-',Eastern:'3-',Southern:'4-',Instore:'5-'};
+var ZONE_TH={Bangkok:'กรุงเทพ',Northern:'ภาคเหนือ (1)',Northeastern:'ภาคอีสาน (2)',Eastern:'ภาคตะวันออก (3)',Southern:'ภาคใต้ (4)',Instore:'หน้าร้าน (5)'};
+
+/* ── tiny utils ── */
+function $(id){ return document.getElementById(id); }
+function fmt(n){ return (Math.round((+n||0)*100)/100).toLocaleString('en-US'); }
+function fmtB(n){ return fmt(n)+' ฿'; }
+function todayStr(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function nowHM(){ var d=new Date(); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function mk(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+function safeId(id){ return String(id||'').replace(/[^a-zA-Z0-9]/g,'_'); }
+function normCode(c){
+  c=String(c||'').toUpperCase().replace(/\s+/g,'').replace(/[_\.]/g,'-');
+  var m;
+  if(m=c.match(/^K-?P[A-Z]*-?(\d+)$/)){ if(/PVC/.test(c)) return 'K-PVC-'+String(m[1]).padStart(2,'0'); }
+  if(m=c.match(/^KP-?(\d+)$/)) return 'KP'+String(m[1]).padStart(3,'0');
+  if(m=c.match(/^L-P-?(\d+)$/)) return 'L-P-'+String(m[1]).padStart(2,'0');
+  if(m=c.match(/^([LTU])-?(\d+)$/)) return m[1]+String(m[2]).padStart(2,'0');
+  return c;
+}
+function toast(msg,ms){ var t=$('toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(t._t); t._t=setTimeout(function(){ t.classList.remove('on'); }, ms||2600); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function chime(ok){
+  try{
+    var ctx=window._actx||(window._actx=new (window.AudioContext||window.webkitAudioContext)());
+    if(ctx.state==='suspended') ctx.resume();
+    [[660,0],[880,.12],[1100,.24]].forEach(function(f){
+      var o=ctx.createOscillator(),g=ctx.createGain();
+      o.type='sine'; o.frequency.value=ok===false?280:f[0]; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(.22,ctx.currentTime+f[1]); g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+f[1]+.22);
+      o.start(ctx.currentTime+f[1]); o.stop(ctx.currentTime+f[1]+.3);
+    });
+  }catch(e){}
+}
+
+/* ═══════════════ DATA ═══════════════ */
+var staffList=[], products=[], soldOut={}, stockMap={}, stockKeyMap={}, posPending={};
+var SESSION_MS=4*3600*1000;
+var me=null;               // logged-in staff record
+var cart={ lines:[] };     // {code,name,qty,price,listPrice,type,grade}
+var ck={ fulfil:'', insMode:'', tax:false };
+var lastOrder=null;        // order object after create
+var _calc={ p:null, mode:'wh' };
+
+posAuthReady.then ? posAuthReady.then(attach) : attach();
+function attach(){
+  PDB.ref('staffList').on('value', function(s){
+    var v=s.val()||{}; staffList=Object.keys(v).map(function(k){ return v[k]; }).filter(Boolean);
+    renderStaff(); restoreSession();
+  });
+  PDB.ref('soldOut').on('value', function(s){ soldOut=s.val()||{}; renderGrid(); });
+  PDB.ref('stockItems').on('value', function(s){
+    var v=s.val()||{}; stockMap={}; stockKeyMap={};
+    Object.keys(v).forEach(function(k){
+      var it=v[k]; if(!it||!it.code) return;
+      var nc=normCode(it.code);
+      stockMap[nc]=it; stockKeyMap[nc]=k;
+    });
+    renderGrid();
+  });
+  // live product overrides from the office catalog (published by index.html)
+  PDB.ref('assistant/productCatalog').on('value', function(s){
+    var v=s.val(); if(v&&v.items){ mergeCatalog(Object.values(v.items)); }
+  });
+  PDB.ref('catalog').on('value', function(s){
+    var v=s.val(); if(v){ mergeCatalog(Object.values(v)); }
+  });
+  PDB.ref('posPending').limitToLast(40).on('value', function(s){
+    posPending=s.val()||{}; renderPendingBadge();
+  });
+}
+function mergeCatalog(items){
+  var by={}; products.forEach(function(p){ by[p.code]=p; });
+  (items||[]).forEach(function(p){
+    if(!p||!p.code) return;
+    var ex=by[p.code];
+    if(ex){ ex.price=+p.price||ex.price; ex.name=p.name||ex.name; ex.w=+p.w||ex.w; ex.mat=p.mat||ex.mat; }
+    else if((p.mat==='WPC'||p.mat==='PVC') && +p.w>0){ var np={code:p.code,name:p.name||'',price:+p.price||0,w:+p.w,mat:p.mat,profile:p.profile||''}; products.push(np); by[np.code]=np; }
+  });
+  renderGrid();
+}
+products=POS_BASE.slice();
+
+/* ═══════════════ LOGIN ═══════════════ */
+var _pinTarget=null,_pinEntry='';
+function posAllowed(s){
+  if(!s||s.active===false) return false;
+  return !!s.posAccess || s.officeAccess!==false;
+}
+function renderStaff(){
+  var g=$('staff-grid');
+  var order=['pim','amy','andre','bobby','noy','milk','shop'];
+  var list=staffList.filter(posAllowed).filter(function(s){ return !s.away; });
+  list.sort(function(a,b){
+    var ai=order.indexOf((a.name||'').trim().toLowerCase()), bi=order.indexOf((b.name||'').trim().toLowerCase());
+    if(ai<0)ai=99; if(bi<0)bi=99;
+    return ai-bi || String(a.name).localeCompare(String(b.name));
+  });
+  if(!list.length){ g.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--cream2);padding:30px">ไม่พบพนักงาน / no staff found</div>'; return; }
+  g.innerHTML=list.map(function(s){
+    var ini=(s.name||'?').trim().charAt(0).toUpperCase();
+    return '<button class="staff-tile" onclick="posPinOpen(\''+esc(s.id)+'\')">'
+      +'<div class="ava">'+esc(ini)+'</div>'
+      +'<div class="nm">'+esc(s.name||'—')+'</div>'
+      +'<div class="rl">'+esc(s.role||'')+'</div></button>';
+  }).join('');
+}
+function posPinOpen(id){
+  var s=staffList.find(function(x){ return x.id===id; }); if(!s) return;
+  _pinTarget=s; _pinEntry='';
+  $('pin-who').textContent='สวัสดี '+(s.name||'')+' 👋';
+  $('pin-err').textContent='';
+  pinDots(); $('pin-sheet').classList.add('on');
+}
+function posPinClose(){ $('pin-sheet').classList.remove('on'); _pinTarget=null; _pinEntry=''; }
+function pinDots(){
+  var n=Math.max(4,_pinEntry.length);
+  $('pin-dots').innerHTML=Array.from({length:n},function(_,i){ return '<i class="'+(i<_pinEntry.length?'f':'')+'"></i>'; }).join('');
+}
+function posPinKey(d){ if(_pinEntry.length<8){ _pinEntry+=d; pinDots(); } }
+function posPinDel(){ _pinEntry=_pinEntry.slice(0,-1); pinDots(); }
+function posPinOk(){
+  if(!_pinTarget) return;
+  if(_pinEntry!==String(_pinTarget.pin||'')){
+    $('pin-err').textContent='PIN ไม่ถูกต้อง ลองใหม่ / wrong PIN';
+    _pinEntry=''; pinDots(); chime(false); return;
+  }
+  me=_pinTarget;
+  localStorage.setItem('kp-pos-session', JSON.stringify({id:me.id, ts:Date.now()}));
+  posPinClose();
+  audit({type:'pos', orderId:'🏪 '+me.name, by:me.name, detail:'เข้าระบบ POS / POS login'});
+  enterShop(); chime();
+}
+function restoreSession(){
+  if(me) { // keep flag changes live
+    var fresh=staffList.find(function(x){ return x.id===me.id; });
+    if(fresh) me=fresh;
+    return;
+  }
+  try{
+    var raw=localStorage.getItem('kp-pos-session'); if(!raw) return;
+    var s=JSON.parse(raw);
+    if(!s || (Date.now()-s.ts)>SESSION_MS){ localStorage.removeItem('kp-pos-session'); return; }
+    var st=staffList.find(function(x){ return x.id===s.id; });
+    if(st && posAllowed(st)){ me=st; enterShop(); }
+  }catch(e){}
+}
+setInterval(function(){
+  if(!me) return;
+  try{
+    var s=JSON.parse(localStorage.getItem('kp-pos-session')||'{}');
+    if(!s.ts || (Date.now()-s.ts)>SESSION_MS){ posLogout(true); }
+  }catch(e){}
+}, 60000);
+function posLogout(silent){
+  if(!silent && !confirm('ออกจากระบบ? / log out?')) return;
+  localStorage.removeItem('kp-pos-session'); me=null;
+  posGo('login');
+}
+function enterShop(){
+  $('seller-chip').innerHTML='👤 '+esc(me.name);
+  restoreCart();
+  buildFilters(); renderGrid(); posGo('shop');
+  try{ navigator.wakeLock && navigator.wakeLock.request('screen').catch(function(){}); }catch(e){}
+}
+
+/* ═══════════════ NAV ═══════════════ */
+var SCRS=['login','shop','calc','cart','quote','checkout','confirm','pay','done','mysales'];
+function posGo(name){
+  SCRS.forEach(function(s){ var el=$('scr-'+s); if(el) el.classList.toggle('on', s===name); });
+  window.scrollTo(0,0);
+  if(name==='mysales') renderMySales();
+  if(name==='cart') renderCart();
+}
+function posFullscreen(){
+  try{
+    if(document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  }catch(e){}
+}
+
+/* ═══════════════ PRODUCT GRID ═══════════════ */
+var _filter='ALL';
+function buildFilters(){
+  var widths=[]; products.forEach(function(p){ if(p.w>0 && widths.indexOf(p.w)<0) widths.push(p.w); });
+  widths.sort(function(a,b){ return a-b; });
+  var html='<button class="fchip'+(_filter==='ALL'?' on':'')+'" onclick="posFilter(\'ALL\')">ทั้งหมด</button>'
+    +'<button class="fchip'+(_filter==='WPC'?' on':'')+'" onclick="posFilter(\'WPC\')">WPC</button>'
+    +'<button class="fchip'+(_filter==='PVC'?' on':'')+'" onclick="posFilter(\'PVC\')">PVC</button>'
+    +widths.map(function(w){ return '<button class="fchip'+(_filter==='w'+w?' on':'')+'" onclick="posFilter(\'w'+w+'\')">'+w+' ซม.</button>'; }).join('');
+  $('filters').innerHTML=html;
+}
+function posFilter(f){ _filter=f; buildFilters(); renderGrid(); }
+function stockOf(code){ var st=stockMap[normCode(code)]; return st ? (parseInt(st.qty)||0) : null; }
+function renderGrid(){
+  var g=$('pgrid'); if(!g) return;
+  var list=products.filter(function(p){ return p.w>0 && (p.mat==='WPC'||p.mat==='PVC'); });
+  if(_filter==='WPC'||_filter==='PVC') list=list.filter(function(p){ return p.mat===_filter; });
+  if(/^w/.test(_filter)) list=list.filter(function(p){ return 'w'+p.w===_filter; });
+  g.innerHTML=list.map(function(p){
+    var so=!!soldOut[p.code];
+    var st=stockOf(p.code);
+    var stHtml = st==null ? '' : '<span class="stock-chip'+(st<=50?' low':'')+'">คงเหลือ '+fmt(st)+'</span>';
+    return '<button class="pcard'+(so?' sold':'')+'" onclick="posCalcOpen(\''+esc(p.code)+'\')">'
+      +'<div class="ph"><span class="chip mat '+(p.mat==='PVC'?'pvc':'wpc')+'">'+p.mat+'</span>'
+      +'<img src="'+IMG_BASE+esc(p.code)+'.jpg" loading="lazy" alt="'+esc(p.code)+'" onerror="this.outerHTML=\'<div class=nopic>'+esc(p.code)+'</div>\'">'
+      +'</div><div class="body">'
+      +'<div class="code">'+esc(p.code)+'</div>'
+      +'<div class="nm">'+esc(p.name||'')+'</div>'
+      +'<div class="row"><span class="price num">'+fmt(p.price)+' <small>฿/แผ่น</small></span><span class="w">'+p.w+' ซม.</span></div>'
+      +'<div class="row" style="margin-top:2px">'+stHtml+'<span></span></div>'
+      +'</div></button>';
+  }).join('') || '<div style="grid-column:1/-1;text-align:center;color:var(--text2);padding:40px">ไม่พบสินค้า</div>';
+  var n=cart.lines.filter(function(l){return l.type==='panel';}).reduce(function(a,l){return a+l.qty;},0);
+  var cb=$('cart-badge'); cb.textContent=cart.lines.length; cb.classList.toggle('hidden', !cart.lines.length);
+}
+
+/* ═══════════════ CALCULATOR ═══════════════ */
+function posCalcOpen(code){
+  var p=products.find(function(x){ return x.code===code; }); if(!p) return;
+  _calc.p=p; _calc.mode='wh';
+  $('calc-title').textContent=p.code;
+  $('calc-code').textContent=p.code;
+  $('calc-nm').textContent=p.name||'';
+  $('calc-pr').innerHTML=fmt(p.price)+' ฿ <small>/ แผ่น</small>';
+  $('calc-ph').innerHTML='<img src="'+IMG_BASE+esc(p.code)+'.jpg" alt="" onerror="this.outerHTML=\'<div class=nopic style=\\\'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--gold3);font-size:26px\\\'>'+esc(p.code)+'</div>\'">';
+  var st=stockOf(p.code);
+  $('calc-meta').innerHTML='<span class="chip">'+p.mat+'</span><span class="chip">หน้ากว้าง '+p.w+' ซม.</span><span class="chip">ยาว 2.9 ม.</span>'
+    +(st!=null?'<span class="chip" style="color:'+(st<=50?'#B45309':'var(--green)')+'">คงเหลือ '+fmt(st)+' แผ่น</span>':'');
+  ['ci-w','ci-h','ci-sqm','ci-run'].forEach(function(i){ $(i).value=''; });
+  $('ci-buffer').checked=true;
+  $('calc-qty').value=0;
+  posCalcMode('wh');
+  buildAccRows(p);
+  posCalcTotals();
+  $('scr-calc').classList.add('on');
+}
+function posCalcClose(){ $('scr-calc').classList.remove('on'); }
+function posCalcMode(m){
+  _calc.mode=m;
+  ['wh','sqm','run'].forEach(function(x){
+    $('cm-'+x).classList.toggle('on', x===m);
+    $('calc-in-'+x).classList.toggle('hidden', x!==m);
+  });
+  posCalcRun();
+}
+/* the office sheet's method: sqm ÷ sqm-per-panel → +10% → +2 spare */
+function posCalcRun(){
+  var p=_calc.p; if(!p) return;
+  var buffer=$('ci-buffer').checked;
+  var area=0, exact=0, sug=0, math=false;
+  if(_calc.mode==='wh'){
+    var w=parseFloat($('ci-w').value)||0, h=parseFloat($('ci-h').value)||0;
+    area=w*h;
+    if(area>0){ exact=Math.round(area/sqmPerPanel(p.w)); math=true; }
+  } else if(_calc.mode==='sqm'){
+    area=parseFloat($('ci-sqm').value)||0;
+    if(area>0){ exact=Math.round(area/sqmPerPanel(p.w)); math=true; }
+  } else {
+    var run=parseFloat($('ci-run').value)||0;
+    if(run>0){ exact=Math.ceil(run*100/effW(p.w)); area=exact*sqmPerPanel(p.w); math=true; }
+  }
+  if(math){
+    sug = buffer ? Math.round(exact*1.1)+2 : exact;
+    $('calc-math').style.display='block';
+    $('cm-area').textContent=(Math.round(area*100)/100)+' ตร.ม.';
+    $('cm-exact').textContent=exact+' แผ่น';
+    $('cm-bufrow').style.display=buffer?'flex':'none';
+    $('cm-buf').textContent=sug+' แผ่น';
+    $('calc-qty').value=sug;
+    autoAccSuggest();
+  } else {
+    $('calc-math').style.display='none';
+  }
+  posCalcTotals();
+}
+function posQtyStep(d){
+  var el=$('calc-qty'); el.value=Math.max(0,(parseInt(el.value)||0)+d);
+  posCalcTotals();
+}
+/* accessory suggestion rows (L-corner / T / U) */
+var _acc=[];
+function buildAccRows(p){
+  var lc=lcornerCode(p.code);
+  _acc=[
+    {key:'l', label:'ฉากจบมุม L-Corner', en:'edge closing · เส้นละ 2.9 ม.', code:lc, price:EDGE_PRICE, qty:0, type:'lcorner', codes:[lc]},
+    {key:'t', label:'ตัว T ต่อแผ่น', en:'T-profile joint', code:'', price:EDGE_PRICE, qty:0, type:'ttrim', codes:['T02','T03','T04','T05','T06','T07','T08']},
+    {key:'u', label:'ตัว U ปิดขอบ', en:'U-profile end cap', code:'', price:EDGE_PRICE, qty:0, type:'utrim', codes:['U02','U03','U04','U05','U06']}
+  ];
+  renderAccRows();
+}
+function autoAccSuggest(){
+  // from the sheet: edge pieces = perimeter/2.9 ; T = ceil(W/2.9)+ceil(H/2.9)
+  if(_calc.mode==='wh'){
+    var w=parseFloat($('ci-w').value)||0, h=parseFloat($('ci-h').value)||0;
+    if(w>0&&h>0){
+      _acc[0].qty=Math.ceil(2*(w+h)/PANEL_LEN_M);
+      _acc[1].qty=(h>PANEL_LEN_M?Math.ceil(w/ PANEL_LEN_M):0); // T only needed when panels stack above 2.9 m
+    }
+  }
+  renderAccRows();
+}
+function renderAccRows(){
+  $('acc-rows').innerHTML=_acc.map(function(a,i){
+    var codeSel = a.codes.length>1
+      ? '<div class="codechips">'+a.codes.map(function(c){ return '<button class="'+(a.code===c?'on':'')+'" onclick="accCode('+i+',\''+c+'\')">'+c+'</button>'; }).join('')+'</div>'
+      : '';
+    return '<div class="acc-row"><div class="t"><b>'+a.label+' <span style="color:var(--gold-deep)">'+esc(a.code||'')+'</span></b><small>'+a.en+' · '+a.price+' ฿/เส้น</small>'+codeSel+'</div>'
+      +'<div class="st"><button class="press" onclick="accStep('+i+',-1)">−</button><input type="number" inputmode="numeric" min="0" value="'+a.qty+'" onchange="accQty('+i+',this.value)"><button class="press" onclick="accStep('+i+',1)">+</button></div></div>';
+  }).join('');
+  posCalcTotals();
+}
+function accStep(i,d){ _acc[i].qty=Math.max(0,(_acc[i].qty||0)+d); renderAccRows(); }
+function accQty(i,v){ _acc[i].qty=Math.max(0,parseInt(v)||0); posCalcTotals(); }
+function accCode(i,c){ _acc[i].code=c; renderAccRows(); }
+function posCalcTotals(){
+  var p=_calc.p; if(!p) return;
+  var q=parseInt($('calc-qty').value)||0;
+  $('calc-clips').textContent=fmt(q*10);
+  var sub=q*p.price;
+  _acc.forEach(function(a){ if(a.qty>0) sub+=a.qty*a.price; });
+  $('calc-sub').textContent=fmtB(sub);
+}
+function posCalcAdd(){
+  var p=_calc.p; if(!p) return;
+  var q=parseInt($('calc-qty').value)||0;
+  if(q<=0 && !_acc.some(function(a){return a.qty>0;})){ toast('ใส่จำนวนแผ่นก่อน / enter quantity'); return; }
+  // a trim with a quantity but no code picked would silently vanish — block instead
+  var noCode=_acc.find(function(a){ return a.qty>0 && !a.code; });
+  if(noCode){ toast('เลือกรหัส '+noCode.label+' ก่อน / pick the code first'); chime(false); return; }
+  if(q>0) cartAddLine({code:p.code,name:p.name,qty:q,price:p.price,listPrice:p.price,type:'panel',grade:'A'});
+  _acc.forEach(function(a){
+    if(a.qty>0){
+      cartAddLine({code:a.code,name:a.label,qty:a.qty,price:a.price,listPrice:a.price,type:a.type,grade:'A'});
+    }
+  });
+  saveCart(); posCalcClose(); renderGrid();
+  toast('✅ เพิ่ม '+p.code+' ×'+q+' ลงตะกร้าแล้ว');
+  chime();
+}
+function cartAddLine(l){
+  var ex=cart.lines.find(function(x){ return x.code===l.code && x.price===l.price && x.grade===l.grade; });
+  if(ex) ex.qty+=l.qty; else cart.lines.push(l);
+}
+
+/* ═══════════════ CART ═══════════════ */
+function saveCart(){ try{ localStorage.setItem('kp-pos-cart', JSON.stringify(cart)); }catch(e){} }
+function restoreCart(){ try{ var c=JSON.parse(localStorage.getItem('kp-pos-cart')||'null'); if(c&&c.lines) cart=c; }catch(e){} }
+function posCartOpen(){ posGo('cart'); }
+function posCartClear(){ if(!cart.lines.length || confirm('ล้างตะกร้า? / clear cart?')){ cart={lines:[]}; ['cart-gift','cart-freeminus','cart-packs','cart-extra','cart-discount','cart-delivery','cart-extra-label'].forEach(function(i){ $(i).value=''; }); saveCart(); renderCart(); } }
+function renderCart(){
+  var host=$('cart-lines');
+  if(!cart.lines.length){
+    host.innerHTML='<div style="text-align:center;color:var(--text2);padding:36px 10px;background:#fff;border:1px dashed var(--border2);border-radius:var(--r)">ตะกร้าว่าง — กดสินค้าเพื่อเริ่มขาย<br><small>cart is empty</small></div>';
+  } else {
+    host.innerHTML=cart.lines.map(function(l,i){
+      var isPanel=l.type==='panel';
+      var mod=l.price!==l.listPrice;
+      return '<div class="cline">'
+        +'<div class="pic">'+(isPanel?'<img src="'+IMG_BASE+esc(l.code)+'.jpg" onerror="this.outerHTML=\'<div class=noimg>'+esc(l.code)+'</div>\'">':'<div class="noimg">'+esc(l.code)+'</div>')+'</div>'
+        +'<div class="mid"><b>'+esc(l.code)+'</b>'
+        +(isPanel?'<button class="gr-b press" style="border:none;cursor:pointer" onclick="lineGrade('+i+')" title="สลับเกรด A/B">'+(l.grade==='B'?'เกรด B ตำหนิ':'เกรด A')+'</button>':'')
+        +'<div class="nm">'+esc(l.name||'')+'</div>'
+        +'<div class="pr'+(mod?' mod':'')+'">฿/หน่วย <input type="number" inputmode="numeric" min="0" value="'+l.price+'" onchange="linePrice('+i+',this.value)">'
+        +(mod?' <small style="color:#B45309">ราคาปกติ '+fmt(l.listPrice)+'</small>':'')+'</div></div>'
+        +'<div class="st"><button class="press" onclick="lineQty('+i+',-1)">−</button><span class="q num">'+l.qty+'</span><button class="press" onclick="lineQty('+i+',1)">+</button></div>'
+        +'<button class="del press" onclick="lineDel('+i+')"><svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 13h8l1-13"/></svg></button>'
+        +'</div>';
+    }).join('');
+  }
+  posCartCalc();
+}
+function lineQty(i,d){ var l=cart.lines[i]; l.qty=Math.max(1,l.qty+d); saveCart(); renderCart(); }
+function linePrice(i,v){ var l=cart.lines[i]; l.price=Math.max(0,parseFloat(v)||0); saveCart(); renderCart(); }
+function lineGrade(i){ var l=cart.lines[i]; l.grade=l.grade==='B'?'A':'B'; saveCart(); renderCart(); }
+function lineDel(i){ cart.lines.splice(i,1); saveCart(); renderCart(); renderGrid(); }
+function cartTotals(){
+  var pq=0, pp=0, ep=0;
+  cart.lines.forEach(function(l){
+    if(l.type==='panel'){ pq+=l.qty; pp+=l.qty*l.price; }
+    else ep+=l.qty*l.price;
+  });
+  var packs=parseInt($('cart-packs').value)||0;
+  var gift=parseInt($('cart-gift').value)||0;
+  var minus=Math.min(pq*10, parseInt($('cart-freeminus').value)||0);
+  var freeNet=Math.max(0,pq*10-minus);
+  var discount=parseInt($('cart-discount').value)||0;
+  var delivery=(ck.fulfil==='delivery')?(parseInt($('cart-delivery').value)||0):0;
+  var extra=parseFloat($('cart-extra').value)||0;
+  var extraLabel=($('cart-extra-label').value||'').trim();
+  var cc=packs*CLIP_PACK_PRICE;
+  var grand=Math.max(0, pp+ep+cc+extra-discount+delivery);
+  return {pq:pq,pp:pp,ep:ep,packs:packs,cc:cc,gift:gift,minus:minus,freeNet:freeNet,discount:discount,delivery:delivery,extra:extra,extraLabel:extraLabel,grand:grand,clips:freeNet+gift};
+}
+function posCartCalc(){
+  var t=cartTotals();
+  $('cart-freeclips').textContent=fmt(t.pq*10);
+  $('sum-pq').textContent=fmt(t.pq); $('sum-pp').textContent=fmtB(t.pp);
+  $('sum-ep').textContent=fmtB(t.ep); $('sum-cc').textContent=fmtB(t.cc);
+  $('sum-clips').textContent=fmt(t.clips)+' ตัว';
+  $('sum-extra-row').style.display=t.extra>0?'flex':'none';
+  $('sum-extra-lbl').textContent=t.extraLabel||'งานพิเศษ';
+  $('sum-ex').textContent=fmtB(t.extra);
+  $('sum-disc-row').style.display=t.discount>0?'flex':'none';
+  $('sum-disc').textContent='−'+fmtB(t.discount);
+  $('sum-del-row').style.display=t.delivery>0?'flex':'none';
+  $('sum-del').textContent='+'+fmtB(t.delivery);
+  $('sum-grand').textContent=fmtB(t.grand);
+  $('ck-total').textContent=fmtB(t.grand);
+  var cb=$('cart-badge'); cb.textContent=cart.lines.length; cb.classList.toggle('hidden', !cart.lines.length);
+}
+
+/* ═══════════════ QUOTATION ═══════════════ */
+function posQuoteShow(){
+  if(!cart.lines.length){ toast('ตะกร้าว่าง / cart empty'); return; }
+  var t=cartTotals();
+  var d=new Date();
+  $('quote-date').textContent='วันที่ '+d.getDate()+'/'+(d.getMonth()+1)+'/'+(d.getFullYear()+543)+' · พนักงาน '+(me?me.name:'');
+  var rows=cart.lines.map(function(l){
+    return '<div class="cf-line"><span class="l">'+esc(l.code)+(l.grade==='B'?' <span style="color:#F0B050">(B)</span>':'')+' × '+l.qty
+      +'<small>'+esc(l.name||'')+' · '+fmt(l.price)+' ฿/หน่วย</small></span><span class="r num">'+fmtB(l.qty*l.price)+'</span></div>';
+  });
+  if(t.packs>0) rows.push('<div class="cf-line"><span class="l">คลิปแพ็ค × '+t.packs+'</span><span class="r num">'+fmtB(t.cc)+'</span></div>');
+  if(t.clips>0) rows.push('<div class="cf-line"><span class="l">คลิปล็อคฟรี × '+fmt(t.clips)+'</span><span class="r free">ฟรี</span></div>');
+  if(t.extra>0) rows.push('<div class="cf-line"><span class="l">'+esc(t.extraLabel||'งานพิเศษ')+'</span><span class="r num">'+fmtB(t.extra)+'</span></div>');
+  if(t.discount>0) rows.push('<div class="cf-line"><span class="l">ส่วนลด</span><span class="r num" style="color:#F0B050">−'+fmtB(t.discount)+'</span></div>');
+  if(t.delivery>0) rows.push('<div class="cf-line"><span class="l">ค่าจัดส่ง</span><span class="r num">+'+fmtB(t.delivery)+'</span></div>');
+  $('quote-lines').innerHTML=rows.join('');
+  $('quote-total').textContent=fmtB(t.grand);
+  posGo('quote');
+}
+
+/* ═══════════════ CHECKOUT ═══════════════ */
+function posCheckoutOpen(){
+  if(!cart.lines.length){ toast('ตะกร้าว่าง / cart empty'); return; }
+  if(!ck.fulfil) posFulfil('pickup');
+  posCartCalc();
+  posGo('checkout');
+}
+function posFulfil(f){
+  ck.fulfil=f;
+  $('ff-pickup').classList.toggle('on', f==='pickup');
+  $('ff-delivery').classList.toggle('on', f==='delivery');
+  $('card-delivery').classList.toggle('hidden', f!=='delivery');
+  $('card-insmode').classList.toggle('hidden', f!=='pickup');
+  $('cart-delivery-row').style.display = f==='delivery' ? 'flex' : 'none';
+  $('cust-opt').textContent = f==='delivery' ? '' : '(ไม่บังคับ / optional)';
+  if(f==='pickup' && !ck.insMode) posInsMode('pack');
+  if(f==='delivery'){
+    fillProvList();
+    // auto delivery tariff like the quotation tool: ≥25 panels free, else 400 ฿
+    var t=cartTotals();
+    if($('cart-delivery').value===''){ $('cart-delivery').value = t.pq>=25 ? 0 : 400; }
+    posZoneCheck();
+  }
+  posCartCalc();
+  var btn=$('ck-create-btn');
+  btn.innerHTML = f==='delivery'
+    ? 'สร้างออเดอร์จัดส่ง ✓<span class="sub-en">create delivery order</span>'
+    : 'สร้างออเดอร์ขายหน้าร้าน ✓<span class="sub-en">create in-store order</span>';
+}
+function posInsMode(m){
+  ck.insMode=m;
+  $('im-pack').classList.toggle('on', m==='pack');
+  $('im-done').classList.toggle('on', m==='done');
+}
+function fillProvList(){
+  var dl=$('prov-list');
+  if(dl.children.length) return;
+  dl.innerHTML=(window.PROV_NAMES||[]).map(function(n){ return '<option value="'+esc(n)+'">'; }).join('');
+}
+function posZoneCheck(){
+  var note=$('zone-note');
+  var pv=($('ck-province').value||'').trim();
+  if(!pv){ note.style.display='none'; return ''; }
+  var z=provZone(pv);
+  note.style.display='flex';
+  if(z){
+    note.className='zone-note zone-ok';
+    note.innerHTML='✅ โซน: <b>'+ZONE_TH[z]+'</b> — สร้างออเดอร์ได้เลย';
+  } else {
+    note.className='zone-note zone-warn';
+    note.innerHTML='⏳ ไม่รู้จักจังหวัดนี้ — จะส่งให้ออฟฟิศยืนยันโซนก่อนออกเลขออเดอร์';
+  }
+  return z;
+}
+function posTaxToggle(){
+  ck.tax=$('ck-tax').checked;
+  $('tax-fields').classList.toggle('hidden', !ck.tax);
+}
+function ckErr(id, bad){ var el=$(id); if(el) el.classList.toggle('f-err', !!bad); return !!bad; }
+
+/* ═══════════════ ORDER CREATION ═══════════════ */
+function contactVal(){
+  var c=($('ck-contact-ch').value||'').trim(), n=($('ck-contact-name').value||'').trim();
+  if(c&&n) return c+' · '+n;
+  return c||n||'';
+}
+function taxReqVal(){
+  if(!ck.tax) return null;
+  return {
+    name:($('tax-name').value||'').trim(),
+    tin:($('tax-tin').value||'').trim(),
+    branch:($('tax-branch').value||'').trim()||'สำนักงานใหญ่',
+    addr:($('tax-addr').value||'').trim(),
+    phone:($('tax-phone').value||'').trim(),
+    by:me?me.name:'', ts:Date.now(), status:'requested'
+  };
+}
+function buildLineItems(){
+  var t=cartTotals();
+  var pa=[], la=[], lineItems=[];
+  cart.lines.forEach(function(l){
+    if(l.type==='panel'){
+      pa.push(l.code+' × '+l.qty+(l.grade==='B'?' (B)':''));
+      var li={type:'panel',code:l.code,qty:l.qty,unitPrice:l.price,amount:l.price*l.qty,grade:l.grade||'A'};
+      lineItems.push(li);
+    } else {
+      la.push(l.code+' × '+l.qty);
+      lineItems.push({type:l.type,code:l.code,qty:l.qty,unitPrice:l.price,amount:l.price*l.qty});
+    }
+  });
+  if(t.packs>0) lineItems.push({type:'clips',code:'Clip Pack / คลิปแพ็ค',qty:t.packs,unitPrice:CLIP_PACK_PRICE,amount:t.cc});
+  if(t.gift>0) lineItems.push({type:'free-gift-clips',code:'Free Clips 🎁 / ของขวัญ',qty:t.gift,unitPrice:0,amount:0});
+  if(t.freeNet>0) lineItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)'+(t.minus>0?' −'+t.minus:''),qty:t.freeNet,unitPrice:0,amount:0});
+  if(t.discount>0) lineItems.push({type:'discount',code:'Discount / ส่วนลด',qty:1,unitPrice:-t.discount,amount:-t.discount});
+  if(t.delivery>0) lineItems.push({type:'delivery',code:'Delivery / ค่าจัดส่ง',qty:1,unitPrice:t.delivery,amount:t.delivery});
+  if(t.extra>0) lineItems.push({type:'extra',code:t.extraLabel||'Extra / เพิ่มเติม',qty:1,unitPrice:t.extra,amount:t.extra});
+  return {t:t, pa:pa, la:la, lineItems:lineItems};
+}
+/* atomic order number per zone — counter transaction + existence check */
+function reserveOrderNo(zone){
+  var zKey=zone.toLowerCase();
+  var prefix=ZONE_PREFIX[zone];
+  function attempt(resolve, reject, tries){
+    if(tries>30){ reject(new Error('no free order number')); return; }
+    PDB.ref('orderCounters/'+zKey).transaction(function(cur){
+      var n=(parseInt(cur)||0)+1; if(n>999) n=1; return n;
+    }, function(err, committed, snap){
+      if(err||!committed){ reject(err||new Error('counter failed')); return; }
+      var num=snap.val();
+      var id=prefix+String(num).padStart(3,'0');
+      PDB.ref('orders/'+safeId(id)).once('value', function(s){
+        if(s.exists()) attempt(resolve, reject, tries+1);
+        else resolve({id:id, num:num});
+      }, function(e){ reject(e); });
+    });
+  }
+  return new Promise(function(res,rej){ attempt(res,rej,0); });
+}
+function reserveReceiptNum(){
+  return new Promise(function(res){
+    PDB.ref('receiptNum').transaction(function(cur){
+      var n=(cur&&parseInt(cur.num))||0; return {num:n+1};
+    }, function(err, committed, snap){
+      res(committed ? snap.val().num : 0);
+    });
+  });
+}
+function audit(entry){
+  try{
+    var d=new Date();
+    entry.ts=Date.now();
+    entry.date=todayStr();
+    entry.time=nowHM();
+    PDB.ref('auditLog').push(entry);
+  }catch(e){}
+}
+function pushQ(role,title,body,data){
+  try{ PDB.ref('pushQueue').push({role:role,title:title,body:body,data:data||{},ts:Date.now(),delivered:false}); }catch(e){}
+}
+function feedAdd(rec){
+  try{
+    rec.dev=KP_DEV_ID; rec.ts=Date.now();
+    rec.amt=Math.round((+rec.amt||0)*100)/100;
+    if(!(rec.amt>0)) return;
+    PDB.ref('payFeed').push(rec);
+  }catch(e){}
+}
+function seedPhotoSlots(o){
+  ['warehouse','delivery','slip'].forEach(function(tab){
+    PDB.ref('photoIndex/'+tab+'/'+safeId(o.id)).transaction(function(cur){
+      if(cur) return cur;
+      return {id:o.id, n:0, ts:Date.now(), zone:o.zone||'', customer:o.customer||''};
+    });
+  });
+}
+function deductStock(lineItems){
+  var PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  lineItems.forEach(function(li){
+    if(!PROD[li.type]) return;
+    var q=parseInt(li.qty)||0; if(!li.code||!q) return;
+    var nc=normCode(li.code);
+    var key=stockKeyMap[nc]; var st=stockMap[nc];
+    if(!key||!st) return;
+    var field = li.grade==='B' ? 'damaged' : 'qty';
+    var cur=parseInt(st[field])||0;
+    var nv=Math.max(0,cur-q);
+    st[field]=nv;
+    PDB.ref('stockItems/'+key+'/'+field).set(nv);
+  });
+}
+function posStatBump(panels, amount){
+  if(!me) return;
+  PDB.ref('posStats/'+mk()+'/'+me.id).transaction(function(cur){
+    cur=cur||{name:me.name,orders:0,panels:0,amount:0};
+    cur.name=me.name;
+    cur.orders=(cur.orders||0)+1;
+    cur.panels=(cur.panels||0)+panels;
+    cur.amount=Math.round(((cur.amount||0)+amount)*100)/100;
+    return cur;
+  });
+}
+function myOrdersLoad(){ try{ return JSON.parse(localStorage.getItem('kp-pos-myorders')||'[]'); }catch(e){ return []; } }
+function myOrdersSave(list){ try{ localStorage.setItem('kp-pos-myorders', JSON.stringify(list.slice(0,80))); }catch(e){} }
+function myOrdersAdd(rec){ var l=myOrdersLoad(); l.unshift(rec); myOrdersSave(l); }
+
+var _creating=false;
+function posCreate(){
+  if(_creating) return;
+  var b=buildLineItems();
+  if(!b.lineItems.some(function(l){ return l.type==='panel'||l.type==='lcorner'||l.type==='ttrim'||l.type==='utrim'; })){
+    toast('ไม่มีสินค้าในตะกร้า'); return;
+  }
+  var cust=($('ck-cust').value||'').trim();
+  var phone=($('ck-phone').value||'').trim();
+  var isDel = ck.fulfil==='delivery';
+  // validation
+  var bad=false;
+  if(isDel){
+    bad = ckErr('f-cust', !cust) | bad;
+    bad = ckErr('f-phone', !/^0\d{9}$/.test(phone.replace(/[^0-9]/g,''))) | bad;
+    bad = ckErr('f-addr', !($('ck-addr').value||'').trim()) | bad;
+    bad = ckErr('f-prov', !($('ck-province').value||'').trim()) | bad;
+  } else {
+    ['f-cust','f-phone','f-addr','f-prov'].forEach(function(i){ ckErr(i,false); });
+    if(phone && !/^0\d{9}$/.test(phone.replace(/[^0-9]/g,''))){ bad = ckErr('f-phone', true) || bad; }
+  }
+  if(bad){ toast('กรุณากรอกข้อมูลที่จำเป็น / missing fields'); chime(false); return; }
+  if(ck.tax && !($('tax-tin').value||'').trim() && !($('tax-name').value||'').trim()){
+    toast('ใส่ชื่อหรือเลขผู้เสียภาษี สำหรับใบกำกับ'); return;
+  }
+
+  var zone, pendingMode=false;
+  if(isDel){
+    zone=provZone(($('ck-province').value||'').trim());
+    if(!zone){ pendingMode=true; }
+  } else zone='Instore';
+
+  _creating=true;
+  $('ck-create-btn').disabled=true;
+
+  if(pendingMode){ posCreatePending(b); return; }
+
+  Promise.all([reserveOrderNo(zone), reserveReceiptNum()]).then(function(r){
+    var no=r[0].id, rcpt=r[1];
+    var t=b.t;
+    var createdBy=me?me.name:'POS';
+    var hm=nowHM();
+    var o={
+      id:no, receiptNum:rcpt, date:todayStr(), zone:zone,
+      customer:cust||'—', phone:phone||'—',
+      address: isDel ? ($('ck-addr').value||'—') : '—',
+      province: isDel ? ($('ck-province').value||'').trim() : '',
+      location: isDel ? ($('ck-loc').value||'') : '',
+      panels: b.pa.length? b.pa.join(' · ') : '—',
+      lcorner: b.la.length? b.la.join(' · ') : '—',
+      clips: t.clips,
+      boxes: Math.max(1, Math.ceil(t.pq/10)),
+      total: fmtB(t.grand),
+      status:'new', notes:'',
+      contact: contactVal(),
+      deliveryRound: isDel ? ($('ck-round').value||'') : '',
+      reqDate: isDel ? ($('ck-reqdate').value||'') : '',
+      reqNote:'', custRaw:'',
+      createdBy: createdBy, editedBy:'',
+      lineItems: b.lineItems,
+      _stockDeducted:true, _editTs:Date.now(),
+      priority:false, priorityReason:'', priorityBy:'', priorityAt:0,
+      statusLog:[{status:'new',time:hm,by:createdBy}],
+      posSale:true, posSeller:createdBy, posSellerId: me?me.id:'', posDevice:KP_DEV_ID
+    };
+    var tax=taxReqVal();
+    if(tax){
+      o.taxReq=tax;
+      if(tax.tin) o.taxTIN=tax.tin;
+      if(tax.name) o.taxName=tax.name;
+      if(tax.addr) o.taxAddr=tax.addr;
+      if(tax.branch) o.taxBranch=tax.branch;
+    }
+    var wo={id:no, zone:zone, boxes:o.boxes, panels:o.panels, lcorner:o.lcorner, clips:o.clips, packed:false, packedAt:null};
+    if(!isDel){
+      if(ck.insMode==='done'){
+        o.status='delivered'; o.deliveredBy=createdBy;
+        o.statusLog.push({status:'delivered',time:hm,by:createdBy});
+        wo.packed=true; wo.packedAt='Instore '+hm;
+      } else {
+        o.status='packing'; o.instoreAutoDeliver=true;
+        o.statusLog.push({status:'packing',time:hm,by:createdBy});
+      }
+    }
+    // strip undefined (Firebase rejects) via JSON round-trip like index.html
+    o=JSON.parse(JSON.stringify(o));
+    var writes=[];
+    writes.push(PDB.ref('orders/'+safeId(no)).set(o));
+    writes.push(PDB.ref('wOrders/'+safeId(no)).set(JSON.parse(JSON.stringify(wo))));
+    if(!isDel && t.grand>0){
+      var rid='r'+Date.now();
+      writes.push(PDB.ref('revOrders/'+rid).set({rid:rid,id:no,cust:o.customer,amt:t.grand,date:todayStr(),zone:zone,month:mk()}));
+    }
+    Promise.all(writes).then(function(){
+      deductStock(b.lineItems);
+      seedPhotoSlots(o);
+      posStatBump(t.pq, t.grand);
+      myOrdersAdd({id:no, ts:Date.now(), date:todayStr(), amt:t.grand, panels:t.pq, status:o.status, zone:zone});
+      audit({type:'pos', orderId:no, by:createdBy, detail:'🏪 POS '+(isDel?'จัดส่ง':'ขายหน้าร้าน')+' — '+t.pq+' แผ่น · '+fmtB(t.grand)});
+      if(o.status==='delivered') audit({type:'status', orderId:no, from:'new', to:'delivered', by:createdBy, detail:'🏪 POS ลูกค้ารับของที่ร้าน'});
+      if(o.status==='packing'){
+        audit({type:'status', orderId:no, from:'new', to:'packing', by:createdBy, detail:'🏪 POS ส่งแพ็ค — เสร็จแล้วส่งมอบเลย'});
+        pushQ('warehouse','📦 New Order: '+no, zone+' · '+o.panels, {tag:'new-order'});
+      }
+      if(isDel) pushQ('warehouse','📦 New Order: '+no, zone+' · '+o.panels, {tag:'new-order'});
+      if(tax) pushQ('office','🧾 ขอใบกำกับภาษี: '+no, (tax.name||'')+' '+(tax.tin||''), {tag:'tax-req'});
+      pushQ('office','🏪 POS order: '+no, createdBy+' · '+fmtB(t.grand), {tag:'pos-order'});
+      lastOrder={o:o, t:t, lines:cart.lines.slice()};
+      // clear the cart NOW — a reload between create and payment must not
+      // resurrect the cart and produce a duplicate order.
+      cart={lines:[]}; saveCart();
+      _creating=false; $('ck-create-btn').disabled=false;
+      showConfirm(o,t);
+      chime();
+    }).catch(function(e){
+      console.error(e);
+      _creating=false; $('ck-create-btn').disabled=false;
+      alert('บันทึกไม่สำเร็จ ลองใหม่ / save failed: '+e);
+    });
+  }).catch(function(e){
+    _creating=false; $('ck-create-btn').disabled=false;
+    alert('ออกเลขออเดอร์ไม่สำเร็จ / order number failed: '+e);
+  });
+}
+/* delivery order with unclear zone → office approval queue, no number yet */
+function posCreatePending(b){
+  var t=b.t;
+  var draft={
+    status:'waiting', ts:Date.now(),
+    seller: me?me.name:'', sellerId: me?me.id:'',
+    customer:($('ck-cust').value||'').trim(),
+    phone:($('ck-phone').value||'').trim(),
+    address:($('ck-addr').value||'').trim(),
+    province:($('ck-province').value||'').trim(),
+    location:($('ck-loc').value||'').trim(),
+    contact:contactVal(),
+    deliveryRound:($('ck-round').value||'').trim(),
+    reqDate:($('ck-reqdate').value||''),
+    panels:b.pa.join(' · '), lcorner:b.la.join(' · '),
+    lineItems:b.lineItems, clips:t.clips,
+    totals:{grand:t.grand, discount:t.discount, delivery:t.delivery, extra:t.extra, extraLabel:t.extraLabel, packs:t.packs, gift:t.gift, freeMinus:t.minus, pq:t.pq},
+    taxReq:taxReqVal()
+  };
+  draft=JSON.parse(JSON.stringify(draft));
+  PDB.ref('posPending').push(draft).then(function(ref){
+    myOrdersAdd({pend:ref.key, ts:Date.now(), date:todayStr(), amt:t.grand, panels:t.pq, status:'waiting', cust:draft.customer});
+    audit({type:'pos', orderId:'⏳ POS', by:me?me.name:'', detail:'ส่งออเดอร์จัดส่งให้ออฟฟิศยืนยันโซน — '+draft.customer+' ('+draft.province+') · '+fmtB(t.grand)});
+    pushQ('office','⏳ POS รอยืนยันโซน', (me?me.name:'')+' · '+draft.customer+' · '+draft.province, {tag:'pos-pending'});
+    _creating=false; $('ck-create-btn').disabled=false;
+    cart={lines:[]}; saveCart();
+    $('done-title').textContent='ส่งให้ออฟฟิศแล้ว ⏳';
+    $('done-no').textContent='รอยืนยันโซน';
+    $('done-sub').textContent='ออฟฟิศตรวจจังหวัด/โซนแล้วจะออกเลขออเดอร์ให้ · ดูสถานะได้ที่ "ยอดขายของฉัน"';
+    posGo('done');
+    chime();
+  }).catch(function(e){
+    _creating=false; $('ck-create-btn').disabled=false;
+    alert('ส่งไม่สำเร็จ / failed: '+e);
+  });
+}
+
+/* ═══════════════ CONFIRM + PAY ═══════════════ */
+function showConfirm(o,t){
+  var d=new Date();
+  $('cf-date').textContent='วันที่ '+d.getDate()+'/'+(d.getMonth()+1)+'/'+(d.getFullYear()+543)+' · พนักงาน '+o.createdBy;
+  $('cf-no').textContent=o.id;
+  var _lines=(lastOrder&&lastOrder.lines)||cart.lines;
+  var rows=_lines.map(function(l){
+    return '<div class="cf-line"><span class="l">'+esc(l.code)+(l.grade==='B'?' <span style="color:#F0B050">(B)</span>':'')+' × '+l.qty
+      +'<small>'+esc(l.name||'')+'</small></span><span class="r num">'+fmtB(l.qty*l.price)+'</span></div>';
+  });
+  if(t.packs>0) rows.push('<div class="cf-line"><span class="l">คลิปแพ็ค × '+t.packs+'</span><span class="r num">'+fmtB(t.cc)+'</span></div>');
+  if(t.clips>0) rows.push('<div class="cf-line"><span class="l">คลิปล็อคฟรี × '+fmt(t.clips)+'</span><span class="r free">ฟรี</span></div>');
+  if(t.extra>0) rows.push('<div class="cf-line"><span class="l">'+esc(t.extraLabel||'งานพิเศษ')+'</span><span class="r num">'+fmtB(t.extra)+'</span></div>');
+  if(t.discount>0) rows.push('<div class="cf-line"><span class="l">ส่วนลด</span><span class="r num" style="color:#F0B050">−'+fmtB(t.discount)+'</span></div>');
+  if(t.delivery>0) rows.push('<div class="cf-line"><span class="l">ค่าจัดส่ง</span><span class="r num">+'+fmtB(t.delivery)+'</span></div>');
+  $('cf-lines').innerHTML=rows.join('');
+  $('cf-total').textContent=fmtB(t.grand);
+  $('cf-note').textContent = o.zone==='Instore'
+    ? (o.status==='delivered' ? 'ขายหน้าร้าน · ลูกค้ารับของเลย' : 'ขายหน้าร้าน · ส่งแพ็คแล้ว รอรับของ')
+    : 'ออเดอร์จัดส่ง โซน '+(ZONE_TH[o.zone]||o.zone);
+  // reset pay state
+  _pay={mode:'', part:false, slips:[]};
+  $('pm-cash').classList.remove('on'); $('pm-online').classList.remove('on');
+  $('ps-full').classList.add('on'); $('ps-part').classList.remove('on');
+  $('pay-amt-wrap').classList.add('hidden'); $('bank-wrap').classList.add('hidden');
+  $('slip-thumbs').innerHTML=''; $('pay-amt').value='';
+  $('pay-confirm-btn').disabled=true;
+  $('pay-no').textContent=o.id;
+  $('pay-due').textContent=fmtB(t.grand);
+  posGo('confirm');
+}
+var _pay={mode:'', part:false, slips:[]};
+function posPayMode(m){
+  _pay.mode=m;
+  $('pm-cash').classList.toggle('on', m==='cash');
+  $('pm-online').classList.toggle('on', m==='online');
+  $('bank-wrap').classList.toggle('hidden', m!=='online');
+  payValidate();
+}
+function posPayPart(part){
+  _pay.part=part;
+  $('ps-full').classList.toggle('on', !part);
+  $('ps-part').classList.toggle('on', part);
+  $('pay-amt-wrap').classList.toggle('hidden', !part);
+  if(part){ $('pay-amt').value=''; $('pay-amt').focus(); }
+  payValidate();
+}
+$('pay-amt').addEventListener('input', payValidate);
+function payValidate(){
+  var ok = !!_pay.mode;
+  if(_pay.part){ ok = ok && (parseFloat($('pay-amt').value)>0); }
+  if(_pay.mode==='online' && !_pay.slips.length) ok=false;
+  $('pay-confirm-btn').disabled=!ok;
+}
+function posCopyAcct(){
+  var t='330-282-3788';
+  if(navigator.clipboard) navigator.clipboard.writeText(t).then(function(){ toast('คัดลอกแล้ว ✓ '+t); });
+  else toast(t);
+}
+function posSlipPick(input){
+  var f=input.files && input.files[0]; if(!f) return;
+  compressFile(f, function(dataUrl){
+    if(!dataUrl){ toast('อ่านรูปไม่ได้ ลองใหม่'); return; }
+    _pay.slips.push(dataUrl);
+    $('slip-thumbs').innerHTML=_pay.slips.map(function(d){ return '<img src="'+d+'">'; }).join('');
+    payValidate();
+  });
+  input.value='';
+}
+function compressFile(file, cb){
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var img=new Image();
+    img.onload=function(){
+      var max=1280,w=img.width,h=img.height;
+      if(w>h&&w>max){ h=Math.round(h*max/w); w=max; }
+      else if(h>=w&&h>max){ w=Math.round(w*max/h); h=max; }
+      var c=document.createElement('canvas'); c.width=w; c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      cb(c.toDataURL('image/jpeg',0.6));
+    };
+    img.onerror=function(){ cb(''); };
+    img.src=e.target.result;
+  };
+  reader.onerror=function(){ cb(''); };
+  reader.readAsDataURL(file);
+}
+function addSlipPhotos(orderId, done){
+  var sid=safeId(orderId), left=_pay.slips.length;
+  if(!left){ done(); return; }
+  _pay.slips.forEach(function(d){
+    var ref=PDB.ref('orderPhotos/slip/'+sid).push();
+    ref.set({data:d, ts:Date.now(), by:me?me.name:''}, function(){
+      PDB.ref('photoIndex/slip/'+sid).transaction(function(cur){
+        cur=cur||{id:orderId,n:0};
+        cur.id=orderId; cur.n=(parseInt(cur.n)||0)+1; cur.ts=Date.now();
+        return cur;
+      }, function(){ left--; if(left<=0) done(); });
+    });
+  });
+}
+function posPayConfirm(){
+  if(!lastOrder) return;
+  var o=lastOrder.o, t=lastOrder.t;
+  var amt = _pay.part ? (parseFloat($('pay-amt').value)||0) : t.grand;
+  if(!(amt>0)){ toast('ใส่จำนวนเงิน'); return; }
+  var pm=_pay.mode; if(!pm) return;
+  var who=me?me.name:'';
+  var upd={ paidAmount:amt, payDate:todayStr(), paidAt:nowHM(), paidBy:who };
+  if(amt>=t.grand-0.5){ upd.payMethod=pm; upd.payMethodPartial=''; }
+  else { upd.payMethod=''; upd.payMethodPartial=pm; }
+  if(pm==='online'){ upd.paidOnline=amt; upd.paidCash=0; }
+  else { upd.paidCash=amt; upd.paidOnline=0; }
+  if(pm==='online' && !_pay.slips.length) upd.slipLater=true;
+  $('pay-confirm-btn').disabled=true;
+  PDB.ref('orders/'+safeId(o.id)).update(upd).then(function(){
+    addSlipPhotos(o.id, function(){
+      feedAdd({amt:amt, id:o.id, cust:o.customer, zone:o.zone, prov:o.province||'', fee:0, kind: pm==='online'?'slip':'office', by:who});
+      audit({type:'payment', orderId:o.id, by:who, detail:'🏪 POS รับเงิน '+fmtB(amt)+' ('+(pm==='online'?'โอน':'เงินสด')+')'+(amt<t.grand?' · มัดจำ':'')});
+      lastOrder.paid=amt;
+      posDone();
+    });
+  }).catch(function(e){
+    $('pay-confirm-btn').disabled=false;
+    alert('บันทึกเงินไม่สำเร็จ / failed: '+e);
+  });
+}
+function posPaySkip(){
+  if(!confirm('ยังไม่รับเงินตอนนี้? ออเดอร์จะค้างเป็น "ยังไม่จ่าย"')) return;
+  posDone();
+}
+function posDone(){
+  var o=lastOrder&&lastOrder.o;
+  $('done-title').textContent='เรียบร้อย! 🎉';
+  $('done-no').textContent=o?o.id:'—';
+  var sub= o&&o.zone==='Instore'
+    ? (o.status==='delivered'?'ขายหน้าร้านสำเร็จ · ลูกค้ารับของแล้ว':'ส่งไปแพ็คแล้ว · คลังกำลังเตรียมของ')
+    : 'ออเดอร์จัดส่งสร้างแล้ว · ออฟฟิศ/คลังรับช่วงต่อ';
+  if(lastOrder&&lastOrder.paid) sub+=' · รับเงินแล้ว '+fmtB(lastOrder.paid);
+  $('done-sub').textContent=sub;
+  cart={lines:[]}; saveCart();
+  ['cart-gift','cart-freeminus','cart-packs','cart-extra','cart-discount','cart-delivery','cart-extra-label','ck-cust','ck-phone','ck-contact-name','ck-addr','ck-province','ck-loc','ck-round','ck-reqdate','tax-name','tax-tin','tax-addr','tax-phone'].forEach(function(i){ var el=$(i); if(el) el.value=''; });
+  $('ck-contact-ch').value=''; $('ck-tax').checked=false; posTaxToggle();
+  ck={fulfil:'', insMode:'', tax:false};
+  posGo('done');
+}
+function posNewSale(){ lastOrder=null; renderGrid(); posGo('shop'); }
+
+/* ═══════════════ MY SALES + PENDING ═══════════════ */
+function renderPendingBadge(){
+  var mine=Object.keys(posPending).filter(function(k){
+    var p=posPending[k]; return p && p.sellerId===(me&&me.id) && p.status==='waiting';
+  });
+  var b=$('pend-badge');
+  b.textContent=mine.length;
+  b.classList.toggle('hidden', !mine.length);
+}
+function renderMySales(){
+  var today=todayStr();
+  var list=myOrdersLoad();
+  var tOrders=0,tPanels=0;
+  list.forEach(function(r){ if(r.date===today && !r.pend){ tOrders++; tPanels+=r.panels||0; } });
+  $('ms-today-orders').textContent=fmt(tOrders);
+  $('ms-today-panels').textContent=fmt(tPanels);
+  $('ms-month-panels').textContent='…';
+  if(me){
+    PDB.ref('posStats/'+mk()+'/'+me.id).once('value', function(s){
+      var v=s.val(); $('ms-month-panels').textContent=fmt(v?v.panels:0);
+    });
+  }
+  // pending drafts (live from Firebase)
+  var pend=Object.keys(posPending).map(function(k){ var p=posPending[k]; p._k=k; return p; })
+    .filter(function(p){ return p.sellerId===(me&&me.id); })
+    .sort(function(a,b){ return b.ts-a.ts; }).slice(0,10);
+  $('ms-pending').innerHTML=pend.map(function(p){
+    var pill = p.status==='waiting' ? '<span class="st-pill st-wait">⏳ รอออฟฟิศ</span>'
+      : p.status==='created' ? '<span class="st-pill st-delivered">✓ ออกเลข '+esc(p.orderId||'')+'</span>'
+      : '<span class="st-pill st-rejected">✗ ตีกลับ'+(p.reason?': '+esc(p.reason):'')+'</span>';
+    return '<div class="ms-item"><div class="no">🚚</div><div class="mid">'+esc(p.customer||'—')+' · '+esc(p.province||'')+'<br><small>'+new Date(p.ts).toLocaleString('th-TH')+'</small></div>'+pill+'</div>';
+  }).join('');
+  $('ms-list').innerHTML=list.filter(function(r){ return !r.pend; }).slice(0,30).map(function(r){
+    return '<div class="ms-item"><div class="no num">'+esc(r.id)+'</div>'
+      +'<div class="mid">'+r.date+' · '+fmt(r.panels||0)+' แผ่น</div>'
+      +'<div class="amt num">'+fmtB(r.amt||0)+'</div></div>';
+  }).join('') || '<div style="text-align:center;color:var(--text2);padding:26px">ยังไม่มีการขายจากเครื่องนี้</div>';
+}
+
+/* pending status change → toast the seller */
+PDB.ref('posPending').on('child_changed', function(s){
+  var p=s.val();
+  if(!p || !me || p.sellerId!==me.id) return;
+  if(p.status==='created'){ toast('✅ ออฟฟิศออกเลขแล้ว: '+(p.orderId||'')); chime(); }
+  if(p.status==='rejected'){ toast('⚠️ ออฟฟิศตีกลับออเดอร์'+(p.reason?': '+p.reason:'')); chime(false); }
+  renderPendingBadge();
+});
+</script>
+</body>
+</html>
