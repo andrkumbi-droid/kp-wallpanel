@@ -312,11 +312,16 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
 .pcard .price{ font-size:19px; font-weight:800; color:var(--gold-deep); }
 .pcard .price small{ font-size:12px; font-weight:500; color:var(--text2); }
 .pcard .w{ font-size:12.5px; color:var(--text2); }
-.pcard.sold::after{
-  content:'สินค้าหมด / SOLD OUT'; position:absolute; inset:0;
+.soldover{
+  position:absolute; inset:0;
   background:rgba(250,248,244,.78); backdrop-filter:blur(1px) grayscale(1);
-  display:flex; align-items:center; justify-content:center;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
   font-weight:800; color:var(--red); font-size:15px; letter-spacing:.5px;
+  text-align:center; padding:10px; pointer-events:none;
+}
+.soldover small{
+  margin-top:8px; color:#92400E; font-size:12.5px; font-weight:700; letter-spacing:0;
+  background:#FFF7E6; border:1.5px solid #FCD34D; border-radius:99px; padding:5px 12px;
 }
 .stock-chip{ font-size:12px; font-weight:600; color:var(--green); }
 .stock-chip.low{ color:#B45309; }
@@ -1234,7 +1239,7 @@ function chime(ok){
 }
 
 /* ═══════════════ DATA ═══════════════ */
-var staffList=[], products=[], soldOut={}, stockMap={}, stockKeyMap={}, posPending={};
+var staffList=[], products=[], soldOut={}, stockMap={}, stockKeyMap={}, posPending={}, incomingEta={};
 var SESSION_MS=4*3600*1000;
 var me=null;               // logged-in staff record
 var cart={ lines:[] };     // {code,name,qty,price,listPrice,type,grade}
@@ -1280,6 +1285,32 @@ function attach(){
   PDB.ref('posPending').limitToLast(40).on('value', function(s){
     posPending=s.val()||{}; renderPendingBadge();
   });
+  // incoming containers → "back in stock around …" on sold-out cards.
+  // Earliest ETA per code; only codes the office actually put into Incoming.
+  PDB.ref('incomingItems').on('value', function(s){
+    var v=s.val()||{}; incomingEta={};
+    Object.keys(v).forEach(function(k){
+      var it=v[k]; if(!it||!it.code||!it.eta) return;
+      var nc=normCode(it.code);
+      if(!incomingEta[nc] || it.eta<incomingEta[nc]) incomingEta[nc]=it.eta;
+    });
+    renderGrid();
+  });
+}
+/* expected restock text: earliest incoming ETA + 2 weeks slack (containers run
+   late). Past the padded date → "soon". Empty when the code is not incoming. */
+function restockTxt(code){
+  var eta=incomingEta[normCode(code)]; if(!eta) return '';
+  var d=new Date(eta+'T00:00:00'); if(isNaN(d)) return '';
+  d.setDate(d.getDate()+14);
+  var today=new Date(todayStr()+'T00:00:00');
+  if(d<=today){
+    // long past even the padded date = a stale Incoming record (the office
+    // rarely clears arrived containers) — say nothing rather than "soon" forever
+    if((today-d)/86400000 > 30) return '';
+    return 'ของกำลังเข้า เร็วๆ นี้ / restock soon';
+  }
+  return 'เข้าประมาณ ~'+String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+' / back in stock';
 }
 function mergeCatalog(items){
   var by={}; products.forEach(function(p){ by[p.code]=p; });
@@ -1443,7 +1474,9 @@ function renderGrid(){
     var so=!!soldOut[p.code];
     var st=stockOf(p.code);
     var stHtml = st==null ? '' : '<span class="stock-chip'+(st<=50?' low':'')+'">คงเหลือ '+fmt(st)+'</span>';
+    var rs=so?restockTxt(p.code):'';
     return '<button class="pcard'+(so?' sold':'')+'" onclick="posCalcOpen(\''+esc(p.code)+'\')">'
+      +(so?'<span class="soldover">สินค้าหมด / SOLD OUT'+(rs?'<small>📦 '+esc(rs)+'</small>':'')+'</span>':'')
       +'<div class="ph">'
       +'<img src="'+IMG_BASE+esc(p.code)+'.jpg" loading="lazy" alt="'+esc(p.code)+'" onerror="this.outerHTML=\'<div class=nopic>'+esc(p.code)+'</div>\'">'
       +'</div><div class="body">'
@@ -1467,8 +1500,10 @@ function posCalcOpen(code){
   $('calc-pr').innerHTML=fmt(p.price)+' ฿ <small>/ แผ่น</small>';
   $('calc-ph').innerHTML='<img src="'+IMG_BASE+esc(p.code)+'.jpg" alt="" onerror="this.outerHTML=\'<div class=nopic style=\\\'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--gold3);font-size:26px\\\'>'+esc(p.code)+'</div>\'">';
   var st=stockOf(p.code);
+  var rsm=soldOut[p.code]?restockTxt(p.code):'';
   $('calc-meta').innerHTML='<span class="chip">'+p.mat+'</span><span class="chip">หน้ากว้าง '+p.w+' ซม.</span><span class="chip">ยาว 2.9 ม.</span>'
-    +(st!=null?'<span class="chip" style="color:'+(st<=50?'#B45309':'var(--green)')+'">คงเหลือ '+fmt(st)+' แผ่น</span>':'');
+    +(st!=null?'<span class="chip" style="color:'+(st<=50?'#B45309':'var(--green)')+'">คงเหลือ '+fmt(st)+' แผ่น</span>':'')
+    +(soldOut[p.code]?'<span class="chip" style="color:var(--red);border-color:#fca5a5">สินค้าหมด'+(rsm?' · 📦 '+esc(rsm):'')+'</span>':'');
   ['ci-w','ci-h','ci-sqm','ci-run'].forEach(function(i){ $(i).value=''; });
   $('calc-qty').value=0;
   posCalcMode('wh');
