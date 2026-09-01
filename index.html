@@ -2916,6 +2916,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
       <div class="stit" style="margin-bottom:0">💼 Finance / การเงิน</div>
       <button type="button" class="btnsm" onclick="finRestoreOpen()" title="Restore closed categories / กู้คืนหมวดที่ปิดไว้"><i class="ti ti-history"></i> ♻️ Restore</button>
+      <button type="button" class="btnsm" onclick="finCostReportOpen()" title="ทุกค่าใช้จ่ายรวมเงินเดือนออฟฟิศ / every cost incl. office salaries">📊 Cost report</button>
       <button type="button" class="btnsm btnsmp" onclick="finReportOpen()" title="Report + charts / รายงาน"><i class="ti ti-chart-pie"></i> Report / รายงาน</button>
     </div>
     <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Payments outside Bills &amp; Payroll — container, tax, installments, extra wages / การจ่ายเงินนอกบิลและนอกเงินเดือน</div>
@@ -7810,7 +7811,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901007;
+var KP_BUILD = 20260901008;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -35355,7 +35356,8 @@ function billsShipData(mk){
 // ── ONE source of truth for the monthly cost picture ──────────────────────
 // The dashboard (costsRender) and the report (billsReportOpen/print) both read
 // this, so a number can never differ between the screen and the printout.
-function billsCostData(mk){
+function billsCostData(mk, opts){
+  opts=opts||{};
   var blocks=[], grand=0;
 
   // 1) Fixed costs — manually kept lines
@@ -35419,7 +35421,7 @@ function billsCostData(mk){
   });
   var sg={Driver:[],Warehouse:[],Lalamove:[],Other:[]};
   Object.keys(perP).forEach(function(k){ var p=perP[k]; sg[_billStaffGroup(p.who,p.name)].push(p); });
-  [['Driver','🚗 Driver / คนขับ',true],['Warehouse','🏭 Warehouse / คลัง',true],['Lalamove','🛺 Lalamove',true],['Other','👤 Other / อื่นๆ',false]].forEach(function(p){
+  [['Driver','🚗 Driver / คนขับ',true],['Warehouse','🏭 Warehouse Staff / พนักงานคลัง',true],['Lalamove','🛺 Lalamove',true],['Other','👤 Other / อื่นๆ',false]].forEach(function(p){
     var rows=sg[p[0]].sort(function(a,b){ return b.inc-a.inc; });
     var kids=rows.map(function(r){
       return { id:r.who, label:r.name, total:r.inc, payout:r.net,
@@ -35448,6 +35450,33 @@ function billsCostData(mk){
       total:kids.reduce(function(a,c){ return a+c.total; },0), children:kids });
   });
 
+  // The Finance tab's payment tree — container, tax, installments. One block per
+  // section, so a container month is visible as a container month. Office
+  // salaries are NOT in this tree; they come as their own block below.
+  if(opts.finance){
+    try{
+      var fp=_finIn(mk), bySec={};
+      fp.forEach(function(p){ (bySec[p.section]=bySec[p.section]||[]).push(p); });
+      finSecs().forEach(function(s){
+        var pays=bySec[s.id]||[]; if(!pays.length) return;
+        var byCat={}, kids=[];
+        pays.forEach(function(p){ var k=p.catId||'?'; if(!byCat[k]){ byCat[k]={ id:k, label:p.catLabel||'—', total:0, items:[] }; kids.push(byCat[k]); } byCat[k].total+=parseFloat(p.amount)||0; byCat[k].items.push(p); });
+        kids.sort(function(a,b){ return b.total-a.total; });
+        blocks.push({ kind:'fin', label:'💼 '+String(s.label||'Finance'), alwaysShow:false,
+          total:kids.reduce(function(a,c){ return a+c.total; },0), children:kids });
+      });
+    }catch(e){}
+  }
+  if(opts.finSalaries){
+    try{
+      var sal=finPayNames(mk).map(function(s){
+        var inc=0; try{ inc=pgCalc(s.id,mk).inc||0; }catch(e){}
+        return { id:s.id, label:s.name||'—', total:inc };
+      }).filter(function(c){ return c.total>0; }).sort(function(a,b){ return b.total-a.total; });
+      if(sal.length) blocks.push({ kind:'finsal', label:'👔 Office salaries / เงินเดือนออฟฟิศ', alwaysShow:false,
+        total:sal.reduce(function(a,c){ return a+c.total; },0), children:sal });
+    }catch(e){}
+  }
   blocks.forEach(function(b){ grand+=b.total; });
   return { mk:mk, blocks:blocks, grand:grand };
 }
@@ -36892,12 +36921,12 @@ function _bcBars(rows,txt,colored){
   }).join('');
 }
 // Last N months of grand totals — same maths as the dashboard, month by month.
-function billsTrend(mk,n){
+function billsTrend(mk,n,opts){
   var p=String(mk).split('-'), y=parseInt(p[0]), m=parseInt(p[1])-1, out=[];
   for(var i=n-1;i>=0;i--){
     var d=new Date(y,m-i,1);
     var k=d.getFullYear()+'-'+(d.getMonth()+1<10?'0':'')+(d.getMonth()+1);
-    out.push({mk:k, label:['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]+' '+String(d.getFullYear()).slice(2), value:billsCostData(k).grand});
+    out.push({mk:k, label:['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]+' '+String(d.getFullYear()).slice(2), value:billsCostData(k,opts).grand});
   }
   return out;
 }
@@ -36991,11 +37020,15 @@ function billsRestoreRender(){
   html+='<button type="button" onclick="billsRestoreClose()" style="width:100%;margin-top:12px;padding:10px;border-radius:var(--rs);border:none;background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer">Close / ปิด</button>';
   el.innerHTML=html;
 }
-function billsReportOpen(){ billsReportRender(); document.getElementById('bill-report-modal').classList.add('open'); }
+var _billReportMode='bills';
+function _billReportOpts(){ return _billReportMode==='all' ? {finance:true, finSalaries:true} : {finance:true}; }
+function billsReportOpen(){ _billReportMode='bills'; billsReportRender(); document.getElementById('bill-report-modal').classList.add('open'); }
+// The Finance tab's view of the same report: everything, salaries included.
+function finCostReportOpen(){ _billReportMode='all'; billsReportRender(); document.getElementById('bill-report-modal').classList.add('open'); }
 function billsReportClose(){ document.getElementById('bill-report-modal').classList.remove('open'); }
 function billsReportRender(){
   var el=document.getElementById('bill-report-body'); if(!el) return;
-  var mk=_billReportMk(), data=billsCostData(mk);
+  var mk=_billReportMk(), data=billsCostData(mk,_billReportOpts());
   var txt={text:'var(--text)',muted:'var(--text2)',track:'var(--bg2)'};
   var live=data.blocks.filter(function(b){ return b.total>0 || (b.children&&b.children.length); });
   var segs=data.blocks.filter(function(b){ return b.total>0; })
@@ -37014,7 +37047,7 @@ function billsReportRender(){
 
   el.innerHTML=
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
-      +'<span style="font-size:16px;font-weight:700">📊 Cost report / รายงานค่าใช้จ่าย</span>'
+      +'<span style="font-size:16px;font-weight:700">📊 Cost report / รายงานค่าใช้จ่าย'+(_billReportMode==='all'?' <span style="font-size:11px;font-weight:600;color:var(--text2)">· รวมเงินเดือนออฟฟิศ / incl. office salaries</span>':' <span style="font-size:11px;font-weight:600;color:var(--text2)">· ไม่รวมเงินเดือนออฟฟิศ / excl. office salaries</span>')+'</span>'
       +'<button type="button" onclick="billsReportClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button></div>'
     +'<div style="display:flex;gap:8px;margin-bottom:12px">'
       +'<select id="br-month" onchange="billsReportRender()" style="flex:1;padding:8px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">'+mopts+'</select>'
@@ -37035,11 +37068,11 @@ function billsReportRender(){
           +_bcBars(kids.map(function(c){ return {label:c.label,value:c.total}; }),txt,false)+'</div>';
       }).join('')
     +'<div style="font-size:12px;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px">6 months / 6 เดือน</div>'
-    +'<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px">'+_bcTrend(billsTrend(mk,6),txt)+'</div>'
+    +'<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px">'+_bcTrend(billsTrend(mk,6,_billReportOpts()),txt)+'</div>'
     +'<button type="button" onclick="billsReportClose()" style="width:100%;margin-top:14px;padding:10px;border-radius:var(--rs);border:none;background:var(--blue);color:#fff;font-weight:700;font-size:14px;cursor:pointer">Close / ปิด</button>';
 }
 function billsReportPrint(){
-  var mk=_billReportMk(), data=billsCostData(mk);
+  var mk=_billReportMk(), data=billsCostData(mk,_billReportOpts());
   var txt={text:'#111827',muted:'#6b7280',track:'#e5e7eb'};
   var MNS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var p=mk.split('-'), mLbl=MNS[parseInt(p[1])-1]+' '+p[0];
