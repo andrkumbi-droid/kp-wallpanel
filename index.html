@@ -2674,8 +2674,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="pgr-row"><label>🚫 Unexcused absent day<small>ขาดงาน = × ค่าแรงต่อวัน</small></label><input type="number" id="pgr-absmult" step="0.5" placeholder="2"></div>
       <div class="pgr-row"><label>💰 Monthly base <span style="font-weight:600;color:var(--text2)">(optional)</span><small>เงินเดือนประจำ (฿) — 0 = ไม่ใช้</small></label><input type="number" id="pgr-monthly" placeholder="0"></div>
       <div class="pgr-row"><label>💹 Commission ฿/panel <span style="font-weight:600;color:var(--text2)">(optional)</span><small>คอมมิชชั่นต่อแผ่นที่ขายได้ — 0 = ไม่ใช้</small></label><input type="number" id="pgr-comm" step="0.05" placeholder="0"></div>
-      <div class="pgr-row"><label>🏪 POS commission ฿/panel <span style="font-weight:600;color:var(--text2)">(optional)</span><small>ค่าคอมหน้าร้าน — เฉพาะคนที่มีติ๊ก 🏪 ใน Staff · แผ่นที่ขายเองบนแท็บเล็ต · 0 = ใช้ค่า default</small></label><input type="number" id="pgr-poscomm" step="0.05" placeholder="0"></div>
-      <div class="pgr-row"><label>🏪 POS default ฿/panel <span style="font-weight:600;color:#b45309">(ทุกคน / ALL sellers)</span><small>ค่า default สำหรับทุกคนที่ไม่มีอัตราของตัวเอง — แก้ที่นี่มีผลทุกคน</small></label><input type="number" id="pgr-poscomm-all" step="0.05" placeholder="0"></div>
+      <div class="pgr-row"><label>🏪 POS commission ฿/panel <span style="font-weight:600;color:var(--text2)">(optional)</span><small>ค่าคอมหน้าร้าน — เฉพาะคนที่มีติ๊ก 🏪 ใน Staff · แผ่นที่ขายเองบนแท็บเล็ต · 0 = ไม่ใช้</small></label><input type="number" id="pgr-poscomm" step="0.05" placeholder="0"></div>
       <!-- Only for people in the office-salary list: which of the two totals they land in -->
       <div class="pgr-row" id="pgr-grey-row" style="border-bottom:none;display:none"><label>🎨 สีของยอด / Colour<small>น้ำเงิน = รวมในยอดออฟฟิศ · เทา = นับแยก / blue counts in the office total, grey is counted separately</small></label>
         <button type="button" id="pgr-grey-btn" onclick="pgRateGreyToggle()" title="แตะเพื่อสลับ / tap to switch" style="width:44px;height:34px;border-radius:6px;border:1.5px solid var(--blue);background:var(--blue);cursor:pointer"></button></div>
@@ -7830,7 +7829,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260902023;
+var KP_BUILD = 20260902024;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -11046,16 +11045,12 @@ function ofAgeBadge(o){
 //    office device that sees a POS order pushes it there once.
 // ════════════════════════════════════════════════════════════════════════════
 var posPendingData={};
-var _posCommRate=0;              // global POS commission default ฿/panel (fb 'posCommRate')
 window._posPendingKey='';
 window._posPendingDraft=null;
 if(window.fbDB){
   window.fbDB.ref('posPending').limitToLast(40).on('value', function(s){
     posPendingData=s.val()||{};
     try{ posPendRender(); }catch(e){}
-  });
-  window.fbDB.ref('posCommRate').on('value', function(s){
-    var v=s.val(); _posCommRate=v?(parseFloat(v.rate)||0):0;
   });
 }
 function posPendWaiting(){
@@ -34183,7 +34178,9 @@ function pgPosPanels(mk, sid){
   _pgPosPanelCache[ck]={sig:sig,n:total};
   return total;
 }
-function pgPosRate(R){ return (R.posComm>0) ? R.posComm : (_posCommRate||0); }
+/* POS rate = the personal posComm only (the global default was dropped —
+   with a handful of 🏪 sellers a per-person rate is clearer). */
+function pgPosRate(R){ return (R.posComm>0) ? R.posComm : 0; }
 // "31/07 – 30/08" — the window, the way a person writes it.
 function pgCommWinTxt(mk){
   var w=pgCommWindow(mk);
@@ -34311,10 +34308,7 @@ function pgRows(sid, mk){
       // Office sellers without the tick are covered by the company-wide 💹
       // 'comm' row — it already counts POS orders — so no extra line and no
       // double pay for them; Pim/Nicky simply have no rate at all.
-      if(r.k==='poscomm'){
-        if(!_stPos) return false;
-        if(!(_R.posComm>0) && !(pgPosRate(_R)>0 && pgPosPanels(mk,sid)>0)) return false;
-      }
+      if(r.k==='poscomm' && !(_stPos && _R.posComm>0)) return false;
       if(r.k==='work' && hideWork) return false;
       return true;
     })
@@ -35050,7 +35044,6 @@ function pgRateOpen(sid){
   set('pgr-ce',R.contEach); set('pgr-absmult',R.absMult); set('pgr-monthly',R.monthly);
   set('pgr-comm',R.comm);
   set('pgr-poscomm',R.posComm);
-  set('pgr-poscomm-all',_posCommRate);
   // The colour square belongs to the office-salary list, so it only shows for
   // someone who is actually in it.
   _pgRateGrey=!!st.finPayGrey;
@@ -35077,14 +35070,6 @@ function pgRateSave(){
           comm:num('pgr-comm'), posComm:num('pgr-poscomm') };
   payRates[sid]=r;
   if(window.fbDB) window.fbDB.ref('payRates/'+sid).set(r);
-  // The global POS default lives in its own node — one value for everyone.
-  var _pcAll=num('pgr-poscomm-all');
-  if(_pcAll!==_posCommRate){
-    var _pcWas=_posCommRate; _posCommRate=_pcAll;
-    if(window.fbDB) window.fbDB.ref('posCommRate').set({rate:_pcAll, by:pgWho(), ts:Date.now()});
-    try{ auditAdd({ type:'payroll', area:'payroll', orderId:'💰 POS',
-      detail:'🏪 POS default ฿/panel '+pgN(_pcWas)+' → '+pgN(_pcAll)+' (ทุกคน / all sellers)', by:pgWho() }); }catch(e){}
-  }
   // Only what actually moved goes into the audit log — a rate change silently
   // rewrites the whole month, so it has to be readable at a glance later.
   var LB={day:'💵 Daily wage', ot:'⏱ OT ฿/h', cont1:'📦 Container 1', cont2:'📦 Container 2',
