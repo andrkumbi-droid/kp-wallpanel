@@ -2292,6 +2292,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   </div></div>
   <!-- Pick orders → their labels stack onto shared A4 sheets (2-3 per page). -->
   <div class="modal-overlay" id="lblbatch-modal"><div class="modal" id="lblbatch-body" style="max-width:460px;max-height:88vh;overflow-y:auto"></div></div>
+  <!-- Orders still missing their carton count — on screen to type them in, on
+       paper for the warehouse to fill in by hand. -->
+  <div class="modal-overlay" id="ctnmiss-modal"><div class="modal" id="ctnmiss-body" style="max-width:480px;max-height:88vh;overflow-y:auto"></div></div>
   <div class="view" id="ofv-tour"><div class="sec">
     <div id="of-tour-overview-wrap">
     <div class="stit">Overview / ภาพรวม</div>
@@ -2307,6 +2310,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <!-- Carton labels for several orders on one sheet — lives here because labels
            are printed while tours are being packed and loaded. -->
       <button type="button" onclick="lblBatchOpen()" title="เลือกหลายออเดอร์ พิมพ์ป้ายติดกล่องในแผ่นเดียว / tick several orders, print their carton labels on one sheet" style="font-size:11px;padding:3px 9px;border:1px solid #1d4ed8;background:var(--bg);color:#1d4ed8;border-radius:var(--rs);cursor:pointer;font-weight:600">🏷️ Labels</button>
+      <!-- The worksheet for the warehouse: every order still missing its carton
+           count, printable, with a box to write the number in by hand. -->
+      <button type="button" onclick="ctnMissOpen()" title="ออเดอร์ที่ยังไม่มีจำนวนลัง — พิมพ์ให้คลังกรอก / orders without a carton count, print for the warehouse to fill in" style="font-size:11px;padding:3px 9px;border:1px solid #b45309;background:#fef3c7;color:#b45309;border-radius:var(--rs);cursor:pointer;font-weight:700">📦? CTN</button>
       </span>
     </div>
     <div id="of-active-tours"><div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div></div>
@@ -7811,7 +7817,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901014;
+var KP_BUILD = 20260901015;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -16973,6 +16979,86 @@ function ofHealLoadedOrphans(){
   });
   if(n){ try{ syncOrders(); }catch(e){} try{ ofRenderOrders(); }catch(e){} try{ ofRenderTour(); }catch(e){} }
   return n;
+}
+// ══════════════════════════════════════════════════════════════════════════
+//  📦? THE MISSING-CARTONS WORKSHEET
+//  ------------------------------------------------------------------------
+//  One list of every live order without a carton count. On screen each row has
+//  the same tap-to-fix as the tour card; on paper each row has an empty box —
+//  the sheet goes to the warehouse, comes back filled in by hand, and the
+//  office types the numbers in from the same window.
+// ══════════════════════════════════════════════════════════════════════════
+function ctnMissingOrders(){
+  var ST={'new':1,'packing':1,'ready':1,'loaded':1,'shipped':1};
+  return (orders||[]).filter(function(o){
+    return o && ST[o.status] && !(parseInt(o.ctn,10)>0);
+  }).sort(function(a,b){
+    return String(a.zone||'').localeCompare(String(b.zone||'')) || String(a.id).localeCompare(String(b.id),undefined,{numeric:true});
+  });
+}
+function ctnMissOpen(){
+  var m=document.getElementById('ctnmiss-modal'); if(!m) return;
+  ctnMissRender();
+  m.classList.add('open');
+}
+function ctnMissClose(){ var m=document.getElementById('ctnmiss-modal'); if(m) m.classList.remove('open'); }
+function ctnMissRender(){
+  var b=document.getElementById('ctnmiss-body'); if(!b) return;
+  var list=ctnMissingOrders();
+  b.innerHTML='<div class="mhdr"><span class="mtit">📦? ยังไม่มีจำนวนลัง / Orders without a carton count ('+list.length+')</span>'
+    +'<button type="button" class="mclose" onclick="ctnMissClose()"><i class="ti ti-x"></i></button></div>'
+    +'<div style="font-size:11.5px;color:var(--text2);margin-bottom:8px">พิมพ์ให้คลังกรอกด้วยมือ แล้วกลับมาใส่ตัวเลขที่นี่ (แตะ 📦?)<br>Print it for the warehouse to fill in by hand, then type the numbers back in here — tap 📦? on a row.</div>'
+    +(list.length
+      ? '<div style="border:1px solid var(--border);border-radius:var(--rs);overflow:hidden;max-height:52vh;overflow-y:auto">'
+        +list.map(function(o){
+            var idJs=String(o.id).replace(/['"\\]/g,'');
+            return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border)">'
+              +'<div style="flex:1;min-width:0">'
+                +'<div style="font-size:13px;font-weight:700">'+_esc(o.id)+' <span style="font-weight:500;color:var(--text2)">· '+_esc(o.customer||'—')+'</span></div>'
+                +'<div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+_esc(o.status)+(o.zone?' · '+_esc(o.zone):'')+' · '+_esc(o.panels||'')+(o.lcorner&&o.lcorner!=='—'?' · '+_esc(o.lcorner):'')+'</div>'
+              +'</div>'
+              +(window.ofReadOnly?'':'<button type="button" onclick="ofFixCtn(\''+idJs+'\');ctnMissRender()" style="flex-shrink:0;font-size:11px;font-weight:800;padding:4px 9px;border:1px solid #b45309;background:#fef3c7;color:#b45309;border-radius:var(--rs);cursor:pointer">📦?</button>')
+            +'</div>';
+          }).join('')
+        +'</div>'
+      : '<div style="padding:18px;text-align:center;color:var(--green);font-size:13px;font-weight:700">✅ ทุกออเดอร์มีจำนวนลังแล้ว / every order has its cartons</div>')
+    +(list.length?'<button type="button" onclick="ctnMissPrint()" style="width:100%;margin-top:12px;padding:11px;border:none;border-radius:var(--rs);background:#1d4ed8;color:#fff;font-size:13.5px;font-weight:800;cursor:pointer">🖨 พิมพ์ใบให้คลังกรอก / print the worksheet</button>':'');
+}
+function ctnMissPrint(){
+  var list=ctnMissingOrders(); if(!list.length) return;
+  var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var when=(function(){ try{ return fmtD(kpTodayStr()); }catch(e){ return kpTodayStr(); } })();
+  var rows=list.map(function(o,i){
+    return '<tr>'
+      +'<td class="c muted">'+(i+1)+'</td>'
+      +'<td class="oid">'+esc(o.id)+'</td>'
+      +'<td>'+esc(o.customer||'—')+'<div class="sub">'+esc(o.zone||'')+(o.province?' · '+esc(o.province):'')+'</div></td>'
+      +'<td class="pr">'+esc(o.panels||'')+(o.lcorner&&o.lcorner!=='—'?' · '+esc(o.lcorner):'')+(o.clips>0?' · 📎'+o.clips:'')+'</td>'
+      +'<td class="box"></td><td class="box"></td>'
+    +'</tr>';
+  }).join('');
+  var html='<!DOCTYPE html><html><head><meta charset="utf-8"><title>CTN worksheet</title><style>'
+    +'*{box-sizing:border-box;margin:0;padding:0}@page{size:A4 portrait;margin:9mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;font-size:10pt}'
+    +'h1{font-size:13pt;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:2px}'
+    +'.note{font-size:9pt;color:#444;margin-bottom:6px}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #999;padding:3px 6px;font-size:9.5pt;vertical-align:top}'
+    +'th{background:#f1f5f9;font-size:8pt;text-transform:uppercase}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'td{height:9mm}.c{text-align:center}.muted{color:#777}'
+    +'.oid{font-weight:800;font-size:11pt;white-space:nowrap}'
+    +'.sub{font-size:8pt;color:#666}.pr{font-size:8.5pt}'
+    +'.box{width:20mm;background:#fcfcfc}'
+    +'</style></head><body>'
+    +'<h1>📦 ใบกรอกจำนวนลัง / Carton count sheet · '+esc(when)+'</h1>'
+    +'<div class="note">คลังนับแล้วเขียนจำนวนลง "ลัง" (และ "มัด" ถ้ามี) แล้วส่งคืนออฟฟิศ / count, write the number into the box, hand the sheet back to the office.</div>'
+    +'<table><thead><tr><th class="c">#</th><th>Order</th><th>ลูกค้า / Customer</th><th>สินค้า / Products</th><th class="c">ลัง / CTN</th><th class="c">มัด / Bundle</th></tr></thead>'
+    +'<tbody>'+rows+'</tbody></table>'
+    +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(html); w.document.close(); w.focus();
 }
 // The warehouse sometimes closes a pack without typing the cartons — and the
 // missing 📦 first shows up on the tour card, so that is where it gets fixed.
