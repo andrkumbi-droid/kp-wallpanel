@@ -2287,9 +2287,14 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" class="fbtn" data-status="delivered" onclick="ofFilt('delivered',this)">Delivered / ส่งแล้ว</button>
       <button type="button" class="fbtn" data-status="cancelled" onclick="ofFilt('cancelled',this)">Cancelled</button>
       <button type="button" class="fbtn" id="of-today-btn" onclick="ofFiltToday(this)" style="border-color:#0070f3;color:#0070f3">📅 Today</button>
+      <!-- Several orders' carton labels on ONE sheet — two 1-CTN orders should
+           not cost two sheets of A4. -->
+      <button type="button" class="fbtn" onclick="lblBatchOpen()" title="เลือกหลายออเดอร์ พิมพ์ป้ายในแผ่นเดียว / tick several orders, print their labels on one sheet" style="border-color:#1d4ed8;color:#1d4ed8">🏷️ Labels</button>
     </div>
     <div id="of-olist"></div>
   </div></div>
+  <!-- Pick orders → their labels stack onto shared A4 sheets (2-3 per page). -->
+  <div class="modal-overlay" id="lblbatch-modal"><div class="modal" id="lblbatch-body" style="max-width:460px;max-height:88vh;overflow-y:auto"></div></div>
   <div class="view" id="ofv-tour"><div class="sec">
     <div id="of-tour-overview-wrap">
     <div class="stit">Overview / ภาพรวม</div>
@@ -7805,7 +7810,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901002;
+var KP_BUILD = 20260901003;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9153,13 +9158,20 @@ function _labelPageHTML(o, name, addr, tel, idx, total){
     +'</div>'
   +'</div>';
 }
-function printOrderLabel(orderId){
-  var o=(orders||[]).find(function(x){return x.id===orderId;});
-  if(!o){ alert('Order not found / ไม่พบออเดอร์'); return; }
+// The labels of ONE order, ready to stack — shared by the single print and the
+// batch sheet, so both roads produce the identical label.
+function _labelsOfOrder(o, n){
   var name=String(o.customer||'').trim();
   var addr=String(o.address||'').trim(); if(addr==='—') addr='';
   var tel=_lblPhone((o.phone&&o.phone!=='—')?o.phone:'');
-  if(!name && !addr){ alert('ออเดอร์นี้ไม่มีชื่อและที่อยู่ / no name or address on this order'); return; }
+  if(!name && !addr) return null;
+  var html='';
+  for(var i=1;i<=n;i++) html+=_labelPageHTML(o, name, addr, tel, i, n);
+  return html;
+}
+function printOrderLabel(orderId){
+  var o=(orders||[]).find(function(x){return x.id===orderId;});
+  if(!o){ alert('Order not found / ไม่พบออเดอร์'); return; }
   var ctn=parseInt(o.ctn,10)||0, n=1;
   if(ctn>1){
     n = confirm('ออเดอร์นี้มี '+ctn+' กล่อง — พิมพ์ '+ctn+' ใบ (ใบละกล่อง)?\n'
@@ -9169,9 +9181,89 @@ function printOrderLabel(orderId){
   // No sheet grouping and no arithmetic: the labels are simply stacked and the
   // browser fills each page with as many as fit (three when the address is short,
   // two when it is long). page-break-inside:avoid keeps one from being sliced.
-  var pages='';
-  for(var i=1;i<=n;i++) pages+=_labelPageHTML(o, name, addr, tel, i, n);
+  var pages=_labelsOfOrder(o, n);
+  if(!pages){ alert('ออเดอร์นี้ไม่มีชื่อและที่อยู่ / no name or address on this order'); return; }
   printReceiptDoc(pages, LABEL_PRINT_CSS, '210mm', '297mm');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  🏷️ SEVERAL ORDERS, ONE SHEET
+//  ------------------------------------------------------------------------
+//  Two 1-carton orders used to cost two sheets of A4 with one label each.
+//  Tick the orders here and their labels stack onto shared pages — the print
+//  CSS already fills each page with whatever fits (2-3 labels). Ticks live
+//  only in this window; nothing is stored.
+// ══════════════════════════════════════════════════════════════════════════
+var _lblSel={}, _lblQ='', _lblPerCtn=true;
+function lblBatchOpen(){
+  _lblSel={}; _lblQ='';
+  var m=document.getElementById('lblbatch-modal'); if(!m) return;
+  lblBatchRender();
+  m.classList.add('open');
+}
+function lblBatchClose(){ var m=document.getElementById('lblbatch-modal'); if(m) m.classList.remove('open'); }
+// The orders somebody labels: the ones being packed right now, newest first.
+// Delivered/cancelled stay out — their cartons are long gone.
+function _lblOrders(){
+  var ST={'new':1,'packing':1,'ready':1,'loaded':1};
+  var q=_lblQ.trim().toLowerCase();
+  return (orders||[]).filter(function(o){
+    if(!o || !ST[o.status]) return false;
+    if(!q) return true;
+    return (String(o.id)+' '+(o.customer||'')+' '+(o.phone||'')+' '+(o.zone||'')).toLowerCase().indexOf(q)>=0;
+  }).slice(0, 120);
+}
+function lblBatchRender(){
+  var b=document.getElementById('lblbatch-body'); if(!b) return;
+  var list=_lblOrders();
+  var nSel=Object.keys(_lblSel).length;
+  var nLbl=0; Object.keys(_lblSel).forEach(function(id){
+    var o=(orders||[]).find(function(x){return x.id===id;});
+    nLbl+=(_lblPerCtn ? Math.max(1, parseInt(o&&o.ctn,10)||0) : 1);
+  });
+  b.innerHTML='<div class="mhdr"><span class="mtit">🏷️ ป้ายหลายออเดอร์ / Labels, several orders on one sheet</span>'
+    +'<button type="button" class="mclose" onclick="lblBatchClose()"><i class="ti ti-x"></i></button></div>'
+    +'<input type="text" value="'+_esc(_lblQ)+'" oninput="_lblQ=this.value;lblBatchRender()" placeholder="ค้นหา / search: order, customer, zone" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:8px">'
+    +'<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;margin-bottom:8px;cursor:pointer">'
+      +'<input type="checkbox" '+(_lblPerCtn?'checked':'')+' onchange="_lblPerCtn=this.checked;lblBatchRender()" style="width:16px;height:16px">'
+      +'ใบละกล่อง / one label per carton <span style="font-weight:500;color:var(--text2)">(ไม่ติ๊ก = ออเดอร์ละใบ / off = one per order)</span>'
+    +'</label>'
+    +'<div style="border:1px solid var(--border);border-radius:var(--rs);overflow:hidden;max-height:46vh;overflow-y:auto">'
+    +(list.length ? list.map(function(o){
+        var on=!!_lblSel[o.id], ctn=parseInt(o.ctn,10)||0;
+        var idJs=String(o.id).replace(/['"\\]/g,'');
+        return '<div onclick="lblBatchTick(\''+idJs+'\')" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;'+(on?'background:var(--blue-bg)':'')+'">'
+          +'<span style="flex-shrink:0;width:19px;height:19px;border-radius:5px;border:1.5px solid '+(on?'var(--blue)':'var(--border)')+';background:'+(on?'var(--blue)':'var(--bg)')+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:800">'+(on?'✓':'')+'</span>'
+          +'<div style="flex:1;min-width:0">'
+            +'<div style="font-size:13px;font-weight:700">'+_esc(o.id)+' <span style="font-weight:500;color:var(--text2)">· '+_esc(o.customer||'—')+'</span></div>'
+            +'<div style="font-size:11px;color:var(--text2)">'+_esc(o.status)+(o.zone?' · '+_esc(o.zone):'')+(ctn?' · 📦 '+ctn+' CTN':'')+'</div>'
+          +'</div>'
+        +'</div>';
+      }).join('') : '<div style="padding:16px;text-align:center;color:var(--text2);font-size:12.5px">— ไม่พบออเดอร์ / nothing found —</div>')
+    +'</div>'
+    +'<button type="button" onclick="lblBatchPrint()" '+(nSel?'':'disabled ')
+      +'style="width:100%;margin-top:12px;padding:11px;border:none;border-radius:var(--rs);background:'+(nSel?'#1d4ed8':'var(--bg2)')+';color:'+(nSel?'#fff':'var(--text2)')+';font-size:13.5px;font-weight:800;cursor:'+(nSel?'pointer':'default')+'">'
+      +'🖨 พิมพ์ '+(nSel?nSel+' ออเดอร์ · '+nLbl+' ป้าย / print '+nLbl+' label'+(nLbl!==1?'s':''):'— เลือกออเดอร์ก่อน / tick orders first')+'</button>';
+}
+function lblBatchTick(id){
+  if(_lblSel[id]) delete _lblSel[id]; else _lblSel[id]=1;
+  lblBatchRender();
+}
+function lblBatchPrint(){
+  var ids=Object.keys(_lblSel); if(!ids.length) return;
+  // Same order as the list on screen, not tick order — the pile on the printer
+  // should read like the list the office just looked at.
+  var pages='', skipped=[];
+  _lblOrders().forEach(function(o){
+    if(!_lblSel[o.id]) return;
+    var n=_lblPerCtn ? Math.max(1, parseInt(o.ctn,10)||0) : 1;
+    var h=_labelsOfOrder(o, n);
+    if(h) pages+=h; else skipped.push(o.id);
+  });
+  if(!pages){ alert('ออเดอร์ที่เลือกไม่มีชื่อ-ที่อยู่ / the ticked orders have no name or address'); return; }
+  if(skipped.length) alert('ข้าม (ไม่มีชื่อ-ที่อยู่) / skipped, no name or address: '+skipped.join(', '));
+  printReceiptDoc(pages, LABEL_PRINT_CSS, '210mm', '297mm');
+  lblBatchClose();
 }
 
 // ── SALES-BY-ZONE DONUT CHARTS ──────────────────────────────────────
