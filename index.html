@@ -7810,7 +7810,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901005;
+var KP_BUILD = 20260901006;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -25409,7 +25409,11 @@ function saveStaffM() {
   const lang = document.getElementById('staffm-lang').value || 'th';
   if(editStaffId) {
     const s = staffList.find(x => x.id === editStaffId);
-    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.finAccess = finAccess; s.cashFeedAccess = cashFeedAccess; s.finPayrollOn = finPayrollOn; s.finPayGrey = finPayGrey; s.foodAccess = foodAccess; s.stockEdit = stockEdit; clCrewSet(s, crewWanted); s.payrollOn = payrollOn; s.away = document.getElementById('staffm-away').checked; s.isDriver = isDriver; s.calcAccess = calcAccess; s.quoteAccess = quoteAccess; s.countAccess = countAccess; s.payAccess = payAccess; s.phone = phone; s.vehicle = vehicle; s.lang = lang;
+    s.name = name; s.pin = pin; s.role = role; s.salesAccess = salesAccess; s.deleteAccess = deleteAccess; s.paymentAccess = paymentAccess; s.customerAccess = customerAccess; s.attendAccess = attendAccess; s.blockAccess = blockAccess; s.acctAccess = acctAccess; s.officeAccess = officeAccess; s.warehouseAccess = warehouseAccess; s.logisticsMode = logisticsMode; s.preorderAccess = preorderAccess; s.billsAccess = billsAccess; s.finAccess = finAccess; s.cashFeedAccess = cashFeedAccess; s.finPayrollOn = finPayrollOn; s.finPayGrey = finPayGrey; s.foodAccess = foodAccess; s.stockEdit = stockEdit; clCrewSet(s, crewWanted); s.payrollOn = payrollOn;
+    var _awayNow=document.getElementById('staffm-away').checked;
+    if(_awayNow && !s.away) s.awayFrom=kpNowMK();      // the month the leave began
+    if(!_awayNow) delete s.awayFrom;
+    s.away=_awayNow; s.isDriver = isDriver; s.calcAccess = calcAccess; s.quoteAccess = quoteAccess; s.countAccess = countAccess; s.payAccess = payAccess; s.phone = phone; s.vehicle = vehicle; s.lang = lang;
     if(isDriver && !s.driverId) s.driverId = 'd' + Date.now();
   } else {
     var ns = { id: 'st' + Date.now(), name, pin, role, salesAccess, deleteAccess, paymentAccess, customerAccess, attendAccess, blockAccess, acctAccess, officeAccess, warehouseAccess, logisticsMode, preorderAccess, billsAccess, finAccess, cashFeedAccess, finPayrollOn, finPayGrey, foodAccess, stockEdit, payrollOn, isDriver, calcAccess, quoteAccess, countAccess, payAccess, phone, vehicle, lang };
@@ -33544,16 +33548,24 @@ function pgFillMonths(){
 }
 // Names come from Management Staff, filtered to "💰 In payroll", ordered
 // Office → Warehouse → Driver → Other. (Bills still asks for payNames().)
-function payNames(){
+// Away, seen from one month: hidden from awayFrom onwards, still present in the
+// months before it — August's payslip does not stop existing because September
+// brought sick leave. No month given = a now-context (pickers, crews): hidden.
+function kpAwayIn(s, mk){
+  if(!s || !s.away) return false;
+  if(mk && s.awayFrom && String(mk) < String(s.awayFrom)) return false;
+  return true;
+}
+function payNames(mk){
   var ORD={Office:0,Warehouse:1,Driver:2,Other:3};
   function grp(role){ role=role||''; if(/office|boss|sales|manager/i.test(role))return 'Office'; return _kpRoleGroup(role); }
   var out=[];
-  try{ (staffList||[]).forEach(function(s){ if(!s.payrollOn || s.away) return; out.push({key:'staff:'+s.id, id:s.id, name:s.name||'—', group:grp(s.role)}); }); }catch(e){}
+  try{ (staffList||[]).forEach(function(s){ if(!s.payrollOn || kpAwayIn(s,mk)) return; out.push({key:'staff:'+s.id, id:s.id, name:s.name||'—', group:grp(s.role)}); }); }catch(e){}
   out.sort(function(a,b){ return (ORD[a.group]-ORD[b.group]) || a.name.localeCompare(b.name); });
   return out;
 }
 function payNameLabel(key){ var n=payNames().find(function(x){return x.key===key;}); return n?n.name:key; }
-function pgStaff(){ return payNames(); }
+function pgStaff(){ return payNames(pgMonth()); }
 
 /* ── Days-off calendar ──────────────────────────────────────────────────────
    The month plan that hangs on the office wall on paper: one square per day,
@@ -37361,8 +37373,8 @@ function _finRoleSort(role){
 }
 function _finRoleKey(role){ return String(role||'').trim().toLowerCase(); }
 function _finRoleLabel(role){ return String(role||'').trim() || 'อื่นๆ / Other'; }
-function finPayNames(){
-  return (staffList||[]).filter(function(s){ return s && s.finPayrollOn && !s.away; })
+function finPayNames(mk){
+  return (staffList||[]).filter(function(s){ return s && s.finPayrollOn && !kpAwayIn(s,mk); })
     .map(function(s){ return { id:s.id, name:s.name||'—', role:s.role||'', grey:!!s.finPayGrey }; })
     .sort(function(a,b){
       var d=_finPayRank(a.role)-_finPayRank(b.role); if(d) return d;
@@ -37374,7 +37386,7 @@ function finPayNames(){
 var _finPayOpen={};
 function finPayToggle(sid){ _finPayOpen[sid]=!_finPayOpen[sid]; finPayRender(); }
 function finPayToggleAll(){
-  var list=finPayNames(), anyOpen=list.some(function(s){ return !!_finPayOpen[s.id]; });
+  var list=finPayNames(pgMonth()), anyOpen=list.some(function(s){ return !!_finPayOpen[s.id]; });
   list.forEach(function(s){ _finPayOpen[s.id]=!anyOpen; });
   finPayRender();
 }
@@ -37399,7 +37411,7 @@ function finPayRender(keepScroll){
   var host=document.getElementById('fin-payroll'); if(!host) return;
   var _sy=keepScroll?0:(window.pageYOffset||document.documentElement.scrollTop||0);
   var _back=function(){ if(_sy) try{ window.scrollTo(0,_sy); }catch(e){} };
-  var list=finPayNames(), mk=pgMonth();
+  var mk=pgMonth(), list=finPayNames(mk);
   var anyOpen=list.some(function(s){ return !!_finPayOpen[s.id]; });
   // Title row = the fold toggle, with the month total on the right so the number
   // is readable while the block is closed. Month picker and Expand-all only make
@@ -38314,7 +38326,7 @@ function finReportData(mk){
   // 2) office salaries, grouped the way the tab groups them: by role
   var sal={ key:'sal', label:'👔 เงินเดือนออฟฟิศ / Office salaries', topics:[] }, byRole={};
   try{
-    finPayNames().forEach(function(s){
+    finPayNames(mk).forEach(function(s){
       var net=0; try{ net=pgCalc(s.id,mk).net||0; }catch(e){}
       var rl=_finRoleLabel(s.role)||'—';
       if(!byRole[rl]){ byRole[rl]={ label:rl, person:true, items:[] }; sal.topics.push(byRole[rl]); }
@@ -38584,7 +38596,7 @@ function finMonthTotals(mk){
   var payG=_finSum(inMonth)-payB;
   var salB=0, salG=0;
   try{
-    finPayNames().forEach(function(s){
+    finPayNames(mk).forEach(function(s){
       var net=0; try{ net=pgCalc(s.id,mk).net||0; }catch(e){}
       if(s.grey) salG+=net; else salB+=net;
     });
