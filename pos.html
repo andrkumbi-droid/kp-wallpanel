@@ -942,7 +942,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
 
 <!-- custom number pad — replaces the system keyboard on every number field.
      Thai convention: "." decimal, "," thousands (added automatically in the display). -->
-<div class="pin-sheet" id="num-sheet" onclick="if(event.target===this)numPadClose()">
+<div class="pin-sheet" id="num-sheet" onclick="numPadBackdrop(event)">
   <div class="pin-card" style="max-width:360px">
     <div class="hint" id="num-label" style="margin-bottom:6px">—</div>
     <div class="num-display num" id="num-display">0</div>
@@ -1133,13 +1133,16 @@ function posConfirmYes(){ var cb=_confCb; posConfirmNo(); if(cb) cb(); }
    pointerdown is cancelled before the input can take focus, so the system
    keyboard never appears. OK writes the value back and fires input+change,
    so all the oninput/onchange recalcs run exactly as if it was typed. */
-var _numTarget=null, _numRaw='';
+var _numTarget=null, _numRaw='', _numOpenTs=0;
+function _isNumInput(t){ return t && t.tagName==='INPUT' && t.type==='number' && !t.disabled && !t.readOnly; }
+// pointerdown only BLOCKS focus (so the tablet keyboard never opens); the pad
+// itself opens on the click that follows. Opening on pointerdown made the
+// leftover click land on the pad's own backdrop and close it instantly.
 document.addEventListener('pointerdown', function(e){
-  var t=e.target;
-  if(t && t.tagName==='INPUT' && t.type==='number' && !t.disabled && !t.readOnly){
-    e.preventDefault();
-    numPadOpen(t);
-  }
+  if(_isNumInput(e.target)) e.preventDefault();
+}, true);
+document.addEventListener('click', function(e){
+  if(_isNumInput(e.target)){ e.preventDefault(); numPadOpen(e.target); }
 }, true);
 function numLabelFor(inp){
   if(inp.dataset && inp.dataset.label) return inp.dataset.label;
@@ -1160,11 +1163,15 @@ function numFmt(s){
   return ip.replace(/\B(?=(\d{3})+(?!\d))/g,',')+rest;
 }
 function numPadOpen(inp){
-  _numTarget=inp;
+  _numTarget=inp; _numOpenTs=Date.now();
   _numRaw=String(inp.value||'').replace(/[^0-9.]/g,'');
   $('num-label').textContent=numLabelFor(inp);
   numPadPaint();
   $('num-sheet').classList.add('on');
+}
+// backdrop tap closes — but not the ghost click right after opening
+function numPadBackdrop(ev){
+  if(ev.target===ev.currentTarget && Date.now()-_numOpenTs>350) numPadClose();
 }
 function numPadPaint(){ $('num-display').textContent=numFmt(_numRaw); }
 function numKey(k){
