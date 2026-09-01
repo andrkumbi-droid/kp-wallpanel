@@ -627,7 +627,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
 <!-- ═══════════════ SHOP (product grid) ═══════════════ -->
 <section id="scr-shop" class="scr">
   <div class="topbar">
-    <div class="brand"><b>KP <span style="color:var(--gold3)">POS</span></b><span>WALLPANEL</span></div>
+    <div class="brand"><b>K<span style="color:var(--gold3)">P</span></b><span>WALLPANEL</span></div>
     <div style="flex:1"></div>
     <button class="chip press" id="seller-chip" onclick="posGo('mysales')" title="ยอดขายของฉัน / my sales"
       style="background:#fff;border:1.5px solid var(--border2);color:var(--text2);min-height:44px;font-size:14.5px;font-weight:600;position:relative;cursor:pointer">
@@ -1500,15 +1500,20 @@ function buildAccRows(p){
   _acc=[
     {key:'l', label:'ฉากจบมุม L-Corner', en:'edge closing · เส้นละ 2.9 ม.', fam:lFam, code:accMatch(p,'L'), qty:0, type:'lcorner'},
     {key:'t', label:'ตัว T ต่อแผ่น', en:'T-profile joint · เส้นละ 2.9 ม.', fam:'T', code:(p.mat==='PVC'?accMatch(p,'T'):''), qty:0, type:'ttrim'},
-    {key:'u', label:'ตัว U ปิดขอบ', en:'U-profile end cap · เส้นละ 2.9 ม.', fam:'U', code:(p.mat==='PVC'?accMatch(p,'U'):''), qty:0, type:'utrim'}
+    {key:'u', label:'ตัว U ปิดขอบ', en:'U-profile end cap · เส้นละ 2.9 ม.', fam:'U', code:(p.mat==='PVC'?accMatch(p,'U'):''), qty:0, type:'utrim'},
+    // clip packs sold on top of the free ones — flows into the cart's แพ็ค field
+    {key:'packs', special:'packs', label:'🔩 คลิปแพ็ค Clip Pack', en:'ขายเพิ่ม · '+CLIP_PACK_PRICE+' ฿/แพ็ค', qty:0}
   ];
   renderAccRows();
 }
 function accAddL(){
   var lFam=(_calc.p&&_calc.p.mat==='PVC')?'LP':'L';
-  _acc.push({key:'l'+_acc.length, label:'ฉากจบมุม L-Corner', en:'อีกแบบ / another type', fam:lFam, code:'', qty:0, type:'lcorner', extra:true});
+  var row={key:'l'+_acc.length, label:'ฉากจบมุม L-Corner', en:'อีกแบบ / another type', fam:lFam, code:'', qty:0, type:'lcorner', extra:true};
+  // keep the clip-pack row at the bottom
+  var pi=_acc.findIndex(function(a){ return a.special==='packs'; });
+  if(pi<0){ _acc.push(row); pi=_acc.length-1; } else { _acc.splice(pi,0,row); }
   renderAccRows();
-  accPickOpen(_acc.length-1);
+  accPickOpen(_acc.indexOf(row));
 }
 /* code picker overlay */
 var _accPickIdx=-1;
@@ -1546,11 +1551,14 @@ function autoAccSuggest(){
 }
 function renderAccRows(){
   var html=_acc.map(function(a,i){
+    var stepper='<div class="st"><button class="press" onclick="accStep('+i+',-1)">−</button><input type="number" inputmode="numeric" min="0" value="'+a.qty+'" onchange="accQty('+i+',this.value)"><button class="press" onclick="accStep('+i+',1)">+</button></div>';
+    if(a.special==='packs'){
+      return '<div class="acc-row"><div class="t"><b>'+a.label+'</b><small>'+a.en+'</small></div>'+stepper+'</div>';
+    }
     var codeBtn = a.code
       ? '<button class="acc-code press" onclick="accPickOpen('+i+')">'+esc(a.code)+' <span style="opacity:.55">▾</span></button>'
       : '<button class="acc-code none press" onclick="accPickOpen('+i+')">เลือกรหัส / choose ▾</button>';
-    return '<div class="acc-row"><div class="t"><b>'+a.label+'</b><small>'+a.en+' · '+fmt(a.code?accPrice(a.code):EDGE_PRICE)+' ฿/เส้น</small><div style="margin-top:6px">'+codeBtn+'</div></div>'
-      +'<div class="st"><button class="press" onclick="accStep('+i+',-1)">−</button><input type="number" inputmode="numeric" min="0" value="'+a.qty+'" onchange="accQty('+i+',this.value)"><button class="press" onclick="accStep('+i+',1)">+</button></div></div>';
+    return '<div class="acc-row"><div class="t"><b>'+a.label+'</b><small>'+a.en+' · '+fmt(a.code?accPrice(a.code):EDGE_PRICE)+' ฿/เส้น</small><div style="margin-top:6px">'+codeBtn+'</div></div>'+stepper+'</div>';
   }).join('');
   html+='<div style="padding:10px 0 2px"><button class="btn btn-ghost press" style="min-height:48px;font-size:14.5px" onclick="accAddL()">➕ เพิ่ม L-Corner อีกแบบ<span class="sub-en">add another L-corner</span></button></div>';
   $('acc-rows').innerHTML=html;
@@ -1563,7 +1571,11 @@ function posCalcTotals(){
   var q=parseInt($('calc-qty').value)||0;
   $('calc-clips').textContent=fmt(q*10);
   var sub=q*p.price;
-  _acc.forEach(function(a){ if(a.qty>0 && a.code) sub+=a.qty*accPrice(a.code); });
+  _acc.forEach(function(a){
+    if(!(a.qty>0)) return;
+    if(a.special==='packs'){ sub+=a.qty*CLIP_PACK_PRICE; return; }
+    if(a.code) sub+=a.qty*accPrice(a.code);
+  });
   $('calc-sub').textContent=fmtB(sub);
 }
 function posCalcAdd(){
@@ -1571,14 +1583,19 @@ function posCalcAdd(){
   var q=parseInt($('calc-qty').value)||0;
   if(q<=0 && !_acc.some(function(a){return a.qty>0;})){ toast('ใส่จำนวนแผ่นก่อน / enter quantity'); return; }
   // a trim with a quantity but no code picked would silently vanish — block instead
-  var noCode=_acc.find(function(a){ return a.qty>0 && !a.code; });
+  var noCode=_acc.find(function(a){ return a.qty>0 && !a.code && !a.special; });
   if(noCode){ toast('เลือกรหัส '+noCode.label+' ก่อน / pick the code first'); chime(false); return; }
   if(q>0) cartAddLine({code:p.code,name:p.name,qty:q,price:p.price,listPrice:p.price,type:'panel',grade:'A'});
   _acc.forEach(function(a){
-    if(a.qty>0){
-      var pr=accPrice(a.code);
-      cartAddLine({code:a.code,name:a.label,qty:a.qty,price:pr,listPrice:pr,type:a.type,grade:'A'});
+    if(!(a.qty>0)) return;
+    if(a.special==='packs'){
+      // sold clip packs live in the cart's own แพ็ค field (kept as the
+      // 'clips' pseudo-line on the order, like the office form)
+      var el=$('cart-packs'); el.value=(parseInt(el.value)||0)+a.qty;
+      return;
     }
+    var pr=accPrice(a.code);
+    cartAddLine({code:a.code,name:a.label,qty:a.qty,price:pr,listPrice:pr,type:a.type,grade:'A'});
   });
   saveCart(); posCalcClose(); renderGrid();
   toast('✅ เพิ่ม '+p.code+' ×'+q+' ลงตะกร้าแล้ว');
