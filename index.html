@@ -2641,6 +2641,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
            as the buttons on each card, only stacked. -->
       <button type="button" class="pg-xbtn" onclick="pgPrintAll()" title="พิมพ์สลิปทุกคนในเดือนนี้ — คนละหน้า / print every payslip of this month, one page each">🖨 ทุกคน / all</button>
       <button type="button" class="pg-xbtn" onclick="pgPdfAll(this)" title="สลิปทุกคนเป็นไฟล์ PDF เดียว / every payslip in one PDF file">📄 ทุกคน / all</button>
+      <button type="button" class="pg-xbtn" id="pg-pos-pill" onclick="pgPosSumOpen()" title="ยอดขายหน้าร้าน (POS) ของเดือนนี้ — กดดูรายคน / this month's POS sales, tap for the per-seller list" style="border-color:#d4af37;color:#8a6d1f">🏪 POS: —</button>
       <select id="pg-month" onchange="pgSetMonth(this.value)" style="flex:0 0 auto;width:auto;padding:7px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:13px;font-weight:800;cursor:pointer"></select>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:10.5px;color:var(--text2);font-weight:600;margin-bottom:10px">
@@ -2687,6 +2688,18 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         <button type="button" onclick="pgRateClose()" style="flex:0 0 auto;padding:11px 16px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text2);font-weight:700;cursor:pointer">Cancel</button>
         <button type="button" onclick="pgRateSave()" style="flex:1;padding:11px;border-radius:var(--rs);border:none;background:var(--green);color:#fff;font-weight:800;font-size:14px;cursor:pointer"><i class="ti ti-check"></i> Save / บันทึก</button>
       </div>
+    </div>
+  </div>
+
+  <!-- PAYROLL: POS sales of the month, per seller -->
+  <div class="modal-overlay" id="pgpos-modal" onclick="if(event.target===this)pgPosSumClose()">
+    <div class="modal">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span style="font-size:17px;font-weight:900">🏪 ขายหน้าร้าน / POS sales · <span id="pgpos-mk">—</span></span>
+        <button type="button" onclick="pgPosSumClose()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2)">✕</button>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px" id="pgpos-win">—</div>
+      <div id="pgpos-body"></div>
     </div>
   </div>
 
@@ -7829,7 +7842,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260902025;
+var KP_BUILD = 20260902026;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -34462,6 +34475,7 @@ function pgRender(){
   var _sy=window.pageYOffset||document.documentElement.scrollTop||0;
   var _back=function(){ if(_sy) try{ window.scrollTo(0,_sy); }catch(e){} };
   pgFillMonths();
+  try{ pgPosPillUpdate(); }catch(e){}    // 🏪 POS pill in the header follows the month
   try{ pgOffRender(); }catch(e){}        // days-off calendar sits above the grid
   try{ finPayRender(true); }catch(e){}   // office salaries in the Finance tab share this data
   var st=pgStaff();
@@ -34477,6 +34491,66 @@ function pgRender(){
   pgRenderTotal();
   _back();
 }
+/* ── POS sales of the month — the pill in the payroll header + per-seller modal.
+   Same commission window as the comm/poscomm rows. */
+function pgPosSummary(mk){
+  var w=pgCommWindow(mk), by={}, tot={orders:0,panels:0,amount:0};
+  (orders||[]).forEach(function(o){
+    if(!o || !o.posSale || o.status==='cancelled' || !o.date) return;
+    var ds=String(o.date).slice(0,10);
+    if(ds<w.from || ds>w.to) return;
+    var nm=String(o.posSeller||o.createdBy||'—').trim()||'—';
+    var e=by[nm.toLowerCase()]||(by[nm.toLowerCase()]={name:nm,orders:0,panels:0,amount:0});
+    var pn=0;
+    String(o.panels||'').split('·').forEach(function(p){
+      var m=p.trim().match(/^([A-Z0-9\-]+)\s*[×x]\s*(\d+)/i);
+      if(m && !/^CL/i.test(m[1])) pn+=parseInt(m[2],10)||0;
+    });
+    var amt=parseFloat(String(o.total||'').replace(/[^0-9.]/g,''))||0;
+    e.orders++; e.panels+=pn; e.amount+=amt;
+    tot.orders++; tot.panels+=pn; tot.amount+=amt;
+  });
+  return { list:Object.values(by).sort(function(a,b){return b.panels-a.panels;}), tot:tot };
+}
+function pgPosPillUpdate(){
+  var el=document.getElementById('pg-pos-pill'); if(!el) return;
+  try{
+    var s=pgPosSummary(pgMonth());
+    el.textContent='🏪 POS: '+pgN(s.tot.panels)+' แผ่น · '+pgN(s.tot.amount)+' ฿';
+  }catch(e){}
+}
+function pgPosSumOpen(){
+  var mk=pgMonth(), s=pgPosSummary(mk);
+  document.getElementById('pgpos-mk').textContent=mk;
+  document.getElementById('pgpos-win').textContent='📅 '+pgCommWinTxt(mk)+' — หน้าต่างเดียวกับค่าคอม / same window as the commission rows';
+  var rows=s.list.map(function(e){
+    var st=(staffList||[]).find(function(x){ return String(x.name||'').trim().toLowerCase()===e.name.toLowerCase(); });
+    var commCell;
+    if(st && st.posAccess){
+      var R=pgRate(st.id);
+      commCell = R.posComm>0
+        ? '<b style="color:#8a6d1f">🏪 '+pgN(e.panels*R.posComm)+' ฿</b><br><span style="font-size:10px;color:var(--text2)">'+pgN(e.panels)+' × '+pgN(R.posComm)+'</span>'
+        : '<span style="color:#b45309">⚠️ ยังไม่ตั้งอัตรา<br>no rate set</span>';
+    } else if(st){
+      commCell='<span style="color:var(--text2)">💹 รวมในคอมรวม<br>in overall comm</span>';
+    } else commCell='—';
+    return '<tr style="border-bottom:1px solid var(--border)">'
+      +'<td style="padding:8px 6px;font-weight:800">'+_esc(e.name)+(st&&st.posAccess?' <span title="มีติ๊ก POS">🏪</span>':'')+'</td>'
+      +'<td style="padding:8px 6px;text-align:right">'+pgN(e.orders)+'</td>'
+      +'<td style="padding:8px 6px;text-align:right;font-weight:800">'+pgN(e.panels)+'</td>'
+      +'<td style="padding:8px 6px;text-align:right">'+pgN(e.amount)+' ฿</td>'
+      +'<td style="padding:8px 6px;text-align:right;font-size:11px">'+commCell+'</td></tr>';
+  }).join('');
+  document.getElementById('pgpos-body').innerHTML = s.list.length
+    ? '<table style="width:100%;border-collapse:collapse;font-size:12.5px">'
+      +'<tr style="border-bottom:1.5px solid var(--text);font-size:11px;color:var(--text2)"><th style="text-align:left;padding:6px">ผู้ขาย / seller</th><th style="text-align:right;padding:6px">ออเดอร์</th><th style="text-align:right;padding:6px">แผ่น</th><th style="text-align:right;padding:6px">ยอดขาย</th><th style="text-align:right;padding:6px">ค่าคอม POS</th></tr>'
+      +rows
+      +'<tr><td style="padding:9px 6px;font-weight:900">รวม / total</td><td style="padding:9px 6px;text-align:right;font-weight:900">'+pgN(s.tot.orders)+'</td><td style="padding:9px 6px;text-align:right;font-weight:900">'+pgN(s.tot.panels)+'</td><td style="padding:9px 6px;text-align:right;font-weight:900">'+pgN(s.tot.amount)+' ฿</td><td></td></tr>'
+      +'</table>'
+    : '<div style="text-align:center;color:var(--text2);padding:24px;font-size:13px">ยังไม่มีการขายหน้าร้านในเดือนนี้ / no POS sales this month</div>';
+  document.getElementById('pgpos-modal').classList.add('open');
+}
+function pgPosSumClose(){ document.getElementById('pgpos-modal').classList.remove('open'); }
 function pgTodayOffset(mk){
   if(mk!==kpNowMK()) return 0;
   return Math.max(0, (new Date().getDate()-4)*29);
