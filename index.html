@@ -7817,7 +7817,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901016;
+var KP_BUILD = 20260901017;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -16999,8 +16999,10 @@ function ofHealLoadedOrphans(){
 // ══════════════════════════════════════════════════════════════════════════
 function ctnMissingOrders(){
   var ST={'new':1,'packing':1,'ready':1,'loaded':1,'shipped':1};
+  // Bundles count as a pack count too: goods tied in มัด instead of boxed have
+  // 0 cartons by design, and that order is NOT missing anything.
   return (orders||[]).filter(function(o){
-    return o && ST[o.status] && !(parseInt(o.ctn,10)>0);
+    return o && ST[o.status] && !(parseInt(o.ctn,10)>0) && !(parseInt(o.bundle,10)>0);
   }).sort(function(a,b){
     return String(a.zone||'').localeCompare(String(b.zone||'')) || String(a.id).localeCompare(String(b.id),undefined,{numeric:true});
   });
@@ -17075,16 +17077,24 @@ function ctnMissPrint(){
 function ofFixCtn(orderId){
   if(window.ofReadOnly) return;
   var o=(orders||[]).find(function(x){return x.id===orderId;}); if(!o) return;
-  var cur=parseInt(o.ctn,10)||0;
+  var cur=parseInt(o.ctn,10)||0, curB=parseInt(o.bundle,10)||0;
   var v=prompt('📦 จำนวนลังของ '+orderId+' / cartons for '+orderId+'\n'+(o.customer||''), cur||'');
   if(v===null) return;
   var nv=parseInt(v,10);
   if(isNaN(nv)||nv<0){ alert('ใส่ตัวเลข / enter a number'); return; }
-  if(nv===cur) return;
-  o.ctn=nv; o._editTs=Date.now();
-  try{ var _dao=(dAllOrders||[]).find(function(x){return x.id===o.id;}); if(_dao) _dao.ctn=nv; }catch(e){}
+  // The worksheet has a มัด box next to the ลัง box, so the same dialog takes both —
+  // Cancel or leaving it as-is keeps the bundles untouched.
+  var vb=prompt('🧶 จำนวนมัดของ '+orderId+' / bundles for '+orderId+' (ไม่มีใส่ 0 / none = 0)', curB||'');
+  var nb=(vb===null||String(vb).trim()==='')?curB:parseInt(vb,10);
+  if(isNaN(nb)||nb<0) nb=curB;
+  if(nv===cur && nb===curB) return;
+  var chg=[];
+  if(nv!==cur){ o.ctn=nv; chg.push('📦 CTN '+(cur||'—')+' → '+nv); }
+  if(nb!==curB){ o.bundle=nb; chg.push('🧶 มัด '+(curB||'—')+' → '+nb); }
+  o._editTs=Date.now();
+  try{ var _dao=(dAllOrders||[]).find(function(x){return x.id===o.id;}); if(_dao){ _dao.ctn=o.ctn; _dao.bundle=o.bundle; } }catch(e){}
   try{ auditAdd({type:'edit', orderId:orderId, by:(typeof ofWho==='function'?ofWho():'Office'),
-    detail:'📦 CTN '+(cur||'—')+' → '+nv+' (จากการ์ดทัวร์ / from the tour card)'}); }catch(e){}
+    detail:chg.join(' · ')+' (จากการ์ดทัวร์ / from the tour card)'}); }catch(e){}
   try{ syncOrders(); }catch(e){}
   try{ sheetsSyncOrder(o); }catch(e){}
   try{ ofRenderTour(); }catch(e){}
