@@ -1645,23 +1645,30 @@ function lineQty(i,d){ var l=cart.lines[i]; l.qty=Math.max(1,l.qty+d); saveCart(
 function linePrice(i,v){ var l=cart.lines[i]; l.price=Math.max(0,parseFloat(v)||0); saveCart(); renderCart(); }
 function lineGrade(i){ var l=cart.lines[i]; l.grade=l.grade==='B'?'A':'B'; saveCart(); renderCart(); }
 function lineDel(i){ cart.lines.splice(i,1); saveCart(); renderCart(); renderGrid(); }
+/* A price typed BELOW list (grade A) is shown to the customer as full list
+   price + a discount line — looks better and books identically. Grade B keeps
+   its own (defect) price and never counts as discount. */
+function lineShowPrice(l){ return (l.grade!=='B' && l.listPrice>l.price) ? l.listPrice : l.price; }
 function cartTotals(){
-  var pq=0, pp=0, ep=0;
+  var pq=0, pp=0, ep=0, below=0;
   cart.lines.forEach(function(l){
-    if(l.type==='panel'){ pq+=l.qty; pp+=l.qty*l.price; }
-    else ep+=l.qty*l.price;
+    var sp=lineShowPrice(l);
+    below+=(sp-l.price)*l.qty;
+    if(l.type==='panel'){ pq+=l.qty; pp+=l.qty*sp; }
+    else ep+=l.qty*sp;
   });
   var packs=parseInt($('cart-packs').value)||0;
   var gift=parseInt($('cart-gift').value)||0;
   var minus=Math.min(pq*10, parseInt($('cart-freeminus').value)||0);
   var freeNet=Math.max(0,pq*10-minus);
-  var discount=parseInt($('cart-discount').value)||0;
+  var discTyped=parseInt($('cart-discount').value)||0;
+  var discount=discTyped+Math.round(below);   // one merged ส่วนลด line
   var delivery=(ck.fulfil==='delivery')?(parseInt($('cart-delivery').value)||0):0;
   var extra=parseFloat($('cart-extra').value)||0;
   var extraLabel=($('cart-extra-label').value||'').trim();
   var cc=packs*CLIP_PACK_PRICE;
   var grand=Math.max(0, pp+ep+cc+extra-discount+delivery);
-  return {pq:pq,pp:pp,ep:ep,packs:packs,cc:cc,gift:gift,minus:minus,freeNet:freeNet,discount:discount,delivery:delivery,extra:extra,extraLabel:extraLabel,grand:grand,clips:freeNet+gift};
+  return {pq:pq,pp:pp,ep:ep,packs:packs,cc:cc,gift:gift,minus:minus,freeNet:freeNet,discount:discount,discTyped:discTyped,below:Math.round(below),delivery:delivery,extra:extra,extraLabel:extraLabel,grand:grand,clips:freeNet+gift};
 }
 function posCartCalc(){
   var t=cartTotals();
@@ -1688,8 +1695,9 @@ function posQuoteShow(){
   var d=new Date();
   $('quote-date').textContent='วันที่ '+d.getDate()+'/'+(d.getMonth()+1)+'/'+(d.getFullYear()+543);
   var rows=cart.lines.map(function(l){
+    var sp=lineShowPrice(l);
     return '<div class="cf-line"><span class="l">'+esc(l.code)+(l.grade==='B'?' <span style="color:#F0B050">(B)</span>':'')+' × '+l.qty
-      +'<small>'+esc(l.name||'')+' · '+fmt(l.price)+' ฿/หน่วย</small></span><span class="r num">'+fmtB(l.qty*l.price)+'</span></div>';
+      +'<small>'+esc(l.name||'')+' · '+fmt(sp)+' ฿/หน่วย</small></span><span class="r num">'+fmtB(l.qty*sp)+'</span></div>';
   });
   if(t.packs>0) rows.push('<div class="cf-line"><span class="l">คลิปแพ็ค × '+t.packs+'</span><span class="r num">'+fmtB(t.cc)+'</span></div>');
   if(t.clips>0) rows.push('<div class="cf-line"><span class="l">คลิปล็อคฟรี × '+fmt(t.clips)+'</span><span class="r free">ฟรี</span></div>');
@@ -1782,13 +1790,14 @@ function buildLineItems(){
   var t=cartTotals();
   var pa=[], la=[], lineItems=[];
   cart.lines.forEach(function(l){
+    var sp=lineShowPrice(l);   // below-list difference rides in the discount line
     if(l.type==='panel'){
       pa.push(l.code+' × '+l.qty+(l.grade==='B'?' (B)':''));
-      var li={type:'panel',code:l.code,qty:l.qty,unitPrice:l.price,amount:l.price*l.qty,grade:l.grade||'A'};
+      var li={type:'panel',code:l.code,qty:l.qty,unitPrice:sp,amount:sp*l.qty,grade:l.grade||'A'};
       lineItems.push(li);
     } else {
       la.push(l.code+' × '+l.qty);
-      lineItems.push({type:l.type,code:l.code,qty:l.qty,unitPrice:l.price,amount:l.price*l.qty});
+      lineItems.push({type:l.type,code:l.code,qty:l.qty,unitPrice:sp,amount:sp*l.qty});
     }
   });
   if(t.packs>0) lineItems.push({type:'clips',code:'Clip Pack / คลิปแพ็ค',qty:t.packs,unitPrice:CLIP_PACK_PRICE,amount:t.cc});
@@ -2054,8 +2063,9 @@ function showConfirm(o,t){
   $('cf-no').textContent=o.id;
   var _lines=(lastOrder&&lastOrder.lines)||cart.lines;
   var rows=_lines.map(function(l){
+    var sp=lineShowPrice(l);
     return '<div class="cf-line"><span class="l">'+esc(l.code)+(l.grade==='B'?' <span style="color:#F0B050">(B)</span>':'')+' × '+l.qty
-      +'<small>'+esc(l.name||'')+'</small></span><span class="r num">'+fmtB(l.qty*l.price)+'</span></div>';
+      +'<small>'+esc(l.name||'')+'</small></span><span class="r num">'+fmtB(l.qty*sp)+'</span></div>';
   });
   if(t.packs>0) rows.push('<div class="cf-line"><span class="l">คลิปแพ็ค × '+t.packs+'</span><span class="r num">'+fmtB(t.cc)+'</span></div>');
   if(t.clips>0) rows.push('<div class="cf-line"><span class="l">คลิปล็อคฟรี × '+fmt(t.clips)+'</span><span class="r free">ฟรี</span></div>');
