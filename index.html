@@ -2287,9 +2287,6 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" class="fbtn" data-status="delivered" onclick="ofFilt('delivered',this)">Delivered / ส่งแล้ว</button>
       <button type="button" class="fbtn" data-status="cancelled" onclick="ofFilt('cancelled',this)">Cancelled</button>
       <button type="button" class="fbtn" id="of-today-btn" onclick="ofFiltToday(this)" style="border-color:#0070f3;color:#0070f3">📅 Today</button>
-      <!-- Several orders' carton labels on ONE sheet — two 1-CTN orders should
-           not cost two sheets of A4. -->
-      <button type="button" class="fbtn" onclick="lblBatchOpen()" title="เลือกหลายออเดอร์ พิมพ์ป้ายในแผ่นเดียว / tick several orders, print their labels on one sheet" style="border-color:#1d4ed8;color:#1d4ed8">🏷️ Labels</button>
     </div>
     <div id="of-olist"></div>
   </div></div>
@@ -2307,6 +2304,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <!-- Province names in Latin letters, for whoever reads a delivery list
            faster that way. Per browser — it changes nothing but what is drawn. -->
       <button type="button" id="of-latin-btn" onclick="kpLatinToggle()" title="เขียนชื่อจังหวัดเป็นตัวอักษรโรมันด้วย / also write province names in Latin letters (this browser only)" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:var(--rs);cursor:pointer;font-weight:600">🔤 ABC OFF</button>
+      <!-- Carton labels for several orders on one sheet — lives here because labels
+           are printed while tours are being packed and loaded. -->
+      <button type="button" onclick="lblBatchOpen()" title="เลือกหลายออเดอร์ พิมพ์ป้ายติดกล่องในแผ่นเดียว / tick several orders, print their carton labels on one sheet" style="font-size:11px;padding:3px 9px;border:1px solid #1d4ed8;background:var(--bg);color:#1d4ed8;border-radius:var(--rs);cursor:pointer;font-weight:600">🏷️ Labels</button>
       </span>
     </div>
     <div id="of-active-tours"><div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div></div>
@@ -7810,7 +7810,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901003;
+var KP_BUILD = 20260901004;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9221,8 +9221,20 @@ function lblBatchRender(){
     var o=(orders||[]).find(function(x){return x.id===id;});
     nLbl+=(_lblPerCtn ? Math.max(1, parseInt(o&&o.ctn,10)||0) : 1);
   });
+  // One tap ticks a whole tour — in the Tour tab that IS the common case: the
+  // truck is being loaded and every carton on it wants its label.
+  var tourChips=(activeTours||[]).filter(function(t){ return t && (t.orders||[]).length; }).map(function(t){
+    var idsHere=(t.orders||[]).filter(function(id){ return list.some(function(o){return o.id===id;}); });
+    if(!idsHere.length) return '';
+    var all=idsHere.every(function(id){ return _lblSel[id]; });
+    var tJs=String(t.id).replace(/['"\\]/g,'');
+    return '<button type="button" onclick="lblBatchTour(\''+tJs+'\')" style="font-size:11px;font-weight:700;padding:4px 9px;border-radius:999px;cursor:pointer;white-space:nowrap;border:1px solid '
+      +(all?'#1d4ed8;background:#1d4ed8;color:#fff':'var(--border);background:var(--bg);color:var(--text2)')+'">'
+      +'🚚 '+_esc(t.driverName||t.tid||'—')+' ('+idsHere.length+')</button>';
+  }).join('');
   b.innerHTML='<div class="mhdr"><span class="mtit">🏷️ ป้ายหลายออเดอร์ / Labels, several orders on one sheet</span>'
     +'<button type="button" class="mclose" onclick="lblBatchClose()"><i class="ti ti-x"></i></button></div>'
+    +(tourChips?'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">'+tourChips+'</div>':'')
     +'<input type="text" value="'+_esc(_lblQ)+'" oninput="_lblQ=this.value;lblBatchRender()" placeholder="ค้นหา / search: order, customer, zone" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:8px">'
     +'<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;margin-bottom:8px;cursor:pointer">'
       +'<input type="checkbox" '+(_lblPerCtn?'checked':'')+' onchange="_lblPerCtn=this.checked;lblBatchRender()" style="width:16px;height:16px">'
@@ -9247,6 +9259,16 @@ function lblBatchRender(){
 }
 function lblBatchTick(id){
   if(_lblSel[id]) delete _lblSel[id]; else _lblSel[id]=1;
+  lblBatchRender();
+}
+// Whole tour on/off: all its listable orders ticked → untick them, else tick all.
+function lblBatchTour(tid){
+  var t=(activeTours||[]).find(function(x){return x.id===tid;}); if(!t) return;
+  var list=_lblOrders();
+  var ids=(t.orders||[]).filter(function(id){ return list.some(function(o){return o.id===id;}); });
+  if(!ids.length) return;
+  var all=ids.every(function(id){ return _lblSel[id]; });
+  ids.forEach(function(id){ if(all) delete _lblSel[id]; else _lblSel[id]=1; });
   lblBatchRender();
 }
 function lblBatchPrint(){
