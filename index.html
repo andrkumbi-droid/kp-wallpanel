@@ -3246,6 +3246,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <label class="fl">Phone</label><input type="tel" id="em-phone">
   <label class="fl">Address</label><textarea id="em-addr" rows="2"></textarea>
   <label class="fl">Location link</label><input type="text" id="em-loc">
+  <!-- The province picked at creation is sometimes wrong (address read differently) —
+       fix it here; typing one suggests the matching zone, same mapping as New Order. -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div><label class="fl">Province / จังหวัด</label><input type="text" id="em-province" placeholder="e.g. อุบลราชธานี" onchange="emProvinceAutoZone()" onblur="emProvinceAutoZone()"></div>
+    <div><label class="fl">Zone / โซน</label><select id="em-zone"><option value="">—</option><option>Bangkok</option><option>Northern</option><option>Northeastern</option><option>Eastern</option><option>Southern</option><option>Instore</option></select></div>
+  </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
     <div><label class="fl">Contact / ช่องทางติดต่อ</label><input type="text" id="em-contact"></div>
     <div><label class="fl">Delivery round / รอบจัดส่ง</label><input type="text" id="em-deliveround"></div>
@@ -7817,7 +7823,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901018;
+var KP_BUILD = 20260901019;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -18092,6 +18098,7 @@ function ofCreateTour(){
 function openEM(idOrBtn){
   var id = typeof idOrBtn === 'string' ? idOrBtn : idOrBtn.getAttribute('data-id');
   const o=orders.find(x=>x.id===id);if(!o)return;editId=id;document.getElementById('em-id').textContent=id;document.getElementById('em-cust').value=o.customer;document.getElementById('em-phone').value=o.phone;document.getElementById('em-addr').value=o.address;document.getElementById('em-loc').value=o.location||'';document.getElementById('em-contact').value=o.contact||'';document.getElementById('em-deliveround').value=o.deliveryRound||'';document.getElementById('em-reqdate').value=o.reqDate||'';document.getElementById('em-reqnote').value=o.reqNote||'';document.getElementById('em-shipbill').value=o.shippingBill||'';document.getElementById('em-ctn').value=o.ctn||'';document.getElementById('em-bundle').value=o.bundle||'';document.getElementById('em-deposit').value=o.deposit||'';document.getElementById('em-packstatus').value=o.packStatus||'';document.getElementById('em-date').value=o.date||new Date().toISOString().split('T')[0];document.getElementById('em-status').value=o.status;document.getElementById('em-notes').value=o.notes||'';
+  try{ document.getElementById('em-province').value=o.province||''; document.getElementById('em-zone').value=(['Bangkok','Northern','Northeastern','Eastern','Southern','Instore'].indexOf(o.zone)>=0)?o.zone:''; }catch(e){}
   // Existing discount → prefill the discount field (stored as a negative line item)
   var _exDisc=(o.lineItems||[]).filter(function(li){return li.type==='discount';}).reduce(function(a,li){return a-(parseFloat(li.amount)||0);},0);
   document.getElementById('em-discount').value=_exDisc>0?_exDisc:'';
@@ -18124,7 +18131,21 @@ function emCalc(){
   var disc=parseFloat((document.getElementById('em-discount')||{}).value)||0;
   var el=document.getElementById('em-total'); if(el) el.textContent='Total / รวม: '+(sum+other-disc).toLocaleString('en-US')+' ฿';
 }
-function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o.status;o.customer=document.getElementById('em-cust').value;o.phone=document.getElementById('em-phone').value;o.address=document.getElementById('em-addr').value;o.location=document.getElementById('em-loc').value;o.contact=document.getElementById('em-contact').value;o.deliveryRound=document.getElementById('em-deliveround').value;o.reqDate=document.getElementById('em-reqdate').value;o.reqNote=(document.getElementById('em-reqnote').value||'').trim();o.shippingBill=document.getElementById('em-shipbill').value;o.ctn=parseInt(document.getElementById('em-ctn').value)||0;o.bundle=parseInt(document.getElementById('em-bundle').value)||0;o.deposit=parseFloat(document.getElementById('em-deposit').value)||0;try{var _dao=dAllOrders.find(function(x){return x.id===o.id;});if(_dao){_dao.ctn=o.ctn;_dao.bundle=o.bundle;}}catch(e){}o.packStatus=document.getElementById('em-packstatus').value;o.notes=document.getElementById('em-notes').value;o.status=document.getElementById('em-status').value;var newDate=document.getElementById('em-date').value;if(newDate)o.date=newDate;const editorMember=staffList.find(x=>x.id===currentStaffId);if(editorMember)o.editedBy=editorMember.name;o._editTs=Date.now();
+function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o.status;o.customer=document.getElementById('em-cust').value;o.phone=document.getElementById('em-phone').value;o.address=document.getElementById('em-addr').value;o.location=document.getElementById('em-loc').value;o.contact=document.getElementById('em-contact').value;o.deliveryRound=document.getElementById('em-deliveround').value;o.reqDate=document.getElementById('em-reqdate').value;o.reqNote=(document.getElementById('em-reqnote').value||'').trim();o.shippingBill=document.getElementById('em-shipbill').value;o.ctn=parseInt(document.getElementById('em-ctn').value)||0;o.bundle=parseInt(document.getElementById('em-bundle').value)||0;o.deposit=parseFloat(document.getElementById('em-deposit').value)||0;try{var _dao=dAllOrders.find(function(x){return x.id===o.id;});if(_dao){_dao.ctn=o.ctn;_dao.bundle=o.bundle;}}catch(e){}
+  // Province/zone corrected after the fact (picked wrong at creation): the order id
+  // keeps its number — only where the order files (zone buckets, reports) moves.
+  // The generic edit-audit has no detail, so this change writes its own line.
+  var _pvNew=((document.getElementById('em-province')||{}).value||'').trim(), _pvOld=(o.province||'').trim();
+  var _znNew=(document.getElementById('em-zone')||{}).value||'', _znOld=o.zone||'';
+  if(_pvNew!==_pvOld) o.province=_pvNew;
+  if(_znNew && _znNew!==_znOld){ o.zone=_znNew; try{var _daz=dAllOrders.find(function(x){return x.id===o.id;});if(_daz)_daz.zone=_znNew;}catch(e){} }
+  if(_pvNew!==_pvOld || (_znNew && _znNew!==_znOld)){
+    try{ auditAdd({type:'edit', orderId:o.id, by:(typeof ofWho==='function'?ofWho():'Office'),
+      detail:'🗺️ '+(_pvNew!==_pvOld?'จังหวัด / province: '+(_pvOld||'—')+' → '+(_pvNew||'—'):'')
+        +((_pvNew!==_pvOld && _znNew && _znNew!==_znOld)?' · ':'')
+        +((_znNew && _znNew!==_znOld)?'โซน / zone: '+(_znOld||'—')+' → '+_znNew:'')}); }catch(e){}
+  }
+  o.packStatus=document.getElementById('em-packstatus').value;o.notes=document.getElementById('em-notes').value;o.status=document.getElementById('em-status').value;var newDate=document.getElementById('em-date').value;if(newDate)o.date=newDate;const editorMember=staffList.find(x=>x.id===currentStaffId);if(editorMember)o.editedBy=editorMember.name;o._editTs=Date.now();
   // Cancelling via the edit modal → same warehouse acknowledgement flow as quickStatus
   if(o.status==='cancelled' && old!=='cancelled'){ o.cancelWasPacked=(old==='ready'||old==='loaded'); o.whCancelStage='new'; o.whCancelAck=false; }
   // Rebuild products from the edited lines (give old stock back first, re-deduct after)
@@ -29931,6 +29952,13 @@ function kpProvinceZone(prov){
   if(KP_PROV_ZONE[n]) return KP_PROV_ZONE[n];                 // English normalized
   for(var k in KP_PROV_ZONE){ if(/[ก-๙]/.test(k) && t.indexOf(k)>=0) return KP_PROV_ZONE[k]; } // Thai embedded
   return '';
+}
+// Province typed in the EDIT dialog → suggest the matching zone. Only fills the
+// select; nothing is saved until the Save button.
+function emProvinceAutoZone(){
+  var pv=document.getElementById('em-province'); if(!pv) return;
+  var z=kpProvinceZone(pv.value);
+  if(z){ var s=document.getElementById('em-zone'); if(s) s.value=z; }
 }
 // From the Province field, auto-pick the zone (which also prepares the order no).
 function ofProvinceAutoZone(){
