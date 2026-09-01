@@ -15665,6 +15665,15 @@ function tourAdjTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+to
 function tourAdjIsCost(e){ return String((e&&e.kind)||'')==='cost'; }
 function tourAdjPayTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+(tourAdjIsCost(e)?0:tourAdjVal(e)); },0); }
 function tourAdjCostTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+(tourAdjIsCost(e)?tourAdjVal(e):0); },0); }
+// ── taken out of the tour cash bag ────────────────────────────────────────
+// A deduction can be money the driver already TOOK out of the collected cash
+// mid-tour ("เบิกเพิ่ม 5,000"). The − line makes his pay lighter; this flag tells
+// the settlement that the BAG is lighter too — without it the sheet asks the
+// shop to expect cash the driver is already carrying in his pocket.
+// Only a − pay line can be bag money: a + line or a ⛽ cost line is ignored even
+// if the flag is left behind by a later sign or kind flip.
+function tourAdjIsBag(e){ return !!(e&&e.bag) && !tourAdjIsCost(e); }
+function tourAdjBagTotal(t){ return tourAdjArr(t).reduce(function(a,e){ var v=tourAdjVal(e); return a+((tourAdjIsBag(e)&&v<0)?-v:0); },0); }
 // A line with no order on it belongs to the WHOLE tour — a ferry ticket, a fine, a
 // bonus for the day. Same list, same total, same settle-up: only the empty oid
 // tells them apart, so everything that already counts adjustments counts these too.
@@ -15693,6 +15702,9 @@ function tourSettleCalc(t){
   });
   var pay=parseFloat(t&&t.driverPay)||0, adv=parseFloat(t&&t.driverAdvance)||0, adj=0;
   try{ adj=tourAdjTotal(t); }catch(e){}
+  // 💵-flagged − lines: cash he already took out of THIS bag mid-tour. His due is
+  // already lighter through the adjustment; the bag below must be lighter too.
+  var bagTaken=0; try{ bagTaken=tourAdjBagTotal(t); }catch(e){}
   // NOT clamped at zero, unlike tourNetPay: a settlement has to be able to say
   // "he owes the shop". Clamping printed a column that did not add up (26,250
   // − 11,500 − 20,000 above a bold "driver keeps 0") and dropped the shortfall.
@@ -15715,7 +15727,7 @@ function tourSettleCalc(t){
   var open=Math.round((due-settled)*100)/100;
   // The bag is lighter by whatever he already took out of it, so a settlement that
   // moved afterwards cannot ask the shop to count cash that is no longer there.
-  var bag=Math.round((cash-fromBag)*100)/100;
+  var bag=Math.round((cash-fromBag-bagTaken)*100)/100;
   // The card can show a pay PROPOSAL (cartons × rate, or the km calculation) that
   // nobody has carried into driverPay yet. Settling then prints "tour pay 0" and
   // hands the whole bag to the shop — on a page the driver signs. Report it.
@@ -15727,7 +15739,7 @@ function tourSettleCalc(t){
                             byHand:!!kmManualOf(t), legs:kmLegs(t).length }; }catch(e){}
   return { cash:cash, online:online, unknown:unknown, pay:pay, adv:adv, adj:adj, km:km,
            due:due, alreadyPaid:!!st.paid, paidHow:st.how||'', paidAmt:rec,
-           settled:settled, settledKnown:settledKnown, fromBag:fromBag, bag:bag,
+           settled:settled, settledKnown:settledKnown, fromBag:fromBag, bagTaken:bagTaken, bag:bag,
            proposal:prop, payMissing:(pay<=0 && prop>0),
            // A shortfall is NOT cash the shop receives: the bag holds what it holds.
            // It is stated once, on its own line, as what the driver has to bring back.
@@ -15821,7 +15833,7 @@ function ofTourSettle(tourId){
   var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
     var v=tourAdjVal(e);
     return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:1px 0;color:var(--text2)">'
-      +'<span>'+esc(tourAdjWho(e))+' · '+(tourAdjIsCost(e)?'⛽ ':'')+esc(e.note||'—')+'</span>'
+      +'<span>'+esc(tourAdjWho(e))+' · '+(tourAdjIsCost(e)?'⛽ ':(tourAdjIsBag(e)&&v<0?'💵 ':''))+esc(e.note||'—')+'</span>'
       +'<span style="font-weight:700;color:'+(v<0?'#b91c1c':'#166534')+';white-space:nowrap">'+tourAdjFmt(v)+'</span></div>';
   }).join('');
   // The settlement STATE belongs in the snapshot as well, not just the figures: a
@@ -15830,7 +15842,7 @@ function ofTourSettle(tourId){
   // line saying the money has already changed hands.
   window._tsetShown={ id:tourId, cash:s.cash, online:s.online, unknown:s.unknown,
                       pay:s.pay, adv:s.adv, adj:s.adj, driverGets:s.driverGets, shopGets:s.shopGets,
-                      owed:s.owed, alreadyPaid:s.alreadyPaid, paidHow:s.paidHow, settled:s.settled, fromBag:s.fromBag,
+                      owed:s.owed, alreadyPaid:s.alreadyPaid, paidHow:s.paidHow, settled:s.settled, fromBag:s.fromBag, bagTaken:s.bagTaken,
                       stops:(t.orders||[]).filter(function(id){ return ((t.status||{})[id]||'')==='delivered'; }).length };
   var body='<div style="font-size:12px;color:var(--text2);margin-bottom:10px">🚚 '+esc(t.driverName||'')+(tidOk(t.tid)?' · '+esc(t.tid):'')+'</div>'
     + (s.payMissing?'<div style="font-size:12px;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:var(--rs);padding:7px 9px;margin-bottom:10px;font-weight:700">⚠️ ยังไม่ได้ใส่ค่าทัวร์ — การ์ดเสนอ '+s.proposal.toLocaleString()+' ฿ กด "→ ค่าทัวร์" ก่อนปิดยอด<div style="font-weight:500">the tour pay has not been entered yet; the card proposes '+s.proposal.toLocaleString()+' ฿ — press "→ ค่าทัวร์" first, or this settles at zero</div></div>':'')
@@ -15863,6 +15875,9 @@ function ofTourSettle(tourId){
     + (!s.settledKnown?'<div style="font-size:11.5px;color:#b45309;background:#fef3c7;border-radius:var(--rs);padding:6px 8px;margin:6px 0 0 22px;font-weight:700">⚠️ ไม่ได้บันทึกยอดที่จ่ายไป — ใบนี้ถือว่าเท่ากับค่าทัวร์ปัจจุบัน<div style="font-weight:500">the amount already paid was never recorded, so this sheet assumes it was the pay as it stands — check the slip</div></div>':'')
     // Second step: the bag, less what already left it, less what he still gets.
     + row('', '💵 เงินสดที่เก็บได้ / cash collected', s.cash.toLocaleString()+' ฿', {gap:true})
+    // Cash he drew out of the bag mid-tour (💵-flagged deduction): already his,
+    // already off his pay above — and no longer in the bag being counted.
+    + (s.bagTaken>0?row('−', '💵 เบิกจากถุงระหว่างทัวร์แล้ว / already taken out of this bag mid-tour', s.bagTaken.toLocaleString()+' ฿', {col:'#b45309'}):'')
     + (s.fromBag>0?row('−', '💵 ค่าทัวร์ที่หยิบจากกระเป๋านี้แล้ว / his pay, already taken out of this bag', s.fromBag.toLocaleString()+' ฿', {col:'#1d4ed8'}):'')
     + (s.owed>0
         ? row('+', '👤 ที่คนขับต้องคืน / what he brings back', s.owed.toLocaleString()+' ฿', {col:'#b91c1c'})
@@ -15915,7 +15930,8 @@ function ofTourSettlePrint(tourId){
       || shown.online!==s.online || shown.unknown!==s.unknown || shown.stops!==nowStops
       // …and so does the hand-over the sheet asserts, even when it moves no figure.
       || shown.alreadyPaid!==s.alreadyPaid || shown.paidHow!==s.paidHow
-      || shown.settled!==s.settled || shown.fromBag!==s.fromBag)){
+      || shown.settled!==s.settled || shown.fromBag!==s.fromBag
+      || (shown.bagTaken||0)!==(s.bagTaken||0))){
     alert('ตัวเลขเปลี่ยนไปตั้งแต่เปิดหน้านี้ / the figures changed since this window was opened.\n\n'
       +'เงินสด / cash: '+shown.cash.toLocaleString()+' → '+s.cash.toLocaleString()+'\n'
       +'คนขับรับ / driver: '+drvSeen(shown)+' → '+drvSeen(s)+'\n'
@@ -15954,7 +15970,7 @@ function ofTourSettlePrint(tourId){
       +'<tfoot><tr><td colspan="2" class="sumlbl">'+label+'</td><td class="r sumlbl">'+money(sum)+'</td></tr></tfoot></table>';
   };
   var adjRows=tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0; }).map(function(e){
-    return '<tr><td>'+esc(tourAdjWho(e))+'</td><td>'+(tourAdjIsCost(e)?'⛽ สำรองจ่าย / laid out · ':'')+esc(e.note||'')+'</td><td class="r">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
+    return '<tr><td>'+esc(tourAdjWho(e))+'</td><td>'+(tourAdjIsCost(e)?'⛽ สำรองจ่าย / laid out · ':(tourAdjIsBag(e)&&tourAdjVal(e)<0?'💵 เบิกจากถุงแล้ว / taken from the bag · ':''))+esc(e.note||'')+'</td><td class="r">'+tourAdjFmt(tourAdjVal(e))+'</td></tr>';
   }).join('');
   // A km tour that has readings: the legs the pay is built from, so the driver can
   // check his own odometer against the sheet he is signing. Nothing to list when the
@@ -16076,6 +16092,7 @@ function ofTourSettlePrint(tourId){
       +(s.alreadyPaid&&!s.settledKnown?'<div class="ct"><span class="op"></span><span class="lb note">⚠️ ไม่ได้บันทึกยอดที่จ่ายไป — ถือว่าเท่ากับค่าทัวร์ปัจจุบัน / the amount already paid was never recorded, this sheet assumes it was the pay as it stands</span></div>':'')
       +'<div class="ct gap"><span class="op"></span><span class="lb">💵 เงินสดที่เก็บได้ / cash collected</span><b>'+money(s.cash)+'</b></div>'
       // The bag is lighter by whatever he already took out of it.
+      +(s.bagTaken>0?'<div class="ct"><span class="op">−</span><span class="lb">💵 เบิกจากถุงระหว่างทัวร์แล้ว / already taken out of this bag mid-tour</span><b>'+money(s.bagTaken)+'</b></div>':'')
       +(s.fromBag>0?'<div class="ct"><span class="op">−</span><span class="lb">💵 ค่าทัวร์ที่หยิบจากกระเป๋านี้แล้ว / his pay, already taken out of this bag</span><b>'+money(s.fromBag)+'</b></div>':'')
       +(s.owed>0
         ? '<div class="ct"><span class="op">+</span><span class="lb">👤 ที่คนขับต้องคืน / what he brings back</span><b>'+money(s.owed)+'</b></div>'
@@ -16194,6 +16211,20 @@ function ofTourAdjKind(tourId, adjId){
     (was?'💰 นับเป็นค่าจ้าง / counted as pay':'⛽ นับเป็นสำรองจ่าย ไม่เข้าเงินเดือน / counted as an expense he laid out, not payroll')
     +' · '+(h.e.oid||'ทั้งทัวร์')+' · '+tourAdjFmt(tourAdjVal(h.e))+(h.e.note?' · '+h.e.note:'')); }catch(e){}
 }
+// 💵 the money already left the bag mid-tour (an extra draw). The − line itself
+// is untouched — this only tells the settlement that the bag is lighter.
+function ofTourAdjBag(tourId, adjId){
+  if(window.ofReadOnly) return;
+  var h=_tourAdjFind(tourId, adjId); if(!h) return;
+  var was=!!h.e.bag;
+  if(was) delete h.e.bag; else h.e.bag=1;
+  h.e.by=ofWho(); h.e.ts=Date.now();
+  _tourAdjSave(h.t);
+  try{ auditTour('adjust','🚚 '+(h.t.driverName||''),
+    (was?'👜 ไม่ได้หยิบจากถุงเงินสด / not taken out of the tour cash after all'
+        :'💵 หยิบจากถุงเงินสดทัวร์แล้ว / taken out of the tour cash bag')
+    +' · ทั้งทัวร์ · '+tourAdjFmt(tourAdjVal(h.e))+(h.e.note?' · '+h.e.note:'')); }catch(e){}
+}
 function ofTourAdjNote(tourId, adjId, val){
   if(window.ofReadOnly) return;
   var h=_tourAdjFind(tourId, adjId); if(!h) return;
@@ -16253,11 +16284,11 @@ function tourAdjRowsInner(t, oid, ro){
     var s=tourAdjSign(e), m=SG[String(s)];
     var aid=String(e.id).replace(/['"\\]/g,'');
     var who=(e.by?e.by:'')+(e.ts?' · '+new Date(e.ts).toISOString().slice(0,10):'');
-    var isC=tourAdjIsCost(e);
+    var isC=tourAdjIsCost(e), isB=tourAdjIsBag(e);
     if(ro){
       return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11.5px">'
         +'<span style="font-weight:800;color:'+m.c+';white-space:nowrap">'+m.t+'</span>'
-        +'<span style="flex:1;min-width:0;color:var(--text)">'+(isC?'⛽ ':'')+esc(e.note||'—')+'</span>'
+        +'<span style="flex:1;min-width:0;color:var(--text)">'+(isC?'⛽ ':(isB&&s===-1?'💵 ':''))+esc(e.note||'—')+'</span>'
         +'<span style="font-weight:800;color:'+m.c+';white-space:nowrap">'+tourAdjFmt(tourAdjVal(e))+'</span>'
         +'</div>';
     }
@@ -16267,6 +16298,12 @@ function tourAdjRowsInner(t, oid, ro){
         +' title="'+(isC?'สำรองจ่าย — คืนเงินสด ไม่เข้าเงินเดือน (บันทึกใบเสร็จใน Bills) / laid out for the shop: paid back in cash, kept out of payroll — the receipt goes into Bills'
                         :'ค่าจ้าง — เข้าเงินเดือน / pay: goes into his payroll')+'"'
         +' style="flex-shrink:0;width:30px;height:29px;padding:0;border:1px solid '+(isC?'#fed7aa':'var(--border)')+';background:'+(isC?'#ffedd5':'var(--bg2)')+';border-radius:var(--rs);font-size:13px;cursor:pointer;line-height:1">'+(isC?'⛽':'💰')+'</button>'
+      // 💵 only on a whole-tour − pay line: cash he already drew OUT of the tour
+      // bag. Lit = the settlement counts the bag as lighter by this amount.
+      +((String(oid)===''&&s===-1&&!isC)?'<button type="button" onclick="event.stopPropagation();ofTourAdjBag(\''+tidJs+'\',\''+aid+'\')"'
+        +' title="'+(isB?'หยิบจากถุงเงินสดทัวร์แล้ว — ปิดยอดจะหักออกจากเงินสดที่เก็บได้ / he already took this out of the tour cash bag, so the settlement counts the bag as lighter'
+                        :'แตะถ้าเงินนี้ถูกหยิบออกจากถุงเงินสดทัวร์แล้ว / tap if he took this out of the tour cash bag')+'"'
+        +' style="flex-shrink:0;width:30px;height:29px;padding:0;border:1px solid '+(isB?'#fcd34d':'var(--border)')+';background:'+(isB?'#fef3c7':'var(--bg2)')+';border-radius:var(--rs);font-size:13px;cursor:pointer;line-height:1'+(isB?'':';filter:grayscale(1);opacity:.55')+'">💵</button>':'')
       +'<input type="text" value="'+esc(e.note)+'" placeholder="เหตุผล / reason — e.g. เสียหายจากการขนส่ง, ค่าเรือ"'
         +' onchange="ofTourAdjNote(\''+tidJs+'\',\''+aid+'\',this.value)" title="'+esc(who)+'"'
         +' style="flex:1 1 90px;min-width:0;padding:5px 7px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:11.5px">'
@@ -16334,7 +16371,7 @@ function tourAdjSummaryHTML(t){
     var orphan=!tourAdjIsTour(e) && !onTour[String(e.oid)];
     return '<div style="display:flex;gap:6px;align-items:baseline;font-size:11px;padding:1px 0">'
       +'<span style="font-weight:700;white-space:nowrap'+(tourAdjIsTour(e)?';color:var(--text2)':'')+'">'+esc(tourAdjWho(e))+(orphan?' <span title="ออเดอร์ไม่อยู่ในทัวร์แล้ว / order is no longer on this tour" style="color:#b45309">⚠️</span>':'')+'</span>'
-      +'<span style="flex:1;min-width:0;color:var(--text2)">'+esc(e.note||'—')+(s===0?' <span style="color:#b45309;font-weight:700">⏳ ยังไม่คิด / not counted</span>':'')+'</span>'
+      +'<span style="flex:1;min-width:0;color:var(--text2)">'+(tourAdjIsBag(e)&&v<0?'💵 ':'')+esc(e.note||'—')+(s===0?' <span style="color:#b45309;font-weight:700">⏳ ยังไม่คิด / not counted</span>':'')+'</span>'
       +'<span style="font-weight:800;color:'+c+';white-space:nowrap">'+(s===0?'—':tourAdjFmt(v))+'</span>'
       +((orphan&&!window.ofReadOnly)?'<button type="button" onclick="event.stopPropagation();ofTourAdjDel(\''+String(t.id).replace(/['"\\]/g,'')+'\',\''+String(e.id).replace(/['"\\]/g,'')+'\')" title="ลบ / delete" style="flex-shrink:0;border:1px solid #fecaca;background:#fee2e2;color:#dc2626;border-radius:var(--rs);font-size:10px;line-height:1;padding:2px 5px;cursor:pointer">✕</button>':'')
       +'</div>';
