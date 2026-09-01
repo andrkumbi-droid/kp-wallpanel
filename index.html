@@ -7817,7 +7817,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260901015;
+var KP_BUILD = 20260901016;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -16563,6 +16563,7 @@ function ofActiveTourRec(t){
       clips:parseInt(o.clips)||0, shipper:o.shipper||'', location:o.location||'' };
   });
   return { tourNo:null, tid:t.tid||'', tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
+    tourDay:t.tourDay||'',   // the picked run-day — what decides which month the tour files under
     created:t.created||'', departedDate:t.departedDate||'', departedAt:t.departedAt||'', backDate:t.backDate||'', backAt:t.backAt||'',
     driverPay:parseFloat(t.driverPay)||0, driverAdvance:parseFloat(t.driverAdvance)||0,
     adj:tourAdjArr(t), adjTotal:tourAdjTotal(t),
@@ -16833,21 +16834,29 @@ function ofDriversRender(){
         +'</div>';
     };
     // Month split: the running month is listed flat (starts empty on the 1st),
-    // every finished month becomes its own dropdown. A tour that is still on the
-    // road always counts towards the current month.
+    // every finished month becomes its own dropdown. A tour belongs to the month
+    // it STARTED in — tourPayDate is the same day endTourPayroll books the wage
+    // on, so this view and the payroll always name the same month. A tour still
+    // on the road over the month change files under its departure month, with a
+    // pointer left behind in the running month so nobody thinks it vanished.
     var curMK=kpNowMK();
     // Net, so the month total agrees with the "net tour pay" shown inside each card.
     // Wage only: laid-out money (⛽) went through his hands but never was his pay.
     var tourPay=function(t){ return Math.max(0, (Number(t.driverPay)||0) + tourAdjPayTotal(t)); };
-    var cur=[], past={};
+    var cur=[], past={}, liveElsewhere=[];
     hist.forEach(function(t){
-      var mk=t._active?curMK:(kpMKey(tourCountDate(t))||kpMKey(t.ts));
-      if(!mk||mk===curMK) cur.push(t); else (past[mk]=past[mk]||[]).push(t);
+      var mk=kpMKey(tourPayDate(t))||curMK;
+      if(!mk||mk===curMK) cur.push(t);
+      else { (past[mk]=past[mk]||[]).push(t); if(t._active) liveElsewhere.push({t:t,mk:mk}); }
     });
     var curPay=cur.reduce(function(a,t){return a+tourPay(t);},0);
-    var curHTML=cur.length ? cur.map(renderTour).join('')
+    var liveHintHTML=liveElsewhere.map(function(x){
+      var gid='drvm_'+key+'_'+x.mk.replace(/-/g,'_');
+      return '<div onclick="ofToggleMore(\''+gid+'\')" style="border:1px dashed #16a34a;background:#f0fdf4;border-radius:var(--rs);margin-bottom:6px;padding:8px 11px;cursor:pointer;font-size:12px;font-weight:700;color:#166534">🚚 กำลังส่งอยู่ / on tour · เริ่ม '+(fmtD(tourPayDate(x.t))||'')+' — นับในเดือน '+kpMLabel(x.mk)+' / counted in '+kpMLabel(x.mk)+' ▾</div>';
+    }).join('');
+    var curHTML=liveHintHTML+(cur.length ? cur.map(renderTour).join('')
       : (kpTourHistLoading() ? '<div style="font-size:12px;color:var(--text2);padding:6px 2px">⏳ กำลังโหลด… / loading…</div>'
-         : '<div style="font-size:12px;color:var(--text2);padding:6px 2px">No tours this month / ยังไม่มีทัวร์เดือนนี้</div>');
+         : (liveHintHTML?'':'<div style="font-size:12px;color:var(--text2);padding:6px 2px">No tours this month / ยังไม่มีทัวร์เดือนนี้</div>')));
     var pastHTML=Object.keys(past).sort().reverse().map(function(mk){
       var g=past[mk], gid='drvm_'+key+'_'+mk.replace(/-/g,'_');
       var gp=g.reduce(function(a,t){return a+tourPay(t);},0);
