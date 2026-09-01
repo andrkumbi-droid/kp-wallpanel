@@ -26,25 +26,76 @@ firebase.initializeApp({
   messagingSenderId: "794246593779",
   appId: "1:794246593779:web:703fc0a4ba89ba58734b86"
 });
-// APP CHECK — same site key as index.html. On localhost we SKIP activation
-// entirely (like index.html): an unregistered debug token makes the RTDB
-// connection hang forever (see memory: kp-appcheck-localhost). Enforcement is off.
+// ── APP CHECK — same key, SAME survival rules as index.html (lines 706-844):
+//    · activate only after <body> exists (activate appends a container to it)
+//    · probe google.com/recaptcha first — unreachable ⇒ skip, app runs as before
+//    · localhost: only with a REGISTERED debug token (?acdebug=…), else skip —
+//      an unregistered token makes the RTDB connection hang forever
+//    · device kill-switch localStorage 'kpAcOff' (SHARED with index.html): once a
+//      sign-in was refused with App Check on, it stays off on this device
+//    · auth refused while App Check on ⇒ set kpAcOff + reload ONCE (sessionStorage
+//      guard) — this is what heals a device where attestation fails silently.
 var APPCHECK_SITE_KEY = '6LebwYgtAAAAAB9LWZ91x3eZfllT9mPsV3Y8Vfpv';
-try{
-  var _isLocal=/^(localhost|127\.0\.0\.1)$/.test(location.hostname) || location.protocol==='file:';
-  if(APPCHECK_SITE_KEY && firebase.appCheck && !_isLocal){
-    firebase.appCheck().activate(APPCHECK_SITE_KEY, true);
-  } else if(_isLocal){
-    console.warn('[POS] localhost — App Check skipped');
+function acReachable(){
+  return new Promise(function(res){
+    var to=setTimeout(function(){ res(false); }, 5000);
+    fetch('https://www.google.com/recaptcha/api.js',{mode:'no-cors'})
+      .then(function(){ clearTimeout(to); res(true); })
+      .catch(function(){ clearTimeout(to); res(false); });
+  });
+}
+var posAppCheckReady = new Promise(function(resolve){
+  var _acOff=false; try{ _acOff=localStorage.getItem('kpAcOff')==='1'; }catch(e){}
+  if(_acOff){ console.warn('[POS] App Check off on this device (kpAcOff)'); resolve(false); return; }
+  if(!APPCHECK_SITE_KEY || !firebase.appCheck){ resolve(false); return; }
+  function go(){
+    try{
+      if(/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || location.protocol==='file:'){
+        var _acQ=(location.search.match(/[?&]acdebug=([^&]+)/)||[])[1];
+        if(_acQ){ try{ localStorage.setItem('kpAcDebugToken', decodeURIComponent(_acQ)); }catch(e){} }
+        var _acSaved=''; try{ _acSaved=localStorage.getItem('kpAcDebugToken')||''; }catch(e){}
+        if(!_acSaved){ console.warn('[POS] localhost without registered debug token — App Check skipped'); resolve(false); return; }
+        self.FIREBASE_APPCHECK_DEBUG_TOKEN=_acSaved;
+      }
+      firebase.appCheck().activate(APPCHECK_SITE_KEY, true);
+      window._posAcOn=true;
+      resolve(true);
+    }catch(e){ console.error('[POS] App Check activate failed:', e&&e.message); resolve(false); }
   }
-}catch(e){}
+  function whenBody(fn){ if(document.body) fn(); else setTimeout(function w(){ document.body?fn():setTimeout(w,5); },0); }
+  acReachable().then(function(ok){
+    if(!ok){ console.warn('[POS] reCAPTCHA unreachable — App Check skipped'); resolve(false); return; }
+    whenBody(go);
+  });
+});
 // SEASON ROOT — must match index.html (v2/). See index.html lines 846-857.
 var SEASON='v2';
 var _rootDb = firebase.database();
 var PDB = { ref:function(p){ return _rootDb.ref(SEASON+'/'+(p==null?'':p)); } };
 var PROOT = _rootDb; // unscoped (pub/ mirror — not used here, kept for parity)
-// Anonymous auth — DB rules require auth != null.
-var posAuthReady = firebase.auth().signInAnonymously().catch(function(e){ console.error('auth', e); });
+// Anonymous auth AFTER App Check settled — DB rules require auth != null.
+function _posAcRetry(){
+  // refused/stalled while App Check on → off for this device, reload once
+  try{
+    if(window._posAcOn && !sessionStorage.getItem('kpAcRetry')){
+      sessionStorage.setItem('kpAcRetry','1');
+      localStorage.setItem('kpAcOff','1');
+      console.warn('[POS] retrying without App Check');
+      setTimeout(function(){ location.reload(); }, 400);
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+var posAuthReady = posAppCheckReady
+  .then(function(){ return firebase.auth().signInAnonymously(); })
+  .then(function(){ window._posAuthOk=true; return true; })
+  .catch(function(e){
+    console.error('[POS] anonymous sign-in failed:', e&&e.code, e&&e.message);
+    window._posAuthOk=false;
+    _posAcRetry();
+    return false;
+  });
 </script>
 
 <style>
@@ -982,6 +1033,18 @@ var lastOrder=null;        // order object after create
 var _calc={ p:null, mode:'wh' };
 
 posAuthReady.then ? posAuthReady.then(attach) : attach();
+// Watchdog: a missing App Check token does not FAIL the DB connection, it STALLS
+// it (auth can even succeed). If no staff list arrived after 12s, heal the same
+// way index.html does — App Check off for this device, one reload — otherwise
+// at least say what is wrong instead of loading forever.
+setTimeout(function(){
+  if(staffList.length || me) return;
+  if(_posAcRetry()) return;
+  var g=$('staff-grid');
+  if(g && !staffList.length){
+    g.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--cream2);padding:30px;line-height:1.7">⚠️ เชื่อมต่อฐานข้อมูลไม่ได้ / cannot reach the database<br><small>เช็คอินเทอร์เน็ตของแท็บเล็ต แล้วลองใหม่ / check the internet, then retry</small><br><br><button onclick="location.reload()" style="padding:14px 28px;border-radius:12px;border:1px solid rgba(212,175,55,.5);background:rgba(212,175,55,.15);color:#F5EFE0;font-size:16px;font-weight:600;cursor:pointer;font-family:inherit">🔄 ลองใหม่ / retry</button></div>';
+  }
+}, 12000);
 function attach(){
   PDB.ref('staffList').on('value', function(s){
     var v=s.val()||{}; staffList=Object.keys(v).map(function(k){ return v[k]; }).filter(Boolean);
