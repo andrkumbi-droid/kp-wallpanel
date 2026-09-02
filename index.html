@@ -7719,16 +7719,24 @@ function ofStockInventoryPrint(mode){
   // get the total. Grade B and Grade C are single boxes: broken stock is always loose,
   // and pre-cut panels (~95 cm) are stacked separately, never in full cartons.
   //
-  // Pcs-per-carton IS printed, and that is not a breach of the blind count: it is a
-  // property of the product, not a count of it. Leaving it empty cost us the count of
-  // 02.09.2026 — the warehouse wrote 14 into every row while the app had 16 and 22 for
-  // KP009/KP011/KP019, and 403 cartons of KP019 at the wrong factor moved the result by
-  // 3,224 pieces, which is far more than anything the count was meant to find. It is
-  // printed in grey to be crossed out and corrected when the carton really holds
-  // something else — that correction is worth having on its own.
+  // TWO carton blocks, because the same product really does arrive in two different
+  // packings (14/16 and 22 to a carton, depending on the shipment). One factor for the
+  // whole stack is what broke the count of 02.09.2026: the warehouse had already split
+  // the stacks — KP009 reads "154+189" cartons, KP070 "126+8" — but then multiplied the
+  // sum by a single 14. On 403 cartons of KP019 the difference between 14 and 22 is
+  // 3,224 pieces, far more than the count was ever meant to find.
+  //
+  // So each block asks for its own pcs-per-carton next to its own carton count, and the
+  // total is worked out from both. The first block carries the size the stock record
+  // holds, printed in grey — that is not a breach of the blind count, it is a property
+  // of the product, not a count of it, and it gets crossed out when the carton in front
+  // of the counter holds something else. The second block stays empty: it is only filled
+  // when a second packing is actually standing there.
   var COLS = [
-    {h:'แผ่น/ลัง<br>Pcs per CTN', c:'w-pc'},
-    {h:'จำนวนลัง<br>CTN total',   c:'w-ctn'},
+    {h:'แผ่น/ลัง ①<br>Pcs/CTN ①', c:'w-pc'},
+    {h:'ลัง ①<br>CTN ①',          c:'w-ctn'},
+    {h:'แผ่น/ลัง ②<br>Pcs/CTN ②', c:'w-pc2'},
+    {h:'ลัง ②<br>CTN ②',          c:'w-ctn2'},
     {h:'แผ่นลอย<br>Loose',        c:'w-lo'},
     {h:'รวมแผ่น<br>TOTAL',        c:'w-tot'},
     {h:'เกรด B<br>Grade B',       c:'w-gb'},
@@ -7752,9 +7760,12 @@ function ofStockInventoryPrint(mode){
           +'<td class="cd">'+esc(e.code)+'</td>'
           +'<td class="c">'+esc(p.w?p.w+' cm':'')+'</td>'
           +cols.map(function(col){
-            // pcs-per-carton comes pre-filled from the stock record; everything else is blank
-            if(col.c==='w-pc' && e.pcsPerCtn>0) return '<td class="box c pcs">'+e.pcsPerCtn+'</td>';
-            return '<td class="box'+(col.c==='w-tot'?' tot':'')+'"></td>';
+            // The carton size of block ① comes pre-filled from the stock record; every
+            // other box stays blank. The class goes on the cell too, so the second
+            // block keeps its tint down the whole column.
+            var cls='box '+(col.c||'')+(col.c==='w-tot'?' tot':'');
+            if(col.c==='w-pc' && e.pcsPerCtn>0) return '<td class="'+cls+' c pcs">'+e.pcsPerCtn+'</td>';
+            return '<td class="'+cls+'"></td>';
           }).join('')
         +'</tr><tr class="nrow">'
           +'<td class="c"></td><td colspan="'+(2+cols.length)+'" class="nt">หมายเหตุ / Note</td>'
@@ -7801,18 +7812,28 @@ function ofStockInventoryPrint(mode){
     +'.nt{font-size:7.5pt;color:#aaa;vertical-align:top}'
     +'.tot{background:#fffbeb}'                       /* the column that has to be worked out */
     +'.pcs{color:#999;font-size:9pt}'                 /* pre-filled carton size — cross out if wrong */
-    +'.w-n{width:9mm}.w-cd{width:30mm}.w-sz{width:15mm}'
-    +'.w-pc{width:19mm}.w-ctn{width:22mm}.w-lo{width:24mm}.w-tot{width:28mm}.w-gb{width:17mm}.w-gc{width:17mm}'
+    /* 8 count columns have to share the page — A4 portrait, 9 mm margins = 192 mm */
+    +'.w-n{width:8mm}.w-cd{width:22mm}.w-sz{width:12mm}'
+    +'.w-pc{width:16mm}.w-ctn{width:17mm}.w-pc2{width:16mm}.w-ctn2{width:17mm}'
+    +'.w-lo{width:17mm}.w-tot{width:23mm}.w-gb{width:14mm}.w-gc{width:14mm}'
+    /* the second carton block is the exception, not the rule — tint it so an empty pair reads as "only one packing here" */
+    +'.w-pc2,.w-ctn2{background:#f6f6f6}'
     +'</style></head><body>'
     +'<div class="hd"><h1>📋 ใบนับสต็อก / Stock count sheet — KP Wallpanel'+esc(modeTag)+'</h1><div class="d">'+esc(dateStr)+'</div></div>'
     +'<div class="who"><div>ผู้นับ / Counted by:</div><div>ผู้ตรวจ / Checked by:</div><div>วันที่ / Date:</div></div>'
-    +'<div class="note"><b>รวมแผ่น = (แผ่น/ลัง × จำนวนลัง) + แผ่นลอย</b> &nbsp;|&nbsp; TOTAL = (pcs per carton × cartons) + loose. '
+    +'<div class="note"><b>รวมแผ่น = (แผ่น/ลัง ① × ลัง ①) + (แผ่น/ลัง ② × ลัง ②) + แผ่นลอย</b> &nbsp;|&nbsp; '
+      +'TOTAL = (pcs/CTN ① × CTN ①) + (pcs/CTN ② × CTN ②) + loose. '
       +'นับเฉพาะแผ่นที่สมบูรณ์ · แผ่นชำรุดใส่ช่อง เกรด B · แผ่นตัดแล้ว ~95 ซม. ใส่ช่อง เกรด C / '
       +'count whole panels only — damaged ones go in Grade B, pre-cut (~95 cm) in Grade C.</div>'
-    +'<div class="note"><b>⚠️ ทุกช่องต้องมีตัวเลข ถ้าไม่มีของให้เขียน 0 — ห้ามเว้นว่าง</b> เพราะช่องว่างแปลว่า "ยังไม่ได้นับ" ไม่ใช่ "ไม่มี" · '
-      +'<b>every box needs a number — write 0 when there is none, never leave it empty</b>, an empty box means "not counted yet", not "none". &nbsp;|&nbsp; '
-      +'ตัวเลขสีเทาในช่อง แผ่น/ลัง คือค่าที่ระบบบันทึกไว้ ถ้าลังจริงไม่ตรง ให้ขีดฆ่าแล้วเขียนจำนวนจริง / '
-      +'the grey number under Pcs per CTN is what the system has on record — if the carton really holds a different number, cross it out and write the real one.</div>'
+    +'<div class="note"><b>⚠️ สินค้าเดียวกันมีลัง 2 ขนาดได้ (เช่น 14 หรือ 16 และ 22 แผ่น/ลัง)</b> — '
+      +'ถ้าเจอลังสองขนาด ให้แยกนับ: ขนาดหนึ่งใส่ช่อง ① อีกขนาดใส่ช่อง ② <b>อย่ารวมจำนวนลังแล้วคูณด้วยเลขเดียว</b> · '
+      +'<b>the same product can come in two carton sizes (e.g. 14 or 16, and 22).</b> If both are standing there, count them apart — '
+      +'one size in block ①, the other in block ② — <b>never add the cartons up and multiply by one number</b>. '
+      +'ถ้ามีขนาดเดียว เว้นช่อง ② ว่างไว้ / if there is only one packing, leave block ② empty.</div>'
+    +'<div class="note"><b>⚠️ ช่องอื่นทุกช่องต้องมีตัวเลข ถ้าไม่มีของให้เขียน 0 — ห้ามเว้นว่าง</b> เพราะช่องว่างแปลว่า "ยังไม่ได้นับ" ไม่ใช่ "ไม่มี" · '
+      +'<b>every other box needs a number — write 0 when there is none, never leave it empty</b>, an empty box means "not counted yet", not "none". &nbsp;|&nbsp; '
+      +'ตัวเลขสีเทาในช่อง แผ่น/ลัง ① คือค่าที่ระบบบันทึกไว้ ถ้าลังจริงไม่ตรง ให้ขีดฆ่าแล้วเขียนจำนวนจริง / '
+      +'the grey number in Pcs/CTN ① is what the system has on record — if the carton really holds a different number, cross it out and write the real one.</div>'
     +body
     +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
   var w=window.open('','_blank');
@@ -7898,7 +7919,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260902037;
+var KP_BUILD = 20260902038;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
