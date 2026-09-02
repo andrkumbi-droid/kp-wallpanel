@@ -7880,7 +7880,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260902035;
+var KP_BUILD = 20260902036;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -39566,6 +39566,161 @@ function finProfit(mk){
     nmBlue: (gp!=null && sale.all>0) ? (gp-t.blue)/sale.all*100 : null
   };
 }
+/* ══════════════════════════════════════════════════════════════════════════
+   PROFIT REPORT — the whole month on paper, every line it is made of
+   --------------------------------------------------------------------------
+   Sales − cost of goods = gross profit, then EVERY expense the month carries,
+   itemised down to the individual receipt: fixed costs, each bills category,
+   shipping and carrier fees, every person in the payroll, the Finance tree
+   (containers, tax, instalments) and the office salaries.
+   The figures are the same ones the tab shows — same sources, same blue/grey
+   rule — so the paper can never tell a different story than the screen. Grey
+   items are printed with ⬜ and summed separately instead of being dropped.
+   ══════════════════════════════════════════════════════════════════════════ */
+function finProfitReportPrint(){
+  var mk=_finMonthKey();
+  var p=finProfit(mk), t=p.exp;
+  var data=null; try{ data=billsCostData(mk,{finance:true, finSalaries:true}); }catch(e){}
+  if(!data){ alert('ไม่มีข้อมูล / no data'); return; }
+  var e=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var n=function(v){ return Math.round(v||0).toLocaleString(); };
+  var pct=function(v){ return (Math.round(v*10)/10)+' %'; };
+  var now=new Date();
+  // ── cost of goods, per product ──
+  var cost=acctData.cost||{}, prod={}, cogsTot=0, noCost=0;
+  try{
+    acRevOrders(mk).forEach(function(o){
+      (o.lineItems||[]).forEach(function(li){
+        if(!li||!li.code||AC_NONGOODS[li.type]) return;
+        var q=parseInt(li.qty)||0; if(q<=0) return;
+        var k=acCostKey(li.code,li.type), c=cost[k], amt=acN(li.amount);
+        var r=prod[k]||(prod[k]={qty:0,rev:0,cogs:0,known:true});
+        r.qty+=q; r.rev+=amt;
+        if(c!=null&&c>0){ r.cogs+=c*q; cogsTot+=c*q; } else { r.known=false; noCost+=amt; }
+      });
+    });
+  }catch(e2){}
+  var prodRows=Object.keys(prod).map(function(k){ var r=prod[k]; r._k=k; return r; })
+    .sort(function(a,b){ return b.cogs-a.cogs; });
+  /* ── expenses ────────────────────────────────────────────────────────────
+     BLUE ONLY. Grey items are the ones the office has deliberately taken out
+     of the company figure, and the profit block on screen subtracts blue too —
+     so a report that also listed grey would show a different, larger cost than
+     the tab it is printed from. They are dropped here, not shown greyed out.
+     ─────────────────────────────────────────────────────────────────────── */
+  var expBlue=0, greyDropped=0, secHtml='';
+  var isGrey=function(blk,c){
+    if(blk.kind==='fin')    return (c.items||[]).length>0 && (c.items||[]).every(function(x){ try{ return finPayIsGrey(x); }catch(e3){ return false; } });
+    if(blk.kind==='finsal'){ var st=(staffList||[]).find(function(s){ return s.id===c.id; }); return !!(st&&st.finPayGrey); }
+    try{ return finBillIsGrey(_finBillKey(blk,c)); }catch(e2){ return false; }
+  };
+  (data.blocks||[]).forEach(function(blk){
+    var kids=(blk.children||[]).filter(function(c){
+      if((parseFloat(c.total)||0)===0) return false;
+      if(isGrey(blk,c)){ greyDropped+=parseFloat(c.total)||0; return false; }
+      return true;
+    });
+    if(!kids.length) return;
+    var bTot=0, rows='';
+    kids.sort(function(a,b){ return (b.total||0)-(a.total||0); }).forEach(function(c){
+      var amt=parseFloat(c.total)||0; bTot+=amt;
+      // detail line: what the entry actually was
+      var det='';
+      if(c.items && c.items.length){
+        det=c.items.slice(0,40).map(function(it){
+          return e(String(it.date||'').slice(5))+' '+e(it.what||it.catLabel||'—')+(it.by?' ('+e(it.by)+')':'')+' — '+n(it.amount);
+        }).join(' · ');
+        if(c.items.length>40) det+=' … +'+(c.items.length-40);
+      } else if(c.lines && c.lines.length){
+        det=c.lines.slice(0,20).map(function(l){
+          return e(String(l.date||'').slice(5))+' '+e((typeof payCatMeta==='function'?(payCatMeta(l.cat).label||l.cat):l.cat)||'')+' '+n(l.amount);
+        }).join(' · ');
+        if(c.lines.length>20) det+=' … +'+(c.lines.length-20);
+        if(c.payout!=null && Math.abs(c.payout-c.total)>0.5) det+=' · จ่ายจริง / payout '+n(c.payout);
+      } else if(c.rows && c.rows.length){
+        det=c.rows.length+' ออเดอร์ / orders'+(c.fees?' · ค่าเก็บเงิน / fees '+n(c.fees):'')+(c.missing?' · ไม่มีราคา / no price '+c.missing:'');
+      }
+      rows+='<tr><td>'+e(c.label||'—')+(det?'<div class="det">'+det+'</div>':'')+'</td><td class="r">'+n(amt)+'</td></tr>';
+    });
+    expBlue+=bTot;
+    secHtml+='<div class="sec"><div class="sect">'+e(blk.label)+'<span class="stot">'+n(bTot)+' ฿</span></div>'
+      +'<table><tbody>'+rows+'</tbody>'
+      +'<tfoot><tr><td>รวม / subtotal</td><td class="r">'+n(bTot)+'</td></tr></tfoot></table></div>';
+  });
+  // ── the paper ──
+  var h='';
+  h+='<div class="kpis">'
+    +'<div class="kpi"><span>ยอดขาย / Revenue</span><b>'+n(p.rev)+' ฿</b></div>'
+    +'<div class="kpi"><span>ต้นทุนสินค้า / COGS</span><b class="neg">−'+n(p.cogs.value)+' ฿</b></div>'
+    +'<div class="kpi"><span>กำไรขั้นต้น / Gross profit</span><b>'+(p.gp!=null?n(p.gp)+' ฿':'—')+'</b>'
+      +(p.gm!=null?'<span style="font-size:7pt">'+pct(p.gm)+'</span>':'')+'</div>'
+    +'<div class="kpi"><span>รายจ่าย / Expenses</span><b class="neg">−'+n(t.blue)+' ฿</b></div>'
+    +'<div class="kpi big"><span>กำไรสุทธิ / NET PROFIT</span><b class="'+((p.npBlue||0)<0?'neg':'pos')+'">'+(p.npBlue!=null?n(p.npBlue)+' ฿':'—')+'</b>'
+      +(p.nmBlue!=null?'<span style="font-size:7pt">'+pct(p.nmBlue)+' ของยอดขาย / of revenue</span>':'')+'</div>'
+    +'</div>';
+  // waterfall
+  h+='<div class="sec"><div class="sect">🧾 สรุป / Summary</div><table><tbody>'
+    +'<tr><td>ยอดขาย / Revenue</td><td class="r">'+n(p.rev)+'</td></tr>'
+    +'<tr><td>− ต้นทุนสินค้าที่ขาย / Cost of goods sold</td><td class="r">−'+n(p.cogs.value)+'</td></tr>'
+    +'<tr class="sub"><td>= กำไรขั้นต้น / Gross profit</td><td class="r">'+(p.gp!=null?n(p.gp):'—')+(p.gm!=null?'  ('+pct(p.gm)+')':'')+'</td></tr>'
+    +'<tr><td>− รายจ่ายดำเนินงาน / Operating expenses</td><td class="r">−'+n(t.blue)+'</td></tr>'
+    +'<tr class="tot"><td>= กำไรสุทธิ / NET PROFIT</td><td class="r">'+(p.npBlue!=null?n(p.npBlue):'—')+'</td></tr>'
+    +'</tbody></table>'
+    +'<div class="note">ครอบคลุมต้นทุน / cost coverage '+pct(p.cogs.coverage)
+      +(noCost>0?' · ยอดขายที่ยังไม่มีต้นทุน / revenue without a cost '+n(noCost)+' ฿':'')
+      +(p.cogs.nearFull?' · ส่วนที่เหลือประมาณการตามอัตราต้นทุนจริง / remainder estimated at the real cost ratio':'')+'</div></div>';
+  // COGS detail
+  h+='<div class="sec"><div class="sect">📦 ต้นทุนสินค้า แยกตามรหัส / Cost of goods by product<span class="stot">'+n(cogsTot)+' ฿</span></div>'
+    +'<table><thead><tr><th>รหัส / Code</th><th class="r">ขาย / Qty</th><th class="r">ยอดขาย / Revenue</th><th class="r">ต้นทุน / Cost</th><th class="r">กำไร / GP</th><th class="r">%</th></tr></thead><tbody>'
+    +prodRows.map(function(r){
+      var gp=r.known?(r.rev-r.cogs):null, gm=(r.known&&r.rev>0)?gp/r.rev*100:null;
+      return '<tr><td>'+e(r._k)+(r.known?'':' <span class="warn">ไม่มีต้นทุน / no cost</span>')+'</td>'
+        +'<td class="r">'+n(r.qty)+'</td><td class="r">'+n(r.rev)+'</td>'
+        +'<td class="r">'+(r.known?n(r.cogs):'—')+'</td><td class="r">'+(gp!=null?n(gp):'—')+'</td>'
+        +'<td class="r">'+(gm!=null?pct(gm):'—')+'</td></tr>';
+    }).join('')
+    +'</tbody><tfoot><tr><td>รวม / Total</td><td class="r"></td><td class="r">'+n(p.rev)+'</td><td class="r">'+n(cogsTot)+'</td><td class="r">'+(p.gp!=null?n(p.gp):'—')+'</td><td class="r">'+(p.gm!=null?pct(p.gm):'—')+'</td></tr></tfoot></table>'
+    +'<div class="note">ต้นทุน = ราคาซื้อต่อชิ้น (รวมค่าเรือ ค่านำเข้า ค่าธรรมเนียมธนาคาร ไม่รวม VAT ที่ขอคืนได้) × จำนวนที่ขายในเดือนนี้ / '
+    +'cost = landed purchase price per piece (freight, import and bank charges included, recoverable VAT excluded) × pieces sold this month</div></div>';
+  // every expense
+  h+='<div class="pgbreak"></div><div class="sec"><div class="sect" style="background:#111;color:#fff">💸 รายจ่ายทั้งหมด / ALL EXPENSES · '+e(kpMLabel(mk))+'<span class="stot">'+n(expBlue)+' ฿</span></div></div>';
+  h+=secHtml;
+  h+='<div class="sec"><table><tbody>'
+    +'<tr class="tot"><td>รวมรายจ่าย / TOTAL EXPENSES</td><td class="r">'+n(expBlue)+'</td></tr>'
+    +'</tbody></table></div>';
+  h+='<div class="note">แหล่งข้อมูล / sources: ยอดขาย+ต้นทุน = ออเดอร์ของเดือนนี้ · รายจ่าย = หน้า Finance + เงินเดือนออฟฟิศ + บิลและค่าใช้จ่ายอื่น (เหมือนภาพรวมในแอป) · '
+    +'รายงานนี้นับเฉพาะรายการสีน้ำเงิน รายการสีเทาไม่รวมอยู่ในนี้ / this report counts blue items only, grey items are not included'
+    +(greyDropped>0?' ('+n(greyDropped)+' ฿)':'')+'</div>';
+  var CSS='*{box-sizing:border-box;margin:0;padding:0}'
+    +'@page{size:A4 portrait;margin:10mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;font-size:9.5pt}'
+    +'.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:8px}'
+    +'.hd h1{font-size:15pt}.hd .d{font-size:9pt;color:#444;text-align:right}'
+    +'.kpis{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}'
+    +'.kpi{flex:1 1 30%;border:1px solid #999;border-radius:4px;padding:5px 8px}'
+    +'.kpi.big{flex:1 1 100%;border:2px solid #111;background:#f0fdf4}'
+    +'.kpi span{display:block;font-size:7.5pt;color:#555;text-transform:uppercase}'
+    +'.kpi b{font-size:13pt}.kpi.big b{font-size:17pt}.kpi .neg{color:#b00}.kpi .pos{color:#15803d}'
+    +'.sec{margin-top:9px}'
+    +'.sect{font-size:10.5pt;font-weight:800;background:#f1f5f9;border:1px solid #999;padding:3px 7px;margin-bottom:3px;display:flex;justify-content:space-between}'
+    +'.stot{font-weight:800}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #bbb;padding:2.5px 6px;font-size:9pt;vertical-align:top}'
+    +'th{background:#f8fafc;font-size:8pt;text-transform:uppercase}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.r{text-align:right;white-space:nowrap}'
+    +'tfoot td{font-weight:800;background:#f1f5f9}'
+    +'tr.tot td{font-weight:800;font-size:11pt;border-top:2px solid #111;background:#f0fdf4}'
+    +'tr.sub td{font-weight:800;background:#f8fafc}'
+    +'.det{font-size:7.5pt;color:#666;margin-top:1px;line-height:1.35}'
+    +'.grey{color:#888}.warn{color:#b45309;font-size:7.5pt}'
+    +'.note{font-size:8pt;color:#555;margin-top:4px;line-height:1.5}'
+    +'.pgbreak{page-break-before:always}';
+  var body='<div class="hd"><h1>รายงานกำไร / Profit report · '+e(kpMLabel(mk))+'</h1>'
+    +'<div class="d">KP Wallpanel · บริษัท พิมมิแกรนด์ จำกัด<br>พิมพ์ / printed '
+    +now.toLocaleDateString('th-TH')+' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0')+'</div></div>'+h;
+  printReceiptDoc(body, CSS, '210mm', '297mm');
+}
 var _finProfOpen=(function(){ try{ return localStorage.getItem('kpFinProfOpen')==='1'; }catch(e){ return false; } })();
 function finProfToggle(){
   _finProfOpen=!_finProfOpen;
@@ -39648,6 +39803,10 @@ function finProfitRender(){
     h+=row('= 🏆 กำไรสุทธิ / Net profit','อัตรากำไรสุทธิ / net margin '+pct(p.nmBlue),n(p.npBlue),p.npBlue<0?'#dc2626':'#15803d','#f0fdf4',true);
     if(dual) h+=row('= กำไรสุทธิ รวมสีเทา / Net incl. grey','',n(p.npAll),p.npAll<0?'#dc2626':'var(--text3)','var(--bg2)',false);
   }
+  h+='<div style="display:flex;gap:6px;margin:2px 0 6px">'
+    +'<button type="button" onclick="finProfitReportPrint()" style="flex:1;padding:10px 12px;border:none;border-radius:var(--rs);background:#0f172a;color:#fff;font-size:12px;font-weight:800;cursor:pointer">🖨️ พิมพ์รายงานกำไร / Print profit report</button>'
+    +'<button type="button" onclick="finCostOpen()" style="padding:10px 12px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg2);color:var(--text);font-size:12px;font-weight:800;cursor:pointer">🏷️ ต้นทุน / Costs</button>'
+    +'</div>';
   h+='<div style="font-size:10.5px;color:var(--text2);line-height:1.6;margin-top:2px">'
     +'ต้นทุนคิดจากราคาซื้อต่อชิ้น × จำนวนที่ขายจริงในเดือนนี้ (แยกตามรหัสสินค้า) · ค่าใช้จ่ายชุดเดียวกับภาพรวมด้านบน<br>'
     +'cost = purchase price per piece × the pieces actually sold this month, per product code · expenses are the same set the overview above counts</div>';
