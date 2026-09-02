@@ -7860,7 +7860,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260902032;
+var KP_BUILD = 20260902033;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -39307,6 +39307,30 @@ function finSumRender(){
    full revenue — that would invent a margin. What is already costed is shown
    separately, so the number grows as the list gets filled.
    ══════════════════════════════════════════════════════════════════════════ */
+/* The purchase costs live inside acctData — a node that also carries every
+   imported invoice line, so the listener that loads the whole thing can arrive
+   late (or, on a slow first boot, not at all before someone opens this tab).
+   The profit figure needs nothing but the tiny cost map, so it gets its own
+   listener. Without this the tab would quietly report 0 % coverage and look
+   like nobody ever entered a price. */
+var _finCostReady=false;
+(function finCostListen(){
+  var tries=0;
+  var t=setInterval(function(){
+    if(!window.fbDB){ if(++tries>600) clearInterval(t); return; }   // 2 min grace
+    clearInterval(t);
+    try{
+      window.fbDB.ref('acctData/cost').on('value', function(snap){
+        acctData.cost = snap.val() || {};
+        _finCostReady = true;
+        try{
+          var v=document.getElementById('ofv-fin');
+          if(v && v.classList.contains('active')){ finProfitRender(); finCostList(); }
+        }catch(e){}
+      });
+    }catch(e){}
+  },200);
+})();
 function finProfit(mk){
   var sale=finSalesOfMonth(mk);
   var c={value:0,usable:false,coverage:0,coveredRev:0,uncoveredRev:0,exact:0,missing:{},nearFull:false};
@@ -39334,6 +39358,13 @@ function finProfToggle(){
 function finProfitRender(){
   var el=document.getElementById('fin-profit'); if(!el) return;
   var mk=_finMonthKey(), p=finProfit(mk);
+  // Costs not in yet: say so instead of showing a 0 % coverage that reads like
+  // "nobody entered any prices".
+  if(!_finCostReady && !Object.keys(acctData.cost||{}).length){
+    el.innerHTML='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:11px 13px;font-size:12px;color:var(--text2)">'
+      +'💰 กำไร / Profit · <span style="opacity:.7">กำลังโหลดต้นทุน… / loading purchase costs…</span></div>';
+    return;
+  }
   var n=function(v){ return Math.round(v).toLocaleString()+' ฿'; };
   var pct=function(v){ return (Math.round(v*10)/10).toLocaleString()+' %'; };
   var cov=p.cogs.coverage||0;
