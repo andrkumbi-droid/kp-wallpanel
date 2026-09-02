@@ -2467,6 +2467,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
           </div>
         </div>
       </div>
+    <!-- Printable reports: everything the tiles above only hint at -->
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button type="button" class="btnsm" onclick="salesReportPrint('month')" title="รายงานเดือนนี้ ละเอียด พิมพ์/PDF / detailed monthly report"><i class="ti ti-file-text"></i> 🖨 รายงานเดือน / Month report</button>
+      <button type="button" class="btnsm" onclick="salesReportPrint('year')" title="รายงานทั้งปี ละเอียด พิมพ์/PDF / detailed yearly report"><i class="ti ti-file-text"></i> 🖨 รายงานปี / Year report</button>
+    </div>
     <!-- Monthly Sales Breakdown -->
     <div class="stit">Monthly Sales / ยอดขายรายเดือน</div>
     <div class="msel" id="of-sales-msel"></div>
@@ -7875,7 +7880,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260902034;
+var KP_BUILD = 20260902035;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -9123,6 +9128,219 @@ var RECEIPT_PRINT_CSS = '@page{margin:0}'
   +'.rcpt-sign-label{font-size:7pt;color:#666;text-transform:uppercase;font-weight:600}';
 // cssOverride + w/h let a second kind of page (the carton label) reuse the very same
 // print path — that iframe trick is the only one that prints reliably on mobile.
+/* ══════════════════════════════════════════════════════════════════════════
+   SALES REPORT — month or year, on paper
+   --------------------------------------------------------------------------
+   Everything the tiles only summarise: revenue against cost, per month, zone,
+   product, channel, seller and customer. Built from `orders` alone (o.date =
+   when the order was written, the same basis the Sales tab uses), so it can
+   never disagree with the tiles above it. Where a purchase cost is known the
+   gross profit is shown next to the revenue; products without one are counted
+   in the revenue but left out of the margin, and the report says so rather
+   than quietly mixing the two.
+   ══════════════════════════════════════════════════════════════════════════ */
+function salesReportData(scope, mk){
+  var yr=(mk||kpNowMK()).slice(0,4);
+  var inScope=function(o){
+    var d=String(o.date||''); if(!d) return false;
+    return scope==='year' ? d.slice(0,4)===yr : d.slice(0,7)===mk;
+  };
+  var cost=acctData.cost||{};
+  var R={ orders:0, rev:0, paid:0, unpaid:0, cogs:0, cogsRev:0, noCostRev:0, panels:0, trims:0, clips:0,
+          byMonth:{}, byZone:{}, byProd:{}, byPay:{}, bySeller:{}, byCust:{}, byChannel:{}, days:{},
+          cancelled:0, cancelledRev:0 };
+  (orders||[]).forEach(function(o){
+    if(!o || !inScope(o)) return;
+    var amt=parseFloat(String(o.total||'').replace(/[^0-9.]/g,''))||0;
+    if(o.status==='cancelled'){ R.cancelled++; R.cancelledRev+=amt; return; }
+    R.orders++; R.rev+=amt;
+    var paid=parseFloat(o.paidAmount)||0;
+    if(!paid && o.payMethod) paid=amt;                 // booked as paid without an amount
+    R.paid+=Math.min(paid,amt); R.unpaid+=Math.max(0,amt-paid);
+    var mkk=String(o.date).slice(0,7);
+    var m=R.byMonth[mkk]||(R.byMonth[mkk]={n:0,rev:0,cogs:0,cogsRev:0,panels:0});
+    m.n++; m.rev+=amt;
+    var z=o.zone||'—'; var zz=R.byZone[z]||(R.byZone[z]={n:0,rev:0}); zz.n++; zz.rev+=amt;
+    var d=String(o.date).slice(0,10); R.days[d]=(R.days[d]||0)+amt;
+    var pm=o.payMethod||(o.payMethodPartial?o.payMethodPartial+' (มัดจำ)':'ยังไม่จ่าย / unpaid');
+    var pp=R.byPay[pm]||(R.byPay[pm]={n:0,rev:0}); pp.n++; pp.rev+=amt;
+    var sel=o.posSeller||o.createdBy||'—';
+    var ss=R.bySeller[sel]||(R.bySeller[sel]={n:0,rev:0,panels:0}); ss.n++; ss.rev+=amt;
+    var ch=String(o.contact||'').split('·')[0].trim()||'—';
+    var cc=R.byChannel[ch]||(R.byChannel[ch]={n:0,rev:0}); cc.n++; cc.rev+=amt;
+    var ckey=(o.customer&&o.customer!=='—'?o.customer:'')+' · '+(o.phone||'');
+    var cu=R.byCust[ckey]||(R.byCust[ckey]={n:0,rev:0,name:o.customer||'—',phone:o.phone||''}); cu.n++; cu.rev+=amt;
+    // line items: quantities and the cost of what was actually sold
+    (o.lineItems||[]).forEach(function(li){
+      if(!li||!li.code) return;
+      var q=parseInt(li.qty)||0; if(q<=0) return;
+      var la=parseFloat(li.amount)||0;
+      if(li.type==='panel'){ R.panels+=q; m.panels+=q; ss.panels+=q; }
+      else if(li.type==='lcorner'||li.type==='ttrim'||li.type==='utrim'||li.type==='tedge'||li.type==='uedge') R.trims+=q;
+      else if(li.type==='clips'||li.type==='free-clips'||li.type==='free-gift-clips') R.clips+=q;
+      if(AC_NONGOODS[li.type]) return;
+      var k=acCostKey(li.code, li.type), c=cost[k];
+      var p=R.byProd[k]||(R.byProd[k]={qty:0,rev:0,cogs:0,costed:true,type:li.type});
+      p.qty+=q; p.rev+=la;
+      if(c!=null&&c>0){ var cg=c*q; p.cogs+=cg; R.cogs+=cg; R.cogsRev+=la; m.cogs+=cg; m.cogsRev+=la; }
+      else { p.costed=false; R.noCostRev+=la; }
+    });
+  });
+  // Jan–Jun 2026 predate the season reset: only the monthly totals survive
+  // (KP_HIST_SALES), no orders and therefore no cost. They are carried in the
+  // revenue so the report agrees with the Year tile, and marked everywhere the
+  // detail is missing instead of showing a zero that looks like no business.
+  R.hist={}; R.histRev=0;
+  if(scope==='year'){
+    kpHistMonths(yr).forEach(function(k){
+      if(R.byMonth[k]) return;                      // real orders win over the old total
+      R.hist[k]=KP_HIST_SALES[k]; R.histRev+=KP_HIST_SALES[k];
+    });
+  }
+  R.revTotal = R.rev + R.histRev;
+  R.mk=mk; R.year=yr; R.scope=scope;
+  R.avgOrder = R.orders ? R.rev/R.orders : 0;
+  R.gp = R.cogsRev - R.cogs;                    // only over what is costed
+  R.gm = R.cogsRev>0 ? R.gp/R.cogsRev*100 : null;
+  R.coverage = (R.cogsRev+R.noCostRev)>0 ? R.cogsRev/(R.cogsRev+R.noCostRev)*100 : 0;
+  var dl=Object.keys(R.days);
+  R.bestDay = dl.sort(function(a,b){ return R.days[b]-R.days[a]; })[0]||'';
+  R.activeDays = dl.length;
+  return R;
+}
+function salesReportPrint(scope){
+  // follows the month picked in the Monthly Sales strip, so the paper matches
+  // what the person was just looking at
+  var mk=(typeof ofSalesMonth!=='undefined' && ofSalesMonth) ? ofSalesMonth : kpNowMK();
+  var R=salesReportData(scope, mk);
+  if(!R.orders){ alert('ไม่มีออเดอร์ในช่วงนี้ / no orders in this period'); return; }
+  var e=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var n=function(v){ return Math.round(v||0).toLocaleString(); };
+  var pct=function(v){ return (Math.round(v*10)/10)+' %'; };
+  var now=new Date();
+  var title = scope==='year' ? ('รายงานประจำปี / Year report '+R.year) : ('รายงานประจำเดือน / Month report '+kpMLabel(mk));
+  // ── tables ──
+  var tbl=function(head, rows, foot){
+    return '<table><thead><tr>'+head.map(function(h,i){ return '<th'+(i?' class="r"':'')+'>'+h+'</th>'; }).join('')+'</tr></thead><tbody>'
+      +rows.join('')+'</tbody>'+(foot||'')+'</table>';
+  };
+  var sortTop=function(obj, key, lim){
+    return Object.keys(obj).map(function(k){ var v=obj[k]; v._k=k; return v; })
+      .sort(function(a,b){ return (b[key]||0)-(a[key]||0); }).slice(0, lim||100);
+  };
+  var h='';
+  // KPI block
+  h+='<div class="kpis">'
+    +'<div class="kpi"><span>ยอดขาย / Revenue</span><b>'+n(R.revTotal)+' ฿</b>'
+      +(R.histRev>0?'<span style="font-size:7pt">รวมข้อมูลเก่า / incl. '+n(R.histRev)+' from old records</span>':'')+'</div>'
+    +'<div class="kpi"><span>ออเดอร์ / Orders</span><b>'+n(R.orders)+'</b>'
+      +(R.histRev>0?'<span style="font-size:7pt">เฉพาะที่มีรายละเอียด / detailed only</span>':'')+'</div>'
+    +'<div class="kpi"><span>เฉลี่ย/ออเดอร์ / Avg order</span><b>'+n(R.avgOrder)+' ฿</b></div>'
+    +'<div class="kpi"><span>แผ่น / Panels</span><b>'+n(R.panels)+'</b></div>'
+    +'<div class="kpi"><span>รับเงินแล้ว / Paid</span><b>'+n(R.paid)+' ฿</b></div>'
+    +'<div class="kpi"><span>ค้างชำระ / Outstanding</span><b class="neg">'+n(R.unpaid)+' ฿</b></div>'
+    +'</div>';
+  // profit
+  h+='<div class="sec"><div class="sect">💰 กำไรขั้นต้น / Gross profit</div>'
+    +'<table><tbody>'
+    +'<tr><td>ยอดขายที่มีต้นทุน / revenue with a known cost</td><td class="r">'+n(R.cogsRev)+' ฿</td></tr>'
+    +'<tr><td>ต้นทุนสินค้า / cost of goods sold</td><td class="r">−'+n(R.cogs)+' ฿</td></tr>'
+    +'<tr class="tot"><td>กำไรขั้นต้น / gross profit</td><td class="r">'+n(R.gp)+' ฿'+(R.gm!=null?'  ('+pct(R.gm)+')':'')+'</td></tr>'
+    +'</tbody></table>'
+    +'<div class="note">ครอบคลุมต้นทุน / cost coverage: <b>'+pct(R.coverage)+'</b>'
+      +(R.noCostRev>0?' · ยังไม่มีต้นทุน / not costed: '+n(R.noCostRev)+' ฿ (ไม่รวมในกำไร / excluded from the margin)':'')+'</div></div>';
+  // month breakdown (year only)
+  if(scope==='year'){
+    var ms=Object.keys(R.byMonth).concat(Object.keys(R.hist)).sort();
+    h+='<div class="sec"><div class="sect">📅 รายเดือน / By month</div>'
+      +tbl(['เดือน / Month','ออเดอร์','แผ่น','ยอดขาย / Revenue','ต้นทุน / COGS','กำไรขั้นต้น / GP','%'],
+        ms.map(function(k){
+          if(R.hist[k]!=null){          // old records: total only
+            return '<tr><td>'+e(kpMLabel(k))+' <span class="warn">ข้อมูลเก่า / old records</span></td>'
+              +'<td class="r">—</td><td class="r">—</td><td class="r">'+n(R.hist[k])+'</td>'
+              +'<td class="r">—</td><td class="r">—</td><td class="r">—</td></tr>';
+          }
+          var m=R.byMonth[k], gp=m.cogsRev-m.cogs, gm=m.cogsRev>0?gp/m.cogsRev*100:null;
+          return '<tr><td>'+e(kpMLabel(k))+'</td><td class="r">'+n(m.n)+'</td><td class="r">'+n(m.panels)+'</td>'
+            +'<td class="r">'+n(m.rev)+'</td><td class="r">'+n(m.cogs)+'</td><td class="r">'+n(gp)+'</td>'
+            +'<td class="r">'+(gm!=null?pct(gm):'—')+'</td></tr>';
+        }),
+        '<tfoot><tr><td>รวม / Total</td><td class="r">'+n(R.orders)+'</td><td class="r">'+n(R.panels)+'</td><td class="r">'+n(R.revTotal)+'</td><td class="r">'+n(R.cogs)+'</td><td class="r">'+n(R.gp)+'</td><td class="r">'+(R.gm!=null?pct(R.gm):'—')+'</td></tr></tfoot>')
+      +(R.histRev>0?'<div class="note">เดือนก่อนเดือน ก.ค. 2026 มีเฉพาะยอดรวม (ก่อนรีเซ็ตระบบ) จึงไม่มีต้นทุน/กำไร / months before Jul 2026 exist only as a monthly total from the old system, so they carry no cost or margin</div>':'')
+      +'</div>';
+  }
+  // zones
+  h+='<div class="sec"><div class="sect">🗺️ ตามโซน / By zone</div>'
+    +tbl(['โซน / Zone','ออเดอร์','ยอดขาย / Revenue','ส่วนแบ่ง / Share'],
+      sortTop(R.byZone,'rev').map(function(z){
+        return '<tr><td>'+e(z._k)+'</td><td class="r">'+n(z.n)+'</td><td class="r">'+n(z.rev)+'</td>'
+          +'<td class="r">'+pct(R.rev?z.rev/R.rev*100:0)+'</td></tr>';
+      }))+'</div>';
+  // products
+  var prods=sortTop(R.byProd,'rev');
+  h+='<div class="sec"><div class="sect">📦 ตามสินค้า / By product ('+prods.length+')</div>'
+    +tbl(['รหัส / Code','จำนวน / Qty','ยอดขาย / Revenue','ต้นทุน / COGS','กำไร / GP','%'],
+      prods.map(function(p){
+        var gp=p.costed?(p.rev-p.cogs):null, gm=(p.costed&&p.rev>0)?gp/p.rev*100:null;
+        return '<tr><td>'+e(p._k)+(p.costed?'':' <span class="warn">ไม่มีต้นทุน</span>')+'</td>'
+          +'<td class="r">'+n(p.qty)+'</td><td class="r">'+n(p.rev)+'</td>'
+          +'<td class="r">'+(p.costed?n(p.cogs):'—')+'</td>'
+          +'<td class="r">'+(gp!=null?n(gp):'—')+'</td><td class="r">'+(gm!=null?pct(gm):'—')+'</td></tr>';
+      }))+'</div>';
+  // payment + channel side by side
+  h+='<div class="sec"><div class="sect">💳 ตามการชำระเงิน / By payment</div>'
+    +tbl(['วิธี / Method','ออเดอร์','ยอด / Amount'],
+      sortTop(R.byPay,'rev').map(function(p){
+        return '<tr><td>'+e(p._k)+'</td><td class="r">'+n(p.n)+'</td><td class="r">'+n(p.rev)+'</td></tr>';
+      }))+'</div>';
+  h+='<div class="sec"><div class="sect">📣 ตามช่องทาง / By channel</div>'
+    +tbl(['ช่องทาง / Channel','ออเดอร์','ยอด / Amount'],
+      sortTop(R.byChannel,'rev',15).map(function(p){
+        return '<tr><td>'+e(p._k)+'</td><td class="r">'+n(p.n)+'</td><td class="r">'+n(p.rev)+'</td></tr>';
+      }))+'</div>';
+  // sellers
+  h+='<div class="sec"><div class="sect">👤 ตามผู้ขาย / By seller</div>'
+    +tbl(['ผู้ขาย / Seller','ออเดอร์','แผ่น / Panels','ยอดขาย / Revenue'],
+      sortTop(R.bySeller,'rev').map(function(s){
+        return '<tr><td>'+e(s._k)+'</td><td class="r">'+n(s.n)+'</td><td class="r">'+n(s.panels)+'</td><td class="r">'+n(s.rev)+'</td></tr>';
+      }))+'</div>';
+  // top customers
+  var cus=sortTop(R.byCust,'rev',25);
+  h+='<div class="sec"><div class="sect">🏆 ลูกค้าสูงสุด / Top customers (25)</div>'
+    +tbl(['ลูกค้า / Customer','เบอร์ / Phone','ออเดอร์','ยอดซื้อ / Revenue'],
+      cus.map(function(c){
+        return '<tr><td>'+e(c.name)+'</td><td>'+e(c.phone)+'</td><td class="r">'+n(c.n)+'</td><td class="r">'+n(c.rev)+'</td></tr>';
+      }))+'</div>';
+  h+='<div class="note">'
+    +'ยอดขาย = ตามวันที่สร้างออเดอร์ ไม่รวมที่ยกเลิก'+(R.cancelled?' ('+R.cancelled+' ออเดอร์ยกเลิก '+n(R.cancelledRev)+' ฿)':'')
+    +' · ต้นทุน = ราคาซื้อต่อชิ้น × จำนวนที่ขาย<br>'
+    +'revenue by order date, cancelled excluded · cost = purchase price per piece × quantity sold · '
+    +'วันที่ขายดีที่สุด / best day: '+e(R.bestDay||'—')+' ('+n(R.days[R.bestDay]||0)+' ฿) · วันที่มีการขาย / active days: '+n(R.activeDays)
+    +'</div>';
+  var CSS='*{box-sizing:border-box;margin:0;padding:0}'
+    +'@page{size:A4 portrait;margin:10mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;font-size:9.5pt}'
+    +'.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:8px}'
+    +'.hd h1{font-size:15pt}.hd .d{font-size:9pt;color:#444;text-align:right}'
+    +'.kpis{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}'
+    +'.kpi{flex:1 1 30%;border:1px solid #999;border-radius:4px;padding:5px 8px}'
+    +'.kpi span{display:block;font-size:7.5pt;color:#555;text-transform:uppercase}'
+    +'.kpi b{font-size:13pt}.kpi .neg{color:#b00}'
+    +'.sec{margin-top:10px;page-break-inside:auto}'
+    +'.sect{font-size:10.5pt;font-weight:800;background:#f1f5f9;border:1px solid #999;padding:3px 7px;margin-bottom:3px}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #bbb;padding:2.5px 6px;font-size:9pt}'
+    +'th{background:#f8fafc;font-size:8pt;text-transform:uppercase}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.r{text-align:right;white-space:nowrap}'
+    +'tfoot td{font-weight:800;background:#f1f5f9}'
+    +'tr.tot td{font-weight:800;font-size:11pt;border-top:2px solid #111}'
+    +'.warn{color:#b45309;font-size:7.5pt}'
+    +'.note{font-size:8pt;color:#555;margin-top:5px;line-height:1.5}';
+  var body='<div class="hd"><h1>'+e(title)+'</h1><div class="d">KP Wallpanel · บริษัท พิมมิแกรนด์ จำกัด<br>'
+    +'พิมพ์ / printed '+now.toLocaleDateString('th-TH')+' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0')+'</div></div>'+h;
+  printReceiptDoc(body, CSS, '210mm', '297mm');
+}
 function printReceiptDoc(bodyHTML, cssOverride, w, h){
   var old=document.getElementById('kp-print-iframe'); if(old&&old.parentNode) old.parentNode.removeChild(old);
   var f=document.createElement('iframe'); f.id='kp-print-iframe';
