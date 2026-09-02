@@ -2944,6 +2944,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="stit" style="margin-bottom:0">💼 Finance / การเงิน</div>
       <button type="button" class="btnsm" onclick="finRestoreOpen()" title="Restore closed categories / กู้คืนหมวดที่ปิดไว้"><i class="ti ti-history"></i> ♻️ Restore</button>
       <button type="button" class="btnsm" onclick="finCostReportOpen()" title="ทุกค่าใช้จ่ายรวมเงินเดือนออฟฟิศ / every cost incl. office salaries">📊 Cost report</button>
+      <button type="button" class="btnsm" onclick="finCostOpen()" title="ต้นทุนซื้อต่อชิ้น — ใช้คำนวณกำไร / purchase cost per piece, drives the profit figure">🏷️ ต้นทุน / Cost</button>
       <button type="button" class="btnsm btnsmp" onclick="finReportOpen()" title="Report + charts / รายงาน"><i class="ti ti-chart-pie"></i> Report / รายงาน</button>
     </div>
     <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Payments outside Bills &amp; Payroll — container, tax, installments, extra wages / การจ่ายเงินนอกบิลและนอกเงินเดือน</div>
@@ -2955,6 +2956,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <!-- Overview fold-out at the very top: sales of the month, every expense the
          office actually pays (payments + office salaries + bills), what is left. -->
     <div id="fin-summary" style="margin-bottom:12px"></div>
+    <!-- Profit fold-out: sales − cost of the goods actually sold = gross profit,
+         minus the same expenses the overview above counts = net profit. -->
+    <div id="fin-profit" style="margin-bottom:12px"></div>
     <!-- Entry form -->
     <div id="fin-entry" style="margin-bottom:10px"></div>
     <!-- Build the tree from right here, next to the form that fills it -->
@@ -2977,6 +2981,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="modal-overlay" id="fin-del-modal"><div class="modal" id="fin-del-body"></div></div>
   <!-- FINANCE: report — pick what goes in, charts + full breakdown -->
   <div class="modal-overlay" id="fin-report-modal"><div class="modal" id="fin-report-body" style="max-width:640px"></div></div>
+  <!-- FINANCE: purchase cost per piece — the one number the app cannot know -->
+  <div class="modal-overlay" id="fincost-modal"><div class="modal" id="fincost-body" style="max-width:680px"></div></div>
 
   <!-- BILLS ADD/EDIT MODAL -->
   <div class="modal-overlay" id="bills-modal">
@@ -7854,7 +7860,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260902030;
+var KP_BUILD = 20260902031;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -39282,6 +39288,276 @@ function finSumRender(){
     + row('= คงเหลือ / Result',resB,resB<0?'#dc2626':'var(--blue)','#eff6ff',true)
     + (dual ? row('= คงเหลือทั้งหมด / Result incl.',resA,resA<0?'#dc2626':'var(--text3)','var(--bg2)',true) : '');
 }
+/* ══════════════════════════════════════════════════════════════════════════
+   PROFIT — what is left after the goods themselves are paid for
+   --------------------------------------------------------------------------
+   The Overview above answers "sales minus what the office paid out". That is
+   NOT the profit: the panels in those orders cost money too, and that money was
+   spent months earlier, on a container. So the profit block takes the same
+   sales and the same expenses, and puts the cost of the goods ACTUALLY SOLD
+   in between:
+        sales − cost of goods sold = gross profit
+        gross profit − expenses    = net profit
+   The cost per piece comes from acctData.cost — the same store the Accounting
+   space uses, filled either by importing a supplier invoice or by hand in the
+   🏷️ ต้นทุน list next to this tab. Nothing is duplicated; both places write the
+   same node, so a price entered here shows up there and vice versa.
+   Honesty rule inherited from acCOGS(): as long as sold pieces have no cost,
+   the gross profit stays EMPTY instead of subtracting a partial cost from the
+   full revenue — that would invent a margin. What is already costed is shown
+   separately, so the number grows as the list gets filled.
+   ══════════════════════════════════════════════════════════════════════════ */
+function finProfit(mk){
+  var sale=finSalesOfMonth(mk);
+  var c={value:0,usable:false,coverage:0,coveredRev:0,uncoveredRev:0,exact:0,missing:{},nearFull:false};
+  try{ c=acCOGS(mk); }catch(e){}
+  var t=finMonthTotals(mk);
+  var gp = c.usable ? (sale.all - c.value) : null;
+  // partial: only over the products that DO have a cost — a progress figure
+  var gpPart = (gp==null && c.coveredRev>0) ? (c.coveredRev - c.exact) : null;
+  return {
+    rev: sale.all, cogs: c, exp: t,
+    gp: gp,
+    gm: (gp!=null && sale.all>0) ? gp/sale.all*100 : null,
+    gpPartial: gpPart,
+    npBlue: gp==null?null:gp-t.blue,
+    npAll:  gp==null?null:gp-t.all,
+    nmBlue: (gp!=null && sale.all>0) ? (gp-t.blue)/sale.all*100 : null
+  };
+}
+var _finProfOpen=(function(){ try{ return localStorage.getItem('kpFinProfOpen')==='1'; }catch(e){ return false; } })();
+function finProfToggle(){
+  _finProfOpen=!_finProfOpen;
+  try{ localStorage.setItem('kpFinProfOpen',_finProfOpen?'1':'0'); }catch(e){}
+  finProfitRender();
+}
+function finProfitRender(){
+  var el=document.getElementById('fin-profit'); if(!el) return;
+  var mk=_finMonthKey(), p=finProfit(mk);
+  var n=function(v){ return Math.round(v).toLocaleString()+' ฿'; };
+  var pct=function(v){ return (Math.round(v*10)/10).toLocaleString()+' %'; };
+  var cov=p.cogs.coverage||0;
+  var covOK=cov>=99.95;
+  // Head: the profit itself, so a folded block still answers the question.
+  var headVal = p.npBlue!=null ? n(p.npBlue) : '—';
+  var headCol = p.npBlue==null ? 'var(--text2)' : (p.npBlue<0?'#dc2626':'#15803d');
+  var head='<div onclick="finProfToggle()" style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--rs);padding:11px 13px;margin-bottom:'+(_finProfOpen?'8px':'0')+';cursor:pointer">'
+    +'<span style="font-size:12.5px;font-weight:800;color:var(--text);min-width:0">'
+      +'<i class="ti ti-chevron-'+(_finProfOpen?'down':'right')+'" style="font-size:14px;vertical-align:-2px;color:var(--text2)"></i> '
+      +'💰 กำไร / Profit · '+kpMLabel(mk)+'</span>'
+    +'<span style="font-size:16px;font-weight:900;color:'+headCol+';white-space:nowrap">'+headVal+'</span></div>';
+  if(!_finProfOpen){ el.innerHTML=head; return; }
+
+  var row=function(lbl,sub,val,col,bg,big,pre){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:'+bg+';border:1px solid var(--border);border-radius:var(--rs);padding:'+(big?'12px 14px':'9px 12px')+';margin-bottom:6px">'
+      +'<span style="font-size:12.5px;font-weight:700;color:var(--text);min-width:0">'+lbl
+        +(sub?'<div style="font-size:10.5px;font-weight:500;color:var(--text2);margin-top:1px">'+sub+'</div>':'')+'</span>'
+      +'<span style="font-size:'+(big?18:15)+'px;font-weight:900;color:'+col+';white-space:nowrap">'+(pre||'')+val+'</span></div>';
+  };
+  var h='';
+  h+=row('📈 ยอดขาย / Sales','ออเดอร์ทั้งเดือน ไม่รวมที่ยกเลิก / every order of the month, cancelled excluded',n(p.rev),'#00897b','#e0f2f1',true);
+
+  // ── cost of goods sold ──
+  var costSub = covOK
+    ? 'ต้นทุนซื้อของสินค้าที่ขายไป / what the sold pieces cost us'
+    : 'มีต้นทุนแล้ว '+pct(cov)+' ของยอดขาย / '+pct(cov)+' of sales is costed';
+  if(p.cogs.nearFull) costSub+=' · ส่วนที่เหลือประมาณการ / remainder estimated';
+  h+=row('📦 ต้นทุนสินค้า / Cost of goods', costSub,
+         p.cogs.value>0?n(p.cogs.value):'—', 'var(--orange-t)','#fff7ed',false, p.cogs.value>0?'−':'');
+
+  // ── gross profit ──
+  if(p.gp!=null){
+    h+=row('= 💵 กำไรขั้นต้น / Gross profit','อัตรากำไรขั้นต้น / margin '+pct(p.gm),n(p.gp),p.gp<0?'#dc2626':'#15803d','#f0fdf4',true);
+  } else {
+    var miss=Object.keys(p.cogs.missing||{});
+    h+='<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:var(--rs);padding:11px 13px;margin-bottom:6px">'
+      +'<div style="font-size:12.5px;font-weight:800;color:#92400e">= 💵 กำไรขั้นต้น / Gross profit — ยังคำนวณไม่ได้ / not yet</div>'
+      +'<div style="font-size:11px;color:#92400e;margin-top:3px;line-height:1.5">'
+        +'ยังไม่ได้ใส่ต้นทุนของสินค้าที่ขายไปบางรายการ ('+pct(100-cov)+' ของยอดขาย) — '
+        +'ถ้าหักต้นทุนแค่บางส่วนจากยอดขายเต็ม กำไรจะสูงเกินจริง<br>'
+        +'<span style="color:#b45309">some sold products have no purchase cost yet — subtracting a partial cost from the full revenue would invent a margin</span></div>'
+      +(p.gpPartial!=null?'<div style="font-size:11.5px;font-weight:700;color:#92400e;margin-top:5px">เฉพาะสินค้าที่ใส่ต้นทุนแล้ว / costed products only: '+n(p.gpPartial)+'</div>':'')
+      +(miss.length?'<div style="font-size:10.5px;color:#b45309;margin-top:4px">ขาด / missing: '+_esc(miss.slice(0,14).join(', '))+(miss.length>14?' +'+(miss.length-14):'')+'</div>':'')
+      +'<button type="button" onclick="finCostOpen()" style="margin-top:7px;padding:7px 12px;border:none;border-radius:var(--rs);background:#b45309;color:#fff;font-size:11.5px;font-weight:800;cursor:pointer">🏷️ ใส่ต้นทุน / enter the costs</button>'
+      +'</div>';
+  }
+
+  // ── expenses, broken out exactly like the overview counts them ──
+  var t=p.exp, dual=(t.all!==t.blue);
+  h+='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:6px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+      +'<span style="font-size:12.5px;font-weight:700">➖ รายจ่าย / Expenses</span>'
+      +'<span style="font-size:15px;font-weight:900;color:var(--blue)">−'+n(t.blue)+'</span></div>'
+    +'<div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.9">'
+      +'<div style="display:flex;justify-content:space-between"><span>💼 จ่ายในหน้า Finance / Finance payments</span><span style="font-weight:700;color:var(--text)">'+n(t.pay)+'</span></div>'
+      +'<div style="display:flex;justify-content:space-between"><span>👔 เงินเดือนออฟฟิศ / Office salaries</span><span style="font-weight:700;color:var(--text)">'+n(t.sal)+'</span></div>'
+      +'<div style="display:flex;justify-content:space-between"><span>🧾 บิล+ค่าใช้จ่ายอื่น / Bills mirror</span><span style="font-weight:700;color:var(--text)">'+n(t.bill)+'</span></div>'
+      +(dual?'<div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:3px;padding-top:3px;color:var(--text3)"><span>⬜ รายการสีเทา / grey items</span><span style="font-weight:700">'+n(t.payGrey+t.salGrey+t.billGrey)+'</span></div>':'')
+    +'</div></div>';
+
+  // ── net profit ──
+  if(p.npBlue!=null){
+    h+=row('= 🏆 กำไรสุทธิ / Net profit','อัตรากำไรสุทธิ / net margin '+pct(p.nmBlue),n(p.npBlue),p.npBlue<0?'#dc2626':'#15803d','#f0fdf4',true);
+    if(dual) h+=row('= กำไรสุทธิ รวมสีเทา / Net incl. grey','',n(p.npAll),p.npAll<0?'#dc2626':'var(--text3)','var(--bg2)',false);
+  }
+  h+='<div style="font-size:10.5px;color:var(--text2);line-height:1.6;margin-top:2px">'
+    +'ต้นทุนคิดจากราคาซื้อต่อชิ้น × จำนวนที่ขายจริงในเดือนนี้ (แยกตามรหัสสินค้า) · ค่าใช้จ่ายชุดเดียวกับภาพรวมด้านบน<br>'
+    +'cost = purchase price per piece × the pieces actually sold this month, per product code · expenses are the same set the overview above counts</div>';
+  el.innerHTML=head+h;
+}
+
+/* ── PURCHASE COST LIST ────────────────────────────────────────────────────
+   Every product that can appear on an order line, with the price we PAY for
+   one piece. Written straight to acctData/cost/<key> (field-level, not the
+   whole acctData node — two people editing at once must not overwrite each
+   other's work; acSync() would do exactly that). Clips are bought per piece
+   and sold per pack, so the key CLIP carries the price of a PACK — the list
+   says so instead of quietly meaning something else than it shows.
+   ─────────────────────────────────────────────────────────────────────────── */
+var _finCostQ='', _finCostFilter='all';
+function finCostOpen(){
+  _finCostQ=''; _finCostFilter='all';
+  var m=document.getElementById('fincost-modal'); if(!m) return;
+  finCostRender(); m.classList.add('open');
+}
+function finCostClose(){ var m=document.getElementById('fincost-modal'); if(m) m.classList.remove('open'); }
+// One row per product: panels always, accessories only when they are real for
+// us (in stock, sold at some point, or already priced) — the catalogue alone
+// carries 86 generated L/T/U codes most of which never existed here.
+function finCostRows(){
+  var cost=acctData.cost||{}, seen={}, out=[];
+  var soldQty={}, soldRev={};
+  try{
+    (orders||[]).forEach(function(o){
+      if(!o || o.status==='cancelled') return;
+      (o.lineItems||[]).forEach(function(li){
+        if(!li||!li.code||AC_NONGOODS[li.type]) return;
+        var q=parseInt(li.qty)||0; if(q<=0) return;
+        var k=acCostKey(li.code,li.type);
+        soldQty[k]=(soldQty[k]||0)+q; soldRev[k]=(soldRev[k]||0)+(acN(li.amount)||0);
+      });
+    });
+  }catch(e){}
+  var inStock={};
+  try{ (stockItems||[]).forEach(function(s){ if(s&&s.code) inStock[acCostKey(s.code)]=(parseInt(s.qty)||0)+(parseInt(s.damaged)||0)+(parseInt(s.precut)||0); }); }catch(e){}
+  var add=function(code,name,sell,grp,always){
+    var k=acCostKey(code); if(!k||seen[k]) return; seen[k]=1;
+    var sold=soldQty[k]||0, stk=inStock[k]||0, has=(cost[k]!=null&&cost[k]!=='');
+    if(!always && !sold && !stk && !has) return;
+    out.push({key:k, code:code, name:name||'', sell:sell||0, grp:grp,
+              sold:sold, stock:stk, cost:has?acN(cost[k]):null,
+              avg: sold>0 ? (soldRev[k]||0)/sold : 0});
+  };
+  (window.QT_PRODUCTS||[]).forEach(function(p){
+    if(!p||!p.code) return;
+    var m=(p.mat||'').toUpperCase();
+    if(m==='WPC'||m==='PVC') add(p.code,p.name,p.price,'panel',true);
+  });
+  (window.QT_PRODUCTS||[]).forEach(function(p){
+    if(!p||!p.code) return;
+    var m=(p.mat||'').toUpperCase();
+    if(m!=='WPC'&&m!=='PVC') add(p.code,p.name,p.price,/^CLIP/i.test(p.code)?'clip':'acc',false);
+  });
+  try{ (stockItems||[]).forEach(function(s){ if(s&&s.code) add(s.code,'',0,'acc',false); }); }catch(e){}
+  Object.keys(soldQty).forEach(function(k){ add(k,'',0,k==='CLIP'?'clip':'acc',false); });
+  Object.keys(cost).forEach(function(k){ add(k,'',0,k==='CLIP'?'clip':'acc',false); });
+  return out;
+}
+function finCostRender(){
+  var b=document.getElementById('fincost-body'); if(!b) return;
+  var rows=finCostRows();
+  var priced=rows.filter(function(r){ return r.cost!=null&&r.cost>0; }).length;
+  var soldRows=rows.filter(function(r){ return r.sold>0; });
+  var soldMissing=soldRows.filter(function(r){ return !(r.cost>0); }).length;
+  var q=_finCostQ.trim().toUpperCase();
+  var view=rows.filter(function(r){
+    if(_finCostFilter==='missing' && r.cost>0) return false;
+    if(_finCostFilter==='sold' && !r.sold) return false;
+    if(q && (r.code+' '+r.name).toUpperCase().indexOf(q)<0) return false;
+    return true;
+  });
+  // sold-but-uncosted first — those are the ones blocking the profit figure
+  view.sort(function(a,b2){
+    var ax=(a.sold>0&&!(a.cost>0))?0:1, bx=(b2.sold>0&&!(b2.cost>0))?0:1;
+    if(ax!==bx) return ax-bx;
+    if(b2.sold!==a.sold) return b2.sold-a.sold;
+    return String(a.code).localeCompare(String(b2.code),undefined,{numeric:true});
+  });
+  var chip=function(id,lbl){
+    var on=_finCostFilter===id;
+    return '<button type="button" onclick="_finCostFilter=\''+id+'\';finCostRender()" style="padding:5px 11px;border-radius:999px;font-size:11.5px;font-weight:700;cursor:pointer;border:1px solid '
+      +(on?'var(--blue);background:var(--blue);color:#fff':'var(--border);background:var(--bg);color:var(--text2)')+'">'+lbl+'</button>';
+  };
+  var money=function(v){ return Math.round(v).toLocaleString(); };
+  b.innerHTML='<div class="mhdr"><span class="mtit">🏷️ ต้นทุนซื้อต่อชิ้น / Purchase cost per piece</span>'
+    +'<button type="button" class="mclose" onclick="finCostClose()"><i class="ti ti-x"></i></button></div>'
+    +'<div style="font-size:11px;color:var(--text2);line-height:1.6;margin-bottom:8px">'
+      +'ราคาที่<b>เราจ่าย</b>ต่อ 1 ชิ้น (รวมค่าเรือ/ค่าใช้จ่ายนำเข้าแล้ว) — ใช้คำนวณกำไรขั้นต้น · คลิปใส่<b>ราคาต่อแพ็ค</b><br>'
+      +'what <b>we pay</b> for one piece, landed — this drives the profit figure · for clips enter the price of a PACK</div>'
+    +'<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">'
+      +'<div style="flex:1;min-width:150px;background:var(--bg2);border-radius:var(--rs);padding:7px 10px;font-size:11.5px;font-weight:700">'
+        +'ใส่แล้ว / priced: <span style="color:var(--green)">'+priced+'</span> / '+rows.length
+        +(soldMissing?' &nbsp;·&nbsp; <span style="color:#dc2626">ขายแล้วแต่ยังไม่มีต้นทุน / sold, no cost: '+soldMissing+'</span>':' &nbsp;·&nbsp; <span style="color:var(--green)">ครบทุกตัวที่ขาย / every sold product costed ✓</span>')
+      +'</div></div>'
+    +'<div style="display:flex;gap:5px;margin-bottom:8px;flex-wrap:wrap">'+chip('all','ทั้งหมด / all')+chip('sold','ที่เคยขาย / sold')+chip('missing','ยังไม่มีต้นทุน / no cost')+'</div>'
+    +'<input type="text" value="'+_esc(_finCostQ)+'" oninput="_finCostQ=this.value;finCostList()" placeholder="ค้นหารหัส เช่น 58 / search code" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:8px">'
+    +'<div id="fincost-list" style="border:1px solid var(--border);border-radius:var(--rs);max-height:52vh;overflow-y:auto"></div>'
+    +'<div style="font-size:10.5px;color:var(--text2);margin-top:8px;line-height:1.6">ราคานี้ใช้ร่วมกับหน้า Accounting (นำเข้าใบแจ้งหนี้ก็เขียนที่เดียวกัน) / shared with the Accounting space — an imported supplier invoice writes the same values</div>';
+  finCostList(view);
+}
+function finCostList(view){
+  var el=document.getElementById('fincost-list'); if(!el) return;
+  if(!view){
+    var rows=finCostRows(), q=_finCostQ.trim().toUpperCase();
+    view=rows.filter(function(r){
+      if(_finCostFilter==='missing' && r.cost>0) return false;
+      if(_finCostFilter==='sold' && !r.sold) return false;
+      if(q && (r.code+' '+r.name).toUpperCase().indexOf(q)<0) return false;
+      return true;
+    });
+    view.sort(function(a,b2){
+      var ax=(a.sold>0&&!(a.cost>0))?0:1, bx=(b2.sold>0&&!(b2.cost>0))?0:1;
+      if(ax!==bx) return ax-bx;
+      if(b2.sold!==a.sold) return b2.sold-a.sold;
+      return String(a.code).localeCompare(String(b2.code),undefined,{numeric:true});
+    });
+  }
+  var money=function(v){ return Math.round(v).toLocaleString(); };
+  el.innerHTML = view.length ? view.map(function(r){
+    var ref=r.avg>0?r.avg:r.sell;                       // what it sells for
+    var mg = (r.cost>0 && ref>0) ? (ref-r.cost)/ref*100 : null;
+    var warn = r.sold>0 && !(r.cost>0);
+    return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);'+(warn?'background:#fffbeb':'')+'">'
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="font-size:12.5px;font-weight:800">'+_esc(r.code)+(r.key==='CLIP'?' <span style="font-weight:600;color:var(--text2);font-size:10.5px">(ต่อแพ็ค / per pack)</span>':'')+'</div>'
+        +'<div style="font-size:10.5px;color:var(--text2)">'
+          +(r.name?_esc(r.name)+' · ':'')
+          +(ref>0?'ขาย / sells '+money(ref)+' ฿':'')
+          +(r.sold?' · ขายแล้ว / sold '+r.sold.toLocaleString():'')
+          +(r.stock?' · คลัง / stock '+r.stock.toLocaleString():'')
+        +'</div></div>'
+      +(mg!=null?'<div style="font-size:11px;font-weight:800;color:'+(mg<0?'#dc2626':(mg<20?'#b45309':'var(--green)'))+';white-space:nowrap">'+(Math.round(mg*10)/10)+'%</div>':'')
+      +'<input type="number" step="0.01" min="0" value="'+(r.cost!=null?r.cost:'')+'" placeholder="฿/ชิ้น" '
+        +'onchange="finCostSet(\''+r.key.replace(/['"\\]/g,'')+'\',this.value)" '
+        +'style="width:96px;flex-shrink:0;padding:7px 8px;border:1.5px solid '+(warn?'#fcd34d':'var(--border)')+';border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:13px;font-weight:700;text-align:right">'
+      +'</div>';
+  }).join('') : '<div style="padding:16px;text-align:center;color:var(--text2);font-size:12.5px">— ไม่พบสินค้า / nothing found —</div>';
+}
+function finCostSet(key, v){
+  if(!key) return;
+  var num=parseFloat(v);
+  acctData.cost=acctData.cost||{};
+  // Field-level write: acSync() would push the WHOLE acctData node and wipe
+  // whatever another device changed in the meantime.
+  try{
+    if(!(num>0)){ delete acctData.cost[key]; if(window.fbDB) window.fbDB.ref('acctData/cost/'+key).remove(); }
+    else { num=Math.round(num*100)/100; acctData.cost[key]=num; if(window.fbDB) window.fbDB.ref('acctData/cost/'+key).set(num); }
+  }catch(e){}
+  try{ auditAdd({type:'payment', area:'finance', orderId:'🏷️ '+key, by:(typeof currentStaffName!=='undefined'?currentStaffName:''),
+       detail:'ต้นทุนซื้อ / purchase cost '+(num>0?num+' ฿':'ลบ / cleared')}); }catch(e){}
+  finCostList();
+  try{ finProfitRender(); }catch(e){}
+}
 function finRender(){
   if(kpHoldWhileTyping('fin-tree', finRender)) return;
   try{ if(!document.getElementById('fin-e-section')) finEntryRender(); }catch(e){}
@@ -39316,6 +39592,7 @@ function finRender(){
   }
   // ── Head of the tab: what came in, what went out, what is left ────────────
   finSumRender();
+  try{ finProfitRender(); }catch(e){}   // …and what is left once the goods are paid for
   var html='', secs=finSecsFor(mk);
   var box=function(inner){ return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px">'+inner+'</div>'; };
   secs.forEach(function(s,si){
