@@ -681,11 +681,11 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
     <div class="brand"><b>K<em>P</em></b><span class="wp">WALLPANEL</span></div>
     <div style="flex:1"></div>
     <!-- who is logged in — display only; sales + commission live in the office payroll -->
-    <div class="chip" id="seller-chip"
-      style="background:#fff;border:1.5px solid var(--border2);color:var(--text2);min-height:44px;font-size:14.5px;font-weight:600;position:relative">
+    <button class="chip press" id="seller-chip" onclick="posCustOpen()" title="ค้นหาลูกค้าเก่า / look up a customer"
+      style="background:#fff;border:1.5px solid var(--border2);color:var(--text2);min-height:44px;font-size:14.5px;font-weight:600;position:relative;cursor:pointer">
       👤 <span id="seller-name">—</span>
       <span class="badge gold hidden" id="pend-badge" title="รอออฟฟิศยืนยันโซน / waiting for office">0</span>
-    </div>
+    </button>
     <button class="iconbtn press" onclick="posCartOpen()" title="ตะกร้า / cart">
       <svg fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.6"/><circle cx="17" cy="20" r="1.6"/><path stroke-linecap="round" d="M3 4h2l2.6 11.2a1.5 1.5 0 0 0 1.47 1.15h7.9a1.5 1.5 0 0 0 1.45-1.1L20.5 8H6"/></svg>
       <span class="badge hidden" id="cart-badge">0</span>
@@ -839,7 +839,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
       <h4>👤 ข้อมูลลูกค้า <small style="color:var(--text2);font-weight:500">/ customer</small></h4>
       <div class="fgrid">
         <div id="f-cust"><label class="fl">ชื่อลูกค้า <small id="cust-opt">(ไม่บังคับ / optional)</small></label><input type="text" id="ck-cust" placeholder="ชื่อ / name"><div class="err-t">กรุณาใส่ชื่อลูกค้า</div></div>
-        <div id="f-phone"><label class="fl">เบอร์โทร <small>/ phone</small></label><input type="tel" inputmode="tel" id="ck-phone" placeholder="08x-xxx-xxxx"><div class="err-t">กรุณาใส่เบอร์โทร 10 หลัก</div></div>
+        <div id="f-phone"><label class="fl">เบอร์โทร <small>/ phone</small></label><input type="tel" inputmode="tel" data-phone="1" id="ck-phone" placeholder="08x-xxx-xxxx"><div class="err-t">กรุณาใส่เบอร์โทร 10 หลัก</div></div>
         <div><label class="fl">ช่องทางติดต่อ <small>(ไม่บังคับ)</small></label>
           <select id="ck-contact-ch">
             <option value="">— เลือก / select —</option>
@@ -1020,6 +1020,19 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   </div>
 </div>
 
+<!-- customer lookup: type a phone number, see what that customer bought before -->
+<section id="scr-cust" class="sheet">
+  <div class="sheet-top">
+    <button class="iconbtn press" onclick="posCustClose()"><svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M15 5l-7 7 7 7"/></svg></button>
+    <h2>ค้นหาลูกค้า <small style="color:var(--text2);font-size:13px;font-weight:500">/ customer lookup</small></h2>
+  </div>
+  <div style="max-width:760px;margin:0 auto;padding:16px 16px 40px">
+    <label class="fl">เบอร์โทรลูกค้า <small>/ phone — พิมพ์ 4 ตัวท้ายก็พอ / last 4 digits are enough</small></label>
+    <input type="tel" inputmode="tel" data-phone="1" id="cust-q" class="biginput num" placeholder="08x-xxx-xxxx" oninput="posCustSearch()">
+    <div id="cust-res" style="margin-top:16px"></div>
+  </div>
+</section>
+
 <!-- one-button notice (missing photo etc.) -->
 <div class="pin-sheet" id="notice-sheet" onclick="if(event.target===this)posNoticeClose()">
   <div class="pin-card">
@@ -1052,7 +1065,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
    payFeed, orderPhotos, auditLog, pushQueue) so office/warehouse/kiosk
    pick everything up without changes. Season-scoped via PDB (v2/).
    ═══════════════════════════════════════════════════════════════════════ */
-var POS_BUILD='pos-1.1.0';
+var POS_BUILD='pos-1.2.0';
 document.getElementById('pos-ver').textContent=POS_BUILD;
 var KP_DEV_ID='pos'+Math.random().toString(36).slice(2,9)+Date.now().toString(36);
 
@@ -1202,8 +1215,13 @@ function posConfirmYes(){ var cb=_confCb; posConfirmNo(); if(cb) cb(); }
    pointerdown is cancelled before the input can take focus, so the system
    keyboard never appears. OK writes the value back and fires input+change,
    so all the oninput/onchange recalcs run exactly as if it was typed. */
-var _numTarget=null, _numRaw='', _numOpenTs=0;
-function _isNumInput(t){ return t && t.tagName==='INPUT' && t.type==='number' && !t.disabled && !t.readOnly; }
+var _numTarget=null, _numRaw='', _numOpenTs=0, _numPhone=false;
+// data-phone fields use the same pad but keep the raw string: parseFloat would
+// eat the leading zero of 08x-xxx-xxxx and a phone number is not a quantity.
+function _isNumInput(t){
+  return t && t.tagName==='INPUT' && !t.disabled && !t.readOnly
+    && (t.type==='number' || t.dataset.phone==='1');
+}
 // pointerdown only BLOCKS focus (so the tablet keyboard never opens); the pad
 // itself opens on the click that follows. Opening on pointerdown made the
 // leftover click land on the pad's own backdrop and close it instantly.
@@ -1225,6 +1243,13 @@ function numLabelFor(inp){
   return inp.placeholder || 'ใส่ตัวเลข / enter number';
 }
 function numFmt(s){
+  if(_numPhone){
+    var d=String(s||'').replace(/\D/g,'');
+    if(!d) return '—';
+    if(d.length<=3) return d;
+    if(d.length<=6) return d.slice(0,3)+'-'+d.slice(3);
+    return d.slice(0,3)+'-'+d.slice(3,6)+'-'+d.slice(6,10);
+  }
   if(!s) return '0';
   var i=s.indexOf('.');
   var ip=(i<0?s:s.slice(0,i)).replace(/^0+(?=\d)/,'') || '0';
@@ -1233,7 +1258,8 @@ function numFmt(s){
 }
 function numPadOpen(inp){
   _numTarget=inp; _numOpenTs=Date.now();
-  _numRaw=String(inp.value||'').replace(/[^0-9.]/g,'');
+  _numPhone = inp.dataset.phone==='1';
+  _numRaw=String(inp.value||'').replace(_numPhone?/\D/g:/[^0-9.]/g,'');
   $('num-label').textContent=numLabelFor(inp);
   numPadPaint();
   $('num-sheet').classList.add('on');
@@ -1244,6 +1270,11 @@ function numPadBackdrop(ev){
 }
 function numPadPaint(){ $('num-display').textContent=numFmt(_numRaw); }
 function numKey(k){
+  if(_numPhone){
+    if(k==='.') return;                       // no decimal point in a phone number
+    if(_numRaw.length>=10) return;
+    _numRaw+=k; numPadPaint(); return;
+  }
   if(k==='.'){
     if(_numRaw.indexOf('.')>=0) return;
     _numRaw=_numRaw===''?'0.':_numRaw+'.';
@@ -1257,7 +1288,7 @@ function numDel(){ _numRaw=_numRaw.slice(0,-1); numPadPaint(); }
 function numPadClose(){ $('num-sheet').classList.remove('on'); _numTarget=null; _numRaw=''; }
 function numPadOk(){
   var t=_numTarget; if(!t){ numPadClose(); return; }
-  var v = _numRaw==='' ? '' : String(parseFloat(_numRaw)||0);
+  var v = _numPhone ? _numRaw : (_numRaw==='' ? '' : String(parseFloat(_numRaw)||0));
   numPadClose();
   t.value=v;
   try{ t.dispatchEvent(new Event('input',{bubbles:true})); }catch(e){}
@@ -1513,7 +1544,7 @@ function enterShop(){
 }
 
 /* ═══════════════ NAV ═══════════════ */
-var SCRS=['login','shop','calc','cart','quote','checkout','confirm','pay','done'];
+var SCRS=['login','shop','calc','cart','quote','checkout','confirm','pay','done','cust'];
 function posGo(name){
   SCRS.forEach(function(s){ var el=$('scr-'+s); if(el) el.classList.toggle('on', s===name); });
   window.scrollTo(0,0);
@@ -2099,10 +2130,18 @@ function posCreate(){
     bad = ckErr('f-addr', !($('ck-addr').value||'').trim()) | bad;
     bad = ckErr('f-prov', !($('ck-province').value||'').trim()) | bad;
   } else {
-    ['f-cust','f-phone','f-addr','f-prov'].forEach(function(i){ ckErr(i,false); });
-    if(phone && !/^0\d{9}$/.test(phone.replace(/[^0-9]/g,''))){ bad = ckErr('f-phone', true) || bad; }
+    // The phone number is what turns a walk-in into a customer we can find
+    // again — buildCustomers() keys on it, so a sale without one never shows
+    // up in the Customers tab.
+    ['f-cust','f-addr','f-prov'].forEach(function(i){ ckErr(i,false); });
+    bad = ckErr('f-phone', !/^0\d{9}$/.test(phone.replace(/[^0-9]/g,''))) | bad;
   }
-  if(bad){ toast('กรุณากรอกข้อมูลที่จำเป็น / missing fields'); chime(false); return; }
+  if(bad){
+    posNotice(!/^0\d{9}$/.test(phone.replace(/[^0-9]/g,''))
+      ? '📱 กรุณาใส่เบอร์โทรลูกค้า (10 หลัก)\nลูกค้าจะได้อยู่ในระบบ ค้นหาเจอครั้งหน้า\n\nPlease enter the customer\'s phone number'
+      : 'กรุณากรอกข้อมูลที่จำเป็น\nPlease fill in the required fields');
+    chime(false); return;
+  }
   if(ck.tax && !($('tax-tin').value||'').trim() && !($('tax-name').value||'').trim()){
     toast('ใส่ชื่อหรือเลขผู้เสียภาษี สำหรับใบกำกับ'); return;
   }
@@ -2485,6 +2524,99 @@ function fillReceipt(lo){
     +'<table><tr><th>รายการ / Item</th><th>จำนวน</th><th>฿/หน่วย</th><th>รวม</th></tr>'+rows.join('')+'</table>'
     +'<div style="font-size:12.5px;margin-top:4px">'+payLine+'</div>'
     +'<div class="rc-foot">ขอบคุณที่อุดหนุน / Thank you!<br>โอนชำระ: SCB ไทยพาณิชย์ · บริษัท พิมมิแกรนด์ จำกัด · 330-282-3788</div>';
+}
+
+/* ═══════════════ CUSTOMER LOOKUP ═══════════════
+   Same source as the office Customers tab: the orders themselves, keyed by
+   phone number. Nothing extra is stored — which is exactly why a POS sale
+   needs a phone number to ever show up there.
+   The orders are fetched once, on the first lookup, and kept for the session:
+   ~2 MB is too much to carry on every boot but fine to ask for when someone
+   actually wants to know what a customer bought last time. */
+var _custOrders=null, _custLoading=false;
+function posCustOpen(){
+  $('cust-q').value=''; $('cust-res').innerHTML='';
+  posGo('cust');
+  if(!_custOrders && !_custLoading) posCustLoad();
+}
+function posCustClose(){ posGo(me?'shop':'login'); }
+function posCustLoad(cb){
+  _custLoading=true;
+  $('cust-res').innerHTML='<div style="text-align:center;color:var(--text2);padding:26px">กำลังโหลดประวัติลูกค้า… / loading customer history…</div>';
+  PDB.ref('orders').once('value', function(s){
+    var v=s.val()||{};
+    _custOrders=Object.keys(v).map(function(k){ return v[k]; }).filter(Boolean);
+    _custLoading=false;
+    if(cb) cb(); else posCustSearch();
+  }, function(){
+    _custLoading=false;
+    $('cust-res').innerHTML='<div style="text-align:center;color:var(--red);padding:26px">โหลดไม่สำเร็จ ลองใหม่ / could not load</div>';
+  });
+}
+function normPhoneP(p){ return String(p||'').replace(/\D/g,''); }
+function posCustSearch(){
+  var q=normPhoneP($('cust-q').value);
+  var el=$('cust-res');
+  if(q.length<4){ el.innerHTML='<div style="text-align:center;color:var(--text2);padding:26px">พิมพ์อย่างน้อย 4 ตัว / type at least 4 digits</div>'; return; }
+  if(!_custOrders){ if(!_custLoading) posCustLoad(); return; }
+  // group the matching orders by phone — one card per customer
+  var by={};
+  _custOrders.forEach(function(o){
+    if(!o || o.status==='cancelled') return;
+    var ph=normPhoneP(o.phone); if(!ph || ph.indexOf(q)<0) return;
+    var c=by[ph]||(by[ph]={phone:ph, name:'', orders:[], total:0, last:''});
+    c.orders.push(o);
+    var amt=parseFloat(String(o.total||'').replace(/[^0-9.]/g,''))||0;
+    c.total+=amt;
+    if((o.date||'')>=(c.last||'')){ c.last=o.date||c.last; if(o.customer&&o.customer!=='—') c.name=o.customer; }
+  });
+  var list=Object.keys(by).map(function(k){ return by[k]; })
+    .sort(function(a,b){ return (b.last||'').localeCompare(a.last||''); });
+  if(!list.length){
+    el.innerHTML='<div style="text-align:center;color:var(--text2);padding:26px;line-height:1.7">ไม่พบลูกค้าเบอร์นี้ / no customer with this number<br><small>ลูกค้าใหม่ — ขายได้ตามปกติ / a new customer, just sell as usual</small></div>';
+    return;
+  }
+  el.innerHTML=list.slice(0,8).map(function(c){
+    var ords=c.orders.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+    return '<div class="opt-card" style="padding:14px 16px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">'
+        +'<div><b style="font-size:17px">'+esc(c.name||'—')+'</b>'
+          +'<div style="font-size:13.5px;color:var(--gold-deep);font-weight:700">'+esc(fmtPhone(c.phone))+'</div></div>'
+        +'<div style="text-align:right"><div style="font-size:12.5px;color:var(--text2)">'+c.orders.length+' ครั้ง / orders</div>'
+          +'<b class="num" style="font-size:16px">'+fmtB(c.total)+'</b></div>'
+      +'</div>'
+      +'<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">'
+        +ords.slice(0,8).map(function(o){
+          var st=o.status==='delivered'?'<span class="st-pill st-delivered">ส่งแล้ว</span>'
+                :o.status==='cancelled'?'':'<span class="st-pill st-packing">'+esc(o.status)+'</span>';
+          return '<div style="padding:7px 0;border-bottom:1px dashed var(--border)">'
+            +'<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'
+              +'<b style="font-size:14px">'+esc(o.id)+'</b>'
+              +'<span style="font-size:12.5px;color:var(--text2)">'+esc(o.date||'')+'</span>'
+              +'<b class="num" style="font-size:14px">'+esc(o.total||'')+'</b>'+st
+            +'</div>'
+            +'<div style="font-size:12.5px;color:var(--text2);margin-top:2px">'+esc(o.panels||'—')
+              +(o.lcorner&&o.lcorner!=='—'?' · '+esc(o.lcorner):'')
+              +(o.clips?' · คลิป '+fmt(o.clips):'')+'</div>'
+          +'</div>';
+        }).join('')
+        +(ords.length>8?'<div style="font-size:12px;color:var(--text2);padding-top:6px">+ อีก '+(ords.length-8)+' ออเดอร์ / more</div>':'')
+      +'</div>'
+      +'<button class="btn btn-gold press" style="width:100%;margin-top:12px;min-height:50px" onclick="posCustUse(\''+c.phone+'\',\''+esc(String(c.name||'').replace(/['"\\]/g,''))+'\')">'
+        +'ใช้ลูกค้ารายนี้ / use this customer</button>'
+    +'</div>';
+  }).join('');
+}
+function fmtPhone(p){
+  var d=normPhoneP(p);
+  return d.length===10 ? d.slice(0,3)+'-'+d.slice(3,6)+'-'+d.slice(6) : d;
+}
+// carry the customer straight into the checkout form
+function posCustUse(phone, name){
+  $('ck-phone').value=phone;
+  if(name) $('ck-cust').value=name;
+  posCustClose();
+  toast('✓ ใส่ข้อมูลลูกค้าแล้ว / customer filled in');
 }
 
 /* ═══════════════ MY SALES + PENDING ═══════════════ */
