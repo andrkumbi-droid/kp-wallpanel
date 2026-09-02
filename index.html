@@ -1393,6 +1393,21 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         finBillGrey = snap.val() || {};
         try{ if(document.getElementById('ofv-fin')&&document.getElementById('ofv-fin').classList.contains('active')) finRender(); }catch(e){}
       });
+      // Purchase cost per product — drives the profit block. Subscribed HERE, with
+      // the other small nodes, and not next to the code that uses it: Firebase
+      // serves every subscription over one connection in registration order, so a
+      // listener declared at the bottom of the file queues up behind the whole
+      // startup download and can take a minute to arrive. acctData itself is
+      // declared far below; the callback runs long after that, so writing into it
+      // is safe (guarded anyway).
+      db.ref('acctData/cost').on('value', function(snap) {
+        try{
+          acctData.cost = snap.val() || {};
+          window._finCostReady = true;
+          var v=document.getElementById('ofv-fin');
+          if(v && v.classList.contains('active')){ finProfitRender(); finCostList(); }
+        }catch(e){}
+      });
       // Lightweight photo index (counts/metadata only, NOT the image data) so the
       // Pictures tab can list orders without downloading every photo on startup.
       db.ref('photoIndex').on('value', function(snap) {
@@ -7860,7 +7875,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260902033;
+var KP_BUILD = 20260902034;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -39313,24 +39328,8 @@ function finSumRender(){
    The profit figure needs nothing but the tiny cost map, so it gets its own
    listener. Without this the tab would quietly report 0 % coverage and look
    like nobody ever entered a price. */
-var _finCostReady=false;
-(function finCostListen(){
-  var tries=0;
-  var t=setInterval(function(){
-    if(!window.fbDB){ if(++tries>600) clearInterval(t); return; }   // 2 min grace
-    clearInterval(t);
-    try{
-      window.fbDB.ref('acctData/cost').on('value', function(snap){
-        acctData.cost = snap.val() || {};
-        _finCostReady = true;
-        try{
-          var v=document.getElementById('ofv-fin');
-          if(v && v.classList.contains('active')){ finProfitRender(); finCostList(); }
-        }catch(e){}
-      });
-    }catch(e){}
-  },200);
-})();
+// set by the acctData/cost listener registered up with the other Firebase
+// subscriptions — see the comment there for why it does not live down here.
 function finProfit(mk){
   var sale=finSalesOfMonth(mk);
   var c={value:0,usable:false,coverage:0,coveredRev:0,uncoveredRev:0,exact:0,missing:{},nearFull:false};
@@ -39360,7 +39359,7 @@ function finProfitRender(){
   var mk=_finMonthKey(), p=finProfit(mk);
   // Costs not in yet: say so instead of showing a 0 % coverage that reads like
   // "nobody entered any prices".
-  if(!_finCostReady && !Object.keys(acctData.cost||{}).length){
+  if(!window._finCostReady && !Object.keys(acctData.cost||{}).length){
     el.innerHTML='<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:11px 13px;font-size:12px;color:var(--text2)">'
       +'💰 กำไร / Profit · <span style="opacity:.7">กำลังโหลดต้นทุน… / loading purchase costs…</span></div>';
     return;
