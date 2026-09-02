@@ -286,6 +286,12 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   transition:all .16s;
 }
 .fchip.on{ background:var(--ink); color:var(--gold); border-color:var(--ink); }
+.fsearch{ flex:0 0 auto; }
+.fsearch input{
+  width:210px; min-height:48px; padding:10px 16px; border-radius:99px;
+  border:1.5px solid var(--border2); background:#fff; font-size:15px;
+}
+.fsearch input:focus{ border-color:var(--gold3); box-shadow:0 0 0 3px rgba(212,175,55,.22); }
 .pgrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:14px; padding:14px 16px 90px; }
 .pcard{
   background:var(--card); border:1px solid var(--border); border-radius:var(--r);
@@ -520,7 +526,9 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   background:linear-gradient(165deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
   border:1px solid rgba(212,175,55,.3); border-radius:22px; padding:20px 22px; margin-bottom:14px;
 }
-.cf-line{ display:flex; justify-content:space-between; gap:14px; padding:9px 0; border-bottom:1px dashed rgba(245,239,224,.14); font-size:16px; }
+.cf-line{ display:flex; justify-content:space-between; align-items:center; gap:14px; padding:9px 0; border-bottom:1px dashed rgba(245,239,224,.14); font-size:16px; }
+.cf-line .l{ flex:1; min-width:0; }
+.cf-thumb{ width:48px; height:48px; border-radius:10px; object-fit:cover; flex:0 0 auto; border:1px solid rgba(212,175,55,.35); }
 .cf-line:last-child{ border-bottom:none; }
 .cf-line .l small{ display:block; color:var(--cream2); font-size:12.5px; }
 .cf-line .r{ font-weight:700; white-space:nowrap; font-variant-numeric:tabular-nums; }
@@ -781,6 +789,8 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
     </div>
   </div>
   <div class="sheet-bar">
+    <!-- office staff only: copy the quote text, same format as the app's Quotation tab -->
+    <button class="btn btn-ghost press hidden" id="cart-quote-btn" style="min-width:170px" onclick="posQuoteCopy()">📋 ใบเสนอราคา<span class="sub-en">copy quote</span></button>
     <button class="btn btn-gold press" style="flex:1" onclick="posCheckoutOpen()">ดำเนินการขาย →<span class="sub-en">checkout</span></button>
   </div>
 </section>
@@ -1487,11 +1497,13 @@ function posFullscreen(){
 }
 
 /* ═══════════════ PRODUCT GRID ═══════════════ */
-var _filter='ALL';
+var _filter='ALL', _q='';
+function posSearch(v){ _q=v||''; renderGrid(); }
 function buildFilters(){
   var widths=[]; products.forEach(function(p){ if(p.w>0 && widths.indexOf(p.w)<0) widths.push(p.w); });
   widths.sort(function(a,b){ return a-b; });
-  var html='<button class="fchip'+(_filter==='ALL'?' on':'')+'" onclick="posFilter(\'ALL\')">ทั้งหมด</button>'
+  var html='<div class="fsearch"><input id="pos-search" type="search" placeholder="🔍 ค้นหา เช่น 58 / search" value="'+esc(_q)+'" oninput="posSearch(this.value)"></div>'
+    +'<button class="fchip'+(_filter==='ALL'?' on':'')+'" onclick="posFilter(\'ALL\')">ทั้งหมด</button>'
     +'<button class="fchip'+(_filter==='WPC'?' on':'')+'" onclick="posFilter(\'WPC\')">WPC</button>'
     +'<button class="fchip'+(_filter==='PVC'?' on':'')+'" onclick="posFilter(\'PVC\')">PVC</button>'
     +widths.map(function(w){ return '<button class="fchip'+(_filter==='w'+w?' on':'')+'" onclick="posFilter(\'w'+w+'\')">'+w+' ซม.</button>'; }).join('');
@@ -1507,6 +1519,12 @@ function renderGrid(){
   list=list.filter(function(p){ return !soldOut[p.code] || restockTxt(p.code); });
   if(_filter==='WPC'||_filter==='PVC') list=list.filter(function(p){ return p.mat===_filter; });
   if(/^w/.test(_filter)) list=list.filter(function(p){ return 'w'+p.w===_filter; });
+  // search: "58" finds KP058, "มูจิ" finds by colour name
+  var q=_q.trim();
+  if(q){
+    var qu=q.toUpperCase();
+    list=list.filter(function(p){ return p.code.toUpperCase().indexOf(qu)>=0 || String(p.name||'').indexOf(q)>=0; });
+  }
   g.innerHTML=list.map(function(p){
     var so=!!soldOut[p.code];
     var st=stockOf(p.code);
@@ -1605,9 +1623,10 @@ function buildAccRows(p){
 function accAdd(k){
   var base=_acc.find(function(a){ return a.key===k; }); if(!base) return;
   var row={key:k+'x'+Date.now(), label:base.label, en:'อีกแบบ / another type', fam:base.fam, code:'', qty:0, type:base.type, extra:true};
-  // keep the clip-pack row at the bottom
-  var pi=_acc.findIndex(function(a){ return a.special==='packs'; });
-  if(pi<0){ _acc.push(row); } else { _acc.splice(pi,0,row); }
+  // directly under its own family row (after the last row of that family)
+  var last=-1;
+  for(var i=0;i<_acc.length;i++){ if(!_acc[i].special && _acc[i].type===base.type) last=i; }
+  _acc.splice(last+1,0,row);
   renderAccRows();
   accPickOpen(_acc.indexOf(row));
 }
@@ -1709,6 +1728,30 @@ function cartAddLine(l){
 function saveCart(){ try{ localStorage.setItem('kp-pos-cart', JSON.stringify(cart)); }catch(e){} }
 function restoreCart(){ try{ var c=JSON.parse(localStorage.getItem('kp-pos-cart')||'null'); if(c&&c.lines) cart=c; }catch(e){} }
 function posCartOpen(){ posGo('cart'); }
+/* copy the quote as text — same style as the app's Quotation tab. Office only. */
+function posQuoteCopy(){
+  if(!cart.lines.length){ toast('ตะกร้าว่าง / cart empty'); return; }
+  var t=cartTotals();
+  var L=['━━━','KP Wallpanel – ใบเสนอราคา','━━━'];
+  cart.lines.forEach(function(l){
+    var sp=lineShowPrice(l), unit=l.type==='panel'?'แผ่น':'เส้น';
+    L.push(l.code+(l.name?' ('+l.name+')':'')+(l.grade==='B'?' (B)':''));
+    L.push('   '+l.qty+' '+unit+' × '+fmt(sp)+'฿ = '+fmt(sp*l.qty)+'฿ ('+fmt(sp)+'฿/'+unit+')');
+  });
+  if(t.packs>0){ L.push('คลิปแพ็ค'); L.push('   '+t.packs+' แพ็ค × '+CLIP_PACK_PRICE+'฿ = '+fmt(t.cc)+'฿'); }
+  if(t.extra>0) L.push((t.extraLabel||'เพิ่มเติม')+': '+fmt(t.extra)+'฿');
+  L.push('───');
+  L.push('รวม: '+fmt(t.pp+t.ep+t.cc+t.extra)+'฿');
+  if(t.discount>0) L.push('ส่วนลด: -'+fmt(t.discount)+'฿');
+  if(t.delivery>0) L.push('ค่าส่ง: '+fmt(t.delivery)+'฿');
+  if(t.clips>0) L.push('ฟรีคลิปล็อค: '+fmt(t.clips)+' ตัว');
+  L.push('━━━','ยอดรวม: '+fmt(t.grand)+'฿','━━━');
+  var txt=L.join('\n');
+  function ok(){ toast('📋 คัดลอกใบเสนอราคาแล้ว / quote copied'); chime(); }
+  function fb(){ var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(e){} ta.remove(); ok(); }
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(ok, fb);
+  else fb();
+}
 function posCartClear(){
   if(!cart.lines.length){ _posCartClearDo(); return; }
   posConfirm('ล้างตะกร้าทั้งหมด? / clear the cart?', _posCartClearDo);
@@ -1738,6 +1781,8 @@ function renderCart(){
         +'</div>';
     }).join('');
   }
+  // quote-copy is an office tool — Milk & co. with only the POS tick don't see it
+  var qb=$('cart-quote-btn'); if(qb) qb.classList.toggle('hidden', !(me && me.officeAccess!==false));
   posCartCalc();
 }
 function lineQty(i,d){ var l=cart.lines[i]; l.qty=Math.max(1,l.qty+d); saveCart(); renderCart(); }
@@ -2205,7 +2250,11 @@ function showConfirm(o,t){
   var _lines=(pendingSale&&pendingSale.lines)||cart.lines;
   var rows=_lines.map(function(l){
     var sp=lineShowPrice(l);
-    return '<div class="cf-line"><span class="l">'+esc(l.code)+(l.grade==='B'?' <span style="color:#F0B050">(B)</span>':'')+' × '+l.qty
+    // panels get their photo — trims and clips have none worth showing
+    var img=l.type==='panel'
+      ? '<img class="cf-thumb" src="'+IMG_BASE+esc(l.code)+'.jpg" alt="" onerror="this.style.display=\'none\'">'
+      : '';
+    return '<div class="cf-line">'+img+'<span class="l">'+esc(l.code)+(l.grade==='B'?' <span style="color:#F0B050">(B)</span>':'')+' × '+l.qty
       +'<small>'+esc(l.name||'')+'</small></span><span class="r num">'+fmtB(l.qty*sp)+'</span></div>';
   });
   if(t.packs>0) rows.push('<div class="cf-line"><span class="l">คลิปแพ็ค × '+t.packs+'</span><span class="r num">'+fmtB(t.cc)+'</span></div>');
