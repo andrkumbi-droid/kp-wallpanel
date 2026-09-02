@@ -1400,6 +1400,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       // startup download and can take a minute to arrive. acctData itself is
       // declared far below; the callback runs long after that, so writing into it
       // is safe (guarded anyway).
+      // Input VAT per month, typed from the PP30 — tiny node, same reasoning as
+      // acctData/cost below: it is needed for a screen, so it is subscribed up here.
+      db.ref('acctData/vatIn').on('value', function(snap) {
+        try{ acctData.vatIn = snap.val() || {}; pfLive(); }catch(e){}
+      });
       db.ref('acctData/cost').on('value', function(snap) {
         try{
           acctData.cost = snap.val() || {};
@@ -39926,7 +39931,10 @@ function pfTog(k,def){
 function _pfMK(){ var m=document.getElementById('pf-month'); return (m&&m.value)||_nowMonthKey(); }
 // Live data arrived (orders, bills, payroll, a purchase cost) — redraw, but only
 // while the tab is actually on screen.
-function pfLive(){ try{ var v=document.getElementById('ofv-profit'); if(v&&v.classList.contains('active')) pfRender(); }catch(e){} }
+function pfLive(){ try{ _pfYTD={}; var v=document.getElementById('ofv-profit');
+  // Somebody may be typing the input VAT into the card right now — the same
+  // guard the other live-updating trees use.
+  if(v&&v.classList.contains('active') && !kpHoldWhileTyping('pf-body', pfRender)) pfRender(); }catch(e){} }
 function pfB(v){ return Math.round(v||0).toLocaleString(); }
 function pfM(v){ return pfB(v)+' ฿'; }
 function pfP(v){ return (Math.round((v||0)*10)/10).toLocaleString()+' %'; }
@@ -40017,6 +40025,71 @@ function pfExpenses(mk){
   grey.sort(function(a,b){ return b.total-a.total; });
   return { blocks:blocks, grey:grey, blue:blue, greyTotal:greyTot };
 }
+
+/* ── VAT ──────────────────────────────────────────────────────────────────
+   Every price in the app is VAT-INCLUSIVE — the tax invoice splits it out as
+   amount × 7/107, and that is what the customer's receipt says. So the sales
+   figure above is NOT ours in full: 7/107 of it belongs to the Revenue
+   Department. The purchase cost on the other side is deliberately VAT-FREE
+   (input tax is recoverable, see acShip), so the two sides are not on the same
+   basis until the output VAT is taken off.
+   The input VAT of a month cannot be derived from what the app stores —
+   receipts are booked gross, most small vendors are not VAT registered, and
+   the import entry is not in here at all. So it is TYPED IN, once per month,
+   from the accountant's PP30. Empty means "not entered yet", and the screen
+   says so instead of quietly assuming zero.                                */
+function pfVatIn(mk){ try{ return acN((acctData.vatIn||{})[mk]); }catch(e){ return 0; } }
+function pfVatInSet(mk,v){
+  var num=parseFloat(v);
+  try{
+    acctData.vatIn=acctData.vatIn||{};
+    // Field-level write — acSync() would push the whole acctData node and wipe
+    // whatever another device changed in the meantime.
+    if(!(num>0)){ delete acctData.vatIn[mk]; if(window.fbDB) window.fbDB.ref('acctData/vatIn/'+mk).remove(); }
+    else { num=Math.round(num*100)/100; acctData.vatIn[mk]=num; if(window.fbDB) window.fbDB.ref('acctData/vatIn/'+mk).set(num); }
+  }catch(e){}
+  try{ auditAdd({type:'payment', area:'finance', orderId:'🧾 VAT '+mk, by:(typeof currentStaffName!=='undefined'?currentStaffName:''),
+       detail:'ภาษีซื้อ / input VAT '+(num>0?num+' ฿':'ลบ / cleared')}); }catch(e){}
+  pfRender();
+}
+/* ── CORPORATE INCOME TAX ─────────────────────────────────────────────────
+   Thai SME rates run over the profit of the WHOLE YEAR, not of one month, so
+   a monthly figure alone cannot be taxed. The card therefore adds the year up
+   to the selected month and puts the bands on that. It is an estimate and
+   says so: the taxable profit is the accountant's, with depreciation and
+   non-deductible items this screen knows nothing about.
+   Bands (paid-up capital ≤ 5M ฿ and revenue ≤ 30M ฿/year): 0 % up to 300k,
+   15 % to 3M, 20 % above. A company outside those limits pays a flat 20 %.  */
+function pfCIT(p){
+  p=Math.max(0,p||0);
+  return Math.max(0,Math.min(p,3000000)-300000)*0.15 + Math.max(0,p-3000000)*0.20;
+}
+// Cached: the year costs one billsCostData() per month, and every fold-out
+// re-renders the page. Cleared whenever live data arrives (pfLive).
+var _pfYTD={};
+function pfYTD(mk){
+  if(_pfYTD[mk]) return _pfYTD[mk];
+  var y=String(mk).slice(0,4), m=parseInt(String(mk).slice(5,7),10)||1;
+  var out={rev:0, net:0, cogs:0, exp:0, months:0, gaps:[]};
+  for(var i=1;i<=m;i++){
+    var k=y+'-'+(i<10?'0':'')+i, rev=0;
+    try{ rev=acRevOrders(k).reduce(function(a,o){ return a+acAmt(o); },0); }catch(e){}
+    var c={value:0,usable:false}; try{ c=acCOGS(k); }catch(e){}
+    var t={blue:0}; try{ t=finMonthTotals(k); }catch(e){}
+    if(!rev && !t.blue) continue;                      // month never traded
+    out.months++;
+    out.rev+=rev; out.cogs+=c.value; out.exp+=t.blue;
+    if(rev>0 && !c.usable) out.gaps.push(kpMLabel(k)); // profit of that month is not honest yet
+  }
+  out.net=out.rev/1.07;                                // taxable revenue is ex-VAT
+  out.profit=out.net-out.cogs-out.exp;
+  _pfYTD[mk]=out;
+  return out;
+}
+// Categories that look like goods or container money. Those are already inside
+// the per-piece purchase cost, so booking them as an expense too would subtract
+// the same baht twice — the one mistake this whole tab could hide.
+var PF_GOODS_RE=/ตู้คอน|คอนเทน|container|ซื้อสินค้า|ค่าสินค้า|นำเข้า|import|purchase of goods|goods purchase|สินค้าเข้า/i;
 
 /* ── small building blocks of the page ──────────────────────────────────── */
 function pfBar(p,col){
@@ -40130,6 +40203,7 @@ function pfRender(){
     +'<div style="font-size:11.5px;color:#cbd5e1;margin-top:3px">'
       +(np!=null?'อัตรากำไรสุทธิ / net margin '+pfP(nm)+' · ':'ยังคำนวณไม่ได้ ต้นทุนยังไม่ครบ / not computable yet, costs incomplete · ')
       +'ยอดขาย / sales '+pfM(rev)+' · '+inc.cnt+' ออเดอร์ / orders</div>'
+    +'<div style="font-size:10px;color:#94a3b8;margin-top:2px">ก่อนหัก VAT และภาษีเงินได้ / before VAT and income tax — ดูการ์ดด้านล่าง / see the cards below</div>'
     // in versus out at a glance — both bars on the same scale, so the gap IS the profit
     +(function(){
       var out=cg.value+t.blue, max=Math.max(rev,out,1);
@@ -40239,6 +40313,16 @@ function pfRender(){
     b+=pfLine('💼 จ่ายในหน้า Finance / Finance payments','ตู้คอนเทนเนอร์ ภาษี ค่าผ่อน ค่าแรงนอกระบบเงินเดือน / containers, tax, instalments, wages outside the payroll grid',pfM(t.pay),'var(--text)');
     b+=pfLine('👔 เงินเดือนออฟฟิศ / Office salaries','คนที่ตั้งเป็นเงินเดือนออฟฟิศในระบบ Payroll / the people flagged as office salary',pfM(t.sal),'var(--text)');
     b+=pfLine('🧾 บิลและค่าใช้จ่ายอื่น / Bills & the rest','ค่าคงที่ ใบเสร็จรายวัน ค่าขนส่ง ค่าแรงคนขับและคลัง / fixed costs, daily receipts, carriers, driver and warehouse pay',pfM(t.bill),'var(--text)');
+    // Container / goods money booked as an expense is money the COGS already
+    // took off — the profit would carry it twice. Loud, and with the names.
+    var dup=[];
+    exp.blocks.forEach(function(g){ g.kids.forEach(function(c){ if(PF_GOODS_RE.test(String(c.label||''))) dup.push(g.blk.label+' → '+c.label); }); });
+    if(dup.length) b+='<div style="background:var(--red-l);border:1px solid var(--red);border-radius:10px;padding:9px 11px;margin-top:8px">'
+      +'<div style="font-size:11.5px;font-weight:800;color:var(--red-t)">⚠️ อาจนับซ้ำกับต้นทุนสินค้า / possibly counted twice</div>'
+      +'<div style="font-size:10.5px;color:var(--red-t);margin-top:3px;line-height:1.5">'
+        +'เงินค่าสินค้าและค่าตู้อยู่ในต้นทุนต่อชิ้นอยู่แล้ว (หักตอนขาย) — ถ้าลงเป็นรายจ่ายอีก กำไรจะถูกหักสองรอบ<br>'
+        +'goods and container money is already inside the per-piece purchase cost and comes off when the pieces are sold. Booked as an expense as well, it is subtracted twice.<br>'
+        +'<b>'+_esc(dup.slice(0,6).join(' · '))+(dup.length>6?' +'+(dup.length-6):'')+'</b></div></div>';
     b+='<div style="font-size:11.5px;font-weight:800;color:var(--text);margin:12px 0 2px">🗂️ ทุกกลุ่ม ทุกใบเสร็จ / Every group, every receipt</div>';
     exp.blocks.forEach(function(g,gi){
       var gk='pf-g'+gi+'-'+pfKey(g.blk.label);
@@ -40270,6 +40354,64 @@ function pfRender(){
       '−'+pfM(t.blue),'var(--blue)',b);
   })();
 
+  /* ── 4 · VAT — the share of the sales that was never ours ── */
+  var vatOut=rev*7/107, vatIn=pfVatIn(mk), vatPay=vatOut-vatIn, npVat=(np==null?null:np-vatPay);
+  (function(){
+    var b='';
+    b+='<div style="font-size:11px;color:var(--text2);line-height:1.55;margin:6px 0 8px">'
+      +'ราคาทุกอย่างในแอปรวม VAT แล้ว ใบกำกับภาษีจึงแยก 7/107 ออกมา — เงินก้อนนั้นไม่เคยเป็นของเรา ต้องนำส่งสรรพากร<br>'
+      +'every price in the app includes VAT, so 7/107 of the sales was never ours. The purchase cost on the other side is already VAT-free (input tax is recoverable).</div>';
+    b+=pfLine('ยอดขายรวม VAT / Gross sales','ตัวเลขที่การ์ดด้านบนใช้ / the figure the cards above use',pfM(rev),'var(--text)');
+    b+=pfLine('− ภาษีขาย 7% / Output VAT','7/107 ของยอดขาย — เก็บแทนสรรพากร / collected on behalf of the Revenue Department','−'+pfM(vatOut),'var(--red)');
+    b+=pfLine('= ยอดขายไม่รวม VAT / Net sales','ยอดขายจริงของบริษัท / the company’s real turnover',pfM(rev/1.07),'var(--green)',true);
+    b+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:8px 2px;border-bottom:1px dashed var(--border)">'
+      +'<span style="min-width:0"><span style="font-size:12.5px;font-weight:600;color:var(--text)">+ ภาษีซื้อ / Input VAT</span>'
+        +'<div style="font-size:10.5px;color:var(--text2);margin-top:2px;line-height:1.45">จาก ภ.พ.30 ของเดือนนั้น (ใบกำกับซื้อ + ใบขนขาเข้า) — แอปไม่รู้เอง ต้องกรอก / from that month’s PP30; the app cannot know it, type it in</div></span>'
+      +'<span style="display:flex;align-items:center;gap:4px;flex-shrink:0">'
+        +'<input type="number" class="kpamt" min="0" step="0.01" value="'+(vatIn>0?vatIn:'')+'" placeholder="0"'
+          +' onchange="pfVatInSet(\''+mk+'\',this.value)"'
+          +' style="width:104px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;font-weight:800;text-align:right;background:var(--bg);color:var(--text)">'
+        +'<span style="font-size:12px;color:var(--text2)">฿</span></span></div>';
+    b+=pfLine('= VAT ที่ต้องนำส่ง / VAT payable',
+      vatIn>0?'ภาษีขาย − ภาษีซื้อ / output minus input':'ยังไม่ได้กรอกภาษีซื้อ — ตัวเลขนี้จึงเป็นกรณีแย่ที่สุด / input VAT not entered yet, so this is the worst case',
+      pfM(vatPay), vatPay>0?'var(--red)':'var(--green)',true);
+    b+=pfLine('= กำไรหลังหัก VAT / Profit after VAT','กำไรสุทธิด้านบน ลบยอดที่ต้องนำส่ง / the net profit above, minus what goes to the Revenue Department',
+      npVat!=null?pfM(npVat):'—', npVat==null?'var(--text3)':(npVat<0?'var(--red)':'var(--green)'),true);
+    b+='<div style="font-size:10.5px;color:var(--text2);line-height:1.6;margin-top:8px">'
+      +'รายจ่ายในแอปบันทึกแบบรวม VAT ส่วนที่ขอคืนได้อยู่ในภาษีซื้อที่กรอก — กรอกแล้วตัวเลขนี้จึงจะตรง / expenses are recorded gross; the recoverable part of them is inside the input VAT you type, so the figure is only exact once it is entered</div>';
+    h+=pfCard('pf-vat',false,'var(--red)','🧾','ภาษีมูลค่าเพิ่ม / VAT 7 %',
+      'ส่วนของยอดขายที่ไม่ใช่เงินของเรา / the share of the sales that was never ours',
+      '−'+pfM(vatOut),'var(--red)',b);
+  })();
+
+  /* ── 5 · corporate income tax, on the year so far ── */
+  (function(){
+    var open=pfOn('pf-cit',false), b='', head='—';
+    if(open){
+      var y=pfYTD(mk), tax=pfCIT(y.profit), flat=Math.max(0,y.profit)*0.20;
+      head=pfM(tax);
+      b+='<div style="font-size:11px;color:var(--text2);line-height:1.55;margin:6px 0 8px">'
+        +'ภาษีนิติบุคคลคิดจากกำไรทั้งปี ไม่ใช่รายเดือน — การ์ดนี้จึงรวมเดือน ม.ค. ถึง '+kpMLabel(mk)+' แล้วใส่อัตราขั้นบันได<br>'
+        +'corporate tax runs on the whole year, so this adds January to '+kpMLabel(mk)+' and puts the SME bands on it. An estimate, not the tax return.</div>';
+      b+=pfLine('ยอดขายไม่รวม VAT / Net sales (year to date)',y.months+' เดือน / months',pfM(y.net),'var(--text)');
+      b+=pfLine('− ต้นทุนสินค้า / Cost of goods','',(y.cogs>0?'−':'')+pfM(y.cogs),'var(--orange-t)');
+      b+=pfLine('− รายจ่าย / Expenses','',(y.exp>0?'−':'')+pfM(y.exp),'var(--blue)');
+      b+=pfLine('= กำไรทั้งปีจนถึงตอนนี้ / Profit year to date','',pfM(y.profit),y.profit<0?'var(--red)':'var(--green)',true);
+      b+=pfLine('ภาษีตามอัตรา SME / Tax at the SME bands','0 % ถึง 300,000 · 15 % ถึง 3,000,000 · 20 % ส่วนที่เกิน',pfM(tax),'var(--red)',true);
+      b+=pfLine('เทียบอัตราคงที่ 20 % / Flat 20 % for comparison','ถ้าบริษัทไม่เข้าเงื่อนไข SME (ทุนจดทะเบียน > 5 ล้าน หรือ รายได้ > 30 ล้าน/ปี)',pfM(flat),'var(--text3)');
+      b+=pfLine('= กำไรหลังภาษี (ประมาณ) / Profit after tax','กำไรทั้งปีจนถึงตอนนี้ ลบภาษีตามขั้นบันได',pfM(y.profit-tax),(y.profit-tax)<0?'var(--red)':'var(--green)',true);
+      if(y.gaps.length) b+='<div style="font-size:10.5px;color:var(--orange-t);margin-top:8px">เดือนที่ต้นทุนยังไม่ครบ ตัวเลขจึงยังไม่นิ่ง / months whose costs are still incomplete: '+_esc(y.gaps.join(', '))+'</div>';
+      b+='<div style="font-size:10.5px;color:var(--text2);line-height:1.6;margin-top:8px">'
+        +'ประมาณการเท่านั้น — กำไรทางภาษีเป็นของบัญชี มีค่าเสื่อม รายจ่ายต้องห้าม และภาษีที่ถูกหัก ณ ที่จ่ายซึ่งหน้านี้ไม่รู้จัก · ภาษีที่จ่ายไปแล้วระหว่างปี (ภ.ง.ด.51) ยังไม่ได้หักในนี้<br>'
+        +'an estimate: the taxable profit is the accountant’s, with depreciation, non-deductible items and withholding tax this screen knows nothing about. Prepayments already made are not deducted here.</div>';
+    } else {
+      b='';
+    }
+    h+=pfCard('pf-cit',false,'#7c3aed','🏛','ภาษีเงินได้นิติบุคคล / Corporate income tax',
+      'ประมาณการจากกำไรทั้งปีจนถึงเดือนนี้ — กดเพื่อคำนวณ / estimated on the year so far, opens and calculates',
+      head,'var(--text3)',b);
+  })();
+
   /* ── 4 · the calculation, line by line ── */
   (function(){
     var b='';
@@ -40278,6 +40420,8 @@ function pfRender(){
     b+=pfLine('= 💵 กำไรขั้นต้น / Gross profit',gm!=null?'มาร์จิ้น / margin '+pfP(gm):'',gp!=null?pfM(gp):'—',gp==null?'var(--text3)':(gp<0?'var(--red)':'var(--green)'),true);
     b+=pfLine('− 💸 รายจ่ายดำเนินงาน / Operating expenses','',(t.blue>0?'−':'')+pfM(t.blue),'var(--blue)');
     b+=pfLine('= 🏆 กำไรสุทธิ / NET PROFIT',nm!=null?'ของยอดขาย / of sales '+pfP(nm):'',np!=null?pfM(np):'—',np==null?'var(--text3)':(np<0?'var(--red)':'var(--green)'),true);
+    b+=pfLine('− 🧾 VAT ที่ต้องนำส่ง / VAT payable',(vatIn>0?'ภาษีขาย − ภาษีซื้อ / output minus input':'ยังไม่ได้กรอกภาษีซื้อ / input VAT not entered yet'),'−'+pfM(vatPay),'var(--red)');
+    b+=pfLine('= 💎 กำไรหลัง VAT / Profit after VAT','ก่อนภาษีเงินได้นิติบุคคล / still before corporate income tax',npVat!=null?pfM(npVat):'—',npVat==null?'var(--text3)':(npVat<0?'var(--red)':'var(--green)'),true);
     b+='<div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap">'
       +'<button type="button" onclick="finProfitReportPrint(_pfMK())" style="flex:1;min-width:150px;padding:11px 12px;border:none;border-radius:10px;background:#0f172a;color:#fff;font-size:12px;font-weight:800;cursor:pointer">🖨️ พิมพ์รายงาน / Print report</button>'
       +'<button type="button" onclick="finCostOpen()" style="flex:1;min-width:120px;padding:11px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);color:var(--text);font-size:12px;font-weight:800;cursor:pointer">🏷️ ต้นทุนซื้อ / Purchase costs</button>'
