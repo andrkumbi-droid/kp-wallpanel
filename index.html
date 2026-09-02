@@ -7662,7 +7662,7 @@ function ofStockAllProducts(){
     var raw=String(code==null?'':code).trim().toUpperCase();
     if(!raw || !CODE_RE.test(raw)) return null;
     var c=ofNormCode(raw);
-    return byCode[c] || (byCode[c]={code:c, qty:null, damaged:null, precut:null, type:'', notes:''});
+    return byCode[c] || (byCode[c]={code:c, qty:null, damaged:null, precut:null, pcsPerCtn:0, type:'', notes:''});
   }
   (stockItems||[]).forEach(function(s){
     var e=add(s.code); if(!e) return;
@@ -7670,6 +7670,7 @@ function ofStockAllProducts(){
     e.qty=(e.qty||0)+(parseInt(s.qty)||0);
     e.damaged=(e.damaged||0)+(parseInt(s.damaged)||0);
     e.precut=(e.precut||0)+(parseInt(s.precut)||0);
+    e.pcsPerCtn=e.pcsPerCtn||(parseInt(s.pcsPerCtn)||0);
     e.type=e.type||s.type||''; e.notes=e.notes||s.notes||'';
   });
   (window.QT_PRODUCTS||[]).forEach(function(p){ if(p.mat==='WPC'||p.mat==='PVC'||p._custom) add(p.code); });
@@ -7711,12 +7712,20 @@ function ofStockInventoryPrint(mode){
   var now=new Date();
   var dateStr=now.toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'});
   var nRow=0;
-  // Blind count: the app's own figures are deliberately NOT printed, so the counter
+  // Blind count: the app's own QUANTITIES are deliberately NOT printed, so the counter
   // writes down what is really there instead of confirming the system number.
-  // Grade A is counted the way the warehouse actually works: write how many panels fit
+  // Grade A is counted the way the warehouse actually works: how many panels fit
   // in ONE carton, how many cartons there are, the loose panels — and multiply/add to
   // get the total. Grade B and Grade C are single boxes: broken stock is always loose,
   // and pre-cut panels (~95 cm) are stacked separately, never in full cartons.
+  //
+  // Pcs-per-carton IS printed, and that is not a breach of the blind count: it is a
+  // property of the product, not a count of it. Leaving it empty cost us the count of
+  // 02.09.2026 — the warehouse wrote 14 into every row while the app had 16 and 22 for
+  // KP009/KP011/KP019, and 403 cartons of KP019 at the wrong factor moved the result by
+  // 3,224 pieces, which is far more than anything the count was meant to find. It is
+  // printed in grey to be crossed out and corrected when the carton really holds
+  // something else — that correction is worth having on its own.
   var COLS = [
     {h:'แผ่น/ลัง<br>Pcs per CTN', c:'w-pc'},
     {h:'จำนวนลัง<br>CTN total',   c:'w-ctn'},
@@ -7742,7 +7751,11 @@ function ofStockInventoryPrint(mode){
           +'<td class="c muted">'+(++nRow)+'</td>'
           +'<td class="cd">'+esc(e.code)+'</td>'
           +'<td class="c">'+esc(p.w?p.w+' cm':'')+'</td>'
-          +cols.map(function(col){ return '<td class="box'+(col.c==='w-tot'?' tot':'')+'"></td>'; }).join('')
+          +cols.map(function(col){
+            // pcs-per-carton comes pre-filled from the stock record; everything else is blank
+            if(col.c==='w-pc' && e.pcsPerCtn>0) return '<td class="box c pcs">'+e.pcsPerCtn+'</td>';
+            return '<td class="box'+(col.c==='w-tot'?' tot':'')+'"></td>';
+          }).join('')
         +'</tr><tr class="nrow">'
           +'<td class="c"></td><td colspan="'+(2+cols.length)+'" class="nt">หมายเหตุ / Note</td>'
         +'</tr></tbody>';
@@ -7787,6 +7800,7 @@ function ofStockInventoryPrint(mode){
     +'.nrow td{height:6.5mm;border-top:1px dashed #ccc;border-bottom:1.5px solid #555}'
     +'.nt{font-size:7.5pt;color:#aaa;vertical-align:top}'
     +'.tot{background:#fffbeb}'                       /* the column that has to be worked out */
+    +'.pcs{color:#999;font-size:9pt}'                 /* pre-filled carton size — cross out if wrong */
     +'.w-n{width:9mm}.w-cd{width:30mm}.w-sz{width:15mm}'
     +'.w-pc{width:19mm}.w-ctn{width:22mm}.w-lo{width:24mm}.w-tot{width:28mm}.w-gb{width:17mm}.w-gc{width:17mm}'
     +'</style></head><body>'
@@ -7795,6 +7809,10 @@ function ofStockInventoryPrint(mode){
     +'<div class="note"><b>รวมแผ่น = (แผ่น/ลัง × จำนวนลัง) + แผ่นลอย</b> &nbsp;|&nbsp; TOTAL = (pcs per carton × cartons) + loose. '
       +'นับเฉพาะแผ่นที่สมบูรณ์ · แผ่นชำรุดใส่ช่อง เกรด B · แผ่นตัดแล้ว ~95 ซม. ใส่ช่อง เกรด C / '
       +'count whole panels only — damaged ones go in Grade B, pre-cut (~95 cm) in Grade C.</div>'
+    +'<div class="note"><b>⚠️ ทุกช่องต้องมีตัวเลข ถ้าไม่มีของให้เขียน 0 — ห้ามเว้นว่าง</b> เพราะช่องว่างแปลว่า "ยังไม่ได้นับ" ไม่ใช่ "ไม่มี" · '
+      +'<b>every box needs a number — write 0 when there is none, never leave it empty</b>, an empty box means "not counted yet", not "none". &nbsp;|&nbsp; '
+      +'ตัวเลขสีเทาในช่อง แผ่น/ลัง คือค่าที่ระบบบันทึกไว้ ถ้าลังจริงไม่ตรง ให้ขีดฆ่าแล้วเขียนจำนวนจริง / '
+      +'the grey number under Pcs per CTN is what the system has on record — if the carton really holds a different number, cross it out and write the real one.</div>'
     +body
     +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
   var w=window.open('','_blank');
@@ -7880,7 +7898,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260902036;
+var KP_BUILD = 20260902037;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
