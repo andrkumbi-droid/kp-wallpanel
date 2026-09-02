@@ -870,13 +870,9 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
       </div>
     </div>
 
-    <div class="formcard hidden" id="card-insmode">
-      <h4>📦 ของพร้อมหรือยัง? <small style="color:var(--text2);font-weight:500">/ handover</small></h4>
-      <div class="insmode">
-        <button id="im-pack" class="press" onclick="posInsMode('pack')"><div style="font-size:30px">📦</div><div class="h">ส่งไปแพ็คก่อน</div><div class="s">คลังแพ็คเสร็จ ลูกค้ารับได้เลย</div></button>
-        <button id="im-done" class="press" onclick="posInsMode('done')"><div style="font-size:30px">✅</div><div class="h">รับของเลย</div><div class="s">ของพร้อมแล้ว ลูกค้าถือกลับ</div></button>
-      </div>
-    </div>
+    <!-- handover card removed: an in-store sale always goes to packing first,
+         so the warehouse records who packed it, the CTN count and a photo.
+         ck.insMode is fixed to 'pack' in posFulfil(). -->
 
     <div class="formcard">
       <div class="taxbox">
@@ -962,11 +958,14 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
         <div class="an">330-282-3788</div>
         <div class="nm">บริษัท พิมมิแกรนด์ จำกัด</div>
       </div>
-      <div style="margin-top:16px">
-        <label for="slip-file" class="btn btn-dark press" style="width:100%">📷 ถ่ายรูปสลิปโอนเงิน<span class="sub-en">photograph the transfer slip</span></label>
-        <input type="file" id="slip-file" accept="image/*" capture="environment" class="hidden" onchange="posSlipPick(this)">
-        <div class="slip-thumbs" id="slip-thumbs"></div>
-      </div>
+    </div>
+    <!-- Proof of payment — for a transfer it is the slip, for cash the notes on
+         the counter. Both land in the order's slip photos, so the office sees
+         the same evidence either way. -->
+    <div id="pay-photo-wrap" class="hidden" style="margin-top:16px">
+      <label for="slip-file" class="btn btn-dark press" style="width:100%" id="pay-photo-btn">📷 ถ่ายรูป<span class="sub-en">photo</span></label>
+      <input type="file" id="slip-file" accept="image/*" capture="environment" class="hidden" onchange="posSlipPick(this)">
+      <div class="slip-thumbs" id="slip-thumbs"></div>
     </div>
     <div style="margin-top:22px;display:flex;flex-direction:column;gap:10px">
       <button class="btn btn-gold btn-big press" id="pay-confirm-btn" onclick="posPayConfirm()" disabled>✓ ยืนยันรับเงิน<span class="sub-en">confirm payment received</span></button>
@@ -1021,6 +1020,14 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   </div>
 </div>
 
+<!-- one-button notice (missing photo etc.) -->
+<div class="pin-sheet" id="notice-sheet" onclick="if(event.target===this)posNoticeClose()">
+  <div class="pin-card">
+    <div class="who" id="notice-msg" style="line-height:1.6;white-space:pre-line;font-size:17px">—</div>
+    <button class="btn btn-gold press" style="width:100%;margin-top:20px" onclick="posNoticeClose()">ตกลง / OK</button>
+  </div>
+</div>
+
 <!-- custom confirm — native confirm() is suppressed in embedded browsers and
      looks cheap on a customer-facing tablet -->
 <div class="pin-sheet" id="conf-sheet">
@@ -1045,7 +1052,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
    payFeed, orderPhotos, auditLog, pushQueue) so office/warehouse/kiosk
    pick everything up without changes. Season-scoped via PDB (v2/).
    ═══════════════════════════════════════════════════════════════════════ */
-var POS_BUILD='pos-1.0.0';
+var POS_BUILD='pos-1.1.0';
 document.getElementById('pos-ver').textContent=POS_BUILD;
 var KP_DEV_ID='pos'+Math.random().toString(36).slice(2,9)+Date.now().toString(36);
 
@@ -1180,6 +1187,13 @@ function normCode(c){
 function toast(msg,ms){ var t=$('toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(t._t); t._t=setTimeout(function(){ t.classList.remove('on'); }, ms||2600); }
 var _confCb=null;
 function posConfirm(msg, cb){ $('conf-msg').textContent=msg; _confCb=cb; $('conf-sheet').classList.add('on'); }
+/* One-button notice — for "you still have to do X", where a yes/no dialog
+   would only invite the wrong answer. */
+function posNotice(msg){
+  $('notice-msg').textContent=msg;
+  $('notice-sheet').classList.add('on');
+}
+function posNoticeClose(){ $('notice-sheet').classList.remove('on'); }
 function posConfirmNo(){ $('conf-sheet').classList.remove('on'); _confCb=null; }
 function posConfirmYes(){ var cb=_confCb; posConfirmNo(); if(cb) cb(); }
 
@@ -1416,6 +1430,11 @@ function posPinDel(){ _pinEntry=_pinEntry.slice(0,-1); pinDots(); }
 // Physical keyboard (incl. numpad — ev.key is '0'-'9' there too): works on the
 // PIN pad and on the confirm sheet. Enter = ✓, Backspace = ⌫, Esc = cancel.
 document.addEventListener('keydown', function(ev){
+  var nt=$('notice-sheet');
+  if(nt && nt.classList.contains('on')){
+    if(ev.key==='Enter'||ev.key==='Escape'){ posNoticeClose(); ev.preventDefault(); }
+    return;
+  }
   var np=$('num-sheet');
   if(np && np.classList.contains('on')){
     if(/^[0-9.]$/.test(ev.key)){ numKey(ev.key); ev.preventDefault(); }
@@ -1894,10 +1913,9 @@ function posFulfil(f){
   $('ff-pickup').classList.toggle('on', f==='pickup');
   $('ff-delivery').classList.toggle('on', f==='delivery');
   $('card-delivery').classList.toggle('hidden', f!=='delivery');
-  $('card-insmode').classList.toggle('hidden', f!=='pickup');
   $('cart-delivery-row').style.display = f==='delivery' ? 'flex' : 'none';
   $('cust-opt').textContent = f==='delivery' ? '' : '(ไม่บังคับ / optional)';
-  if(f==='pickup' && !ck.insMode) posInsMode('pack');
+  ck.insMode='pack';   // in-store sales always go through packing
   if(f==='delivery'){
     fillProvList();
     // auto delivery tariff like the quotation tool: ≥25 panels free, else 400 ฿
@@ -1910,11 +1928,6 @@ function posFulfil(f){
   btn.innerHTML = f==='delivery'
     ? 'สร้างออเดอร์จัดส่ง ✓<span class="sub-en">create delivery order</span>'
     : 'สร้างออเดอร์ขายหน้าร้าน ✓<span class="sub-en">create in-store order</span>';
-}
-function posInsMode(m){
-  ck.insMode=m;
-  $('im-pack').classList.toggle('on', m==='pack');
-  $('im-done').classList.toggle('on', m==='done');
 }
 function fillProvList(){
   var dl=$('prov-list');
@@ -2171,7 +2184,7 @@ function posFinalize(pay){
       o.paidAmount=pay.amt; o.payDate=todayStr(); o.paidAt=nowHM(); o.paidBy=who;
       if(pay.amt>=t.grand-0.5){ o.payMethod=pay.method; o.payMethodPartial=''; }
       else { o.payMethod=''; o.payMethodPartial=pay.method; }
-      if(pay.method==='online'){ o.paidOnline=pay.amt; o.paidCash=0; if(!_pay.slips.length) o.slipLater=true; }
+      if(pay.method==='online'){ o.paidOnline=pay.amt; o.paidCash=0; }
       else { o.paidCash=pay.amt; o.paidOnline=0; }
     }
     var wo={id:no, zone:zone, boxes:o.boxes, panels:o.panels, lcorner:o.lcorner, clips:o.clips, packed:false, packedAt:null};
@@ -2300,6 +2313,7 @@ function showConfirm(o,t){
   $('pm-cash').classList.remove('on'); $('pm-online').classList.remove('on');
   $('ps-full').classList.add('on'); $('ps-part').classList.remove('on');
   $('pay-amt-wrap').classList.add('hidden'); $('bank-wrap').classList.add('hidden');
+  $('pay-photo-wrap').classList.add('hidden');
   $('cash-wrap').classList.add('hidden'); $('cash-recv').value='';
   $('change-line').classList.add('hidden'); $('short-line').classList.add('hidden');
   $('slip-thumbs').innerHTML=''; $('pay-amt').value='';
@@ -2318,6 +2332,11 @@ function posPayMode(m){
   $('pm-cash').classList.toggle('on', m==='cash');
   $('pm-online').classList.toggle('on', m==='online');
   $('bank-wrap').classList.toggle('hidden', m!=='online');
+  // both ways need proof — a slip for a transfer, the cash on the counter
+  $('pay-photo-wrap').classList.toggle('hidden', !m);
+  $('pay-photo-btn').innerHTML = (m==='cash')
+    ? '📷 ถ่ายรูปเงินสด<span class="sub-en">photograph the cash</span>'
+    : '📷 ถ่ายรูปสลิปโอนเงิน<span class="sub-en">photograph the transfer slip</span>';
   _cashWrapSync();
   payValidate();
 }
@@ -2342,10 +2361,12 @@ function cashChange(){
   if(showChange) $('change-val').textContent=fmtB(recv-due);
   $('short-line').classList.toggle('hidden', !(recv>0 && recv<due));
 }
+// The photo is NOT part of this check on purpose: a disabled button leaves the
+// seller guessing what is missing. The button stays live and posPayConfirm()
+// says what to do.
 function payValidate(){
   var ok = !!_pay.mode;
   if(_pay.part){ ok = ok && (parseFloat($('pay-amt').value)>0); }
-  if(_pay.mode==='online' && !_pay.slips.length) ok=false;
   $('pay-confirm-btn').disabled=!ok;
 }
 function posSlipPick(input){
@@ -2396,6 +2417,14 @@ function posPayConfirm(){
   var amt = _pay.part ? (parseFloat($('pay-amt').value)||0) : t.grand;
   if(!(amt>0)){ toast('ใส่จำนวนเงิน'); return; }
   var pm=_pay.mode; if(!pm) return;
+  // proof first — cash on the counter or the transfer slip
+  if(!_pay.slips.length){
+    posNotice(pm==='cash'
+      ? '📷 กรุณาถ่ายรูปเงินสดก่อนยืนยัน\nPlease photograph the cash first'
+      : '📷 กรุณาถ่ายรูปสลิปโอนเงินก่อนยืนยัน\nPlease photograph the transfer slip first');
+    chime(false);
+    return;
+  }
   var change=0;
   if(pm==='cash' && !_pay.part){
     var recv=parseFloat($('cash-recv').value)||0;
