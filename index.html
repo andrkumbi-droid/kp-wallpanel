@@ -2972,7 +2972,8 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="stit" style="margin-bottom:0">💎 กำไร / Profit</div>
       <button type="button" class="btnsm" onclick="pfRender()" title="โหลดใหม่ / refresh"><i class="ti ti-refresh"></i></button>
       <button type="button" class="btnsm" onclick="finCostOpen()" title="ราคาซื้อต่อชิ้น / purchase cost per piece">🏷️ ต้นทุน / Cost</button>
-      <button type="button" class="btnsm btnsmp" onclick="finProfitReportPrint(_pfMK())" title="พิมพ์รายงานกำไร / print the profit report"><i class="ti ti-printer"></i> Print</button>
+      <button type="button" class="btnsm" onclick="pfSummaryCSV()" title="ดาวน์โหลดสรุปเป็น Excel / download the summary for Excel"><i class="ti ti-file-spreadsheet"></i> Excel</button>
+      <button type="button" class="btnsm btnsmp" onclick="pfSummaryPrint()" title="สรุป 1 หน้า สำหรับพิมพ์ / one-page summary to print"><i class="ti ti-printer"></i> Print</button>
     </div>
     <div style="font-size:11px;color:var(--text2);margin-bottom:10px">ทุกบาทที่เข้าและออกในเดือนนี้ — ยอดขาย ต้นทุนสินค้า และค่าใช้จ่ายทุกใบเสร็จ / every baht in and out this month, down to the single receipt</div>
     <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center">
@@ -40439,7 +40440,7 @@ function pfRender(){
     b+=pfLine('− 🧾 VAT ที่ต้องนำส่ง / VAT payable',(vatIn>0?'ภาษีขาย − ภาษีซื้อ / output minus input':'ยังไม่ได้กรอกภาษีซื้อ / input VAT not entered yet'),'−'+pfM(vatPay),'var(--red)');
     b+=pfLine('= 💎 กำไรหลัง VAT / Profit after VAT','ก่อนภาษีเงินได้นิติบุคคล / still before corporate income tax',npVat!=null?pfM(npVat):'—',npVat==null?'var(--text3)':(npVat<0?'var(--red)':'var(--green)'),true);
     b+='<div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap">'
-      +'<button type="button" onclick="finProfitReportPrint(_pfMK())" style="flex:1;min-width:150px;padding:11px 12px;border:none;border-radius:10px;background:#0f172a;color:#fff;font-size:12px;font-weight:800;cursor:pointer">🖨️ พิมพ์รายงาน / Print report</button>'
+      +'<button type="button" onclick="finProfitReportPrint(_pfMK())" style="flex:1;min-width:150px;padding:11px 12px;border:none;border-radius:10px;background:#0f172a;color:#fff;font-size:12px;font-weight:800;cursor:pointer">🖨️ รายงานละเอียด / Detailed report</button>'
       +'<button type="button" onclick="finCostOpen()" style="flex:1;min-width:120px;padding:11px 12px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);color:var(--text);font-size:12px;font-weight:800;cursor:pointer">🏷️ ต้นทุนซื้อ / Purchase costs</button>'
     +'</div>';
     b+='<div style="font-size:10.5px;color:var(--text2);line-height:1.6;margin-top:10px">'
@@ -40451,6 +40452,173 @@ function pfRender(){
   })();
 
   el.innerHTML=h;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SUMMARY REPORT — the month on one page, for the folder and for Excel
+   --------------------------------------------------------------------------
+   The detailed report (finProfitReportPrint) lists every product code and
+   every single receipt — right for an audit, too much for "how did August
+   go". This one stays at overview level: income per zone, the cost of goods
+   as ONE line, expenses per category (never per receipt), and the summary
+   with VAT. Same functions behind it as the tab, so the paper cannot say
+   something else than the screen.
+   ══════════════════════════════════════════════════════════════════════════ */
+function pfSumData(mk){
+  var inc=pfIncome(mk), exp=pfExpenses(mk);
+  var cg={value:0,coverage:0,usable:false}; try{ cg=acCOGS(mk); }catch(e){}
+  var t={pay:0,sal:0,bill:0,blue:0}; try{ t=finMonthTotals(mk); }catch(e){}
+  var gp=cg.usable?(inc.gross-cg.value):null;
+  var np=gp==null?null:gp-t.blue;
+  var vatOut=inc.gross*7/107, vatIn=pfVatIn(mk);
+  return { mk:mk, inc:inc, exp:exp, cogs:cg, tot:t,
+           gp:gp, np:np, vatOut:vatOut, vatIn:vatIn, vatPay:vatOut-vatIn,
+           npVat:(np==null?null:np-(vatOut-vatIn)) };
+}
+function pfSummaryPrint(){
+  var mk=_pfMK(), d=pfSumData(mk), now=new Date();
+  var e=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var n=function(v){ return Math.round(v||0).toLocaleString(); };
+  var pct=function(v){ return (Math.round((v||0)*10)/10)+' %'; };
+
+  var h='<div class="hd"><h1>สรุปกำไร / Profit summary · '+e(kpMLabel(mk))+'</h1>'
+    +'<div class="d">KP Wallpanel · บริษัท พิมมิแกรนด์ จำกัด<br>พิมพ์ / printed '
+    +now.toLocaleDateString('th-TH')+' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0')+'</div></div>';
+
+  // ── the five figures, big ──
+  h+='<div class="kpis">'
+    +'<div class="kpi"><span>ยอดขาย / Sales</span><b>'+n(d.inc.gross)+' ฿</b><i>'+d.inc.cnt+' ออเดอร์ / orders</i></div>'
+    +'<div class="kpi"><span>ต้นทุนสินค้า / Cost of goods</span><b class="neg">−'+n(d.cogs.value)+' ฿</b><i>ครอบคลุม / costed '+pct(d.cogs.coverage)+'</i></div>'
+    +'<div class="kpi"><span>กำไรขั้นต้น / Gross profit</span><b>'+(d.gp!=null?n(d.gp)+' ฿':'—')+'</b>'
+      +'<i>'+(d.gp!=null&&d.inc.gross>0?pct(d.gp/d.inc.gross*100):'—')+'</i></div>'
+    +'<div class="kpi"><span>รายจ่าย / Expenses</span><b class="neg">−'+n(d.tot.blue)+' ฿</b><i>ไม่รวมค่าสินค้า / excl. goods</i></div>'
+    +'<div class="kpi big"><span>กำไรสุทธิ / NET PROFIT</span><b class="'+((d.np||0)<0?'neg':'pos')+'">'+(d.np!=null?n(d.np)+' ฿':'—')+'</b>'
+      +'<i>'+(d.np!=null&&d.inc.gross>0?pct(d.np/d.inc.gross*100)+' ของยอดขาย / of sales':'')+' · ก่อนหัก VAT / before VAT</i></div>'
+    +'</div>';
+
+  // ── income, per zone ──
+  h+='<div class="sec"><div class="sect">📈 รายรับ / INCOME<span class="stot">'+n(d.inc.gross)+' ฿</span></div>'
+    +'<table><thead><tr><th>โซน / Zone</th><th class="r">ออเดอร์ / Orders</th><th class="r">ยอดขาย / Sales</th><th class="r">เก็บแล้ว / Settled</th><th class="r">ค้าง / Open</th></tr></thead><tbody>'
+    +d.inc.zones.map(function(z){
+      return '<tr><td>'+e((typeof PF_ZONE!=='undefined'&&PF_ZONE[z.zone])||z.zone)+'</td>'
+        +'<td class="r">'+n(z.cnt)+'</td><td class="r">'+n(z.amt)+'</td>'
+        +'<td class="r">'+n(z.paid)+'</td><td class="r">'+n(z.amt-z.paid)+'</td></tr>';
+    }).join('')
+    +'</tbody><tfoot><tr><td>รวม / Total</td><td class="r">'+n(d.inc.cnt)+'</td><td class="r">'+n(d.inc.gross)+'</td>'
+    +'<td class="r">'+n(d.inc.paid)+'</td><td class="r">'+n(d.inc.open)+'</td></tr></tfoot></table>'
+    +'<div class="note">เงินสด / cash '+n(d.inc.cash)+' ฿ · โอน / transfer '+n(d.inc.online)+' ฿ · ยอดค้างชำระยังเป็นเงินของเรา ไม่ใช่ขาดทุน / what is open is still ours to collect, not a loss</div></div>';
+
+  // ── cost of goods: one line, on purpose ──
+  h+='<div class="sec"><div class="sect">📦 ต้นทุนสินค้าที่ขาย / COST OF GOODS SOLD<span class="stot">'+n(d.cogs.value)+' ฿</span></div>'
+    +'<table><tbody>'
+    +'<tr><td>ราคาซื้อต่อชิ้น × จำนวนที่ขายในเดือนนี้ / landed purchase price per piece × the pieces sold this month</td><td class="r">'+n(d.cogs.value)+'</td></tr>'
+    +'<tr><td>ครอบคลุมต้นทุน / cost coverage</td><td class="r">'+pct(d.cogs.coverage)+'</td></tr>'
+    +'</tbody></table>'
+    +'<div class="note">ราคารวมค่าเรือ ค่านำเข้า ค่าธรรมเนียมธนาคาร ไม่รวม VAT ที่ขอคืนได้ · แยกตามรหัสสินค้าอยู่ในรายงานละเอียด / freight, import and bank charges included, recoverable VAT excluded; the per-code breakdown is in the detailed report</div></div>';
+
+  // ── expenses: category level, never receipts ──
+  h+='<div class="sec"><div class="sect">💸 รายจ่าย / EXPENSES<span class="stot">'+n(d.tot.blue)+' ฿</span></div>'
+    +'<table><thead><tr><th>กลุ่ม / Group</th><th>หมวด / Category</th><th class="r">฿</th></tr></thead><tbody>'
+    +d.exp.blocks.map(function(g){
+      var rows=g.kids.map(function(c,i){
+        return '<tr>'+(i===0?'<td rowspan="'+g.kids.length+'">'+e(g.blk.label)+'</td>':'')
+          +'<td>'+e(c.label||'—')+'</td><td class="r">'+n(c.total)+'</td></tr>';
+      }).join('');
+      return rows+'<tr class="sub"><td></td><td>รวม / subtotal '+e(g.blk.label)+'</td><td class="r">'+n(g.total)+'</td></tr>';
+    }).join('')
+    +'</tbody><tfoot><tr><td colspan="2">รวมรายจ่าย / Total expenses</td><td class="r">'+n(d.tot.blue)+'</td></tr></tfoot></table>'
+    +'<div class="note">💼 Finance '+n(d.tot.pay)+' ฿ · 👔 เงินเดือนออฟฟิศ / office salaries '+n(d.tot.sal)+' ฿ · 🧾 บิลและอื่นๆ / bills and the rest '+n(d.tot.bill)+' ฿'
+    +(d.exp.greyTotal>0?' · ⬜ นับแยก ไม่รวมในนี้ / counted separately, not included '+n(d.exp.greyTotal)+' ฿':'')+'</div></div>';
+
+  // ── the calculation ──
+  h+='<div class="sec"><div class="sect">🧮 สรุป / SUMMARY</div><table><tbody>'
+    +'<tr><td>ยอดขาย (รวม VAT) / Sales incl. VAT</td><td class="r">'+n(d.inc.gross)+'</td></tr>'
+    +'<tr><td>− ต้นทุนสินค้าที่ขาย / Cost of goods sold</td><td class="r">−'+n(d.cogs.value)+'</td></tr>'
+    +'<tr class="sub"><td>= กำไรขั้นต้น / Gross profit</td><td class="r">'+(d.gp!=null?n(d.gp):'—')+'</td></tr>'
+    +'<tr><td>− รายจ่ายดำเนินงาน / Operating expenses</td><td class="r">−'+n(d.tot.blue)+'</td></tr>'
+    +'<tr class="tot"><td>= กำไรสุทธิ / NET PROFIT</td><td class="r">'+(d.np!=null?n(d.np):'—')+'</td></tr>'
+    +'<tr><td>− ภาษีขาย 7% / Output VAT (7/107)</td><td class="r">−'+n(d.vatOut)+'</td></tr>'
+    +'<tr><td>+ ภาษีซื้อ / Input VAT'+(d.vatIn>0?'':' — ยังไม่ได้กรอก / not entered yet')+'</td><td class="r">'+n(d.vatIn)+'</td></tr>'
+    +'<tr class="tot"><td>= กำไรหลังหัก VAT / PROFIT AFTER VAT</td><td class="r">'+(d.npVat!=null?n(d.npVat):'—')+'</td></tr>'
+    +'</tbody></table>'
+    +'<div class="note">ยอดขาย = ออเดอร์ตามวันที่สั่ง ไม่รวมที่ยกเลิก · รายจ่าย = หน้า Finance + เงินเดือนออฟฟิศ + บิล (เฉพาะสีน้ำเงิน) · ยังไม่หักภาษีเงินได้นิติบุคคล ซึ่งคิดตอนปิดปี<br>'
+    +'sales by order date, cancelled excluded · expenses = Finance + office salaries + bills, blue items only · corporate income tax is not deducted, that is settled with the annual accounts</div></div>';
+
+  var CSS='*{box-sizing:border-box;margin:0;padding:0}'
+    +'@page{size:A4 portrait;margin:12mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;background:#fff;font-size:10pt}'
+    +'.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:7px;margin-bottom:10px}'
+    +'.hd h1{font-size:16pt}.hd .d{font-size:9pt;color:#444;text-align:right}'
+    +'.kpis{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}'
+    +'.kpi{flex:1 1 30%;border:1px solid #999;border-radius:4px;padding:6px 9px}'
+    +'.kpi.big{flex:1 1 100%;border:2px solid #111;background:#f0fdf4}'
+    +'.kpi span{display:block;font-size:8pt;color:#555;text-transform:uppercase}'
+    +'.kpi b{font-size:14pt;display:block;line-height:1.25}.kpi.big b{font-size:20pt}'
+    +'.kpi i{font-size:8pt;color:#666;font-style:normal}'
+    +'.kpi .neg{color:#b00}.kpi .pos{color:#15803d}'
+    +'.sec{margin-top:11px}'
+    +'.sect{font-size:11pt;font-weight:800;background:#f1f5f9;border:1px solid #999;padding:4px 8px;margin-bottom:4px;display:flex;justify-content:space-between}'
+    +'.stot{font-weight:800}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #bbb;padding:3px 7px;font-size:9.5pt;vertical-align:top}'
+    +'th{background:#f8fafc;font-size:8pt;text-transform:uppercase}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.r{text-align:right;white-space:nowrap}'
+    +'tfoot td{font-weight:800;background:#f1f5f9}'
+    +'tr.tot td{font-weight:800;font-size:11pt;border-top:2px solid #111;background:#f0fdf4}'
+    +'tr.sub td{font-weight:700;background:#f8fafc}'
+    +'.note{font-size:8pt;color:#555;margin-top:4px;line-height:1.5}';
+  printReceiptDoc(h, CSS, '210mm', '297mm');
+}
+
+/* Excel: the same overview as rows. CSV with a BOM so Excel opens the Thai
+   text in the right encoding — same as the daily export. */
+function pfSummaryCSV(){
+  var mk=_pfMK(), d=pfSumData(mk);
+  var q=function(v){ v=String(v==null?'':v); return /[",\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  var r=function(v){ return Math.round(v||0); };
+  var L=[];
+  L.push(['KP Wallpanel — สรุปกำไร / Profit summary', kpMLabel(mk)].map(q).join(','));
+  L.push(['สร้างเมื่อ / generated', new Date().toLocaleString('th-TH')].map(q).join(','));
+  L.push('');
+  L.push(['สรุป / SUMMARY','฿'].map(q).join(','));
+  L.push(['ยอดขาย รวม VAT / Sales incl. VAT', r(d.inc.gross)].map(q).join(','));
+  L.push(['ต้นทุนสินค้า / Cost of goods', -r(d.cogs.value)].map(q).join(','));
+  L.push(['กำไรขั้นต้น / Gross profit', d.gp!=null?r(d.gp):''].map(q).join(','));
+  L.push(['รายจ่าย / Expenses', -r(d.tot.blue)].map(q).join(','));
+  L.push(['กำไรสุทธิ / Net profit', d.np!=null?r(d.np):''].map(q).join(','));
+  L.push(['ภาษีขาย / Output VAT', -r(d.vatOut)].map(q).join(','));
+  L.push(['ภาษีซื้อ / Input VAT', r(d.vatIn)].map(q).join(','));
+  L.push(['กำไรหลังหัก VAT / Profit after VAT', d.npVat!=null?r(d.npVat):''].map(q).join(','));
+  L.push('');
+  L.push(['รายรับแยกตามโซน / INCOME BY ZONE'].map(q).join(','));
+  L.push(['โซน / Zone','ออเดอร์ / Orders','ยอดขาย / Sales','เก็บแล้ว / Settled','ค้าง / Open'].map(q).join(','));
+  d.inc.zones.forEach(function(z){
+    L.push([z.zone, z.cnt, r(z.amt), r(z.paid), r(z.amt-z.paid)].map(q).join(','));
+  });
+  L.push(['รวม / Total', d.inc.cnt, r(d.inc.gross), r(d.inc.paid), r(d.inc.open)].map(q).join(','));
+  L.push('');
+  L.push(['รายจ่าย / EXPENSES'].map(q).join(','));
+  L.push(['กลุ่ม / Group','หมวด / Category','฿'].map(q).join(','));
+  d.exp.blocks.forEach(function(g){
+    g.kids.forEach(function(c){ L.push([g.blk.label, c.label||'—', r(c.total)].map(q).join(',')); });
+    L.push([g.blk.label,'รวม / subtotal', r(g.total)].map(q).join(','));
+  });
+  L.push(['รวมรายจ่าย / Total expenses','', r(d.tot.blue)].map(q).join(','));
+  if(d.exp.grey.length){
+    L.push('');
+    L.push(['นับแยก ไม่อยู่ในกำไร / COUNTED SEPARATELY, NOT IN THE PROFIT'].map(q).join(','));
+    d.exp.grey.forEach(function(g){
+      g.kids.forEach(function(c){ L.push([g.blk.label, c.label||'—', r(c.total)].map(q).join(',')); });
+    });
+    L.push(['รวมสีเทา / Grey total','', r(d.exp.greyTotal)].map(q).join(','));
+  }
+  var blob=new Blob(['﻿'+L.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='kp-profit-'+mk+'.csv';
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); },1000);
 }
 
 /* ── PURCHASE COST LIST ────────────────────────────────────────────────────
