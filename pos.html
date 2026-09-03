@@ -880,12 +880,20 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
           <label class="switch"><input type="checkbox" id="ck-tax" onchange="posTaxToggle()"><i></i></label>
           <div class="t">🧾 ลูกค้าขอใบกำกับภาษี<small>request tax invoice — แจ้งออฟฟิศเตรียมให้ทันที</small></div>
         </div>
+        <!-- เลขภาษีมาก่อน: 13 digits are all the customer has to say — name,
+             address and branch come from the Revenue Department itself. -->
         <div class="fgrid hidden" id="tax-fields" style="margin-top:14px">
+          <div class="full"><label class="fl">เลขผู้เสียภาษี <small>(13 หลัก — ดึงชื่อ + ที่อยู่จากกรมสรรพากรให้เอง)</small></label>
+            <div style="display:flex;gap:10px;align-items:stretch">
+              <input type="text" inputmode="numeric" maxlength="13" id="tax-tin" placeholder="0000000000000" oninput="posTaxTinAuto()" style="flex:1;min-width:0">
+              <button type="button" class="btn btn-dark press" id="tax-find" onclick="posTaxLookup()" style="white-space:nowrap;padding:14px 18px">🔍 ค้น</button>
+            </div>
+            <div id="tax-rd" style="font-size:13.5px;color:var(--text2);margin-top:6px">ใส่เลข 13 หลัก แล้วชื่อ + ที่อยู่จดทะเบียนมาเอง / 13 digits pull the registered name + address</div>
+          </div>
           <div class="full"><label class="fl">ชื่อบริษัท / ชื่อผู้ซื้อ</label><input type="text" id="tax-name" placeholder="บริษัท … จำกัด"></div>
-          <div><label class="fl">เลขผู้เสียภาษี <small>(13 หลัก)</small></label><input type="text" inputmode="numeric" maxlength="13" id="tax-tin" placeholder="0000000000000"></div>
           <div><label class="fl">สาขา</label><input type="text" id="tax-branch" placeholder="สำนักงานใหญ่" value="สำนักงานใหญ่"></div>
-          <div class="full"><label class="fl">ที่อยู่ใบกำกับ</label><textarea id="tax-addr" rows="2" placeholder="ที่อยู่ตามใบทะเบียน"></textarea></div>
           <div><label class="fl">เบอร์โทร (ใบกำกับ)</label><input type="tel" id="tax-phone" placeholder="ไม่บังคับ"></div>
+          <div class="full"><label class="fl">ที่อยู่ใบกำกับ</label><textarea id="tax-addr" rows="2" placeholder="ที่อยู่ตามใบทะเบียน"></textarea></div>
         </div>
       </div>
     </div>
@@ -1065,7 +1073,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
    payFeed, orderPhotos, auditLog, pushQueue) so office/warehouse/kiosk
    pick everything up without changes. Season-scoped via PDB (v2/).
    ═══════════════════════════════════════════════════════════════════════ */
-var POS_BUILD='pos-1.2.0';
+var POS_BUILD='pos-1.3.0';
 document.getElementById('pos-ver').textContent=POS_BUILD;
 var KP_DEV_ID='pos'+Math.random().toString(36).slice(2,9)+Date.now().toString(36);
 
@@ -1984,6 +1992,41 @@ function posTaxToggle(){
   ck.tax=$('ck-tax').checked;
   $('tax-fields').classList.toggle('hidden', !ck.tax);
 }
+/* ── ค้นหาจากกรมสรรพากร ────────────────────────────────────────────────────
+   The customer at the counter knows their tax number, rarely the exact
+   registered wording of company and address — and that wording is what has to
+   be on the tax invoice. 13 digits fetch it from the Revenue Department, the
+   same way the office app does. The service speaks SOAP and sends no CORS
+   header, so it goes through the FlowAccount relay (action "tin"). */
+var KP_FLOWACCOUNT_URL='https://script.google.com/macros/s/AKfycby3eHRQxCptZULaBQp9zdub4qV0hMtoZVGpi_eR6Z8X4JVGGjbwj_Qkw_KZLatAHrQoYw/exec';
+var _posTinLast='';
+function posTaxRdNote(t, col){
+  var el=$('tax-rd'); if(!el) return;
+  el.style.color=col||'var(--text2)'; el.textContent=t;
+}
+function posTaxTinAuto(){
+  var el=$('tax-tin'); if(!el) return;
+  var d=String(el.value||'').replace(/[^0-9]/g,'');
+  if(el.value!==d) el.value=d;
+  if(d.length===13 && d!==_posTinLast) posTaxLookup();
+}
+function posTaxLookup(){
+  var el=$('tax-tin'); if(!el) return;
+  var tin=String(el.value||'').replace(/[^0-9]/g,'');
+  if(tin.length!==13){ posTaxRdNote('ต้องครบ 13 หลักก่อน / needs all 13 digits','var(--red)'); return; }
+  _posTinLast=tin;
+  posTaxRdNote('⏳ กำลังค้นกรมสรรพากร…');
+  fetch(KP_FLOWACCOUNT_URL, { method:'POST', body: JSON.stringify({ action:'tin', tin:tin }) })
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(!j || !j.ok) throw new Error((j&&j.error)||'ไม่พบ / not found');
+      if(j.name) $('tax-name').value=j.name;
+      if(j.address) $('tax-addr').value=j.address;
+      $('tax-branch').value = j.branchNo>0 ? ('สาขาที่ '+j.branchNo) : 'สำนักงานใหญ่';
+      posTaxRdNote('🏛 ใส่ข้อมูลกรมสรรพากรแล้ว: '+(j.name||'')+(j.branchNo>0?(' · สาขาที่ '+j.branchNo):' · สำนักงานใหญ่'), 'var(--green)');
+    })
+    .catch(function(err){ _posTinLast=''; posTaxRdNote('❌ '+String(err&&err.message||err)+' — พิมพ์ชื่อ/ที่อยู่เองได้', 'var(--red)'); });
+}
 function ckErr(id, bad){ var el=$(id); if(el) el.classList.toggle('f-err', !!bad); return !!bad; }
 
 /* ═══════════════ ORDER CREATION ═══════════════ */
@@ -2489,6 +2532,8 @@ function posDone(){
   cart={lines:[]}; saveCart();
   ['cart-gift','cart-freeminus','cart-packs','cart-extra','cart-discount','cart-delivery','cart-extra-label','ck-cust','ck-phone','ck-contact-name','ck-addr','ck-province','ck-round','ck-reqdate','tax-name','tax-tin','tax-addr','tax-phone'].forEach(function(i){ var el=$(i); if(el) el.value=''; });
   $('ck-contact-ch').value=''; $('ck-tax').checked=false; posTaxToggle();
+  $('tax-branch').value='สำนักงานใหญ่'; _posTinLast='';
+  posTaxRdNote('ใส่เลข 13 หลัก แล้วชื่อ + ที่อยู่จดทะเบียนมาเอง / 13 digits pull the registered name + address');
   ck={fulfil:'', insMode:'', tax:false};
   posGo('done');
 }
