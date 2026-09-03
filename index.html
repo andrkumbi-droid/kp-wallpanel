@@ -9135,20 +9135,66 @@ function buildReceiptPageHTML(order, num) {
     +'</div>';
 }
 
-// Print ALL receipts for every order in a tour, one page each
+// Receipts for a tour — the list first, then print. It used to be one Yes/No for
+// the whole tour: 20 stops meant 20 sheets even when the driver only needed the
+// two that changed. Everything starts ticked (the old behaviour is one tap away),
+// and a receipt NUMBER is only burned on the orders actually printed.
 function printTourReceipts(ti) {
   var t = activeTours[ti];
   if(!t || !t.orders || !t.orders.length){ alert('No orders in this tour.'); return; }
   var ords = t.orders.map(function(id){ return orders.find(function(x){return x.id===id;}); }).filter(Boolean);
   if(!ords.length){ alert('No matching orders found.'); return; }
-  if(!confirm('Print '+ords.length+' receipts for '+t.driverName+'? / พิมพ์ '+ords.length+' ใบเสร็จ?')) return;
-  // Assign a permanent, unique receipt number to any order that doesn't have one yet
+  var esc=_esc;
+  var rows = ords.map(function(o){
+    return '<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;cursor:pointer">'
+      +'<input type="checkbox" class="trcpt-cb" data-oid="'+esc(o.id)+'" checked onchange="trcptCount()" style="width:18px;height:18px;margin-top:2px;flex-shrink:0">'
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="font-weight:700;font-size:13px">'+esc(o.id)+' · '+esc(o.customer||'—')+'</div>'
+        +'<div style="font-size:11.5px;color:var(--text2)">'+esc(String(o.total||''))
+          +(o.receiptNum ? ' · ใบเสร็จ #'+o.receiptNum+' (พิมพ์แล้ว / printed before)' : ' · ยังไม่มีเลขใบเสร็จ / no receipt no. yet')+'</div>'
+      +'</div></label>';
+  }).join('');
+  var html='<div id="trcpt-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)trcptClose()">'
+    +'<div style="background:var(--bg);border-radius:14px;max-width:460px;width:100%;max-height:88vh;display:flex;flex-direction:column;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,0.4)">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center">'
+      +'<div style="font-weight:800;font-size:15px">🧾 พิมพ์ใบเสร็จ / Print receipts</div>'
+      +'<button type="button" onclick="trcptClose()" style="border:none;background:var(--bg2);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:16px;color:var(--text)">✕</button>'
+    +'</div>'
+    +'<div style="font-size:12px;color:var(--text2);margin:2px 0 10px">'+esc(t.driverName||'')+' · '+ords.length+' ออเดอร์ / orders</div>'
+    +'<label style="display:flex;gap:10px;align-items:center;padding:8px 10px;background:var(--bg2);border-radius:var(--rs);margin-bottom:8px;cursor:pointer;font-weight:700;font-size:13px">'
+      +'<input type="checkbox" id="trcpt-all" checked onchange="trcptAll(this.checked)" style="width:18px;height:18px">'
+      +'<span>ทั้งหมด / print all</span></label>'
+    +'<div style="flex:1;overflow-y:auto;margin:0 -2px;padding:0 2px">'+rows+'</div>'
+    +'<button type="button" id="trcpt-go" onclick="trcptGo('+ti+')" style="width:100%;margin-top:10px;padding:12px;border:none;border-radius:var(--rs);background:#1D4ED8;color:#fff;font-size:14px;font-weight:800;cursor:pointer"></button>'
+  +'</div></div>';
+  var wrap=document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap.firstChild);
+  trcptCount();
+}
+function trcptClose(){ var m=document.getElementById('trcpt-modal'); if(m) m.remove(); }
+function trcptBoxes(){ return [].slice.call(document.querySelectorAll('#trcpt-modal .trcpt-cb')); }
+function trcptAll(on){ trcptBoxes().forEach(function(c){ c.checked=!!on; }); trcptCount(); }
+function trcptCount(){
+  var b=trcptBoxes(), n=b.filter(function(c){return c.checked;}).length;
+  var all=document.getElementById('trcpt-all');
+  if(all){ all.checked = n===b.length; all.indeterminate = n>0 && n<b.length; }
+  var go=document.getElementById('trcpt-go');
+  if(go){ go.disabled = n===0; go.style.opacity = n?'1':'.5';
+    go.textContent = n ? ('🖨 พิมพ์ '+n+' ใบ / print '+n) : 'เลือกอย่างน้อย 1 / pick at least one'; }
+}
+function trcptGo(ti){
+  var t=activeTours[ti]; if(!t) return;
+  var ids=trcptBoxes().filter(function(c){return c.checked;}).map(function(c){return c.getAttribute('data-oid');});
+  var ords=ids.map(function(id){ return orders.find(function(x){return x.id===id;}); }).filter(Boolean);
+  if(!ords.length) return;
+  // A permanent, unique receipt number for every order that has none yet — only
+  // for the ones being printed, so unticked stops keep their number free.
   var changed=false;
   ords.forEach(function(o){
     if(!o.receiptNum){ currentReceiptNum=(parseInt(currentReceiptNum)||0)+1; o.receiptNum=currentReceiptNum; changed=true; }
   });
   if(changed){ try{ syncOrders(); syncReceiptNum(); }catch(e){} }
   var pages = ords.map(function(o){ return '<div class="rcpt-sheet">'+buildReceiptPageHTML(o, o.receiptNum)+'</div>'; }).join('');
+  trcptClose();
   // Print from a dedicated off-screen iframe holding a full standalone document.
   // The old approach (body>* {display:none} + a live #print-all-receipts block) prints
   // blank on mobile Chrome/Safari; a self-contained iframe document is reliable everywhere.
