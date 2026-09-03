@@ -7,6 +7,8 @@
  *   · create  → create a TAX INVOICE in FlowAccount from an app order,
  *               then fetch its PDF (original + copy) and hand it back as base64
  *   · pdf     → re-fetch the PDF of an already-created invoice (reprint)
+ *   · tin     → ask the REVENUE DEPARTMENT for the registered company name and
+ *               address behind a 13-digit tax id (no FlowAccount involved)
  *
  * The invoice is created IN FlowAccount — same number series, same VAT report,
  * exactly as if someone typed it there. The app only saves the returned id.
@@ -52,6 +54,7 @@
  *   { "action":"health" }
  *   { "action":"create", "doc": { ...InlineDocument fields... } }
  *   { "action":"pdf", "id": 123456 }
+ *   { "action":"tin", "tin":"0835567022983", "branch":0 }
  * Response (JSON): { ok:true, ... } or { error:"..." }
  */
 
@@ -158,6 +161,12 @@ function _faHandle(e) {
       try { req = JSON.parse(e.postData.contents); } catch (err) { req = {}; }
     }
     if (e && e.parameter && !req.action) req.action = e.parameter.action;
+    if (e && e.parameter && e.parameter.tin && !req.tin) req.tin = e.parameter.tin;
+
+    // Revenue-Department lookup: 13-digit TIN in, registered company + address out.
+    // Nothing FlowAccount is involved, so it answers even while the client
+    // id/secret are still missing — and before the credential check below.
+    if (req.action === 'tin') return _faJson(_rdTin(req.tin, req.branch));
 
     var cfg = _faProps();
     if (!cfg.id || !cfg.secret) return _faJson({ error: 'FA_CLIENT_ID / FA_CLIENT_SECRET not set' });
@@ -210,4 +219,106 @@ function _faHint(msg) {
 function _faJson(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ค้นหาจากฐานข้อมูลกรมสรรพากร — the Revenue Department's own VAT-registrant
+// service, the same source behind FlowAccount's "Search from the RD's database".
+//
+// An order in the app carries the DELIVERY name and address. A tax invoice must
+// carry the REGISTERED company name and its REGISTERED address, and only the RD
+// knows those. The service is public (the credentials are literally
+// anonymous/anonymous) but speaks SOAP and sends no CORS header, so the browser
+// cannot call it — it comes through here.
+//
+//   { "action":"tin", "tin":"0835567022983", "branch":0 }
+//   → { ok:true, name, address, tambon, amphur, province, postcode,
+//       branchNo, branchName, since }
+// ════════════════════════════════════════════════════════════════════════════
+var RD_VAT_URL = 'https://rdws.rd.go.th/serviceRD3/vatserviceRD3.asmx';
+
+// Every field comes back as <tag><anyType …>value</anyType></tag>, and an empty
+// one is the single character '-'. Strip the wrapper, treat '-' as empty.
+function _rdField(xml, tag) {
+  var m = xml.match(new RegExp('<' + tag + '>([\\s\\S]*?)</' + tag + '>'));
+  if (!m) return '';
+  var v = m[1].replace(/<[^>]*>/g, '').trim();
+  return (v === '-' || v === 'null') ? '' : v;
+}
+
+function _rdTin(tin, branch) {
+  tin = String(tin || '').replace(/\D/g, '');
+  if (tin.length !== 13) return { error: 'TIN ต้องมี 13 หลัก / must be 13 digits' };
+  var br = parseInt(branch, 10); if (!(br > 0)) br = 0;
+
+  var cache = CacheService.getScriptCache();
+  var key = 'rd_' + tin + '_' + br;
+  var hit = cache.get(key);
+  if (hit) { try { return JSON.parse(hit); } catch (err) {} }
+
+  var body = '<?xml version="1.0" encoding="utf-8"?>'
+    + '<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+    + ' xmlns:xsd="http://www.w3.org/2001/XMLSchema"'
+    + ' xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body>'
+    + '<Service xmlns="https://rdws.rd.go.th/serviceRD3/vatserviceRD3">'
+    + '<username>anonymous</username><password>anonymous</password>'
+    + '<TIN>' + tin + '</TIN><ProvinceCode>0</ProvinceCode>'
+    + '<BranchNumber>' + br + '</BranchNumber><AmphurCode>0</AmphurCode>'
+    + '</Service></soap:Body></soap:Envelope>';
+
+  var res = UrlFetchApp.fetch(RD_VAT_URL, {
+    method: 'post',
+    contentType: 'text/xml; charset=utf-8',
+    headers: { SOAPAction: 'https://rdws.rd.go.th/serviceRD3/vatserviceRD3/Service' },
+    muteHttpExceptions: true,
+    payload: body
+  });
+  if (res.getResponseCode() !== 200)
+    return { error: 'กรมสรรพากรไม่ตอบ / RD service ' + res.getResponseCode() };
+  var xml = res.getContentText();
+
+  var err = _rdField(xml, 'vmsgerr');
+  var name = _rdField(xml, 'vName');
+  // The RD packs its "not found" into HTML: "…&lt;br&gt; Data not found".
+  if (err) return { error: err.replace(/&lt;br&gt;|<br[^>]*>/gi, ' · ').replace(/&amp;/g, '&').replace(/\s+/g, " ").trim() };
+  if (!name) return { error: 'ไม่พบเลขนี้ในทะเบียน VAT / no VAT registration for this number' };
+
+  var title = _rdField(xml, 'vtitleName');
+  var surname = _rdField(xml, 'vSurname');
+  var province = _rdField(xml, 'vProvince');
+  var bkk = province.indexOf('กรุงเทพ') === 0;
+
+  var parts = [];
+  function add(prefix, v) { if (v) parts.push(prefix + v); }
+  add('', _rdField(xml, 'vHouseNumber'));
+  add('อาคาร', _rdField(xml, 'vBuildingName'));
+  add('ห้อง', _rdField(xml, 'vRoomNumber'));
+  add('ชั้น', _rdField(xml, 'vFloorNumber'));
+  add('หมู่บ้าน', _rdField(xml, 'vVillageName'));
+  add('หมู่ ', _rdField(xml, 'vMooNumber'));
+  add('ซอย', _rdField(xml, 'vSoiName'));
+  add('แยก', _rdField(xml, 'vYaek'));
+  add('ถนน', _rdField(xml, 'vStreetName'));
+  // Bangkok districts are แขวง/เขต, everywhere else ตำบล/อำเภอ — printing the
+  // wrong pair on a tax invoice is the kind of detail an auditor notices.
+  add(bkk ? 'แขวง' : 'ตำบล', _rdField(xml, 'vThambol'));
+  add(bkk ? 'เขต' : 'อำเภอ', _rdField(xml, 'vAmphur'));
+  add('', province);
+  add('', _rdField(xml, 'vPostCode'));
+
+  var out = {
+    ok: true,
+    tin: tin,
+    name: ((title ? title + ' ' : '') + name + (surname ? ' ' + surname : '')).trim(),
+    address: parts.join(' '),
+    tambon: _rdField(xml, 'vThambol'),
+    amphur: _rdField(xml, 'vAmphur'),
+    province: province,
+    postcode: _rdField(xml, 'vPostCode'),
+    branchNo: parseInt(_rdField(xml, 'vBranchNumber'), 10) || 0,
+    branchName: _rdField(xml, 'vBranchName'),
+    since: _rdField(xml, 'vBusinessFirstDate')
+  };
+  try { cache.put(key, JSON.stringify(out), 21600); } catch (err2) {}
+  return out;
 }

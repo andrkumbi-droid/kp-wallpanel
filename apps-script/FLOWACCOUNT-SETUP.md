@@ -64,6 +64,28 @@ sobald die URL gesetzt ist.
 4. Erst wenn alles passt: Script property `FA_MODE` auf `live` stellen
    (neu deployen nicht nötig — Properties wirken sofort)
 
+## 5. Steuernummer-Suche (กรมสรรพากร)
+
+Im 🧾-Dialog steht die **13-stellige Steuernummer ganz oben**. Sobald sie
+vollständig ist (oder auf 🔍 ค้นสรรพากร), holt die App **Firmenname und
+Registeradresse direkt vom Finanzamt** und schreibt sie in die Felder — dasselbe,
+was FlowAccount als „Search from the RD's database" anbietet. Name und Adresse
+aus der Order sind nur Liefername/Lieferadresse und taugen nicht für die
+Steuerrechnung; ein Klick auf „↩ ใช้ข้อมูลจากออเดอร์" holt sie zurück.
+
+Der Dienst (`rdws.rd.go.th/serviceRD3/vatserviceRD3.asmx`) ist öffentlich, aber
+SOAP und ohne CORS-Header — deshalb läuft er über dieses Relay
+(`{"action":"tin","tin":"…","branch":0}`), Antwort 6 h im Cache. Er braucht
+**keine** FlowAccount-Zugangsdaten und funktioniert auch, solange die noch fehlen.
+
+⚠️ Dafür muss `flowaccount.gs` **neu deployt** werden (Apps Script → Datei neu
+einfügen → Bereitstellen → *Bereitstellung verwalten* → Bearbeiten → neue
+Version). Ohne das antwortet das Relay `unknown action`, und im Dialog steht rot
+„❌ unknown action" — Name und Adresse lassen sich dann von Hand eintippen.
+
+Nicht jede Nummer ist auffindbar: Wer nicht in der VAT-Registrierung steht,
+liefert „ไม่พบข้อมูลที่ต้องการค้นหา / Data not found".
+
 ## Störungsfälle
 
 - `token 400/401` → client-id/secret falsch oder Tarif ohne API
