@@ -40070,16 +40070,26 @@ var _pfYTD={};
 function pfYTD(mk){
   if(_pfYTD[mk]) return _pfYTD[mk];
   var y=String(mk).slice(0,4), m=parseInt(String(mk).slice(5,7),10)||1;
-  var out={rev:0, net:0, cogs:0, exp:0, months:0, gaps:[]};
+  var out={rev:0, net:0, cogs:0, exp:0, months:0, gaps:[], rows:[], skipped:[]};
   for(var i=1;i<=m;i++){
     var k=y+'-'+(i<10?'0':'')+i, rev=0;
     try{ rev=acRevOrders(k).reduce(function(a,o){ return a+acAmt(o); },0); }catch(e){}
     var c={value:0,usable:false}; try{ c=acCOGS(k); }catch(e){}
-    var t={blue:0}; try{ t=finMonthTotals(k); }catch(e){}
-    if(!rev && !t.blue) continue;                      // month never traded
+    var t={blue:0,pay:0,bill:0,sal:0}; try{ t=finMonthTotals(k); }catch(e){}
+    /* A month the company never traded in is NOT empty in finMonthTotals: the
+       office salaries come from pgCalc(), and that pays out the monthly base of
+       every office person for ANY month it is asked about — a payroll grid for
+       that month is not required, and the season root only carries data from
+       the month it was created in. Counting those would invent whole months of
+       wages (six of them, before this figure was fixed). A month therefore only
+       enters the year when it holds orders, a Finance payment or a Bills record;
+       a base salary on its own is no evidence that the month existed.          */
+    if(!rev && !(t.pay+t.bill)){ out.skipped.push(k); continue; }
     out.months++;
     out.rev+=rev; out.cogs+=c.value; out.exp+=t.blue;
     if(rev>0 && !c.usable) out.gaps.push(kpMLabel(k)); // profit of that month is not honest yet
+    out.rows.push({ mk:k, rev:rev, net:rev/1.07, cogs:c.value, exp:t.blue,
+                    profit:rev/1.07-c.value-t.blue, costed:!!c.usable });
   }
   out.net=out.rev/1.07;                                // taxable revenue is ex-VAT
   out.profit=out.net-out.cogs-out.exp;
@@ -40400,6 +40410,32 @@ function pfRender(){
       b+=pfLine('ภาษีตามอัตรา SME / Tax at the SME bands','0 % ถึง 300,000 · 15 % ถึง 3,000,000 · 20 % ส่วนที่เกิน',pfM(tax),'var(--red)',true);
       b+=pfLine('เทียบอัตราคงที่ 20 % / Flat 20 % for comparison','ถ้าบริษัทไม่เข้าเงื่อนไข SME (ทุนจดทะเบียน > 5 ล้าน หรือ รายได้ > 30 ล้าน/ปี)',pfM(flat),'var(--text3)');
       b+=pfLine('= กำไรหลังภาษี (ประมาณ) / Profit after tax','กำไรทั้งปีจนถึงตอนนี้ ลบภาษีตามขั้นบันได',pfM(y.profit-tax),(y.profit-tax)<0?'var(--red)':'var(--green)',true);
+      // Where the four figures above come from — one row per month, so the sum
+      // can be followed instead of believed.
+      b+='<div style="font-size:11.5px;font-weight:800;color:var(--text);margin:14px 0 2px">📅 เดือนต่อเดือน / Month by month</div>';
+      b+='<div style="display:flex;gap:6px;font-size:9.5px;font-weight:700;color:var(--text2);text-transform:uppercase;padding:6px 4px 2px">'
+        +'<span style="flex:1">เดือน / month</span><span style="width:78px;text-align:right">ขายไม่รวม VAT</span>'
+        +'<span style="width:68px;text-align:right">ต้นทุน</span><span style="width:68px;text-align:right">รายจ่าย</span>'
+        +'<span style="width:74px;text-align:right">กำไร</span></div>';
+      b+=y.rows.map(function(r){
+        return '<div style="display:flex;gap:6px;align-items:center;font-size:11.5px;padding:6px 4px;border-bottom:1px dashed var(--border);font-variant-numeric:tabular-nums">'
+          +'<span style="flex:1;min-width:0;font-weight:700;color:var(--text)">'+kpMLabel(r.mk)
+            +(r.costed?'':'<span style="color:var(--orange-t);font-weight:700"> · ต้นทุนไม่ครบ</span>')+'</span>'
+          +'<span style="width:78px;text-align:right">'+pfB(r.net)+'</span>'
+          +'<span style="width:68px;text-align:right;color:var(--orange-t)">'+pfB(r.cogs)+'</span>'
+          +'<span style="width:68px;text-align:right;color:var(--blue)">'+pfB(r.exp)+'</span>'
+          +'<span style="width:74px;text-align:right;font-weight:800;color:'+(r.profit<0?'var(--red)':'var(--green)')+'">'+pfB(r.profit)+'</span>'
+        +'</div>';
+      }).join('');
+      b+='<div style="display:flex;gap:6px;align-items:center;font-size:12px;padding:7px 4px;border-top:2px solid var(--border);font-variant-numeric:tabular-nums;font-weight:800">'
+        +'<span style="flex:1">รวม / total</span>'
+        +'<span style="width:78px;text-align:right">'+pfB(y.net)+'</span>'
+        +'<span style="width:68px;text-align:right;color:var(--orange-t)">'+pfB(y.cogs)+'</span>'
+        +'<span style="width:68px;text-align:right;color:var(--blue)">'+pfB(y.exp)+'</span>'
+        +'<span style="width:74px;text-align:right;color:'+(y.profit<0?'var(--red)':'var(--green)')+'">'+pfB(y.profit)+'</span></div>';
+      if(y.skipped.length) b+='<div style="font-size:10.5px;color:var(--text2);margin-top:6px;line-height:1.5">'
+        +'เดือนที่ไม่มีข้อมูลเลย ไม่นับรวม / months with no records at all, left out: '
+        +_esc(y.skipped.map(function(k){ return kpMLabel(k); }).join(', '))+'</div>';
       if(y.gaps.length) b+='<div style="font-size:10.5px;color:var(--orange-t);margin-top:8px">เดือนที่ต้นทุนยังไม่ครบ ตัวเลขจึงยังไม่นิ่ง / months whose costs are still incomplete: '+_esc(y.gaps.join(', '))+'</div>';
       b+='<div style="font-size:10.5px;color:var(--text2);line-height:1.6;margin-top:8px">'
         +'ประมาณการเท่านั้น — กำไรทางภาษีเป็นของบัญชี มีค่าเสื่อม รายจ่ายต้องห้าม และภาษีที่ถูกหัก ณ ที่จ่ายซึ่งหน้านี้ไม่รู้จัก · ภาษีที่จ่ายไปแล้วระหว่างปี (ภ.ง.ด.51) ยังไม่ได้หักในนี้<br>'
