@@ -9963,7 +9963,7 @@ function printDeliverySheet() {
   var _tos = (t.orders||[]).map(function(id){
     return orders.find(function(x){return x.id===id;}) || {id:id, customer:'—', address:'—', panels:'—', lcorner:'—', clips:0, total:'—', zone:'—', phone:'—'};
   }).filter(function(o){ return ((t.status||{})[o.id]||'loaded') !== 'cancelled'; });
-  return dsPrintSheet(t.driverName||'', _tos, '', t.tid||'');
+  return dsPrintSheet(t.driverName||'', _tos, '', t.tid||'', t);
 }
 // Reprint a sheet later from the Drivers tab — works for an archived tourHistory record
 // AND for a tour that is still on the road. Each stop prints from the LIVE order record
@@ -9979,13 +9979,52 @@ function ofDrvPrintSheet(driverKey, tourKey, tourId){
     .map(function(sp){ return (orders||[]).find(function(x){return x.id===sp.id;}) || sp; });
   if(!list.length){ alert('No orders in this tour / ทัวร์นี้ไม่มีออเดอร์'); return; }
   // A reprint carries the tour's OWN date (the day it left), not today's.
-  dsPrintSheet(rec.driverName||'', list, tourCountDate(rec), rec.tid||'');
+  dsPrintSheet(rec.driverName||'', list, tourCountDate(rec), rec.tid||'', at||null);
 }
 // dateISO ('YYYY-MM-DD') overrides the printed date — a sheet reprinted weeks later must
 // still show the day the tour ran. Left empty for a live tour: that prints today.
 // tid = tour ID (YYMMDD-N, same code stamped on the orders as o.tourNo) — printed on
 // every page so a loose sheet can still be traced back to its tour.
-function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
+// ── ใบส่งของกับทัวร์ไม่ตรงกัน / paper vs. tour ─────────────────────────────
+// A printed delivery sheet is a photograph of the tour at that minute. What the
+// office changes afterwards lives only in the app, while the driver checks the
+// truck against the paper — that is how order 2-242 was loaded with the old
+// quantities on 03.09. The tour remembers when its sheet was printed and which
+// stops stood on it, and the card says out loud when the two have drifted apart.
+function tourSheetDrift(t){
+  if(!t) return null;
+  var since=parseInt(t.sheetAt)||0, ids=(t.sheetIds&&t.sheetIds.length)?t.sheetIds:null;
+  var changed=[], added=[], pend=[];
+  (t.orders||[]).forEach(function(id){
+    if(((t.status||{})[id]||'')==='cancelled') return;
+    var o=(orders||[]).find(function(x){ return x.id===id; }); if(!o) return;
+    if(o.changeReq && o.changeReq.status==='pending'){ pend.push(id); }
+    if(!since) return;
+    if(ids && ids.indexOf(id)<0){ added.push(id); return; }
+    if((parseInt(o._editTs)||0) > since) changed.push(id);
+  });
+  if(!changed.length && !added.length && !pend.length) return null;
+  return { since:since, changed:changed, added:added, pend:pend };
+}
+function ofTourDriftBox(t, ti, ro){
+  var d=tourSheetDrift(t); if(!d) return '';
+  var when=d.since?new Date(d.since).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'';
+  var bits=[];
+  if(d.changed.length) bits.push('✏️ แก้ไข / changed: <b>'+d.changed.map(_esc).join(', ')+'</b>');
+  if(d.added.length) bits.push('➕ เพิ่มใหม่ / new: <b>'+d.added.map(_esc).join(', ')+'</b>');
+  if(d.pend.length) bits.push('⏳ คลังยังไม่ยืนยัน / warehouse not confirmed: <b>'+d.pend.map(_esc).join(', ')+'</b>');
+  return '<div style="background:#fef2f2;border:1.5px solid #fecaca;border-radius:var(--rs);padding:7px 9px;margin-bottom:8px;font-size:11.5px;color:#b91c1c">'
+    +'<b>⚠️ '+(d.since?'ใบส่งของไม่ตรงกับทัวร์ / the printed sheet is out of date':'มีออเดอร์แก้ไข รอคลังยืนยัน / a changed order is waiting for the warehouse')+'</b>'
+    +(when?' <span style="color:var(--text2);font-weight:600">— พิมพ์เมื่อ / printed '+_esc(when)+'</span>':'')
+    +'<div style="margin-top:2px;color:#7f1d1d">'+bits.join('<br>')+'</div>'
+    +(ro?'':'<button type="button" onclick="event.stopPropagation();currentTourDetailIdx='+ti+';printDeliverySheet()" style="margin-top:6px;font-size:11px;padding:4px 9px;border:none;background:#16a34a;color:#fff;border-radius:var(--rs);cursor:pointer;font-weight:700">🖨 พิมพ์ใบใหม่ / print a fresh sheet</button>')
+  +'</div>';
+}
+// tourRec = the live tour, when there is one. The sheet then knows what the LAST
+// printed sheet said (tour.sheetAt / tour.sheetIds) and can mark every stop that
+// has changed since — the whole point being that a driver checking the truck
+// against paper cannot see a quantity that was edited in the office at 16:03.
+function dsPrintSheet(driverName, tourOrders, dateISO, tid, tourRec) {
   const now = new Date();
   var _dt = dateISO ? new Date(String(dateISO)+'T00:00:00') : now;
   if(isNaN(_dt)) _dt = now;
@@ -10003,6 +10042,25 @@ function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
   const PRODT = {panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
 
   function moneyOf(o){ return parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0; }
+
+  // What changed since the sheet this one replaces.
+  var _sinceTs = tourRec ? (parseInt(tourRec.sheetAt)||0) : 0;
+  var _prevIds = (tourRec && tourRec.sheetIds && tourRec.sheetIds.length) ? tourRec.sheetIds : null;
+  var _prevAt  = _sinceTs ? new Date(_sinceTs).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+  function dsMark(o){
+    var pend = !!(o.changeReq && o.changeReq.status==='pending');
+    var isNew = !!(_prevIds && _prevIds.indexOf(o.id)<0);
+    var chg = !isNew && _sinceTs>0 && (parseInt(o._editTs)||0) > _sinceTs;
+    if(!pend && !isNew && !chg) return null;
+    var lbl = isNew ? '➕ ใหม่ในใบนี้ / NEW on this sheet'
+            : (chg ? ('✏️ แก้ไขหลังใบก่อน / CHANGED since the sheet of '+_prevAt)
+                   : '⏳ แก้ไขแล้ว คลังยังไม่ยืนยัน / changed, warehouse not confirmed');
+    var diff='';
+    try{ if(o.changeReq && typeof coDiffText==='function') diff=coDiffText(o.changeReq); }catch(e){}
+    if(pend && !isNew && !chg) lbl='⏳ '+lbl.replace(/^⏳ /,'');
+    return { lbl:lbl, diff:diff, pend:pend, isNew:isNew, chg:chg };
+  }
+  var _marked = tourOrders.filter(function(o){ return !!dsMark(o); });
 
   function dsBlock(o){
     var prods = (o.lineItems||[]).filter(function(li){ return PRODT[li.type] && (parseFloat(li.qty)||0)>0; })
@@ -10057,7 +10115,9 @@ function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
         + '<div class="ds-payrow">เงินสด/Cash <span class="box"></span></div>'
         + '<div class="ds-payrow">โอน/Online <span class="box"></span></div>';
     }
-    return '<div class="ds-order"><div class="ds-seq"></div><div class="ds-body">'
+    var mk = dsMark(o);
+    return '<div class="ds-order'+(mk?' ds-chg':'')+'"><div class="ds-seq"></div><div class="ds-body">'
+      + (mk ? '<div class="ds-chgb">'+mk.lbl+(mk.diff?' &nbsp; '+esc(mk.diff):'')+'</div>' : '')
       + '<div class="ds-top">'
         + '<div class="ds-id">'+esc(o.id)+'</div>'
         + '<div class="ds-contact"><div class="nm">'+name+'</div><div>'+phone+(contact?' &nbsp; '+contact:'')+'</div>'+(addr?'<div>📍 '+addr+'</div>':'')+'<div style="font-size:9pt;font-weight:700;color:#1d4ed8;margin-top:1px">'+shipTxt+'</div>'+(createdStr?'<div style="font-size:8.5pt;color:#555">📅 สั่ง/Ordered: '+esc(createdStr)+'</div>':'')+'</div>'
@@ -10077,6 +10137,12 @@ function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
   var grandTotal = tourOrders.reduce(function(a,o){ return a+moneyOf(o); }, 0);
   var totalCtn = tourOrders.reduce(function(a,o){ return a+(parseInt(o.ctn)||0); }, 0);
   var totalBundle = tourOrders.reduce(function(a,o){ return a+(parseInt(o.bundle)||0); }, 0);
+
+  // Nobody reads 19 blocks looking for a changed digit — the changed stops are
+  // named once, in red, above everything else.
+  var warnHTML = !_marked.length ? '' : ('<div class="ds-warn">⚠️ ตรวจซ้ำก่อนโหลด / CHECK THESE BEFORE LOADING — '
+    + _marked.length + ' ออเดอร์เปลี่ยนตั้งแต่ใบก่อน / changed since the last sheet: '
+    + _marked.map(function(o){ return esc(o.id); }).join(' · ') + '</div>');
 
   var summaryHTML = '<div class="ds-summary"><div class="ds-sum-grid">'
     + '<div class="ds-sum-box"><div class="lbl">ออเดอร์ทั้งหมด / Total Orders</div><div class="val">'+tourOrders.length+'</div></div>'
@@ -10098,6 +10164,11 @@ function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
   + '@page{size:A4 portrait;margin:8mm;margin-top:40mm}'  /* 4cm clear at top for the clipboard clip (every page) */
   + 'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;background:#fff}'
   + '.ds-header{background:#ffeb3b;border:1px solid #999;padding:5px 8px;margin:0 auto 6px;width:180mm;display:flex;justify-content:space-between;align-items:center}'
+  // A changed stop is yellow all over, with a black-on-amber line saying what
+  // changed — findable while standing at the truck, not a digit to spot.
+  + '.ds-order.ds-chg{background:#fef9c3;border:2.5px solid #ca8a04}'
+  + '.ds-chgb{background:#facc15;color:#111;font-weight:800;font-size:9.5pt;padding:2px 6px;border-radius:3px;margin-bottom:3px}'
+  + '.ds-warn{border:2.5px solid #dc2626;background:#fef2f2;color:#b91c1c;font-weight:800;font-size:10.5pt;padding:5px 9px;margin:0 auto 6px;width:180mm;border-radius:3px}'
   + '.ds-h-title{font-size:12pt;font-weight:800}.ds-h-sub{font-size:9.5pt;font-weight:600}'
   + '.ds-h-tid{display:inline-block;font-size:10pt;font-weight:800;background:#111;color:#fff;border-radius:9px;padding:1px 8px;margin-left:6px;letter-spacing:.4px;vertical-align:1px;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
   + '.ds-bank{border:2px solid #16a34a;background:#f0fdf4;border-radius:4px;padding:6px 10px;margin:0 auto 6px;width:180mm;font-size:10pt;line-height:1.5;color:#111}.ds-bank b{color:#166534}'
@@ -10133,7 +10204,7 @@ function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
   + '</span><span class="ds-h-sub">'+dateStr+' · หน้า {PG} · '+tourOrders.length+' ออเดอร์ · '+printedTxt+'</span></div></template>'
   + '<scr'+'ipt>(function(){'
   + 'var flow=document.getElementById("ds-flow");'
-  + 'flow.innerHTML='+JSON.stringify(summaryHTML+blocksHTML)+';'
+  + 'flow.innerHTML='+JSON.stringify(warnHTML+summaryHTML+blocksHTML)+';'
   + 'var blocks=[].slice.call(flow.children);'
   + 'var htpl=document.getElementById("ds-htpl").innerHTML;'
   // Tour ID repeated on every following page — a sheet that gets separated from page 1
@@ -10154,6 +10225,15 @@ function dsPrintSheet(driverName, tourOrders, dateISO, tid) {
   + 'pg.forEach(function(b){pd.appendChild(b);});flow.appendChild(pd);});'
   + 'setTimeout(function(){window.print();},300);'
   + '})();<\/scr'+'ipt></body></html>';
+
+  // From here on the paper in the driver's hand is this list, printed now. What
+  // the office changes after this minute is what the next sheet will highlight.
+  if(tourRec && !dateISO){
+    tourRec.sheetAt = Date.now();
+    tourRec.sheetIds = tourOrders.map(function(o){ return o.id; });
+    try{ syncTours(); }catch(e){}
+    try{ ofRenderTour(); }catch(e){}
+  }
 
   var printWin = window.open('', '_blank');
   if(printWin){
@@ -13317,6 +13397,7 @@ function ofRenderTour(){
       // Outside the header on purpose: everything inside it opens the tour detail
       // on a tap, and a note is written into, not opened.
       ofTourNoteBox(t,ro)+
+      ofTourDriftBox(t,ti,ro)+
       // ── TOP: loaded pickup + Departed on one line ──────────────────────
       // They belong together in the yard: photograph the loaded truck, then send it
       // off. Departed is amber, not green — green is the finished state (the orders
@@ -19057,6 +19138,17 @@ function submitCO(){
     // changeReq = a confirmation task for the warehouse (the order is already updated)
     o.changeReq={status:'pending',by:who,ts:Date.now(),diff:diff,note:document.getElementById('co-note').value||'',oldItems:oldItems,oldTotal:oldTotal,newItems:newItems,newTotal:o.total};
     try{auditAdd({type:'change-request',orderId:o.id,by:who,detail:coDiffText(o.changeReq)});}catch(e){}
+    // An order that is already on a tour is the dangerous case: the driver may be
+    // holding a sheet printed before this edit, and the office person doing it may
+    // be at home. Say it out loud to the road and to the warehouse.
+    try{
+      var _onTour=(activeTours||[]).find(function(x){ return (x.orders||[]).indexOf(o.id)>=0; });
+      if(_onTour && window.pushSend){
+        var _msg=o.id+' · '+coDiffText(o.changeReq)+' — '+(_onTour.driverName||'');
+        window.pushSend('driver','⚠️ ออเดอร์บนทัวร์เปลี่ยน / order on tour changed', _msg, {orderId:o.id});
+        window.pushSend('warehouse','⚠️ ออเดอร์บนทัวร์เปลี่ยน / order on tour changed', _msg, {orderId:o.id});
+      }
+    }catch(e){}
   } else {
     // Money-only correction: no warehouse task, no re-pack, no banner on the card.
     try{auditAdd({type:'edit',orderId:o.id,by:who,detail:'ราคา/ส่วนลด / price only: '+oldTotal+' → '+o.total});}catch(e){}
