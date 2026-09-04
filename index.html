@@ -9985,6 +9985,88 @@ function ofDrvPrintSheet(driverKey, tourKey, tourId){
 // still show the day the tour ran. Left empty for a live tour: that prints today.
 // tid = tour ID (YYMMDD-N, same code stamped on the orders as o.tourNo) — printed on
 // every page so a loose sheet can still be traced back to its tour.
+// ── ใบตรวจของขึ้นรถ / loading check ────────────────────────────────────────
+// Two different jobs, two different sheets. The delivery sheet is printed in the
+// afternoon so the driver can ring his customers, write notes and plan the day —
+// by loading time it is hours old. This one is printed AT the truck, one line per
+// stop, codes and quantities only, and it is always the current state. Changed
+// stops are yellow here too, with what changed spelled out.
+function printLoadCheck(ti){
+  var t = (typeof ti==='object' && ti) ? ti : activeTours[ti];
+  if(!t){ alert('Tour not found / ไม่พบทัวร์'); return; }
+  var ords=(t.orders||[]).map(function(id){ return (orders||[]).find(function(x){return x.id===id;}); })
+    .filter(function(o){ return o && ((t.status||{})[o.id]||'loaded')!=='cancelled'; });
+  if(!ords.length){ alert('No orders in this tour / ทัวร์นี้ไม่มีออเดอร์'); return; }
+  var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var since=parseInt(t.sheetAt)||0, prev=(t.sheetIds&&t.sheetIds.length)?t.sheetIds:null;
+  var now=new Date();
+  var when=now.toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'})
+    +' · '+now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})+' น.';
+  var PRODT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  var rows=ords.map(function(o,i){
+    var cr=o.changeReq, pend=!!(cr&&cr.status==='pending');
+    var isNew=!!(prev && prev.indexOf(o.id)<0);
+    var chg=!isNew && since>0 && (parseInt(o._editTs)||0)>since;
+    var mark=pend||isNew||chg;
+    var diff=''; try{ if(cr) diff=coDiffText(cr); }catch(e){}
+    var lines=(o.lineItems||[]).filter(function(li){ return PRODT[li.type] && (parseFloat(li.qty)||0)>0; })
+      .map(function(li){ return '<div class="lc-i"><span class="bx"></span>'+esc(li.code)+' <b>×'+li.qty+'</b></div>'; }).join('');
+    if(!lines) lines='<div class="lc-i"><span class="bx"></span>'+esc(o.panels||'—')+'</div>';
+    var clips=parseInt(o.clips)||0;
+    if(clips>0) lines+='<div class="lc-i"><span class="bx"></span>📎 Clips <b>×'+clips.toLocaleString()+'</b></div>';
+    var pack=[];
+    if(parseInt(o.ctn)>0) pack.push('📦 '+o.ctn+' CTN');
+    if(parseInt(o.bundle)>0) pack.push('🧶 '+o.bundle+' มัด');
+    return '<tr'+(mark?' class="lc-chg"':'')+'>'
+      +'<td class="c b">'+(i+1)+'</td>'
+      +'<td class="c b id">'+esc(o.id)+'</td>'
+      +'<td>'+esc(o.customer||'—')
+        +(mark?'<div class="lc-warn">'+(isNew?'➕ ใหม่ / NEW':(pend?'⚠️ แก้ไข ยังไม่ยืนยัน / CHANGED, not confirmed':'✏️ แก้ไขหลังใบส่งของ / CHANGED since the sheet'))
+          +(diff?' — '+esc(diff):'')+'</div>':'')+'</td>'
+      +'<td>'+lines+'</td>'
+      +'<td class="c b">'+(pack.join('<br>')||'—')+'</td>'
+      +'<td class="c"><span class="bx big"></span></td>'
+    +'</tr>';
+  }).join('');
+  var totCtn=ords.reduce(function(a,o){ return a+(parseInt(o.ctn)||0); },0);
+  var totBun=ords.reduce(function(a,o){ return a+(parseInt(o.bundle)||0); },0);
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Loading check / ใบตรวจของขึ้นรถ</title><style>'
+    +'*{box-sizing:border-box;margin:0;padding:0}'
+    +'@page{size:A4 portrait;margin:8mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;background:#fff;font-size:10pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    +'.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:5px}'
+    +'.hd h1{font-size:14pt}.hd .d{font-size:9.5pt;color:#333;text-align:right}'
+    +'.tid{display:inline-block;background:#111;color:#fff;border-radius:9px;padding:1px 8px;font-size:10pt;margin-left:6px}'
+    +'.note{font-size:9pt;color:#444;margin-bottom:5px}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #666;padding:3px 5px;font-size:10pt;vertical-align:top}'
+    +'th{background:#f1f5f9;font-size:8.5pt;text-transform:uppercase}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.c{text-align:center}.b{font-weight:800}.id{font-size:12pt}'
+    +'.lc-i{display:flex;align-items:center;gap:6px;font-size:10.5pt;padding:1px 0}'
+    +'.bx{display:inline-block;width:14px;height:14px;border:1.6px solid #333;border-radius:2px;flex-shrink:0}'
+    +'.bx.big{width:20px;height:20px;border-width:2px}'
+    +'.lc-chg{background:#fef9c3;outline:2.5px solid #ca8a04}'
+    +'.lc-warn{background:#facc15;color:#111;font-weight:800;font-size:9pt;padding:2px 5px;border-radius:3px;margin-top:3px}'
+    +'.sum{margin-top:6px;font-size:11pt;font-weight:800;display:flex;gap:18px;justify-content:flex-end}'
+    +'.sign{display:flex;gap:10px;margin-top:10px}'
+    +'.sign div{flex:1;border:1px solid #111;border-radius:4px;padding:4px 8px;height:14mm;font-size:9pt;color:#555}'
+    +'</style></head><body>'
+    +'<div class="hd"><h1>🚚 ใบตรวจของขึ้นรถ / Loading check<span class="tid">'+esc(t.tid||'')+'</span></h1>'
+      +'<div class="d"><b>'+esc(t.driverName||'')+'</b><br>🖨 '+esc(when)+'</div></div>'
+    +'<div class="note">พิมพ์ตอนโหลดของ — ตรงกับแอปนาทีนี้ / printed at loading time, this IS the current state. '
+      +'ติ๊กทุกบรรทัดตอนยกขึ้นรถ · แถวสีเหลืองคือออเดอร์ที่เพิ่งเปลี่ยน / tick every line as it goes on the truck; a yellow row changed recently.</div>'
+    +'<table><thead><tr><th class="c" style="width:8mm">#</th><th class="c" style="width:20mm">ออเดอร์<br>Order</th>'
+      +'<th style="width:52mm">ลูกค้า / Customer</th><th>รายการ / Items</th>'
+      +'<th class="c" style="width:22mm">แพ็ค<br>Packing</th><th class="c" style="width:18mm">ขึ้นรถ<br>Loaded</th></tr></thead>'
+    +'<tbody>'+rows+'</tbody></table>'
+    +'<div class="sum"><span>'+ords.length+' ออเดอร์ / orders</span><span>📦 '+totCtn+' CTN</span>'+(totBun?'<span>🧶 '+totBun+' มัด</span>':'')+'</div>'
+    +'<div class="sign"><div>คนโหลด / Loaded by:</div><div>คนขับตรวจแล้ว / Driver checked:</div></div>'
+    +'<scr'+'ipt>setTimeout(function(){window.print();},250);<\/scr'+'ipt></body></html>';
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(html); w.document.close(); w.focus();
+}
 // ── ใบส่งของกับทัวร์ไม่ตรงกัน / paper vs. tour ─────────────────────────────
 // A printed delivery sheet is a photograph of the tour at that minute. What the
 // office changes afterwards lives only in the app, while the driver checks the
@@ -11281,7 +11363,20 @@ function quickStatus(btn) {
     o.whCancelAck = false;
   }
   // Order moving to ready/loaded/delivered auto-confirms a still-pending change (keeps it as a record)
-  if((newStatus==='ready'||newStatus==='loaded'||newStatus==='delivered') && o.changeReq && o.changeReq.status==='pending'){ o.changeReq.status='confirmed'; o.changeReq.confirmedBy=byName; o.changeReq.confirmedAt=Date.now(); }
+  // A pending change used to be confirmed silently by this very status change —
+  // which is how a changed order got loaded with the old goods on 03.09. Whoever
+  // moves it to ready/loaded now has to say that the goods match the change.
+  if((newStatus==='ready'||newStatus==='loaded'||newStatus==='delivered') && o.changeReq && o.changeReq.status==='pending'){
+    var _d=''; try{ _d=coDiffText(o.changeReq); }catch(e){}
+    if(!confirm('⚠️ ออเดอร์นี้ถูกแก้ไข ยังไม่ยืนยัน / this order was CHANGED and not confirmed yet\n\n'
+        +o.id+'\n'+_d+'\n\n'
+        +'ของบนรถ/ที่แพ็คตรงกับที่แก้ไขแล้วใช่ไหม? / do the packed goods already match the change?\n'
+        +'กด OK = ยืนยันการแก้ไข / OK = confirm the change')){
+      o.status=old; try{ (o.statusLog||[]).pop(); }catch(e){}
+      return;
+    }
+    o.changeReq.status='confirmed'; o.changeReq.confirmedBy=byName; o.changeReq.confirmedAt=Date.now();
+  }
   // Sync warehouse status
   const wo = wOrders.find(x => x.id === id);
   if(wo && newStatus === 'ready' && !wo.packed) {
@@ -13636,7 +13731,7 @@ function ofRenderTour(){
       '<div style="flex:1;min-width:0">'+
         // Creation date on the row: an order waiting since last week should go on a
         // tour before today's, and that is only visible if the date is right here.
-        '<div style="font-size:13px;font-weight:700">'+o.id+' <span style="font-size:11px;font-weight:500;color:var(--text2)">&middot; '+(o.zone||'')+(o.date?' &middot; 📅 '+fmtD(o.date).slice(0,5):'')+'</span> '+ofAgeBadge(o)+'</div>'+
+        '<div style="font-size:13px;font-weight:700">'+o.id+' <span style="font-size:11px;font-weight:500;color:var(--text2)">&middot; '+(o.zone||'')+(o.date?' &middot; 📅 '+fmtD(o.date).slice(0,5):'')+'</span> '+ofAgeBadge(o)+(o.changeReq&&o.changeReq.status==='pending'?' <span style="font-size:9px;font-weight:800;background:#fee2e2;color:#b91c1c;border-radius:8px;padding:1px 5px">⏳ แก้ไขรอยืนยัน / change not confirmed</span>':'')+'</div>'+
         '<div style="font-size:12px;color:var(--text2);margin-top:1px">👤 '+(o.customer||'—')+'</div>'+
         (o.phone&&o.phone!=='—'?'<div style="font-size:12px;color:var(--text2)">📞 '+o.phone+'</div>':'')+
         (o.address&&o.address!=='—'?'<div style="font-size:12px;color:var(--text2)">📍 '+o.address+'</div>':'')+
@@ -13847,6 +13942,7 @@ function ofRenderLala(){
       +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
         +'<button type="button" class="btnsm" style="background:#1D4ED8;color:#fff;border-color:#1D4ED8;font-weight:600" onclick="printTourReceipts('+ti+')" title="Customer receipts / ใบเสร็จลูกค้า"><i class="ti ti-receipt"></i> Print receipts / พิมพ์ใบเสร็จ</button>'
         +'<button type="button" class="btnsm btng" style="font-weight:600" onclick="currentTourDetailIdx='+ti+';printDeliverySheet()" title="Driver delivery sheet / ใบส่งของคนขับ"><i class="ti ti-clipboard-list"></i> Delivery sheet / ใบส่งของ</button>'
+        +'<button type="button" class="btnsm" style="background:#0369a1;color:#fff;border-color:#0369a1;font-weight:600" onclick="printLoadCheck('+ti+')" title="พิมพ์ตอนโหลดของ — ตรงกับแอปนาทีนี้ / printed at loading time, always current"><i class="ti ti-checkbox"></i> ใบตรวจของขึ้นรถ / Loading check</button>'
         +(departed?'':'<button type="button" class="btnsm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:600" onclick="ofLalaDeparted('+ti+')">🚀 ออกรถ / Departed</button>')
       +'</div>'
       +'</div>';
@@ -19059,6 +19155,14 @@ function coCalc(){
 }
 function submitCO(){
   var o=orders.find(function(x){return x.id===coId;}); if(!o)return;
+  // An order that is already on a tour may be lying on a truck, next to a sheet
+  // printed before this edit. Changing it is allowed — doing it unnoticed is not.
+  var _tOn=(activeTours||[]).find(function(x){ return (x.orders||[]).indexOf(o.id)>=0; });
+  if(_tOn && !confirm('⚠️ ออเดอร์นี้อยู่บนทัวร์ '+(_tOn.tid||'')+' ('+(_tOn.driverName||'')+')'
+      +(_tOn.driving?' — รถออกไปแล้ว / already on the road':'')+'\n\n'
+      +'This order is on a tour. The driver may be holding a sheet printed before this change.\n'
+      +'คนขับและคลังจะได้รับแจ้งเตือน และต้องพิมพ์ใบส่งของใหม่ / driver and warehouse get a notification, and a fresh delivery sheet must be printed.\n\n'
+      +'แก้ไขต่อไหม? / change it anyway?')) return;
   var newItems=[], tq=0, freeGift=0;
   document.querySelectorAll('#co-lines .pline').forEach(function(l){
     var i=l.querySelectorAll('input');
@@ -19791,6 +19895,19 @@ function drTour(){
       return '<div class="tcard" data-oid="'+id+'"'+(loaded?'':' style="opacity:0.72"')+'>'+
         '<div class="ttop">'+
         '<div class="thdr"><span class="tnum">'+(idx+1)+'. '+o.id+(_locUrl?' <a href="'+_locUrl+'" target="_blank" title="Open location in Maps" style="text-decoration:none">📍</a>':'')+(loaded?'':(isPacking?' <span style="font-size:10px;font-weight:700;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 6px;white-space:nowrap">📦 กำลังแพ็ค / Packing</span>':' <span style="font-size:10px;font-weight:700;color:#6b7280;background:rgba(0,0,0,0.06);border-radius:8px;padding:1px 6px;white-space:nowrap">⬜ ยังไม่ขึ้นรถ</span>'))+'</span> '+kpcOrderBubble(o.id)+'</div>'+
+        // A change made after the paper was printed is the one thing the driver
+        // cannot see on his sheet — so it sits above the goods, in red.
+        (function(){
+          var cr=liveO&&liveO.changeReq; if(!cr) return '';
+          var pend=cr.status==='pending';
+          var fresh=pend||((parseInt(cr.ts)||0) > (Date.now()-36*3600000));
+          if(!fresh) return '';
+          var d=''; try{ d=coDiffText(cr); }catch(e){}
+          return '<div style="background:'+(pend?'#fef2f2':'#fffbeb')+';border:1.5px solid '+(pend?'#fecaca':'#fde68a')+';border-radius:8px;padding:5px 8px;margin-bottom:5px;font-size:12px;font-weight:700;color:'+(pend?'#b91c1c':'#92400e')+'">'
+            +(pend?'⚠️ แก้ไขแล้ว คลังยังไม่ยืนยัน / CHANGED, not confirmed':'✏️ ออเดอร์นี้ถูกแก้ไข / this order was changed')
+            +(d?'<div style="font-weight:600;margin-top:2px">'+d+'</div>':'')
+          +'</div>';
+        })()+
         '<div style="font-size:13px;margin-bottom:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' &middot; '+o.lcorner:'')+(o.clips&&o.clips>0?' &middot; 📎 '+o.clips+' clips':'')+(o.ctn?' &middot; <span style="color:var(--green);font-weight:700">📦 '+o.ctn+' CTN</span>':'')+(o.bundle?' &middot; <span style="color:#ea580c;font-weight:700">🧶 '+o.bundle+' มัด</span>':'')+'</div>'+
         '<div class="crow"><i class="ti ti-user" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.customer+'</span></div>'+
         '<div class="crow"><i class="ti ti-phone" style="font-size:13px;color:var(--text2)"></i><span>'+phoneLinks(o.phone,'var(--blue)')+'</span></div>'+
@@ -20154,6 +20271,20 @@ function drArrDepart(){
   if(tour.kmMode && !kmLogOf(tour).length){
     alert('🏁 ถ่ายรูปเลขไมล์ก่อนออกรถ\nPhotograph the odometer before departing.');
     try{ drKmOpen(''); }catch(e){}
+    return;
+  }
+  // Loading is where a changed order must be caught: the goods are still in the
+  // yard and the warehouse is standing next to them. Nothing leaves with a change
+  // nobody confirmed.
+  var _chg=arranged.filter(function(id){
+    var oo=orders.find(function(x){return x.id===id;});
+    return oo && oo.changeReq && oo.changeReq.status==='pending';
+  });
+  if(_chg.length){
+    alert('⛔ ออเดอร์ที่แก้ไขแล้วยังไม่ยืนยัน / a changed order is not confirmed yet:\n\n'
+      +_chg.join(', ')+'\n\n'
+      +'ให้ออฟฟิศ/คลังตรวจของแล้วกด Ready ก่อน แล้วพิมพ์ใบส่งของใหม่ /\n'
+      +'office or warehouse must check the goods and set it Ready first, then print a fresh delivery sheet.');
     return;
   }
   if(!confirm('ออกรถเลย? / Depart now?')) return;
@@ -30030,6 +30161,9 @@ function calcViz() {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
         <button type="button" class="btn btng" style="margin-top:0" onclick="printDeliverySheet()">
           <i class="ti ti-clipboard-list"></i> Delivery sheet / ใบส่งของ
+        </button>
+        <button type="button" class="btn btng" style="margin-top:0;background:#0369a1" onclick="printLoadCheck(currentTourDetailIdx)">
+          <i class="ti ti-checkbox"></i> ใบตรวจของขึ้นรถ / Loading check
         </button>
         <button type="button" class="btn btnr" style="margin-top:0" onclick="ofEndTourFromDetail()">
           <i class="ti ti-flag-check"></i> End tour / จบทัวร์
