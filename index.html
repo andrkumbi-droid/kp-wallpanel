@@ -33126,6 +33126,18 @@ function clPrintCheck(id, filled){
           +'<div>➕ คนช่วยอื่น ๆ / Other helpers: '+ln(help)+' คน</div>'
           +'<div>Σ รวมคนลงของ / people in total: '+ln(was.length+hired+help)+' คน</div>'
         +'</div>'
+        // What it cost. On the blank sheet these are lines to write on while
+        // standing at the truck; on the recorded sheet they carry the money the
+        // app booked into Bills, so paper and books say the same thing.
+        +(function(){
+          var hr=parseInt(rec&&rec.hiredRate)||0, pr=parseInt(rec&&rec.helpRate)||0;
+          var tot=(parseInt(rec&&rec.pay)||0) || (hired*hr+help*pr);
+          return '<div class="crewn">'
+            +'<div>💰 จ้างเพิ่ม คนละ / hired, each: '+ln(hr?hr.toLocaleString('en-US'):'')+' ฿</div>'
+            +'<div>💰 คนช่วยอื่น คนละ / helpers, each: '+ln(pr?pr.toLocaleString('en-US'):'')+' ฿</div>'
+            +'<div>Σ ค่าลงของรวม / unload pay: '+ln(tot?tot.toLocaleString('en-US'):'')+' ฿</div>'
+          +'</div>';
+        })()
         +(rec&&rec.note?'<div style="margin-top:4px;font-size:9pt">📝 '+esc(rec.note)+'</div>':'')
       +'</div>';
     })()
@@ -33259,11 +33271,19 @@ function clChkRender(){
       +(names.length?names.map(function(n){ return '<span class="chknm'+(was.indexOf(n)>=0?' on':'')+'" data-nm="'+_esc(n)+'" onclick="clChkNm(this)">'+_esc(n)+'</span>'; }).join('')
                     :'<span style="font-size:11.5px;color:var(--text3)">— ไม่มีรายชื่อ / no names —</span>')
     +'</div>'
+    // The head count alone never told anybody what the morning cost. The rate per
+    // person sits right next to it, and the sum goes to Bills by itself (clChkBill).
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px">'
       +'<div><label class="fl" style="margin-top:0">👷 จ้างเพิ่ม / hired</label><input class="chkf" type="number" min="0" id="clchk-hired" value="'+((parseInt(k.hired)||0)||'')+'" oninput="clChkPeople()"></div>'
+      +'<div><label class="fl" style="margin-top:0">💰 คนละ / each ฿</label><input class="chkf" type="number" min="0" id="clchk-hrate" placeholder="500" value="'+((parseInt(k.hiredRate)||0)||'')+'" oninput="clChkPeople()"></div>'
       +'<div><label class="fl" style="margin-top:0">➕ คนช่วยอื่น / helpers</label><input class="chkf" type="number" min="0" id="clchk-help" value="'+((parseInt(k.helpers)||0)||'')+'" oninput="clChkPeople()"></div>'
+      +'<div><label class="fl" style="margin-top:0">💰 คนละ / each ฿</label><input class="chkf" type="number" min="0" id="clchk-hprate" placeholder="500" value="'+((parseInt(k.helpRate)||0)||'')+'" oninput="clChkPeople()"></div>'
     +'</div>'
     +'<div style="font-size:11.5px;color:var(--text2);text-align:right;margin:4px 0 2px">Σ รวมคนลงของ / people in total: <b style="color:var(--text)" id="clchk-people">0</b> คน</div>'
+    +'<div id="clchk-payrow" style="display:none;font-size:12px;background:var(--bg2);border-radius:var(--rs);padding:6px 9px;margin:2px 0 4px">'
+      +'<div style="display:flex;justify-content:space-between;gap:8px"><span>💵 ค่าลงของรวม / unload pay</span><b id="clchk-pay">0 ฿</b></div>'
+      +'<div style="font-size:10.5px;color:var(--text2);margin-top:2px" id="clchk-paynote"></div>'
+    +'</div>'
     +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid var(--border);padding-top:8px;margin-top:6px">'
       +'<button type="button" class="btnsm" style="flex-shrink:0;padding:6px 10px;font-size:11.5px" onclick="clChkAll()">✓ ครบทุกรายการ / all complete</button>'
       +'<span id="clchk-sum" style="font-size:11.5px;color:var(--text2);text-align:right"></span>'
@@ -33295,8 +33315,25 @@ function clChkNm(el){ el.classList.toggle('on'); clChkPeople(); }
 function clChkPeople(){
   var el=document.getElementById('clchk-people'); if(!el) return;
   var crew=document.querySelectorAll('#clchk-crew .chknm.on').length;
-  var hd=document.getElementById('clchk-hired'), hp=document.getElementById('clchk-help');
-  el.textContent=crew+(parseInt(hd&&hd.value)||0)+(parseInt(hp&&hp.value)||0);
+  var p=clChkPay();
+  el.textContent=crew+p.hired+p.help;
+  var row=document.getElementById('clchk-payrow'), sum=document.getElementById('clchk-pay'), nt=document.getElementById('clchk-paynote');
+  if(!row) return;
+  row.style.display = p.total>0 ? 'block' : 'none';
+  if(sum) sum.textContent=p.total.toLocaleString('en-US')+' ฿';
+  if(nt) nt.textContent = p.parts.join('  ·  ')+' → ลงบิลอัตโนมัติที่ ค่าลงของ / posted to Bills automatically';
+}
+// What the unloading costs, from the two counts and their rates. One place, so
+// the form, the printed sheet and the Bills receipt can never disagree.
+function clChkPay(k){
+  var n=function(id,f){ var e=document.getElementById(id); return k?(parseInt(k[f])||0):(parseInt(e&&e.value)||0); };
+  var hired=n('clchk-hired','hired'), hrate=n('clchk-hrate','hiredRate');
+  var help=n('clchk-help','helpers'), prate=n('clchk-hprate','helpRate');
+  var parts=[];
+  if(hired>0&&hrate>0) parts.push('จ้าง '+hired+' × '+hrate.toLocaleString('en-US')+' ฿');
+  if(help>0&&prate>0) parts.push('ช่วย '+help+' × '+prate.toLocaleString('en-US')+' ฿');
+  return { hired:hired, hrate:hrate, help:help, prate:prate,
+           total: hired*hrate + help*prate, parts:parts };
 }
 // Typing the number the PI expects ticks the line off by itself — that is the
 // normal case and nobody should have to tap twice for it. Anything else leaves
@@ -33402,17 +33439,55 @@ function clChkSave(){
   var k={ date:g('clchk-date')||kpTodayStr(), arrAt:g('clchk-arr'), finAt:g('clchk-fin'),
           by:g('clchk-by')||clDocWho(), crew:crew,
           hired:parseInt(g('clchk-hired'))||0, helpers:parseInt(g('clchk-help'))||0,
+          hiredRate:parseInt(g('clchk-hrate'))||0, helpRate:parseInt(g('clchk-hprate'))||0,
+          pay:clChkPay().total,
           note:g('clchk-note'), lines:lines,
           savedAt:Date.now(), savedBy:clDocWho() };
   c.check=k;
   // A child write, never a .set() of the whole container — the papers, the dates
   // and the product list belong to whoever is editing them right now.
   if(window.fbDB) window.fbDB.ref('containerLog/'+id+'/check').set(k);
+  clChkBill(c, k);
   try{ auditAdd({ type:'edit', area:'container', orderId:'🚢 '+(c.supplier||'')+' '+(c.containerNo||''),
         note:'ตรวจรับสินค้า / goods check '+got+'/'+exp+' CTN'+(bad?(' · '+bad+' ไม่ครบ / short'):' · ครบ / complete'), by:k.by }); }catch(e){}
   clChkClose();
   try{ clRender(); }catch(e){}
   try{ if(document.getElementById('ofv-inc')) ofRenderInc(); }catch(e){}
+}
+
+// ── ค่าลงของ → บิล / the unload pay lands in Bills by itself ──────────────
+// The office used to read the number off the check sheet and type it into the
+// Bills tab a second time. A hand-copied number is how a container ends up paid
+// twice, or not at all. The receipt id is derived from the container, so saving
+// the check again CORRECTS that one receipt instead of adding another; setting
+// the pay back to nothing removes it.
+function clUnloadCat(){
+  var list=(typeof costCats!=='undefined' && costCats && costCats.other) ? costCats.other : [];
+  for(var i=0;i<list.length;i++){
+    if(/ลงของ|unload/i.test(String(list[i].label||''))) return list[i];
+  }
+  return null;
+}
+function clChkBill(c, k){
+  if(!window.fbDB || !c) return;
+  var id='bill-clchk-'+String(c.id||'').replace(/[.#$\/\[\]]/g,'_');
+  var p=clChkPay(k);
+  if(!(p.total>0)){ window.fbDB.ref('bills/'+id).remove(); return; }
+  var cat=clUnloadCat();
+  if(!cat){
+    // No category to book it to. Creating one silently would rewrite the whole
+    // section (see catRemove) — say it instead, the money is still on the check.
+    alert('บันทึกผลตรวจแล้ว แต่ยังไม่มีหมวด "ค่าลงของ" ในบิล / the check is saved, but Bills has no "Unload helpers" category yet.\n\nสร้างหมวดในแท็บ Bills แล้วกดบันทึกผลตรวจอีกครั้ง / create it in the Bills tab and save the check again.');
+    return;
+  }
+  var rec={ id:id, section:'other', subcatId:cat.id, subcatLabel:cat.label||'',
+    what:'ลงตู้ '+(c.containerNo||c.supplier||c.id)+(p.parts.length?(' · '+p.parts.join(' + ')):''),
+    amount:p.total, date:k.date||kpTodayStr(), ts:Date.now(),
+    by:k.savedBy||k.by||'Office', photoUrl:'', clchkId:c.id };
+  window.fbDB.ref('bills/'+id).set(rec);
+  try{ auditAdd({ type:'bills', action:'unload pay', orderId:'🚢 '+(c.containerNo||c.supplier||''),
+    detail:'ค่าลงของ / unload pay '+p.total.toLocaleString('en-US')+' ฿'+(p.parts.length?(' ('+p.parts.join(' + ')+')'):''),
+    by:rec.by }); }catch(e){}
 }
 // What the cards show: one line that answers "was it checked, when, by whom, and
 // did anything come up short" without opening anything.
