@@ -172,6 +172,16 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
 .sub-en{ display:block; font-size:12px; font-weight:500; opacity:.75; margin-top:1px; }
 
 .chip{ display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:99px; font-size:13px; font-weight:600; }
+/* 🙋 help button: a small nudge when idle, a gold ring while the call is out,
+   and a runner next to it once somebody has said they are coming. */
+.helpbtn{ position:relative; overflow:visible }
+.helpbtn .hb-ic{ display:inline-block; font-size:22px; line-height:1; animation:hbIdle 3.2s ease-in-out infinite }
+.helpbtn.ringing{ background:linear-gradient(135deg,#E6C55A,#C9A227); border-color:#C9A227 }
+.helpbtn.ringing .hb-ic{ animation:hbRing .7s ease-in-out infinite }
+.helpbtn .hb-run{ position:absolute; right:-6px; bottom:-6px; font-size:17px; animation:hbRun .8s ease-in-out infinite }
+@keyframes hbIdle{ 0%,88%,100%{ transform:rotate(0) } 92%{ transform:rotate(-14deg) } 96%{ transform:rotate(12deg) } }
+@keyframes hbRing{ 0%,100%{ transform:rotate(-16deg) scale(1) } 50%{ transform:rotate(16deg) scale(1.15) } }
+@keyframes hbRun{ 0%,100%{ transform:translateX(-2px) } 50%{ transform:translateX(3px) } }
 
 /* top bar (light screens) */
 .topbar{
@@ -685,6 +695,13 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
       style="background:#fff;border:1.5px solid var(--border2);color:var(--text2);min-height:44px;font-size:14.5px;font-weight:600;position:relative;cursor:pointer">
       👤 <span id="seller-name">—</span>
       <span class="badge gold hidden" id="pend-badge" title="รอออฟฟิศยืนยันโซน / waiting for office">0</span>
+    </button>
+    <!-- 🙋 เรียกช่วย — one tap and every office/warehouse screen in the building
+         lights up, moves and calls out in Thai. For the moment when four
+         customers walk in at once and the seller cannot serve them all. -->
+    <button class="iconbtn press helpbtn" id="help-btn" onclick="posHelpCall()" title="เรียกคนมาช่วยขาย / call for help at the front">
+      <span class="hb-ic">🙋</span>
+      <span class="hb-run hidden" id="help-run">🏃</span>
     </button>
     <button class="iconbtn press" onclick="posCartOpen()" title="ตะกร้า / cart">
       <svg fill="none" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.6"/><circle cx="17" cy="20" r="1.6"/><path stroke-linecap="round" d="M3 4h2l2.6 11.2a1.5 1.5 0 0 0 1.47 1.15h7.9a1.5 1.5 0 0 0 1.45-1.1L20.5 8H6"/></svg>
@@ -1367,6 +1384,16 @@ function attach(){
   PDB.ref('catalog').on('value', function(s){
     var v=s.val(); if(v){ mergeCatalog(Object.values(v)); }
   });
+  PDB.ref('helpCall').on('value', function(s){
+    var v=s.val()||null, prev=_helpCall;
+    _helpCall=v;
+    // the acknowledgement is the answer the seller waited for — say it out loud
+    if(v && v.ackAt && v.ackBy && v.ackBy!=='(ยกเลิก)' && (!prev || prev.ackAt!==v.ackAt)){
+      try{ chime(); }catch(e){}
+      toast('🏃 '+v.ackBy+' กำลังไปช่วย / is on the way');
+    }
+    posHelpRender();
+  });
   PDB.ref('posPending').limitToLast(40).on('value', function(s){
     posPending=s.val()||{}; renderPendingBadge();
   });
@@ -2008,6 +2035,41 @@ function posZoneCheck(){
     note.innerHTML='⏳ ไม่รู้จักจังหวัดนี้ — จะส่งให้ออฟฟิศยืนยันโซนก่อนออกเลขออเดอร์';
   }
   return z;
+}
+/* ── 🙋 เรียกช่วย / call for help at the front ──────────────────────────────
+   The shop floor cannot leave the counter to fetch anybody, so the tablet does
+   it: one node in Firebase, and every office and warehouse screen in the
+   building shows a full-screen alarm that moves, glows and says "ช่วยหน่อยค่ะ"
+   out loud. Whoever taps "กำลังไป" clears it for everyone and appears here as
+   a runner for a minute, so the seller knows help is on its way.
+   One call at a time: helpCall is a single record, not a queue. */
+var _helpCall=null, _helpRunT=null;
+function posHelpCall(){
+  if(!window.PDB){ toast("ออฟไลน์ / offline"); return; }
+  var now=Date.now();
+  // a call that is still ringing: tapping again takes it back
+  if(_helpCall && _helpCall.at && !_helpCall.ackAt && (now-_helpCall.at)<10*60000){
+    posConfirm("ยกเลิกการเรียกช่วย? / cancel the help call?", function(){
+      PDB.ref("helpCall").update({ackBy:"(ยกเลิก)", ackAt:Date.now()});
+    });
+    return;
+  }
+  PDB.ref("helpCall").set({ id:now, by:(me?me.name:""), at:now, ackBy:"", ackAt:0 });
+  try{ chime(); }catch(e){}
+  toast("🙋 เรียกแล้ว — ออฟฟิศกำลังรับสาย / the office has been called");
+}
+function posHelpRender(){
+  var b=$("help-btn"), run=$("help-run"); if(!b) return;
+  var v=_helpCall||{}, now=Date.now();
+  var ringing = !!(v.at && !v.ackAt && (now-v.at)<10*60000);
+  b.classList.toggle("ringing", ringing);
+  // somebody is on the way — show the runner for one minute
+  var coming = !!(v.ackAt && v.ackBy && v.ackBy!=="(ยกเลิก)" && (now-v.ackAt)<60000);
+  run.classList.toggle("hidden", !coming);
+  b.title = ringing ? "เรียกแล้ว — แตะเพื่อยกเลิก / called, tap to cancel"
+    : (coming ? (v.ackBy+" กำลังมา / on the way") : "เรียกคนมาช่วยขาย / call for help at the front");
+  clearTimeout(_helpRunT);
+  if(ringing || coming) _helpRunT=setTimeout(posHelpRender, 2000);
 }
 function posTaxToggle(){
   ck.tax=$('ck-tax').checked;

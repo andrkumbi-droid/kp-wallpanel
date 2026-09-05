@@ -40,6 +40,9 @@ body.dark{
   }
 }
 @media print{body,body.dark{--bg:#fff;--bg2:#f5f5f5;--border:#e5e5e5;--text:#000;--text2:#555;}}
+/* 🙋 help-call alarm: the box hops, the red ground breathes */
+@keyframes kpHelpJump{ 0%,100%{ transform:translateY(0) rotate(-8deg) } 50%{ transform:translateY(-14px) rotate(8deg) } }
+@keyframes kpHelpBg{ from{ background:rgba(120,20,20,0.45) } to{ background:rgba(220,38,38,0.62) } }
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);max-width:430px;margin:0 auto;min-height:100vh}
 .screen{display:none}.screen.active{display:block}
 .pb{padding-bottom:3rem}
@@ -1144,6 +1147,14 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
           window.kpTourHistReady = true;   // "0 tours" now means none, not "still coming"
           try{ if(document.getElementById('ofv-drivers') && document.getElementById('ofv-drivers').classList.contains('active')) ofDriversRender(); }catch(e){}
           try{ if(document.getElementById('ofv-lala') && document.getElementById('ofv-lala').classList.contains('active')) ofRenderLala(); }catch(e){}
+        });
+        // 🙋 ที่ร้านเรียกช่วย — the POS tablet raising its hand. Handed straight
+        // to the main script (functions in here are not global, see the
+        // head-IIFE trap) so every screen can raise the alarm.
+        db.ref('helpCall').on('value', function(snap) {
+          // The main script may not be parsed yet on a cold load — park the value.
+          window._kpHelpSeen=snap.val();
+          try{ if(window.kpHelpUpdate) window.kpHelpUpdate(snap.val()); }catch(e){}
         });
         db.ref('bills').on('value', function(snap) {
           bills = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}) : [];
@@ -20722,6 +20733,102 @@ function kpChime(){
     });
   }catch(e){}
 }
+// ══════════════════════════════════════════════════════════════════════════
+//  🙋 เรียกช่วยหน้าร้าน / HELP AT THE FRONT
+//
+//  Four customers walk into the shop at once and the seller cannot serve them
+//  all. The POS tablet has a 🙋 button; pressing it lands in helpCall, and from
+//  there this takes over EVERY office and warehouse screen in the building —
+//  whatever tab it is on — with a moving, glowing overlay and a Thai voice
+//  saying "ช่วยหน่อยค่ะ". Tapping "กำลังไป" answers it: the alarm stops
+//  everywhere at once and the shop sees a runner next to its button.
+//
+//  Deliberately NOT shown to drivers (they are on the road) and it never blocks
+//  the app: 'ไว้ก่อน' hides it on this device while the call stays out for the
+//  others. Silent on a device with no Thai voice — the picture is loud enough.
+// ══════════════════════════════════════════════════════════════════════════
+var _kpHelp=null, _kpHelpTimer=null, _kpHelpSaid=0, _kpHelpMuteId=0;
+function kpHelpLive(v){
+  return !!(v && v.at && !v.ackAt && (Date.now()-v.at) < 10*60000);
+}
+// Office and warehouse are in the building; the hub counts too (somebody who
+// just logged in is standing right there). A driver mid-tour is not.
+function kpHelpForMe(){
+  try{
+    if(document.getElementById('s-driver') && document.getElementById('s-driver').classList.contains('active')) return false;
+    return true;
+  }catch(e){ return true; }
+}
+function kpHelpUpdate(v){
+  _kpHelp=v||null;
+  var live=kpHelpLive(_kpHelp) && kpHelpForMe() && _kpHelpMuteId!==((_kpHelp&&_kpHelp.id)||0);
+  if(live) kpHelpShow(); else kpHelpHide();
+}
+function kpHelpSpeak(){
+  try{
+    if(!window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+    var v=kpThaiVoice();
+    if(v===null) return;                       // voices known, none Thai → stay silent
+    var u=new SpeechSynthesisUtterance('ช่วยหน่อยค่ะ หน้าร้านมีลูกค้าเยอะ');
+    u.lang='th-TH'; if(v) u.voice=v;
+    u.rate=0.95; u.pitch=kpVoiceIsFemale(v)?1.08:1.15; u.volume=1;
+    try{ speechSynthesis.cancel(); }catch(e){}
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+function kpHelpShow(){
+  var el=document.getElementById('kp-help-ov');
+  if(!el){
+    el=document.createElement('div');
+    el.id='kp-help-ov';
+    el.style.cssText='position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:18px;'
+      +'background:rgba(120,20,20,0.55);backdrop-filter:blur(2px);animation:kpHelpBg 1s ease-in-out infinite alternate';
+    document.body.appendChild(el);
+  }
+  var by=(_kpHelp&&_kpHelp.by)?_esc(_kpHelp.by):'';
+  el.innerHTML='<div style="background:var(--bg);border-radius:20px;max-width:380px;width:100%;padding:22px 20px;text-align:center;box-shadow:0 14px 60px rgba(0,0,0,.5);border:3px solid #dc2626">'
+    +'<div style="font-size:86px;line-height:1;animation:kpHelpJump .6s ease-in-out infinite">🙋</div>'
+    +'<div style="font-size:19px;font-weight:800;color:#dc2626;margin-top:6px">ช่วยหน่อยค่ะ!</div>'
+    +'<div style="font-size:14px;font-weight:700;margin-top:2px">หน้าร้านลูกค้าเยอะ ต้องการคนช่วยขาย</div>'
+    +'<div style="font-size:12.5px;color:var(--text2);margin-top:2px">Help needed at the shop'+(by?' · '+by:'')+'</div>'
+    +'<button type="button" onclick="kpHelpAck()" style="width:100%;margin-top:16px;padding:16px;border:none;border-radius:14px;background:#16a34a;color:#fff;font-size:17px;font-weight:800;cursor:pointer">🏃 กำลังไป / on my way</button>'
+    +'<button type="button" onclick="kpHelpMute()" style="width:100%;margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--text2);font-size:13px;font-weight:700;cursor:pointer">ไว้ก่อน / not me (hide here)</button>'
+  +'</div>';
+  el.style.display='flex';
+  if(!_kpHelpTimer){
+    _kpHelpSaid=0;
+    try{ kpChime(); }catch(e){}
+    kpHelpSpeak();
+    // repeat, but not forever — twelve calls (~a minute) is loud enough to fetch
+    // somebody; the picture keeps standing until it is answered.
+    _kpHelpTimer=setInterval(function(){
+      if(!document.getElementById('kp-help-ov')){ kpHelpHide(); return; }
+      if(++_kpHelpSaid>12){ clearInterval(_kpHelpTimer); _kpHelpTimer=null; return; }
+      try{ kpChime(); }catch(e){}
+      kpHelpSpeak();
+    }, 5000);
+  }
+}
+function kpHelpHide(){
+  var el=document.getElementById('kp-help-ov'); if(el) el.remove();
+  if(_kpHelpTimer){ clearInterval(_kpHelpTimer); _kpHelpTimer=null; }
+  try{ if(window.speechSynthesis) speechSynthesis.cancel(); }catch(e){}
+}
+// "I am going" — clears the call for everybody and tells the shop who is coming.
+function kpHelpAck(){
+  var who=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName
+    :(((typeof staffList!=='undefined'?staffList:[]).find(function(x){return x.id===currentStaffId;})||{}).name||'Office');
+  kpHelpHide();
+  try{ if(window.fbDB) window.fbDB.ref('helpCall').update({ackBy:who, ackAt:Date.now()}); }catch(e){}
+  try{ auditAdd({type:'edit', area:'shop', orderId:'🙋 เรียกช่วยหน้าร้าน', detail:'กำลังไปช่วย / on the way', by:who}); }catch(e){}
+}
+// Not me — quiet on this screen, still ringing on the others.
+function kpHelpMute(){ _kpHelpMuteId=(_kpHelp&&_kpHelp.id)||0; kpHelpHide(); }
+window.kpHelpUpdate=kpHelpUpdate;
+try{ if(window._kpHelpSeen!==undefined) kpHelpUpdate(window._kpHelpSeen); }catch(e){}
+// A tab that was on the driver screen when the call came should still get it
+// when somebody switches back to office — cheap re-check while a call is out.
+setInterval(function(){ if(_kpHelp && kpHelpLive(_kpHelp)) kpHelpUpdate(_kpHelp); }, 4000);
 // One Audio element, rewound each time, so 5 slips in a row don't pile up.
 function kpPlayCash(){
   if(!kpSlipSoundOn()) return;
