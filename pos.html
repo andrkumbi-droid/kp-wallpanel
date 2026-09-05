@@ -952,13 +952,20 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
       <input type="number" inputmode="numeric" min="0" id="pay-amt" class="amt-input num" placeholder="0">
     </div>
     <div id="cash-wrap" class="hidden" style="margin-top:14px">
-      <label class="fl" style="color:var(--cream)">รับเงินจากลูกค้า <small style="color:var(--cream2)">(฿) / cash received</small></label>
+      <label class="fl" id="cash-lbl" style="color:var(--cream)">รับเงินจากลูกค้า <small style="color:var(--cream2)">(฿) / cash received</small></label>
       <input type="number" inputmode="numeric" min="0" id="cash-recv" class="amt-input num" placeholder="0">
       <div id="change-line" class="hidden" style="display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;padding:14px 18px;background:rgba(127,217,154,.1);border:1.5px solid rgba(127,217,154,.45);border-radius:14px">
         <span style="color:#7FD99A;font-weight:700;font-size:17px">เงินทอน / change</span>
         <b class="num" id="change-val" style="font-size:34px;color:#7FD99A">0 ฿</b>
       </div>
       <div id="short-line" class="hidden" style="margin-top:10px;color:#F87171;font-size:14.5px;font-weight:600;text-align:center">รับเงินมาน้อยกว่ายอด — ใช้โหมด "มัดจำ" / less than due, use deposit</div>
+      <!-- Cash AND transfer on the same sale: the seller types the cash the
+           customer puts on the counter, the rest is the transfer. -->
+      <div id="split-line" class="hidden" style="display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;padding:14px 18px;background:rgba(212,175,55,.10);border:1.5px solid rgba(212,175,55,.45);border-radius:14px">
+        <span style="color:var(--gold);font-weight:700;font-size:17px">🏦 โอนเงิน / transfer</span>
+        <b class="num" id="split-val" style="font-size:34px;color:var(--gold)">0 ฿</b>
+      </div>
+      <div id="split-warn" class="hidden" style="margin-top:10px;color:#F87171;font-size:14.5px;font-weight:600;text-align:center">เงินสดมากกว่ายอดที่ต้องชำระ / the cash part is larger than the amount due</div>
     </div>
     <div id="bank-wrap" class="hidden">
       <div class="bank-card">
@@ -2280,7 +2287,11 @@ function posFinalize(pay){
       o.paidAmount=pay.amt; o.payDate=todayStr(); o.paidAt=nowHM(); o.paidBy=who;
       if(pay.amt>=t.grand-0.5){ o.payMethod=pay.method; o.payMethodPartial=''; }
       else { o.payMethod=''; o.payMethodPartial=pay.method; }
-      if(pay.method==='online'){ o.paidOnline=pay.amt; o.paidCash=0; }
+      // 'split' is the office's own value for cash + transfer on one order
+      // (ofTourPaySave writes exactly these three fields), so the Pay tab, the
+      // tour cash line and the reports read it without a special case.
+      if(pay.method==='split'){ o.paidCash=pay.cash||0; o.paidOnline=pay.online||0; }
+      else if(pay.method==='online'){ o.paidOnline=pay.amt; o.paidCash=0; }
       else { o.paidCash=pay.amt; o.paidOnline=0; }
     }
     var wo={id:no, zone:zone, boxes:o.boxes, panels:o.panels, lcorner:o.lcorner, clips:o.clips, packed:false, packedAt:null};
@@ -2308,7 +2319,7 @@ function posFinalize(pay){
       if(tax) pushQ('office','🧾 ขอใบกำกับภาษี: '+no, (tax.name||'')+' '+(tax.tin||''), {tag:'tax-req'});
       pushQ('office','🏪 POS order: '+no, o.createdBy+' · '+fmtB(t.grand), {tag:'pos-order'});
       function finish(){
-        lastOrder={o:o, t:t, lines:ps.lines, paid:pay?pay.amt:0, change:(pay&&pay.change)||0, method:pay?pay.method:''};
+        lastOrder={o:o, t:t, lines:ps.lines, paid:pay?pay.amt:0, change:(pay&&pay.change)||0, method:pay?pay.method:'', cash:(pay&&pay.cash)||0, online:(pay&&pay.online)||0};
         pendingSale=null; _finalizing=false;
         try{ fillReceipt(lastOrder); }catch(e){}
         posDone(); chime();
@@ -2320,7 +2331,7 @@ function posFinalize(pay){
           feedAdd({amt:pay.amt, id:no, cust:o.customer, zone:o.zone, prov:o.province||'', fee:0,
                    kind: pay.method==='online'?'slip':'office', by:who,
                    pos:1, posPanels:t.pq, deposit: pay.amt<t.grand-0.5?1:0});
-          audit({type:'payment', orderId:no, by:who, detail:'🏪 POS รับเงิน '+fmtB(pay.amt)+' ('+(pay.method==='online'?'โอน':'เงินสด')+')'+(pay.amt<t.grand?' · มัดจำ':'')});
+          audit({type:'payment', orderId:no, by:who, detail:'🏪 POS รับเงิน '+fmtB(pay.amt)+' ('+(pay.method==='split'?('💵 '+fmtB(pay.cash)+' + 🏦 '+fmtB(pay.online)):(pay.method==='online'?'โอน':'เงินสด'))+')'+(pay.amt<t.grand?' · มัดจำ':'')});
           finish();
         });
       } else finish();
@@ -2405,34 +2416,59 @@ function showConfirm(o,t){
     : 'ออเดอร์จัดส่ง โซน '+(ZONE_TH[o.zone]||o.zone))
     +' · เลขออเดอร์จะออกเมื่อยืนยันการชำระ';
   // reset pay state
-  _pay={mode:'', part:false, slips:[]};
+  _pay={mode:'', cash:false, online:false, part:false, slips:[]};
   $('pm-cash').classList.remove('on'); $('pm-online').classList.remove('on');
   $('ps-full').classList.add('on'); $('ps-part').classList.remove('on');
   $('pay-amt-wrap').classList.add('hidden'); $('bank-wrap').classList.add('hidden');
   $('pay-photo-wrap').classList.add('hidden');
   $('cash-wrap').classList.add('hidden'); $('cash-recv').value='';
   $('change-line').classList.add('hidden'); $('short-line').classList.add('hidden');
+  $('split-line').classList.add('hidden'); $('split-warn').classList.add('hidden');
   $('slip-thumbs').innerHTML=''; $('pay-amt').value='';
   $('pay-confirm-btn').disabled=true;
   $('pay-no').textContent='ออกเมื่อยืนยัน / on confirm';
   $('pay-due').textContent=fmtB(t.grand);
   posGo('confirm');
 }
-var _pay={mode:'', part:false, slips:[]};
+var _pay={mode:'', cash:false, online:false, part:false, slips:[]};
+// The amount this payment is about: the whole bill, or the deposit that was typed.
+function payBase(){
+  var due=pendingSale?pendingSale.t.grand:0;
+  return _pay.part ? (parseFloat($('pay-amt').value)||0) : due;
+}
+// Cash on the counter for a split — the transfer is whatever is left of the base.
+function paySplitCash(){ return parseFloat($('cash-recv').value)||0; }
+function paySplitOnline(){ return Math.round((payBase()-paySplitCash())*100)/100; }
 function _cashWrapSync(){
-  $('cash-wrap').classList.toggle('hidden', !(_pay.mode==='cash' && !_pay.part));
+  // Cash needs a field in every case now: alone it is 'how much did they hand
+  // over' (with change), next to a transfer it is 'how much of it is cash'.
+  $('cash-wrap').classList.toggle('hidden', !_pay.cash);
+  $('cash-lbl').innerHTML = (_pay.mode==='split')
+    ? 'รับเป็นเงินสด <small style="color:var(--cream2)">(฿) / cash part — ส่วนที่เหลือคือยอดโอน</small>'
+    : 'รับเงินจากลูกค้า <small style="color:var(--cream2)">(฿) / cash received</small>';
   cashChange();
 }
+// Cash and transfer are not either/or any more: a customer who puts 10,000 on
+// the counter and transfers the rest used to force the seller to book one of
+// the two wrongly. Both buttons toggle; with both on, the cash figure is typed
+// and the transfer is the remainder (the office has carried paidCash +
+// paidOnline + payMethod 'split' for a while — this fills the same fields).
 function posPayMode(m){
-  _pay.mode=m;
-  $('pm-cash').classList.toggle('on', m==='cash');
-  $('pm-online').classList.toggle('on', m==='online');
-  $('bank-wrap').classList.toggle('hidden', m!=='online');
+  var other = m==='cash' ? 'online' : 'cash';
+  // never leave the screen with nothing selected — tapping the only active one keeps it
+  if(_pay[m] && !_pay[other]) return;
+  _pay[m] = !_pay[m];
+  _pay.mode = (_pay.cash&&_pay.online) ? 'split' : (_pay.cash ? 'cash' : (_pay.online ? 'online' : ''));
+  $('pm-cash').classList.toggle('on', _pay.cash);
+  $('pm-online').classList.toggle('on', _pay.online);
+  $('bank-wrap').classList.toggle('hidden', !_pay.online);
   // both ways need proof — a slip for a transfer, the cash on the counter
-  $('pay-photo-wrap').classList.toggle('hidden', !m);
-  $('pay-photo-btn').innerHTML = (m==='cash')
-    ? '📷 ถ่ายรูปเงินสด<span class="sub-en">photograph the cash</span>'
-    : '📷 ถ่ายรูปสลิปโอนเงิน<span class="sub-en">photograph the transfer slip</span>';
+  $('pay-photo-wrap').classList.toggle('hidden', !_pay.mode);
+  $('pay-photo-btn').innerHTML = (_pay.mode==='split')
+    ? '📷 ถ่ายรูปเงินสด + สลิป<span class="sub-en">photograph the cash and the slip</span>'
+    : (_pay.mode==='cash'
+      ? '📷 ถ่ายรูปเงินสด<span class="sub-en">photograph the cash</span>'
+      : '📷 ถ่ายรูปสลิปโอนเงิน<span class="sub-en">photograph the transfer slip</span>');
   _cashWrapSync();
   payValidate();
 }
@@ -2445,17 +2481,29 @@ function posPayPart(part){
   _cashWrapSync();
   payValidate();
 }
-$('pay-amt').addEventListener('input', payValidate);
+$('pay-amt').addEventListener('input', function(){ cashChange(); payValidate(); });
 $('cash-recv').addEventListener('input', cashChange);
 $('cash-recv').addEventListener('change', cashChange);
 /* cash received → show the change (เงินทอน) live */
 function cashChange(){
+  var base=payBase(), recv=parseFloat($('cash-recv').value)||0;
+  if(_pay.mode==='split'){
+    // no change and no 'too little' here — what is missing IS the transfer
+    var rest=paySplitOnline();
+    $('change-line').classList.add('hidden');
+    $('short-line').classList.add('hidden');
+    $('split-line').classList.toggle('hidden', !(recv>0 && rest>0));
+    $('split-val').textContent=fmtB(Math.max(0,rest));
+    $('split-warn').classList.toggle('hidden', !(recv>0 && base>0 && rest<0));
+    payValidate();
+    return;
+  }
+  $('split-line').classList.add('hidden'); $('split-warn').classList.add('hidden');
   var due=pendingSale?pendingSale.t.grand:0;
-  var recv=parseFloat($('cash-recv').value)||0;
-  var showChange = recv>0 && recv>=due;
+  var showChange = recv>0 && recv>=due && !_pay.part;
   $('change-line').classList.toggle('hidden', !showChange);
   if(showChange) $('change-val').textContent=fmtB(recv-due);
-  $('short-line').classList.toggle('hidden', !(recv>0 && recv<due));
+  $('short-line').classList.toggle('hidden', !(recv>0 && recv<due && !_pay.part));
 }
 // The photo is NOT part of this check on purpose: a disabled button leaves the
 // seller guessing what is missing. The button stays live and posPayConfirm()
@@ -2463,6 +2511,8 @@ function cashChange(){
 function payValidate(){
   var ok = !!_pay.mode;
   if(_pay.part){ ok = ok && (parseFloat($('pay-amt').value)>0); }
+  // a split is only a split while both halves are real money
+  if(ok && _pay.mode==='split'){ ok = paySplitCash()>0 && paySplitOnline()>0; }
   $('pay-confirm-btn').disabled=!ok;
 }
 function posSlipPick(input){
@@ -2521,6 +2571,14 @@ function posPayConfirm(){
     chime(false);
     return;
   }
+  if(pm==='split'){
+    var cashPart=paySplitCash(), onlinePart=paySplitOnline();
+    if(!(cashPart>0) || !(onlinePart>0)){
+      toast('ใส่จำนวนเงินสด — ส่วนที่เหลือคือยอดโอน / enter the cash part, the rest is the transfer'); chime(false); return;
+    }
+    posFinalize({method:'split', amt:amt, cash:cashPart, online:onlinePart, change:0});
+    return;
+  }
   var change=0;
   if(pm==='cash' && !_pay.part){
     var recv=parseFloat($('cash-recv').value)||0;
@@ -2568,7 +2626,7 @@ function fillReceipt(lo){
   rows.push('<tr class="rc-tot"><td colspan="3">ยอดรวมทั้งหมด / GRAND TOTAL</td><td class="num">'+fmtB(t.grand)+'</td></tr>');
   var payLine;
   if(lo.paid>0){
-    payLine='ชำระแล้ว / paid: '+fmtB(lo.paid)+' ('+(lo.method==='online'?'โอน / transfer':'เงินสด / cash')+')'
+    payLine='ชำระแล้ว / paid: '+fmtB(lo.paid)+' ('+(lo.method==='split'?('💵 เงินสด '+fmtB(lo.cash||0)+' + 🏦 โอน '+fmtB(lo.online||0)):(lo.method==='online'?'โอน / transfer':'เงินสด / cash'))+')'
       +(lo.paid<t.grand?' · <b>ค้างชำระ '+fmtB(t.grand-lo.paid)+'</b>':'')
       +(lo.change>0?' · เงินทอน / change '+fmtB(lo.change):'');
   } else {
