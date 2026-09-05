@@ -28568,6 +28568,7 @@ function qtRebuildProducts(){
   try{ if(document.getElementById('s-quote') && document.getElementById('s-quote').classList.contains('active') && (!window.qtItems || !qtItems.length)){ qtShowProducts(QT_PRODUCTS, null); if(typeof qtInitCounts==='function') qtInitCounts(); } }catch(e){}
   try{ assistantPublishCatalog(); }catch(e){}
   try{ publishWebCatalog(); }catch(e){}
+  _kpPhotoDone=false;   // catalogue changed - look at the photos again
 }
 
 // Mirror the merged catalog to Firebase (assistant/productCatalog) so the
@@ -28728,6 +28729,58 @@ var qtItemId = 0;
 
 var IMG_BASE = 'img/products/';
 
+// ── Product photos: the one thing the catalogue cannot publish by itself ────
+// Code, name and price travel from the app into pub/webCatalog on their own,
+// but the PHOTO is a file in the repo (img/products/<CODE>.jpg). A panel
+// without one is skipped when the shop sends "everything in stock" into a
+// Messenger chat — the customer simply never sees it, and nobody notices,
+// because a missing photo only hides the thumbnail here. So check what is
+// really reachable instead of trusting that whoever added the product also
+// pushed a file, and name the ones that are missing.
+var _kpPhotoT=null, _kpPhotoDone=false;
+function kpPhotoAuditSoon(){
+  if(_kpPhotoDone) return;
+  _kpPhotoDone=true;
+  clearTimeout(_kpPhotoT);
+  _kpPhotoT=setTimeout(function(){ kpPhotoAudit(); }, 3000);   // let the list settle first
+}
+function kpPhotoAudit(loud){
+  var list=(window.QT_PRODUCTS||[]).filter(function(p){
+    return p && p.code && (p.mat==='WPC'||p.mat==='PVC') && !soldOut[p.code];
+  });
+  if(!list.length) return;
+  var left=list.length, missing=[];
+  function done(){
+    var el=document.getElementById('kp-photo-warn');
+    if(!missing.length){
+      if(el) el.remove();
+      if(loud) alert('รูปสินค้าครบทุกตัว ✓ / all product photos present');
+      return;
+    }
+    missing.sort();
+    if(!el){
+      el=document.createElement('div');
+      el.id='kp-photo-warn';
+      el.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:99998;'
+        +'max-width:390px;width:92%;background:#fef3c7;border:1.5px solid #f59e0b;color:#92400e;'
+        +'border-radius:12px;padding:10px 12px;font-size:12.5px;font-weight:700;'
+        +'box-shadow:0 6px 24px rgba(0,0,0,.18);cursor:pointer';
+      el.title='ปิด / dismiss';
+      el.onclick=function(){ this.remove(); };
+      document.body.appendChild(el);
+    }
+    el.innerHTML='⚠️ '+missing.length+' สินค้าพร้อมส่งยังไม่มีรูป / no photo yet: '+missing.join(', ')
+      +'<div style="font-weight:600;margin-top:3px">ลูกค้าจะไม่เห็นลายนี้ตอนส่งรูปทั้งหมด · these are skipped when all products go out in a chat.</div>';
+  }
+  list.forEach(function(p){
+    var im=new Image();
+    im.onload =function(){ if(!--left) done(); };
+    im.onerror=function(){ missing.push(p.code); if(!--left) done(); };
+    im.src=IMG_BASE+p.code+'.jpg';
+  });
+}
+window.kpPhotoAudit=kpPhotoAudit;
+
 function qtInit() {
   qtItems = [];
   qtShipManual = false;
@@ -28842,6 +28895,7 @@ function qtRefreshSoldOut() {
 }
 
 function qtShowProducts(list, activeCat) {
+  try{ kpPhotoAuditSoon(); }catch(e){}
   // Update filter button styles
   ['WPC','PVC','ACC'].forEach(function(cat) {
     var btn = document.getElementById('qtf-'+cat);
