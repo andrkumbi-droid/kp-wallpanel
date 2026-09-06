@@ -12106,6 +12106,17 @@ function ofRecomputeTotal(o){
 function tourPayCO(t, o){
   var full=ofPayCO(o||{});
   if(!t||!o) return full;
+  // Seit 09/2026 schreibt die Liefermaske ausdruecklich auf, was der Fahrer an
+  // DIESEM Stopp kassiert hat. Das ist eine Auskunft, keine Vermutung — sie
+  // schlaegt die Datumsheuristik darunter, die bei einer Anzahlung im Laden am
+  // selben Tag oder ohne payDate danebenliegt. Auftraege ohne den Eintrag
+  // (alles vor diesem Datum) laufen unveraendert weiter.
+  var _tp=o.tourPay;
+  if(_tp && ((parseFloat(_tp.cash)||0)>0 || (parseFloat(_tp.online)||0)>0)){
+    var _tc=parseFloat(_tp.cash)||0, _to=parseFloat(_tp.online)||0;
+    var _all=(o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):(_tc+_to);
+    return {cash:_tc, online:_to, unknown:0, pre:Math.max(0, Math.round((_all-_tc-_to)*100)/100)};
+  }
   var dep=t.departedDate||'';
   var pd=String(o.payDate||'');
   var snap=(parseFloat(o.paidCash)||0)+(parseFloat(o.paidOnline)||0);
@@ -20521,6 +20532,19 @@ var _deliveryShipMode = false;
 var _deliveryPhone = '';
 
 var _deliveryTotal = 0;
+// Was vor dieser Auslieferung schon auf dem Auftrag gebucht war, und was davon
+// noch offen ist. Der Fahrer kassiert IMMER nur _deliveryDue.
+var _deliveryPre = 0, _deliveryDue = 0;
+// Wie viel ist auf dem Auftrag bezahlt? Gleiche Ableitung wie auf der
+// Auftragskarte: paidAmount zaehlt, sonst payMethod = voll, sonst das alte
+// deposit-Feld.
+function dlPaidBefore(o){
+  if(!o) return 0;
+  var tot=parseFloat(String(o.total||'').replace(/[^0-9]/g,''))||0;
+  var p=(o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):(o.payMethod?tot:0);
+  if(p<=0) p=parseFloat(o.deposit)||0;
+  return Math.max(0, Math.round(p*100)/100);
+}
 function openDeliveryModal(id, shipMode){
   _deliveryId = id;
   _deliveryShipMode = !!shipMode;
@@ -20551,7 +20575,23 @@ function openDeliveryModal(id, shipMode){
   document.getElementById('delivery-photo-input').value = '';
   document.getElementById('delivery-upload-progress').style.display = 'none';
   // Reset payment section
-  document.getElementById('dl-total').textContent = _deliveryTotal.toLocaleString()+' ฿';
+  _deliveryPre = Math.min(dlPaidBefore(full), _deliveryTotal);
+  _deliveryDue = Math.max(0, Math.round((_deliveryTotal-_deliveryPre)*100)/100);
+  document.getElementById('dl-total').textContent = _deliveryDue.toLocaleString()+' ฿';
+  var _pn=document.getElementById('dl-pre-note');
+  if(_pn){
+    if(_deliveryPre>0 && _deliveryDue>0){
+      _pn.style.display='block';
+      _pn.innerHTML='💵 จ่ายมาแล้ว / already paid: <b>'+_deliveryPre.toLocaleString()+' ฿</b>'
+        +' &nbsp;·&nbsp; ยอดรวม / total '+_deliveryTotal.toLocaleString()+' ฿'
+        +'<br>เก็บเฉพาะยอดที่เหลือ / collect only the rest: <b style="font-size:14px">'
+        +_deliveryDue.toLocaleString()+' ฿</b>';
+    } else if(_deliveryPre>0 && _deliveryDue<=0){
+      _pn.style.display='block';
+      _pn.innerHTML='✅ จ่ายครบแล้ว / paid in full: <b>'+_deliveryPre.toLocaleString()+' ฿</b>'
+        +'<br>ไม่ต้องเก็บเงิน / collect nothing';
+    } else _pn.style.display='none';
+  }
   document.getElementById('dl-cash-chk').checked = false;
   document.getElementById('dl-online-chk').checked = false;
   document.getElementById('dl-cash-amt').value = '';
@@ -20679,11 +20719,11 @@ function dlKmCommit(orderId){
 function dlPayToggle(which){
   var cashChk=document.getElementById('dl-cash-chk'), onChk=document.getElementById('dl-online-chk');
   var cashAmt=document.getElementById('dl-cash-amt'), onAmt=document.getElementById('dl-online-amt');
-  if(cashChk.checked && !onChk.checked){ cashAmt.value=_deliveryTotal; onAmt.value=''; }
-  else if(onChk.checked && !cashChk.checked){ onAmt.value=_deliveryTotal; cashAmt.value=''; }
+  if(cashChk.checked && !onChk.checked){ cashAmt.value=_deliveryDue; onAmt.value=''; }
+  else if(onChk.checked && !cashChk.checked){ onAmt.value=_deliveryDue; cashAmt.value=''; }
   else if(cashChk.checked && onChk.checked){ // split: keep what's there, prefill the just-toggled side with remainder
     var other = which==='cash' ? (parseFloat(onAmt.value)||0) : (parseFloat(cashAmt.value)||0);
-    var rem = Math.max(0,_deliveryTotal-other);
+    var rem = Math.max(0,_deliveryDue-other);
     if(which==='cash' && !cashAmt.value) cashAmt.value=rem;
     if(which==='online' && !onAmt.value) onAmt.value=rem;
   } else { cashAmt.value=''; onAmt.value=''; }
@@ -20721,8 +20761,8 @@ function dlPaySum(){ return (parseFloat((document.getElementById('dl-cash-amt')|
 function dlPayMsg(){
   var msg=document.getElementById('dl-pay-msg'); if(!msg) return;
   var sum=dlPaySum();
-  if(sum===_deliveryTotal){ msg.style.color='var(--green)'; msg.textContent='✓ '+sum.toLocaleString()+' / '+_deliveryTotal.toLocaleString()+' ฿'; }
-  else { msg.style.color='#dc2626'; msg.textContent=sum.toLocaleString()+' / '+_deliveryTotal.toLocaleString()+' ฿ — must match total / ต้องเท่ายอดรวม'; }
+  if(sum===_deliveryDue){ msg.style.color='var(--green)'; msg.textContent='✓ '+sum.toLocaleString()+' / '+_deliveryDue.toLocaleString()+' ฿'; }
+  else { msg.style.color='#dc2626'; msg.textContent=sum.toLocaleString()+' / '+_deliveryDue.toLocaleString()+' ฿ — ต้องเท่ายอดที่ต้องเก็บ / must match the amount to collect'; }
   try{ dlSlipRefresh(); }catch(e){}
 }
 function closeDeliveryModal(){
@@ -26474,8 +26514,13 @@ function confirmDelivery(){
   var online = parseFloat((document.getElementById('dl-online-amt')||{}).value)||0;
   if(!payOffice && !paidAlready){
     // Require payment to match the total (cash + online = total).
-    if((cash+online) !== _deliveryTotal){
-      alert('Payment must match the total / ยอดชำระต้องเท่ายอดรวม ('+_deliveryTotal.toLocaleString()+' ฿)');
+    // Gemessen wird am RESTBETRAG. Bei einer Anzahlung im Laden ist das nicht
+    // die Auftragssumme — der Fahrer bekommt nur, was noch offen ist.
+    if((cash+online) !== _deliveryDue){
+      alert(_deliveryPre>0
+        ? ('Already paid '+_deliveryPre.toLocaleString()+' ฿ — collect only '+_deliveryDue.toLocaleString()+' ฿\n'
+           +'จ่ายมาแล้ว '+_deliveryPre.toLocaleString()+' ฿ — เก็บเฉพาะ '+_deliveryDue.toLocaleString()+' ฿')
+        : ('Payment must match the total / ยอดชำระต้องเท่ายอดรวม ('+_deliveryDue.toLocaleString()+' ฿)'));
       return;
     }
     // Online payment → a slip photo is required (QR checked on capture).
@@ -26525,12 +26570,28 @@ function confirmDelivery(){
       ord.payAtOffice=true; ord.deliveredBy=drName;
     }
     try{ pushSend('office','💼 Pay at office: '+id, ((ord&&ord.customer)||'')+' · '+_deliveryTotal.toLocaleString()+' ฿ — collect / record payment', {tag:'pay-office', orderId:id}); }catch(e){}
+  } else if(ord && _deliveryPre>0){
+    // ANZAHLUNG + REST. Der Kunde hat im Laden angezahlt, der Fahrer kassiert
+    // den Rest. Hier darf NICHT ueberschrieben werden: paidCash/paidOnline und
+    // payDate sind der Schnappschuss der Anzahlung, und die Tourabrechnung
+    // liest genau die Differenz zu paidAmount als das, was dieser Fahrer
+    // eingenommen hat. Wer hier paidAmount=cash setzt, loescht die Anzahlung
+    // und verlangt vom Fahrer abends Bargeld, das er nie bekommen hat.
+    ord.paidAmount = Math.round((_deliveryPre+cash+online)*100)/100;
+    ord.payMethod  = payMethod;
+    // Was auf DIESER Fahrt kassiert wurde — ausdruecklich, damit die Abrechnung
+    // nicht aus Datum und Methode raten muss (bei geteilter Zahlung raet sie falsch).
+    ord.tourPay = {cash:cash, online:online, by:drName, date:kpTodayStr()};
+    ord.deliveredBy = drName;
+    if(!ord.payDate) ord.payDate = kpTodayStr();
+    delete ord.payAtOffice;
   } else if(ord){
     // payDate is the day the money arrived — the tour card reads it to tell a
     // deposit taken weeks ago from what this driver collected today, so it is set
     // unconditionally here (kpTodayStr, local: before 07:00 an ISO date is still
     // yesterday in Bangkok).
     ord.payMethod=payMethod; ord.paidCash=cash; ord.paidOnline=online; ord.paidAmount=cash+online; ord.paidBy=drName; ord.payDate=kpTodayStr(); delete ord.payAtOffice;
+    ord.tourPay = {cash:cash, online:online, by:drName, date:kpTodayStr()};
   }
   dlKmCommit(id);
   closeDeliveryModal();
@@ -30668,6 +30729,12 @@ function calcViz() {
         <span style="font-size:13px;font-weight:700">💰 Payment / การชำระเงิน</span>
         <span style="font-size:16px;font-weight:800;color:var(--green)" id="dl-total">0 ฿</span>
       </div>
+      <!-- Anzahlung. Steht nur da, wenn vor der Tour schon Geld auf dem Auftrag
+           gebucht war. Dann ist die grosse Zahl oben der REST, den der Fahrer
+           kassiert — nicht die Auftragssumme. Ohne diese Zeile tippte er die
+           volle Summe ein, und die Tourabrechnung verlangte am Abend Bargeld,
+           das er nie bekommen hatte. -->
+      <div id="dl-pre-note" style="display:none;background:#dbeafe;border:1px solid #bfdbfe;border-radius:var(--rs);padding:8px 10px;margin-bottom:10px;font-size:12px;font-weight:700;color:#1e40af;line-height:1.5"></div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;cursor:pointer;background:#fef3c7;border:1px solid #fde68a;border-radius:var(--rs);padding:9px 10px;margin-bottom:10px;color:#92400e">
         <input type="checkbox" id="dl-paidalready-chk" onchange="dlPayAtOfficeToggle('already')" style="width:18px;height:18px;cursor:pointer;flex-shrink:0">
         <span>✅ ลูกค้าจ่ายที่ออฟฟิศแล้ว / Customer already paid the office
