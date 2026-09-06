@@ -209,12 +209,33 @@ tbody tr:last-child td{border-bottom:none}
 
 /* Der Griff. Fast unsichtbar, bis man die Zeile berührt — er soll da sein,
    wenn man ihn sucht, und sonst nicht mitreden. */
-.c1{display:flex;align-items:center;gap:4px}
-.grab{width:16px;flex-shrink:0;cursor:grab;text-align:center;
+.c1{display:flex;align-items:stretch;gap:4px}
+/* Der Griff ist so hoch wie die Zeile — sonst trifft man ihn am Tablet nicht.
+   Zu sehen ist trotzdem nur das kleine Zeichen in der Mitte. */
+.grab{width:20px;flex-shrink:0;cursor:grab;
+  display:flex;align-items:center;justify-content:center;
   font-size:15px;line-height:1;color:var(--edge);opacity:.45;
   touch-action:none;user-select:none;transition:color .12s,opacity .12s}
 tr:hover .grab{opacity:1;color:var(--ink3)}
 .grab:hover{color:var(--coin)}
+
+/* Eingabefelder in der Zeile. Sie sollen wie Text aussehen, bis man sie
+   anfasst — eine Liste voller Kästchen liest sich nicht mehr. */
+input.cell{border:2px solid transparent;background:transparent;color:inherit;
+  font:inherit;padding:1px 4px;text-align:inherit;min-width:0}
+td.n input.cell{text-align:right}
+input.cell:hover{border-color:var(--edge);background:#0B0B18}
+input.cell:focus{border-color:var(--coin);background:#0B0B18;outline:none;color:var(--coin)}
+.codes input.cell{font-size:12.5px;color:var(--ink3)}
+.lbl input.cell{font-weight:700}
+
+/* Löschen: erscheint erst, wenn die Zeile angefasst wird. */
+.codes .del{margin-left:8px;opacity:0;cursor:pointer;color:var(--ink3);
+  font-weight:700;padding:0 4px;transition:opacity .12s,color .12s}
+tr:hover .codes .del{opacity:.6}
+.codes .del:hover{opacity:1;color:var(--fire)}
+button.lnk.add{border-color:var(--pipe);color:var(--pipe)}
+button.lnk.add:hover{background:var(--pipe);color:#0B2A0B;border-color:var(--pipe)}
 tr.dragrow{outline:3px solid var(--coin);outline-offset:-3px}
 tr.dragrow td{background:rgba(252,216,0,.07)!important}
 body.dragging{cursor:grabbing;user-select:none}
@@ -257,6 +278,7 @@ footer{margin-top:30px;padding-top:15px;border-top:3px solid var(--edge);
   <header>
     <h1>MOULDS · ฿/M</h1>
     <span class="who" id="who"></span>
+    <button type="button" class="lnk add" id="add">+ Mould</button>
     <button type="button" class="lnk" id="out">Logout</button>
   </header>
 
@@ -306,38 +328,78 @@ footer{margin-top:30px;padding-top:15px;border-top:3px solid var(--edge);
    proforma invoices ("200*9*2900MM"), and those are what this table holds.
    A code that is not listed still appears: it falls back to its catalogue
    width with an unknown thickness, so a new product is never silently lost. */
-/* u = zuletzt bezahlter Stückpreis in USD, aus der jeweils neuesten Proforma-
-   Rechnung. cap = Stück je 40-Fuß-Container, wo ein Container sortenrein war
-   und die Zahl damit gemessen statt gerechnet ist. */
-var MOULD=[
-  {w:300,t:8,  c:['K-PVC-09','K-PVC-10','K-PVC-11','K-PVC-12','K-PVC-13'], n:'flach', u:1.288, cap:8142},
-  {w:265,t:8,  c:['K-PVC-01','K-PVC-02','K-PVC-03','K-PVC-06'], n:'',                 u:1.09},
-  {w:400,t:8,  c:['K-PVC-07','K-PVC-08'], n:'',                                       u:2.75},
-  {w:200,t:12, c:['KP011','KP019','KP036','KP072'], n:'',                             u:1.487},
-  {w:200,t:9,  c:['KP021','KP035','KP052','KP053','KP054','KP076','KP077'], n:'',     u:1.49, cap:10856},
-  {w:200,t:23, c:['KP048','KP049'], n:'',                                             u:2.30},
-  {w:170,t:18, c:['KP030','KP063','KP064'], n:'6 Rillen',                             u:1.70},
-  {w:165,t:22, c:['KP005','KP009','KP014','KP028','KP061','KP073','KP074','KP075'], n:'gefräst', u:1.516, cap:9024},
-  {w:163,t:10, c:['KP033','KP044','KP070'], n:'',                                     u:1.621},
-  {w:155,t:9,  c:['KP010','KP050','KP051'], n:'',                                     u:1.094}
-];
+/* ── DIE LISTE ─────────────────────────────────────────────────────────────
+   Die Moulds liegen in der Datenbank (v2/mouldList), nicht in dieser Datei.
+   Damit gehört die Liste dem Büro: Zeile anlegen, löschen, Preis korrigieren —
+   ohne dass jemand den Code anfasst. Jedes Feld ist an Ort und Stelle
+   änderbar, gespeichert wird beim Verlassen des Feldes.
+   Der Katalog wird nur noch für zweierlei gebraucht: das Foto zum
+   Beispielcode und der Hinweis unten, welche Produkte in keiner Zeile
+   vorkommen — sonst verschwände ein neues Dekor stillschweigend.          */
+var MOULDS={};
+
 /* Wie viele Paneele in einen 40HQ gehen.
    Drei Container waren sortenrein und geben den Maßstab: die beiden flachen
    (PVC 300×8 mit 8.142 Stück, WPC 200×9 mit 10.856) belegen beide auf 0,1 m³
    genau DASSELBE Volumen — 56,7 m³ Bruttomaß. Das ist die Kapazität.
    Die dicken gefrästen Profile schachteln sich ineinander: Container #5 fasste
-   9.024 Stück 165×22, also nur 0,597 ihres Bruttomaßes. */
+   9.024 Stück 165×22, also nur 0,597 ihres Bruttomaßes.
+   Eine im Datensatz eingetragene Stückzahl schlägt die Rechnung immer. */
 var HQ_M3=56.7, NEST=0.597;
+function mouldCap(w,t,cap){
+  if(cap>0) return cap;
+  var v=(w/1000)*(t/1000)*2.9*(t>12?NEST:1);
+  return v>0 ? Math.round(HQ_M3/v) : 0;
+}
 
-/* ── Zeilen selbst sortieren ───────────────────────────────────────────────
-   Wie der Griff in der Tourkarte, nur für eine Tabelle. Dort wird die Zeile
-   fixiert und ein Platzhalter hält die Lücke — in einer Tabelle geht das nicht,
-   ein <tr> lässt sich nicht sinnvoll aus dem Fluss nehmen. Also andersherum:
-   die Zeile bleibt, wo sie ist, und wird beim Ziehen live umsortiert. Das
-   Ergebnis fühlt sich gleich an und kann nicht in der Luft hängenbleiben.
-   Die Reihenfolge liegt in der Datenbank, nicht im Browser — sie ist eine
-   Entscheidung, keine Ansichtssache, und gilt auf jedem Gerät.             */
-var ORDER=[], _dragTr=null;
+function mList(){
+  return Object.keys(MOULDS).map(function(id){
+    var m=Object.assign({}, MOULDS[id]); m.id=id; return m;
+  });
+}
+
+/* ── Ändern, anlegen, löschen ────────────────────────────────────────────── */
+function mSet(id, field, val){
+  if(!MOULDS[id]) return;
+  MOULDS[id][field]=val;                       // sofort sichtbar
+  render();
+  if(!MDB) return;
+  var patch={}; patch[field]=val;
+  MDB.ref('mouldList/'+id).update(patch).catch(function(){
+    $('status').textContent='Nicht gespeichert — die Änderung gilt nur in diesem Fenster.';
+  });
+}
+function mAdd(){
+  var id='m'+Date.now();
+  var pos=Math.max.apply(null, [0].concat(mList().map(function(m){ return +m.pos||0; })))+10;
+  var rec={mat:'WPC', w:200, t:9, name:'', usd:0, cap:0, code:'', pos:pos};
+  MOULDS[id]=rec; render();
+  if(MDB) MDB.ref('mouldList/'+id).set(rec).catch(function(){
+    $('status').textContent='Zeile konnte nicht gespeichert werden.';
+  });
+  // Direkt ins erste Feld der neuen Zeile, damit man sofort tippen kann.
+  setTimeout(function(){
+    var el=document.querySelector('tr[data-k="'+id+'"] input');
+    if(el){ el.focus(); el.select(); el.scrollIntoView({block:'center'}); }
+  }, 30);
+}
+function mDel(id){
+  var m=MOULDS[id]; if(!m) return;
+  if(!confirm('„'+m.mat+' '+m.w+' × '+m.t+' mm" löschen?')) return;
+  delete MOULDS[id]; render();
+  if(MDB) MDB.ref('mouldList/'+id).remove().catch(function(){
+    $('status').textContent='Zeile konnte nicht gelöscht werden.';
+  });
+}
+
+/* ── Zeilen selbst verschieben ─────────────────────────────────────────────
+   Wie der Griff in der Tourkarte, nur für eine Tabelle: dort wird die Zeile
+   fixiert und ein Platzhalter hält die Lücke — ein <tr> lässt sich aber nicht
+   sinnvoll aus dem Fluss nehmen. Also bleibt die Zeile stehen und die Tabelle
+   sortiert sich live um. Fühlt sich gleich an, kann nicht in der Luft hängen.
+   Beim Loslassen bekommt jede Zeile ihre neue Position (10, 20, 30 …) — mit
+   Lücken, damit eine später eingeschobene Zeile nicht alles neu nummeriert. */
+var _dragTr=null;
 function dragStart(e, h){
   if(e.button!=null && e.button>0) return;
   var tr=h.closest('tr'); if(!tr) return;
@@ -356,8 +418,7 @@ function dragMove(e){
     var r=rows[i]; if(r===_dragTr) continue;
     var b=r.getBoundingClientRect();
     if(e.clientY>b.top && e.clientY<b.bottom){
-      var below = e.clientY > b.top+b.height/2;
-      r.parentNode.insertBefore(_dragTr, below ? r.nextSibling : r);
+      r.parentNode.insertBefore(_dragTr, e.clientY>b.top+b.height/2 ? r.nextSibling : r);
       break;
     }
   }
@@ -369,13 +430,19 @@ function dragEnd(){
   document.body.classList.remove('dragging');
   if(!_dragTr) return;
   _dragTr.classList.remove('dragrow'); _dragTr=null;
-  ORDER=Array.prototype.map.call(document.querySelectorAll('#rows tr'),
-    function(r){ return r.getAttribute('data-k'); }).filter(Boolean);
+  var patch={};
+  Array.prototype.forEach.call(document.querySelectorAll('#rows tr'), function(r,i){
+    var id=r.getAttribute('data-k'); if(!id || !MOULDS[id]) return;
+    MOULDS[id].pos=(i+1)*10;
+    patch['mouldList/'+id+'/pos']=(i+1)*10;
+  });
   SORT={k:'manual', d:1};
   try{ localStorage.setItem('kp-mould-sort', JSON.stringify(SORT)); }catch(e){}
-  if(MDB) MDB.ref('mouldOrder').set(ORDER).catch(function(){
-    $('status').textContent='Reihenfolge konnte nicht gespeichert werden.';
-  });
+  if(MDB && Object.keys(patch).length){
+    _rootDb.ref(SEASON).update(patch).catch(function(){
+      $('status').textContent='Reihenfolge konnte nicht gespeichert werden.';
+    });
+  }
   render();
 }
 
@@ -393,10 +460,9 @@ function mouldCap(w,t,cap){
   var v=(w/1000)*(t/1000)*2.9*(t>12?NEST:1);
   return v>0 ? Math.round(HQ_M3/v) : 0;
 }
-var MOF={}; MOULD.forEach(function(m){ m.c.forEach(function(code){ MOF[code]=m; }); });
 
-var staffList=[], cost={}, cat={}, soldOut={}, me=null;
-var SET={rate:33.6346, fr:20, len:2.9, cont:120000};
+var staffList=[], cost={}, cat={}, me=null;
+var SET={rate:33.6346, fr:0, len:2.9, cont:120000};
 // Sortierung merkt sich das Gerät — sie ist eine Ansichtssache, keine Firmenzahl.
 var SORT={k:"manual", d:1};
 try{ var _sv=JSON.parse(localStorage.getItem('kp-mould-sort')||'null'); if(_sv&&_sv.k) SORT=_sv; }catch(e){}
@@ -477,6 +543,20 @@ dots();
 document.querySelectorAll('th.s').forEach(function(th){
   th.addEventListener('click', function(){ sortBy(th.getAttribute('data-s')); });
 });
+// Gespeichert wird beim Verlassen des Feldes, nicht bei jedem Tastendruck —
+// sonst stünde nach "1" schon eine 1 in der Datenbank, bevor "1,49" fertig ist.
+$('rows').addEventListener('change', function(e){
+  var t=e.target;
+  if(!t || !t.classList.contains('cell')) return;
+  var f=t.getAttribute('data-f');
+  var v = (f==='mat'||f==='name'||f==='code') ? t.value.trim() : num(t.value);
+  if(f==='mat') v=v.toUpperCase();     // sonst greift der Katalog-Abgleich unten nicht
+  mSet(t.getAttribute('data-id'), f, v);
+});
+$('rows').addEventListener('keydown', function(e){
+  if(e.key==='Enter' && e.target.classList.contains('cell')) e.target.blur();
+});
+$('add').addEventListener('click', mAdd);
 $('out').addEventListener('click', function(){
   try{ localStorage.removeItem('kp-mould-session'); }catch(e){}
   location.reload();
@@ -494,58 +574,29 @@ try{ var sv=JSON.parse(localStorage.getItem('kp-mould-set')||'null'); if(sv) SET
 });
 
 /* ── grouping + maths ── */
-function groupKey(code){
-  var m=MOF[code];
-  if(m) return m.w+'x'+m.t;
-  var w=num((cat[code]||{}).w);
-  return w ? w*10+'x?' : 'x?';               // catalogue width is in cm, mould in mm
-}
-function build(){
-  var G={};
-  Object.keys(cat).forEach(function(code){
-    var p=cat[code]; if(!p || (p.mat!=='WPC' && p.mat!=='PVC')) return;
-    var m=MOF[code], key=groupKey(code);
-    var g=G[key]||(G[key]={ key:key, w:m?m.w:num(p.w)*10, t:m?m.t:null, mat:p.mat,
-                            name:m?m.n:'', usd:m?m.u:0, cap:m?m.cap:0,
-                            codes:[], landed:[], sell:[], out:0 });
-    g.codes.push(code);
-    if(soldOut[code]) g.out++;
-    if(num(cost[code])>0) g.landed.push(num(cost[code]));
-    if(num(p.price)>0) g.sell.push(num(p.price));
-  });
-  return Object.keys(G).map(function(k){ return G[k]; });
-}
-var avg=function(a){ return a.length ? a.reduce(function(x,y){ return x+y; },0)/a.length : 0; };
-
 function render(){
   if(!me) return;
-  var list=build();
+  var list=mList();
   list.forEach(function(g){
     /* Drei Zahlen, mehr braucht die Liste nicht: was die Ware kostet, was ihr
-       Platz im Container kostet, und die Summe — das ist der Preis, zu dem ein
-       Brett bei euch im Laden steht. */
-    g.pcs   = mouldCap(g.w, g.t, g.cap);            // Stück je 40HQ
-    g.goods = g.usd>0 ? g.usd*SET.rate : 0;         // Ware je Stück
-    g.frei  = g.pcs>0 ? (SET.cont||0)/g.pcs : 0;    // Frachtanteil je Stück
+       Platz im Container kostet, und die Summe — der Preis, zu dem ein Brett
+       bei euch im Laden steht. */
+    g.pcs   = mouldCap(+g.w, +g.t, +g.cap);
+    /* Nebenkosten % schlägt auf den Warenpreis auf — Bankgebühr, Agent, alles
+       was nicht schon in der Containersumme steckt. Steht das Feld auf 0,
+       ändert es nichts. */
+    g.goods = +g.usd>0 ? +g.usd*SET.rate*(1+(+SET.fr||0)/100) : 0;
+    g.frei  = g.pcs>0 ? (SET.cont||0)/g.pcs : 0;
     g.tot   = g.goods>0 ? g.goods+g.frei : 0;
   });
-  /* Sortierung liegt beim Nutzer: Kopfzeile anklicken, nochmal klicken dreht
-     um. Leere Werte wandern immer ans Ende, egal in welche Richtung sortiert
-     wird — sonst stünde bei absteigend eine Reihe Striche ganz oben. */
+
   var key=SORT.k, dir=SORT.d;
   if(key==='manual'){
-    // Eigene Reihenfolge. Was noch nicht darin steht — ein neues Mould —
-    // landet hinten statt zu verschwinden.
-    list.sort(function(a,b){
-      var A=ORDER.indexOf(a.key), B=ORDER.indexOf(b.key);
-      if(A<0) A=9999; if(B<0) B=9999;
-      return A-B || (a.tot||1e9)-(b.tot||1e9);
-    });
-  } else
-  list.sort(function(a,b){
+    list.sort(function(a,b){ return (+a.pos||0)-(+b.pos||0); });
+  } else list.sort(function(a,b){
     if(key==='mould'){
       if(a.mat!==b.mat) return (a.mat<b.mat?-1:1)*dir;
-      return (a.w-b.w||a.t-b.t)*dir;
+      return ((+a.w)-(+b.w) || (+a.t)-(+b.t))*dir;
     }
     var A=a[key]||0, B=b[key]||0;
     if(!A && !B) return 0;
@@ -560,37 +611,48 @@ function render(){
     th.classList.toggle('act', on);
   });
 
+  var f=function(id,fld,val,w,step){
+    return '<input class="cell" data-id="'+id+'" data-f="'+fld+'" style="width:'+w+'px" '
+      +(step?'type="number" step="'+step+'"':'type="text"')+' value="'+esc(val==null?'':val)+'">';
+  };
   $('rows').innerHTML=list.map(function(g){
-    var shot=g.codes.find(function(c){ return !soldOut[c]; }) || g.codes[0];
-    // Der Meterpreis steht klein unter der Stückzahl: dieselbe Zahl, andere
-    // Einheit — er soll da sein, aber nicht mit dem Stückpreis konkurrieren.
     var pm=function(v){ return (v>0 && SET.len>0) ? '<span class="sub2">'+f2(v/SET.len)+' ฿/m</span>' : ''; };
-    return '<tr data-k="'+esc(g.key)+'">'
-      +'<td><div class="c1">'
-        +'<span class="grab" title="ziehen zum Sortieren / ลากเพื่อจัดลำดับ" '
-          +'onpointerdown="dragStart(event,this)">⠿</span>'
-        +'<img class="thumb" src="img/products/'+encodeURIComponent(shot)+'.jpg" alt="'+esc(shot)+'" '
-        +'loading="lazy" onclick="zoom(this.src,\''+esc(shot)+'\')" title="groß ansehen / ดูใหญ่" '
+    var img=g.code
+      ? '<img class="thumb" src="img/products/'+encodeURIComponent(g.code)+'.jpg" alt="'+esc(g.code)+'" '
+        +'loading="lazy" onclick="zoom(this.src,\''+esc(g.code)+'\')" title="groß ansehen / ดูใหญ่" '
         +'onerror="this.classList.add(\'gone\');'
         +'this.insertAdjacentHTML(\'afterend\',\'<div class=&quot;noimg&quot;>?</div>\')">'
+      : '<div class="noimg">?</div>';
+    return '<tr data-k="'+esc(g.id)+'">'
+      +'<td><div class="c1">'
+        +'<span class="grab" title="ziehen zum Sortieren / ลากเพื่อจัดลำดับ" '
+          +'onpointerdown="dragStart(event,this)">⠿</span>'+img
       +'</div></td>'
-      +'<td class="lbl">'+esc(g.mat)+' · '+g.w+' × '+(g.t||'?')+' mm'
-        +'<span class="codes">'+esc(shot)+'</span></td>'
-      +'<td class="n mono">'+(g.goods?f2(g.goods):'<span class="miss">—</span>')+pm(g.goods)+'</td>'
+      +'<td class="lbl">'
+        +f(g.id,'mat',g.mat,46)+' · '+f(g.id,'w',g.w,52,'1')+' × '+f(g.id,'t',g.t,42,'1')+' mm'
+        +f(g.id,'name',g.name,86)
+        +'<span class="codes">'+f(g.id,'code',g.code,96)
+          +'<span class="del" title="Zeile löschen" onclick="mDel(\''+esc(g.id)+'\')">✕</span></span></td>'
+      +'<td class="n mono">'+f(g.id,'usd',g.usd,66,'any')+' $'
+        +'<span class="sub2">'+(g.goods?f2(g.goods)+' ฿'+(SET.len>0?' · '+f2(g.goods/SET.len)+' ฿/m':''):'—')+'</span></td>'
       +'<td class="n mono">'+(g.frei?f2(g.frei):'<span class="miss">—</span>')
-        +(g.pcs?'<span class="sub2">'+f0(g.pcs)+' Stk / 40HQ'+(g.cap?' ✓':'')+'</span>':'')+'</td>'
+        +'<span class="sub2">'+(g.pcs?f0(g.pcs)+' Stk / 40HQ'+(+g.cap>0?' ✓':''):'')+'</span></td>'
       +'<td class="n mono'+(g.tot>0 && Math.abs(g.tot-best)<0.01?' best':'')+'">'
         +(g.tot?f2(g.tot):'<span class="miss">—</span>')+pm(g.tot)+'</td>'
       +'</tr>';
   }).join('');
 
-  var noCost=[];
+  /* Ein Dekor, das in keiner Zeile vorkommt, wuerde sonst stillschweigend
+     fehlen — die Liste ist ja jetzt handgepflegt. */
+  var haveW={};
+  list.forEach(function(g){ haveW[g.mat+'|'+Math.round(+g.w/10)]=1; });
+  var lost=[];
   Object.keys(cat).forEach(function(c){
-    var p=cat[c]; if(p && (p.mat==='WPC'||p.mat==='PVC') && !(num(cost[c])>0)) noCost.push(c);
+    var p=cat[c]; if(!p || (p.mat!=='WPC' && p.mat!=='PVC')) return;
+    if(!haveW[p.mat+'|'+Math.round(num(p.w))]) lost.push(c);
   });
-  $('foot').innerHTML='Stand: live aus der App · '+list.length+' Moulds · '
-    +Object.keys(cat).length+' Produkte im Katalog'
-    +(noCost.length?' · <span class="warn">ohne Kostenwert: '+esc(noCost.join(', '))+'</span>':'');
+  $('foot').innerHTML=list.length+' Moulds · '+Object.keys(cat).length+' Produkte im Katalog'
+    +(lost.length?' · <span class="warn">in keiner Zeile: '+esc(lost.join(', '))+'</span>':'');
 }
 
 /* ── live data ── */
@@ -608,13 +670,9 @@ function sub(){
       }catch(e){}
     }
   });
-  MDB.ref("mouldOrder").on("value", function(s){
-    var v=s.val(); ORDER=Array.isArray(v)?v.filter(Boolean):[];
-    render();
-  });
+  MDB.ref("mouldList").on("value", function(s){ MOULDS=s.val()||{}; render(); mark(); });
   MDB.ref('acctData/cost').on('value', function(s){ cost=s.val()||{}; render(); mark(); });
   MDB.ref('webCatalog').on('value',    function(s){ cat=s.val()||{};  render(); mark(); });
-  _rootDb.ref('pub/soldOut').on('value', function(s){ soldOut=s.val()||{}; render(); });
 }
 function mark(){
   var n=Object.keys(cat).length;
