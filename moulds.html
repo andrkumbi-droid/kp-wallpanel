@@ -206,6 +206,19 @@ tbody tr:last-child td{border-bottom:none}
 .thumb{width:92px;height:92px;object-fit:cover;display:block;cursor:zoom-in;
   border:3px solid var(--edge);background:#0B0B18}
 .thumb:hover{border-color:var(--coin)}
+
+/* Der Griff. Fast unsichtbar, bis man die Zeile berührt — er soll da sein,
+   wenn man ihn sucht, und sonst nicht mitreden. */
+.c1{display:flex;align-items:center;gap:4px}
+.grab{width:16px;flex-shrink:0;cursor:grab;text-align:center;
+  font-size:15px;line-height:1;color:var(--edge);opacity:.45;
+  touch-action:none;user-select:none;transition:color .12s,opacity .12s}
+tr:hover .grab{opacity:1;color:var(--ink3)}
+.grab:hover{color:var(--coin)}
+tr.dragrow{outline:3px solid var(--coin);outline-offset:-3px}
+tr.dragrow td{background:rgba(252,216,0,.07)!important}
+body.dragging{cursor:grabbing;user-select:none}
+body.dragging .grab{cursor:grabbing}
 .thumb.gone{display:none}
 .noimg{width:92px;height:92px;border:3px dashed var(--edge);background:#0B0B18;
   display:flex;align-items:center;justify-content:center;color:var(--ink3);font-size:26px}
@@ -316,6 +329,56 @@ var MOULD=[
    9.024 Stück 165×22, also nur 0,597 ihres Bruttomaßes. */
 var HQ_M3=56.7, NEST=0.597;
 
+/* ── Zeilen selbst sortieren ───────────────────────────────────────────────
+   Wie der Griff in der Tourkarte, nur für eine Tabelle. Dort wird die Zeile
+   fixiert und ein Platzhalter hält die Lücke — in einer Tabelle geht das nicht,
+   ein <tr> lässt sich nicht sinnvoll aus dem Fluss nehmen. Also andersherum:
+   die Zeile bleibt, wo sie ist, und wird beim Ziehen live umsortiert. Das
+   Ergebnis fühlt sich gleich an und kann nicht in der Luft hängenbleiben.
+   Die Reihenfolge liegt in der Datenbank, nicht im Browser — sie ist eine
+   Entscheidung, keine Ansichtssache, und gilt auf jedem Gerät.             */
+var ORDER=[], _dragTr=null;
+function dragStart(e, h){
+  if(e.button!=null && e.button>0) return;
+  var tr=h.closest('tr'); if(!tr) return;
+  _dragTr=tr; tr.classList.add('dragrow');
+  document.body.classList.add('dragging');
+  e.preventDefault(); e.stopPropagation();
+  try{ h.setPointerCapture(e.pointerId); }catch(_){}
+  window.addEventListener('pointermove', dragMove, true);
+  window.addEventListener('pointerup', dragEnd, true);
+  window.addEventListener('pointercancel', dragEnd, true);
+}
+function dragMove(e){
+  if(!_dragTr) return;
+  var rows=Array.prototype.slice.call(document.querySelectorAll('#rows tr'));
+  for(var i=0;i<rows.length;i++){
+    var r=rows[i]; if(r===_dragTr) continue;
+    var b=r.getBoundingClientRect();
+    if(e.clientY>b.top && e.clientY<b.bottom){
+      var below = e.clientY > b.top+b.height/2;
+      r.parentNode.insertBefore(_dragTr, below ? r.nextSibling : r);
+      break;
+    }
+  }
+}
+function dragEnd(){
+  window.removeEventListener('pointermove', dragMove, true);
+  window.removeEventListener('pointerup', dragEnd, true);
+  window.removeEventListener('pointercancel', dragEnd, true);
+  document.body.classList.remove('dragging');
+  if(!_dragTr) return;
+  _dragTr.classList.remove('dragrow'); _dragTr=null;
+  ORDER=Array.prototype.map.call(document.querySelectorAll('#rows tr'),
+    function(r){ return r.getAttribute('data-k'); }).filter(Boolean);
+  SORT={k:'manual', d:1};
+  try{ localStorage.setItem('kp-mould-sort', JSON.stringify(SORT)); }catch(e){}
+  if(MDB) MDB.ref('mouldOrder').set(ORDER).catch(function(){
+    $('status').textContent='Reihenfolge konnte nicht gespeichert werden.';
+  });
+  render();
+}
+
 /* Bild groß ansehen. Global, weil die Zeilen es per onclick aufrufen. */
 function zoom(src, code){
   $('lb-img').src=src; $('lb-cap').textContent=code||'';
@@ -335,7 +398,7 @@ var MOF={}; MOULD.forEach(function(m){ m.c.forEach(function(code){ MOF[code]=m; 
 var staffList=[], cost={}, cat={}, soldOut={}, me=null;
 var SET={rate:33.6346, fr:20, len:2.9, cont:120000};
 // Sortierung merkt sich das Gerät — sie ist eine Ansichtssache, keine Firmenzahl.
-var SORT={k:'tot', d:1};
+var SORT={k:"manual", d:1};
 try{ var _sv=JSON.parse(localStorage.getItem('kp-mould-sort')||'null'); if(_sv&&_sv.k) SORT=_sv; }catch(e){}
 function sortBy(k){
   SORT = (SORT.k===k) ? {k:k, d:-SORT.d} : {k:k, d:1};
@@ -442,7 +505,7 @@ function build(){
   Object.keys(cat).forEach(function(code){
     var p=cat[code]; if(!p || (p.mat!=='WPC' && p.mat!=='PVC')) return;
     var m=MOF[code], key=groupKey(code);
-    var g=G[key]||(G[key]={ w:m?m.w:num(p.w)*10, t:m?m.t:null, mat:p.mat,
+    var g=G[key]||(G[key]={ key:key, w:m?m.w:num(p.w)*10, t:m?m.t:null, mat:p.mat,
                             name:m?m.n:'', usd:m?m.u:0, cap:m?m.cap:0,
                             codes:[], landed:[], sell:[], out:0 });
     g.codes.push(code);
@@ -470,6 +533,15 @@ function render(){
      um. Leere Werte wandern immer ans Ende, egal in welche Richtung sortiert
      wird — sonst stünde bei absteigend eine Reihe Striche ganz oben. */
   var key=SORT.k, dir=SORT.d;
+  if(key==='manual'){
+    // Eigene Reihenfolge. Was noch nicht darin steht — ein neues Mould —
+    // landet hinten statt zu verschwinden.
+    list.sort(function(a,b){
+      var A=ORDER.indexOf(a.key), B=ORDER.indexOf(b.key);
+      if(A<0) A=9999; if(B<0) B=9999;
+      return A-B || (a.tot||1e9)-(b.tot||1e9);
+    });
+  } else
   list.sort(function(a,b){
     if(key==='mould'){
       if(a.mat!==b.mat) return (a.mat<b.mat?-1:1)*dir;
@@ -493,11 +565,15 @@ function render(){
     // Der Meterpreis steht klein unter der Stückzahl: dieselbe Zahl, andere
     // Einheit — er soll da sein, aber nicht mit dem Stückpreis konkurrieren.
     var pm=function(v){ return (v>0 && SET.len>0) ? '<span class="sub2">'+f2(v/SET.len)+' ฿/m</span>' : ''; };
-    return '<tr>'
-      +'<td><img class="thumb" src="img/products/'+encodeURIComponent(shot)+'.jpg" alt="'+esc(shot)+'" '
+    return '<tr data-k="'+esc(g.key)+'">'
+      +'<td><div class="c1">'
+        +'<span class="grab" title="ziehen zum Sortieren / ลากเพื่อจัดลำดับ" '
+          +'onpointerdown="dragStart(event,this)">⠿</span>'
+        +'<img class="thumb" src="img/products/'+encodeURIComponent(shot)+'.jpg" alt="'+esc(shot)+'" '
         +'loading="lazy" onclick="zoom(this.src,\''+esc(shot)+'\')" title="groß ansehen / ดูใหญ่" '
         +'onerror="this.classList.add(\'gone\');'
-        +'this.insertAdjacentHTML(\'afterend\',\'<div class=&quot;noimg&quot;>?</div>\')"></td>'
+        +'this.insertAdjacentHTML(\'afterend\',\'<div class=&quot;noimg&quot;>?</div>\')">'
+      +'</div></td>'
       +'<td class="lbl">'+esc(g.mat)+' · '+g.w+' × '+(g.t||'?')+' mm'
         +'<span class="codes">'+esc(shot)+'</span></td>'
       +'<td class="n mono">'+(g.goods?f2(g.goods):'<span class="miss">—</span>')+pm(g.goods)+'</td>'
@@ -531,6 +607,10 @@ function sub(){
         }
       }catch(e){}
     }
+  });
+  MDB.ref("mouldOrder").on("value", function(s){
+    var v=s.val(); ORDER=Array.isArray(v)?v.filter(Boolean):[];
+    render();
   });
   MDB.ref('acctData/cost').on('value', function(s){ cost=s.val()||{}; render(); mark(); });
   MDB.ref('webCatalog').on('value',    function(s){ cat=s.val()||{};  render(); mark(); });
