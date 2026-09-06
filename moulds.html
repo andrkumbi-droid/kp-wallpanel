@@ -241,6 +241,7 @@ footer{margin-top:30px;padding-top:15px;border-top:3px solid var(--edge);
         <th></th><th>Mould</th><th class="n">Breite</th><th class="n">Dicke</th><th class="n">Farben</th>
         <th class="n">Landed ฿/Stk</th><th class="n">฿/m</th><th class="n">฿/m²</th>
         <th class="n">m²/Stk</th><th class="n">Zuschnitt ฿</th><th class="n">VK ฿/m²</th><th class="n">Marge</th>
+        <th class="n">Vladimir ฿/m²</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -267,17 +268,21 @@ footer{margin-top:30px;padding-top:15px;border-top:3px solid var(--edge);
    proforma invoices ("200*9*2900MM"), and those are what this table holds.
    A code that is not listed still appears: it falls back to its catalogue
    width with an unknown thickness, so a new product is never silently lost. */
+/* v = Vladimirs aktuelles Angebot in USD, aus dem Lieferantenvergleich im
+   Sheet (Spalte Vladimir). Nur zur Information — bezahlt wird, was in den
+   Proforma-Rechnungen steht. Wo die Groesse im Sheet minimal abweicht, steht
+   es als Notiz dran, statt sie stillschweigend gleichzusetzen. */
 var MOULD=[
-  {w:300,t:8,  c:['K-PVC-09','K-PVC-10','K-PVC-11','K-PVC-12','K-PVC-13'], n:'flach'},
-  {w:265,t:8,  c:['K-PVC-01','K-PVC-02','K-PVC-03','K-PVC-06'], n:''},
-  {w:400,t:8,  c:['K-PVC-07','K-PVC-08'], n:''},
-  {w:200,t:12, c:['KP011','KP019','KP036','KP072'], n:''},
-  {w:200,t:9,  c:['KP021','KP035','KP052','KP053','KP054','KP076','KP077'], n:''},
-  {w:200,t:23, c:['KP048','KP049'], n:''},
-  {w:170,t:18, c:['KP030','KP063','KP064'], n:'6 Rillen'},
-  {w:165,t:22, c:['KP005','KP009','KP014','KP028','KP061','KP073','KP074','KP075'], n:'gefräst'},
-  {w:163,t:10, c:['KP033','KP044','KP070'], n:''},
-  {w:155,t:9,  c:['KP010','KP050','KP051'], n:''}
+  {w:300,t:8,  c:['K-PVC-09','K-PVC-10','K-PVC-11','K-PVC-12','K-PVC-13'], n:'flach',   v:1.29},
+  {w:265,t:8,  c:['K-PVC-01','K-PVC-02','K-PVC-03','K-PVC-06'], n:'',                   v:1.26, vn:'Sheet: 260×8'},
+  {w:400,t:8,  c:['K-PVC-07','K-PVC-08'], n:'',                                         v:1.85, vn:'3,5 kg · 4,4 kg = 2,20'},
+  {w:200,t:12, c:['KP011','KP019','KP036','KP072'], n:'',                               v:1.46},
+  {w:200,t:9,  c:['KP021','KP035','KP052','KP053','KP054','KP076','KP077'], n:'',       v:1.43},
+  {w:200,t:23, c:['KP048','KP049'], n:'',                                               v:2.15},
+  {w:170,t:18, c:['KP030','KP063','KP064'], n:'6 Rillen',                               v:1.56},
+  {w:165,t:22, c:['KP005','KP009','KP014','KP028','KP061','KP073','KP074','KP075'], n:'gefräst', v:1.52},
+  {w:163,t:10, c:['KP033','KP044','KP070'], n:'',                                       v:1.52},
+  {w:155,t:9,  c:['KP010','KP050','KP051'], n:'',                                       v:1.09, vn:'Sheet: 158×9'}
 ];
 var MOF={}; MOULD.forEach(function(m){ m.c.forEach(function(code){ MOF[code]=m; }); });
 
@@ -381,7 +386,8 @@ function build(){
     var p=cat[code]; if(!p || (p.mat!=='WPC' && p.mat!=='PVC')) return;
     var m=MOF[code], key=groupKey(code);
     var g=G[key]||(G[key]={ w:m?m.w:num(p.w)*10, t:m?m.t:null, mat:p.mat,
-                            name:m?m.n:'', codes:[], landed:[], sell:[], out:0 });
+                            name:m?m.n:'', vlad:m?m.v:0, vnote:m?m.vn:'',
+                            codes:[], landed:[], sell:[], out:0 });
     g.codes.push(code);
     if(soldOut[code]) g.out++;
     if(num(cost[code])>0) g.landed.push(num(cost[code]));
@@ -401,6 +407,8 @@ function render(){
     g.perM=(SET.len>0)?g.la/SET.len:0;
     g.sqm=g.area>0?g.la/g.area:0;
     g.vkSqm=g.area>0?g.se/g.area:0;
+    // Vladimirs Preis auf dieselbe Basis: Ware × Kurs + Nebenkostensatz.
+    g.vSqm=(g.vlad>0 && g.area>0) ? (g.vlad*SET.rate*(1+SET.fr/100))/g.area : 0;
   });
   list.sort(function(a,b){ return (a.sqm||1e9)-(b.sqm||1e9); });
   var best=Math.min.apply(null, list.map(function(g){ return g.sqm>0?g.sqm:1e9; }));
@@ -434,6 +442,13 @@ function render(){
       +'<td class="n mono">'+(g.perM?f2(g.perM*(SET.cut||0)):'<span class="miss">—</span>')+'</td>'
       +'<td class="n mono">'+(g.vkSqm?f0(g.vkSqm):'<span class="miss">—</span>')+'</td>'
       +'<td class="n mono">'+(marge!=null?f0(marge)+' %':'<span class="miss">—</span>')+'</td>'
+      // Vladimirs Angebot auf dieselbe Basis gerechnet wie die eigene Zahl:
+      // USD × Kurs + Nebenkosten, geteilt durch die Fläche. Grün heißt
+      // günstiger als das, was gerade bezahlt wird, rot teurer.
+      +'<td class="n mono">'+(g.vSqm
+          ? '<span class="'+(g.la>0 ? (g.vSqm<g.sqm?'best':'warn') : '')+'">'+f0(g.vSqm)+'</span>'
+            +'<span class="codes">$'+f2(g.vlad)+(g.vnote?' · '+esc(g.vnote):'')+'</span>'
+          : '<span class="miss">—</span>')+'</td>'
       +'</tr>';
   }).join('');
 
