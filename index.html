@@ -22856,6 +22856,20 @@ function ofSetSlipReview(orderId, status){
   var el=document.getElementById('slrev_btn_'+safeOrderId(orderId)); if(el) el.innerHTML=ofSlipReviewButtons(o);
   try{ ofRenderTour(); }catch(e){}   // refresh the header 🧾 Slips count/colour
 }
+// Laeuft gerade ein Foto-Upload? Solange das steht, oeffnet ein weiterer Tipp
+// auf das Kamerafeld nichts. Auf einem langsamen Netz sah die Maske sonst
+// eingefroren aus, der Fahrer tippte drei-, viermal nach und waehlte jedes Mal
+// dieselbe Aufnahme.
+var _dlPhotoBusy = false;
+function dlPhotoPick(){
+  if(_dlPhotoBusy){
+    var p=document.getElementById('delivery-upload-progress');
+    if(p){ p.style.display='block';
+      p.innerHTML='⏳ กำลังอัปโหลด รอสักครู่ / still uploading, please wait'; }
+    return;
+  }
+  var el=document.getElementById('delivery-photo-input'); if(el) el.click();
+}
 // Capture one or more delivery photos (camera or gallery) — saved immediately
 // to the order's 'delivery' photo node, like the warehouse pack photos.
 function handleDeliveryPhoto(input){
@@ -22863,7 +22877,16 @@ function handleDeliveryPhoto(input){
   var files = Array.prototype.slice.call(input.files);
   var drName = (typeof currentDriverId!=='undefined') ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver') : 'Driver';
   var prog = document.getElementById('delivery-upload-progress');
-  if(prog) prog.style.display = 'block';
+  _dlPhotoBusy = true;
+  var _tot = files.length, _doneN = 0, _dup = 0;
+  var _say = function(){
+    if(!prog) return;
+    prog.style.display='block';
+    prog.innerHTML = '<i class="ti ti-loader"></i> ⏳ กำลังอัปโหลด / uploading… '+(_doneN)+'/'+_tot
+      + '<br><b>อย่ากดซ้ำ / do not tap again</b>';
+  };
+  _say();
+  try{ dlPhotoRefresh(); }catch(e){}
   // EXIF bonus: if the photo carries GPS and this customer has no pin yet,
   // use the photo's real location (true delivery spot). Never overrides an
   // existing pin (driver tap / office edit win).
@@ -22882,14 +22905,65 @@ function handleDeliveryPhoto(input){
     });
   }
   var pending = files.length;
+  var step = function(){
+    pending--; _doneN++; _say();
+    if(pending<=0){
+      input.value='';
+      _dlPhotoBusy = false;
+      if(prog){
+        if(_dup>0){
+          // Nicht stillschweigend schlucken: der Fahrer soll sehen, dass sein
+          // zweiter Versuch angekommen und als dieselbe Aufnahme erkannt wurde.
+          prog.innerHTML = '✅ รูปซ้ำ '+_dup+' รูป ไม่ได้บันทึก / '+_dup+' duplicate photo'
+            +(_dup!==1?'s':'')+' skipped';
+          setTimeout(function(){ if(prog) prog.style.display='none'; }, 4000);
+        } else prog.style.display='none';
+      }
+      dlPhotoRefresh();
+    }
+  };
   files.forEach(function(f){
     compressPhotoFile(f, function(dataUrl){
-      addOrderPhoto(_deliveryId, 'delivery', dataUrl, drName, function(){
-        pending--;
-        if(pending<=0){ input.value=''; if(prog) prog.style.display='none'; dlPhotoRefresh(); }
+      if(!dataUrl){ step(); return; }
+      // Dieselbe Aufnahme ein zweites Mal? Dann nicht speichern. Genau so
+      // entstanden die vier gleichen Bilder: der Upload haengt, der Fahrer
+      // tippt noch einmal und waehlt dasselbe Foto aus der Galerie.
+      dlPhotoIsDup(_deliveryId, dataUrl, function(isDup){
+        if(isDup){ _dup++; step(); return; }
+        addOrderPhoto(_deliveryId, 'delivery', dataUrl, drName, step);
       });
     });
   });
+}
+// Fingerabdruck eines Bildes. Ein erster Versuch tastete nur jedes neunte
+// Zeichen ab — schnell, aber er uebersah einen Unterschied von einem Zeichen,
+// und damit haette ein echtes zweites Foto still verworfen werden koennen.
+// Deshalb ueber die GANZEN Daten, mit zwei Streuwerten nebeneinander, damit
+// zwei verschiedene Bilder nicht zufaellig denselben Wert bekommen. Kostet
+// bei einem komprimierten Foto den Bruchteil einer Sekunde und laeuft genau
+// einmal je Aufnahme.
+function dlPhotoSig(dataUrl){
+  var s=String(dataUrl||''), n=s.length, h1=0x811c9dc5, h2=0x01000193;
+  for(var i=0;i<n;i++){
+    var c=s.charCodeAt(i);
+    h1=((h1^c)*16777619)|0;
+    h2=(((h2<<5)-h2)+c)|0;
+  }
+  return n+'.'+(h1>>>0).toString(36)+'.'+(h2>>>0).toString(36);
+}
+// Liegt dieses Bild schon auf dem Auftrag? Verglichen wird ueber die
+// Fingerabdruecke im leichten Index, nicht ueber die Bilddaten selbst.
+function dlPhotoIsDup(orderId, dataUrl, cb){
+  if(!window.fbDB || !orderId){ cb(false); return; }
+  var sig = dlPhotoSig(dataUrl);
+  window.fbDB.ref('orderPhotos/delivery/'+safeOrderId(orderId)).once('value', function(snap){
+    var data = snap.val()||{}, dup=false;
+    Object.keys(data).forEach(function(k){
+      var p=data[k]||{};
+      if(p.sig ? (p.sig===sig) : (p.data && dlPhotoSig(p.data)===sig)) dup=true;
+    });
+    cb(dup);
+  }, function(){ cb(false); });
 }
 // Shipper handover: the receipt the carrier hands back. Goes into the order's
 // 'shipreceipt' node — the same one the office 🧾 button, Bills and
@@ -22939,21 +23013,33 @@ function dlPhotoRefresh(){
   if(!prev) return;
   if(!_deliveryId || !window.fbDB){ prev.style.display='none'; prev.innerHTML=''; return; }
   var sid = safeOrderId(_deliveryId);
-  // Photos can be removed (e.g. blurry) only BEFORE the order is delivered.
+  // Loeschen war bisher nach der Auslieferung ganz gesperrt — der Beweis sollte
+  // nicht verschwinden koennen. Nur stand der Fahrer damit auf vier gleichen
+  // Bildern, die er nicht mehr loswurde. Die Regel lautet jetzt: loeschen ja,
+  // solange MINDESTENS EIN Foto uebrig bleibt. Der Beweis bleibt, der Muell geht.
   var _ord = (typeof orders!=='undefined' ? orders.find(function(x){return x.id===_deliveryId;}) : null) || {};
-  var locked = _ord.status==='delivered' || (typeof dStatus!=='undefined' && dStatus[_deliveryId]==='delivered');
+  var delivered = _ord.status==='delivered' || (typeof dStatus!=='undefined' && dStatus[_deliveryId]==='delivered');
   window.fbDB.ref('orderPhotos/delivery/'+sid).once('value', function(snap){
     var data = snap.val()||{};
     var keys = Object.keys(data).sort(function(a,b){ return (data[a].ts||0)-(data[b].ts||0); });
     if(!keys.length){ prev.style.display='none'; prev.innerHTML=''; return; }
+    // Das letzte verbleibende Foto eines ausgelieferten Auftrags ist der Beleg
+    // und bleibt geschuetzt. Alles darueber darf weg.
+    var canDel = !delivered || keys.length>1;
     prev.style.display='block';
-    prev.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">'+
+    prev.innerHTML = (keys.length>1
+      ? '<div style="font-size:11px;color:var(--text2);margin-bottom:5px">'
+        +(canDel?'แตะ ✕ เพื่อลบรูปซ้ำ / tap ✕ to delete a duplicate'
+                :'ส่งแล้ว — เหลือรูปสุดท้ายไว้เป็นหลักฐาน / delivered — the last photo stays')
+        +'</div>' : '')+
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">'+
       keys.map(function(k){
         var p=data[k]||{};
         var when = p.ts ? new Date(p.ts).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
         return '<div style="position:relative">'+
           '<img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid var(--border)">'+
-          (locked?'':'<button type="button" onclick="dlDeletePhoto(\''+sid+'\',\''+k+'\')" title="Delete / ลบ" style="position:absolute;top:3px;right:3px;width:22px;height:22px;border-radius:50%;border:none;background:rgba(220,38,38,0.92);color:#fff;font-size:12px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center">✕</button>')+
+          // 30px statt 22 — mit dem Daumen im Auto war der alte Knopf kaum zu treffen.
+          (canDel?'<button type="button" onclick="event.stopPropagation();dlDeletePhoto(\''+sid+'\',\''+k+'\')" title="Delete / ลบ" style="position:absolute;top:2px;right:2px;width:30px;height:30px;border-radius:50%;border:2px solid #fff;background:rgba(220,38,38,0.95);color:#fff;font-size:15px;font-weight:700;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.4)">✕</button>':'')+
           (when?'<div style="position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);color:#fff;font-size:9px;padding:2px 4px;border-radius:0 0 6px 6px;text-align:center">'+when+(p.by?' · '+p.by:'')+'</div>':'')+
         '</div>';
       }).join('')+
@@ -22964,10 +23050,28 @@ function dlPhotoRefresh(){
 // is delivered. Targets the 'delivery' node directly (not the global picsTab).
 function dlDeletePhoto(sid, key){
   if(!window.fbDB || !_deliveryId) return;
+  if(_dlPhotoBusy){ alert('⏳ กำลังอัปโหลด รอสักครู่ / still uploading, please wait'); return; }
   var _ord = (typeof orders!=='undefined' ? orders.find(function(x){return x.id===_deliveryId;}) : null) || {};
-  var locked = _ord.status==='delivered' || (typeof dStatus!=='undefined' && dStatus[_deliveryId]==='delivered');
-  if(locked){ alert('Already delivered — photos are locked.\nส่งแล้ว ลบรูปไม่ได้'); return; }
-  if(!confirm('Delete this photo? / ลบรูปนี้?')) return;
+  var delivered = _ord.status==='delivered' || (typeof dStatus!=='undefined' && dStatus[_deliveryId]==='delivered');
+  // Der Beleg darf nicht verschwinden, Dubletten schon. Gezaehlt wird frisch
+  // aus der Datenbank, nicht aus der Vorschau — die kann veraltet sein.
+  window.fbDB.ref('orderPhotos/delivery/'+sid).once('value', function(snap){
+    var n = Object.keys(snap.val()||{}).length;
+    if(delivered && n<=1){
+      alert('This is the only delivery photo — it stays as proof.\nรูปนี้เป็นรูปเดียว เก็บไว้เป็นหลักฐาน');
+      return;
+    }
+    if(!confirm('Delete this photo? / ลบรูปนี้?')) return;
+    _dlDeletePhotoNow(sid, key, delivered);
+  });
+}
+function _dlDeletePhotoNow(sid, key, delivered){
+  // Wer nach der Auslieferung loescht, hinterlaesst eine Spur im Audit-Log —
+  // sonst waere der Beleg still veraenderbar.
+  var who = (typeof currentDriverId!=='undefined')
+    ? ((drivers.find(function(d){return d.id===currentDriverId;})||{}).name||'Driver')
+    : ((typeof currentStaffName!=='undefined'&&currentStaffName)||'—');
+  if(delivered){ try{ auditAdd({type:'photo-del', orderId:_deliveryId, where:'delivery', by:who, detail:'nach Auslieferung'}); }catch(e){} }
   window.fbDB.ref('orderPhotos/delivery/'+sid+'/'+key).remove(function(){
     window.fbDB.ref('photoIndex/delivery/'+sid).transaction(function(cur){
       if(!cur) return cur;
@@ -24416,7 +24520,10 @@ function addOrderPhoto(orderId, type, dataUrl, by, done){
   var sid = safeOrderId(orderId);
   var ord = (typeof orders!=='undefined' ? orders.find(function(x){return x.id===orderId;}) : null) || {};
   var ref = window.fbDB.ref('orderPhotos/'+type+'/'+sid).push();
-  ref.set({ data:dataUrl, ts:Date.now(), by:by||'' }, function(err){
+  // sig = Fingerabdruck der Bilddaten, damit dieselbe Aufnahme spaeter als
+  // Dublette erkannt wird, ohne alle Bilder herunterladen zu muessen.
+  var _sig = ''; try{ _sig = dlPhotoSig(dataUrl); }catch(e){}
+  ref.set({ data:dataUrl, ts:Date.now(), by:by||'', sig:_sig }, function(err){
     if(err){ if(done) done(false); return; }
     // bump the lightweight index
     var idxRef = window.fbDB.ref('photoIndex/'+type+'/'+sid);
@@ -30696,7 +30803,10 @@ function calcViz() {
     <div style="margin-bottom:14px">
       <label class="fl" style="margin-top:0">📷 Delivery photo (optional)</label>
       <div id="delivery-photo-preview" style="display:none;margin-bottom:8px"></div>
-      <div id="delivery-photo-upload" style="border:2px dashed var(--border);border-radius:var(--rs);padding:20px;text-align:center;cursor:pointer;background:var(--bg2)" onclick="document.getElementById('delivery-photo-input').click()">
+      <!-- dlPhotoPick statt eines direkten .click(): waehrend ein Upload laeuft,
+           oeffnet ein zweiter Tipp keine Kamera mehr. Genau daraus entstanden die
+           vier gleichen Fotos. -->
+      <div id="delivery-photo-upload" style="border:2px dashed var(--border);border-radius:var(--rs);padding:20px;text-align:center;cursor:pointer;background:var(--bg2)" onclick="dlPhotoPick()">
         <i class="ti ti-camera" style="font-size:28px;color:var(--text2);display:block;margin-bottom:6px"></i>
         <div style="font-size:13px;color:var(--text2)">Tap to take photo / เลือกรูป</div>
       </div>
