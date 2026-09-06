@@ -40919,11 +40919,13 @@ function pfPaidPill(mk,pk,label,paid){
 
 function pfExpenses(mk){
   var data=null; try{ data=billsCostData(mk,{finance:true, finSalaries:true}); }catch(e){}
-  var blocks=[], grey=[], blue=0, greyTot=0;
+  var blocks=[], grey=[], blue=0, greyTot=0, dueOpen=0;
   ((data&&data.blocks)||[]).forEach(function(blk){
     var kb=[], kg=[], tb=0, tg=0;
     (blk.children||[]).forEach(function(c){
       var amt=parseFloat(c.total)||0; if(amt===0) return;
+      var _pk=pfPaidKey(blk,c);
+      if(_pk && !pfIsPaid(mk,_pk)) dueOpen+=amt;   // faellig, aber noch nicht bezahlt
       if(pfExpGrey(blk,c)){ kg.push(c); tg+=amt; } else { kb.push(c); tb+=amt; }
     });
     if(kb.length){ blocks.push({ blk:blk, kids:kb.sort(function(a,b){ return (b.total||0)-(a.total||0); }), total:tb }); blue+=tb; }
@@ -40931,7 +40933,7 @@ function pfExpenses(mk){
   });
   blocks.sort(function(a,b){ return b.total-a.total; });
   grey.sort(function(a,b){ return b.total-a.total; });
-  return { blocks:blocks, grey:grey, blue:blue, greyTotal:greyTot };
+  return { blocks:blocks, grey:grey, blue:blue, greyTotal:greyTot, dueOpen:dueOpen };
 }
 
 /* ── VAT ──────────────────────────────────────────────────────────────────
@@ -41155,7 +41157,13 @@ function pfRender(){
   try{ t=finMonthTotals(mk); }catch(e){}
   var rev=inc.gross;
   var gp = cg.usable ? (rev-cg.value) : null;
-  var np = gp==null ? null : gp-t.blue;
+  /* Blau muss heissen: das Geld ist vom Konto. Was noch einen ungesetzten
+     Monatsende-Haken traegt, ist das nicht -- es kommt hier heraus und steht
+     daneben, sonst schmueckt der Haken nur den Baum, waehrend die Zahl oben
+     weiter behauptet, das Geld sei weg. */
+  var expOpen=exp.dueOpen||0, expPaid=Math.max(0, t.blue-expOpen);
+  var np = gp==null ? null : gp-expPaid;
+  var npEnd = gp==null ? null : gp-(expPaid+expOpen);
   var gm = (gp!=null&&rev>0) ? gp/rev*100 : null;
   var nm = (np!=null&&rev>0) ? np/rev*100 : null;
   var npCol = np==null?'#94a3b8':(np<0?'#f87171':'#4ade80');
@@ -41198,7 +41206,7 @@ function pfRender(){
     +tile('📈 ยอดขาย / Sales',pfM(rev),inc.cnt+' ออเดอร์ / orders','var(--green)')
     +tile('📦 ต้นทุนสินค้า / COGS','−'+pfM(cg.value),'ครอบคลุม / costed '+pfP(cg.coverage),'var(--orange-t)')
     +tile('💵 กำไรขั้นต้น / Gross',gp!=null?pfM(gp):'—',gm!=null?'มาร์จิ้น / margin '+pfP(gm):'ต้นทุนยังไม่ครบ / not costed',gp==null?'var(--text3)':(gp<0?'var(--red)':'var(--green)'))
-    +tile('💸 รายจ่าย / Expenses','−'+pfM(t.blue),'ทุกอย่างนอกจากสินค้า / everything but the goods','var(--blue)')
+    +tile('💸 รายจ่าย / Expenses','−'+pfM(expPaid),(expOpen>0?'จ่ายแล้ว · ค้างอีก '+pfM(expOpen)+' รอสิ้นเดือน / paid so far':'ทุกอย่างนอกจากสินค้า / everything but the goods'),'var(--blue)')
   +'</div>';
 
   /* ── the warehouse right now — the one card that is not about the month ── */
@@ -41474,8 +41482,9 @@ function pfRender(){
     b+=pfLine('📈 ยอดขาย / Sales','',pfM(rev),'var(--green)',true);
     b+=pfLine('− 📦 ต้นทุนสินค้าที่ขาย / Cost of goods sold','',(cg.value>0?'−':'')+pfM(cg.value),'var(--orange-t)');
     b+=pfLine('= 💵 กำไรขั้นต้น / Gross profit',gm!=null?'มาร์จิ้น / margin '+pfP(gm):'',gp!=null?pfM(gp):'—',gp==null?'var(--text3)':(gp<0?'var(--red)':'var(--green)'),true);
-    b+=pfLine('− 💸 รายจ่ายดำเนินงาน / Operating expenses','',(t.blue>0?'−':'')+pfM(t.blue),'var(--blue)');
+    b+=pfLine('− 💸 รายจ่ายดำเนินงาน / Operating expenses',(expOpen>0?'เฉพาะที่จ่ายแล้ว / only what is actually paid':''),(expPaid>0?'−':'')+pfM(expPaid),'var(--blue)');
     b+=pfLine('= 🏆 กำไรสุทธิ / NET PROFIT',nm!=null?'ของยอดขาย / of sales '+pfP(nm):'',np!=null?pfM(np):'—',np==null?'var(--text3)':(np<0?'var(--red)':'var(--green)'),true);
+    if(expOpen>0) b+=pfLine('… หลังจ่ายสิ้นเดือน / after the month-end payments','ยังต้องจ่ายอีก / still to pay '+pfM(expOpen),npEnd!=null?pfM(npEnd):'—','var(--text3)');
     b+=pfLine('− 🧾 VAT ที่ต้องนำส่ง / VAT payable',(vatIn>0?'ภาษีขาย − ภาษีซื้อ / output minus input':'ยังไม่ได้กรอกภาษีซื้อ / input VAT not entered yet'),'−'+pfM(vatPay),'var(--red)');
     b+=pfLine('= 💎 กำไรหลัง VAT / Profit after VAT','ก่อนภาษีเงินได้นิติบุคคล / still before corporate income tax',npVat!=null?pfM(npVat):'—',npVat==null?'var(--text3)':(npVat<0?'var(--red)':'var(--green)'),true);
     b+='<div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap">'
