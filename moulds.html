@@ -222,7 +222,7 @@ footer{margin-top:30px;padding-top:15px;border-top:3px solid var(--edge);
 
 <div class="wrap" id="app" style="display:none">
   <header>
-    <h1>MOULDS · ฿/M²</h1>
+    <h1>MOULDS · ฿/M</h1>
     <span class="who" id="who"></span>
     <button type="button" class="lnk" id="out">Logout</button>
   </header>
@@ -239,9 +239,9 @@ footer{margin-top:30px;padding-top:15px;border-top:3px solid var(--edge);
     <table>
       <thead><tr>
         <th></th><th>Mould</th><th class="n">Breite</th><th class="n">Dicke</th><th class="n">Farben</th>
-        <th class="n">Landed ฿/Stk</th><th class="n">฿/m</th><th class="n">฿/m²</th>
-        <th class="n">m²/Stk</th><th class="n">Zuschnitt ฿</th><th class="n">VK ฿/m²</th><th class="n">Marge</th>
-        <th class="n">Vladimir ฿/m²</th>
+        <th class="n">Landed ฿/Stk</th><th class="n">฿/m</th>
+        <th class="n">Zuschnitt ฿</th><th class="n">VK ฿/Stk</th><th class="n">Marge</th>
+        <th class="n">Vladimir ฿/Stk</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -401,22 +401,23 @@ function render(){
   if(!me) return;
   var list=build();
   list.forEach(function(g){
+    /* Nur Stück und Meter — die Quadratmeterrechnung ist raus. Eingekauft,
+       geschnitten und verkauft wird in Brettern, und der Meterpreis ist das,
+       was zwei verschieden lange Bretter vergleichbar macht. */
     g.la=avg(g.landed);
     g.se=avg(g.sell);
-    g.area=(SET.len||2.9)*(g.w/1000);
     g.perM=(SET.len>0)?g.la/SET.len:0;
-    g.sqm=g.area>0?g.la/g.area:0;
-    g.vkSqm=g.area>0?g.se/g.area:0;
+    g.cut=g.perM*(SET.cut||0);
     // Vladimirs Preis auf dieselbe Basis: Ware × Kurs + Nebenkostensatz.
-    g.vSqm=(g.vlad>0 && g.area>0) ? (g.vlad*SET.rate*(1+SET.fr/100))/g.area : 0;
+    g.vPc=(g.vlad>0) ? g.vlad*SET.rate*(1+SET.fr/100) : 0;
   });
-  list.sort(function(a,b){ return (a.sqm||1e9)-(b.sqm||1e9); });
-  var best=Math.min.apply(null, list.map(function(g){ return g.sqm>0?g.sqm:1e9; }));
+  list.sort(function(a,b){ return (a.perM||1e9)-(b.perM||1e9); });
+  var best=Math.min.apply(null, list.map(function(g){ return g.perM>0?g.perM:1e9; }));
 
   $('rows').innerHTML=list.map(function(g){
     var spread = g.landed.length>1
       && (Math.max.apply(null,g.landed)-Math.min.apply(null,g.landed))/Math.max(1,Math.min.apply(null,g.landed)) > 0.25;
-    var marge = (g.vkSqm>0 && g.sqm>0) ? (g.vkSqm-g.sqm)/g.vkSqm*100 : null;
+    var marge = (g.se>0 && g.la>0) ? (g.se-g.la)/g.se*100 : null;
     // Ein Dekor stellvertretend fürs Mould. Fehlt das Foto, bleibt ein
     // gestrichelter Platzhalter stehen statt eines kaputten Bildsymbols.
     var shot=g.codes.find(function(c){ return !soldOut[c]; }) || g.codes[0];
@@ -435,18 +436,15 @@ function render(){
       +'<td class="n mono">'+(g.t?g.t+' mm':'<span class="miss">?</span>')+'</td>'
       +'<td class="n mono">'+g.codes.length+'</td>'
       +'<td class="n mono">'+(g.la?f2(g.la):'<span class="miss">—</span>')+'</td>'
-      +'<td class="n mono">'+(g.perM?f2(g.perM):'<span class="miss">—</span>')+'</td>'
-      +'<td class="n mono'+(g.sqm>0 && Math.abs(g.sqm-best)<0.01?' best':'')+'">'
-        +(g.sqm?f0(g.sqm):'<span class="miss">—</span>')+'</td>'
-      +'<td class="n mono">'+f2(g.area)+'</td>'
-      +'<td class="n mono">'+(g.perM?f2(g.perM*(SET.cut||0)):'<span class="miss">—</span>')+'</td>'
-      +'<td class="n mono">'+(g.vkSqm?f0(g.vkSqm):'<span class="miss">—</span>')+'</td>'
+      +'<td class="n mono'+(g.perM>0 && Math.abs(g.perM-best)<0.01?' best':'')+'">'
+        +(g.perM?f2(g.perM):'<span class="miss">—</span>')+'</td>'
+      +'<td class="n mono">'+(g.cut?f2(g.cut):'<span class="miss">—</span>')+'</td>'
+      +'<td class="n mono">'+(g.se?f0(g.se):'<span class="miss">—</span>')+'</td>'
       +'<td class="n mono">'+(marge!=null?f0(marge)+' %':'<span class="miss">—</span>')+'</td>'
-      // Vladimirs Angebot auf dieselbe Basis gerechnet wie die eigene Zahl:
-      // USD × Kurs + Nebenkosten, geteilt durch die Fläche. Grün heißt
-      // günstiger als das, was gerade bezahlt wird, rot teurer.
-      +'<td class="n mono">'+(g.vSqm
-          ? '<span class="'+(g.la>0 ? (g.vSqm<g.sqm?'best':'warn') : '')+'">'+f0(g.vSqm)+'</span>'
+      // Vladimirs Angebot auf dieselbe Basis wie die eigene Zahl: USD × Kurs
+      // + Nebenkosten. Grün heißt günstiger als der aktuelle Einkauf.
+      +'<td class="n mono">'+(g.vPc
+          ? '<span class="'+(g.la>0 ? (g.vPc<g.la?'best':'warn') : '')+'">'+f2(g.vPc)+'</span>'
             +'<span class="codes">$'+f2(g.vlad)+(g.vnote?' · '+esc(g.vnote):'')+'</span>'
           : '<span class="miss">—</span>')+'</td>'
       +'</tr>';
