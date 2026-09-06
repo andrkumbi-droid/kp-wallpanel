@@ -1,0 +1,396 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KP Wallpanel — Moulds</title>
+<link rel="icon" href="kp-icon-app.svg" type="image/svg+xml">
+
+<!-- ═══════════════ FIREBASE — identical boot to pos.html ═══════════════
+     Same project, same App Check survival rules, same anonymous sign-in.
+     The page itself is public (GitHub Pages); everything it SHOWS sits behind
+     the database rules and the PIN below, exactly like the POS tablet.      -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script>
+firebase.initializeApp({
+  apiKey: "AIzaSyBhUzwMR28dvulez9q6AZ4gZS80Y9VK0qQ",
+  authDomain: "kp-wallpanel.firebaseapp.com",
+  databaseURL: "https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "kp-wallpanel",
+  storageBucket: "kp-wallpanel.firebasestorage.app",
+  messagingSenderId: "794246593779",
+  appId: "1:794246593779:web:703fc0a4ba89ba58734b86"
+});
+var APPCHECK_SITE_KEY = '6LebwYgtAAAAAB9LWZ91x3eZfllT9mPsV3Y8Vfpv';
+function acReachable(){
+  return new Promise(function(res){
+    var to=setTimeout(function(){ res(false); }, 5000);
+    fetch('https://www.google.com/recaptcha/api.js',{mode:'no-cors'})
+      .then(function(){ clearTimeout(to); res(true); })
+      .catch(function(){ clearTimeout(to); res(false); });
+  });
+}
+var mAppCheckReady = new Promise(function(resolve){
+  var _acOff=false; try{ _acOff=localStorage.getItem('kpAcOff')==='1'; }catch(e){}
+  if(_acOff){ resolve(false); return; }
+  if(!APPCHECK_SITE_KEY || !firebase.appCheck){ resolve(false); return; }
+  function go(){
+    try{
+      if(/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || location.protocol==='file:'){
+        var _q=(location.search.match(/[?&]acdebug=([^&]+)/)||[])[1];
+        if(_q){ try{ localStorage.setItem('kpAcDebugToken', decodeURIComponent(_q)); }catch(e){} }
+        var _saved=''; try{ _saved=localStorage.getItem('kpAcDebugToken')||''; }catch(e){}
+        if(!_saved){ resolve(false); return; }     // unregistered token hangs the RTDB
+        self.FIREBASE_APPCHECK_DEBUG_TOKEN=_saved;
+      }
+      firebase.appCheck().activate(APPCHECK_SITE_KEY, true);
+      window._mAcOn=true; resolve(true);
+    }catch(e){ resolve(false); }
+  }
+  function whenBody(fn){ if(document.body) fn(); else setTimeout(function w(){ document.body?fn():setTimeout(w,5); },0); }
+  acReachable().then(function(ok){ ok ? whenBody(go) : resolve(false); });
+});
+var SEASON='v2';
+var _rootDb = firebase.database();
+var MDB = { ref:function(p){ return _rootDb.ref(SEASON+'/'+(p==null?'':p)); } };
+function _mAcRetry(){
+  try{
+    if(window._mAcOn && !sessionStorage.getItem('kpAcRetry')){
+      sessionStorage.setItem('kpAcRetry','1');
+      localStorage.setItem('kpAcOff','1');
+      setTimeout(function(){ location.reload(); }, 400);
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+function _mSignIn(attempt){
+  return firebase.auth().signInAnonymously()
+    .then(function(){ return true; })
+    .catch(function(){
+      if(_mAcRetry()) return false;
+      var wait=Math.min(30000, 2000*Math.pow(2, Math.min(attempt-1,4)));
+      return new Promise(function(res){ setTimeout(function(){ res(_mSignIn(attempt+1)); }, wait); });
+    });
+}
+var mAuthReady = mAppCheckReady.then(function(){ return _mSignIn(1); });
+</script>
+
+<style>
+:root{
+  --ground:#F2F3F1; --surface:#FBFBFA; --sunk:#E9EBE7;
+  --ink:#16191A; --ink2:#4A524E; --ink3:#79817C;
+  --line:#D8DAD5; --line2:#C3C7C0;
+  --gain:#0E7A5F; --cost:#B4552F; --accent:#0E7A5F;
+  --shadow:0 1px 2px rgba(22,25,26,.05), 0 8px 24px -12px rgba(22,25,26,.18);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#121513; --surface:#1A1E1C; --sunk:#0D100E;
+    --ink:#E8EBE7; --ink2:#A8B0AB; --ink3:#7C847F;
+    --line:#2C312E; --line2:#3D443F;
+    --gain:#46C79C; --cost:#E08A62; --accent:#46C79C;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.7);
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:"IBM Plex Sans",-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.55;
+  -webkit-font-smoothing:antialiased}
+.mono,td.n,th.n{font-variant-numeric:tabular-nums;
+  font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+.wrap{max-width:1150px;margin:0 auto;padding:0 16px 70px}
+
+/* ── PIN ── */
+#gate{position:fixed;inset:0;z-index:50;background:#14100A;color:#F5EFE0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:22px}
+#gate h1{font-size:20px;font-weight:700;margin:0;letter-spacing:.02em}
+#gate .sub{font-size:12.5px;color:#b6ad97;margin-top:-8px;text-align:center;max-width:34ch}
+.dots{display:flex;gap:11px;margin:4px 0 2px}
+.dot{width:14px;height:14px;border-radius:50%;border:1.5px solid #6b6250}
+.dot.on{background:#C9A227;border-color:#C9A227}
+.pad{display:grid;grid-template-columns:repeat(3,72px);gap:10px}
+.pad button{height:60px;border-radius:12px;border:1px solid #3a3428;background:#221d14;color:#F5EFE0;
+  font-size:21px;font-weight:700;cursor:pointer}
+.pad button:active{background:#332b1d}
+#gate .err{color:#e08a62;font-size:13px;min-height:19px;font-weight:600}
+
+/* ── page ── */
+header{padding:26px 0 14px;border-bottom:1px solid var(--line);display:flex;
+  align-items:flex-end;gap:12px;flex-wrap:wrap}
+header h1{font-size:23px;font-weight:700;margin:0;letter-spacing:-.01em;flex:1;min-width:180px}
+header .who{font-size:12px;color:var(--ink3)}
+button.lnk{border:1px solid var(--line2);background:var(--surface);color:var(--ink2);
+  border-radius:3px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer}
+button.lnk:hover{border-color:var(--accent);color:var(--accent)}
+
+.bar{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);
+  border-radius:3px;overflow:hidden;margin-top:16px;flex-wrap:wrap}
+.bar > div{background:var(--surface);padding:10px 13px;flex:1;min-width:124px}
+.bar label{display:block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink3);margin-bottom:4px;font-weight:600}
+.bar input{width:100%;border:1px solid var(--line2);border-radius:2px;background:var(--ground);
+  color:var(--ink);padding:5px 8px;font-size:15px;font-weight:600;text-align:right}
+
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:3px;background:var(--surface);
+  box-shadow:var(--shadow);margin-top:18px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:920px}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3);font-weight:600;
+  background:var(--sunk);position:sticky;top:0;z-index:2}
+td.n,th.n{text-align:right}
+tbody tr:hover td{background:var(--sunk)}
+tbody tr:last-child td{border-bottom:none}
+.lbl{font-weight:700}
+.codes{font-size:10.5px;color:var(--ink3);white-space:normal;max-width:230px;display:block;margin-top:2px}
+.best{color:var(--gain);font-weight:800}
+.miss{color:var(--ink3)}
+.warn{color:var(--cost);font-weight:700}
+.note{border-left:3px solid var(--accent);background:var(--surface);padding:13px 16px;
+  margin-top:18px;border-radius:0 3px 3px 0;font-size:13.5px;color:var(--ink2)}
+.note b{color:var(--ink)}
+#status{font-size:12px;color:var(--ink3);margin-top:9px;min-height:17px}
+footer{margin-top:34px;padding-top:15px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink3)}
+</style>
+
+<div id="gate">
+  <h1>🧮 KP Moulds</h1>
+  <div class="sub">ใส่ PIN / enter your PIN</div>
+  <div class="dots" id="dots"></div>
+  <div class="err" id="pin-err"></div>
+  <div class="pad" id="pad"></div>
+</div>
+
+<div class="wrap" id="app" style="display:none">
+  <header>
+    <h1>🧮 Moulds — Einkauf &amp; Umrechnung</h1>
+    <span class="who" id="who"></span>
+    <button type="button" class="lnk" id="out">Logout</button>
+  </header>
+
+  <div class="bar">
+    <div><label>Kurs THB / USD</label><input type="number" id="s-rate" step="0.0001"></div>
+    <div><label>Nebenkosten %</label><input type="number" id="s-fr" step="0.1"></div>
+    <div><label>Länge m</label><input type="number" id="s-len" step="0.01"></div>
+    <div><label>Zuschnitt m</label><input type="number" id="s-cut" step="0.01"></div>
+  </div>
+  <div id="status">verbinde …</div>
+
+  <div class="tw">
+    <table>
+      <thead><tr>
+        <th>Mould</th><th class="n">Breite</th><th class="n">Dicke</th><th class="n">Dekore</th>
+        <th class="n">Landed ฿/Stk</th><th class="n">฿/m</th><th class="n">฿/m²</th>
+        <th class="n">m²/Stk</th><th class="n">Zuschnitt ฿</th><th class="n">VK ฿/m²</th><th class="n">Marge</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <b>Die Zahlen kommen live aus der App.</b> Landed Cost aus der Einkaufspreis-Liste,
+    Maße und Verkaufspreise aus dem Katalog. Was ihr dort ändert, steht hier beim nächsten
+    Laden — es gibt keinen zweiten Datenstand, der veralten kann.
+    <br><br>
+    <b>Die Dicke steht nicht überall im Katalog.</b> Wo sie aus den Proforma-Rechnungen bekannt
+    ist, steht sie hier; sonst ein Fragezeichen und die Gruppe fasst nur nach Breite zusammen.
+    Solche Zeilen können mehrere Moulds mischen — an einer breiten Kostenspanne erkennt man das.
+  </div>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+/* ── MOULDS ────────────────────────────────────────────────────────────────
+   The catalogue carries the width of every panel but the thickness of only a
+   few, so grouping on the catalogue alone throws different moulds into one
+   row — 200×9 and 200×23 are both "20 cm". The real dimensions come off the
+   proforma invoices ("200*9*2900MM"), and those are what this table holds.
+   A code that is not listed still appears: it falls back to its catalogue
+   width with an unknown thickness, so a new product is never silently lost. */
+var MOULD=[
+  {w:300,t:8,  c:['K-PVC-09','K-PVC-10','K-PVC-11','K-PVC-12','K-PVC-13'], n:'PVC · flach'},
+  {w:265,t:8,  c:['K-PVC-01','K-PVC-02','K-PVC-03','K-PVC-06'], n:'PVC'},
+  {w:400,t:8,  c:['K-PVC-07','K-PVC-08'], n:'PVC'},
+  {w:200,t:12, c:['KP011','KP019','KP036','KP072'], n:'WPC'},
+  {w:200,t:9,  c:['KP021','KP035','KP052','KP053','KP054','KP076','KP077'], n:'WPC'},
+  {w:200,t:23, c:['KP048','KP049'], n:'WPC'},
+  {w:170,t:18, c:['KP030','KP063','KP064'], n:'WPC · 6 Rillen'},
+  {w:165,t:22, c:['KP005','KP009','KP014','KP028','KP061','KP073','KP074','KP075'], n:'WPC · gefräst'},
+  {w:163,t:10, c:['KP033','KP044','KP070'], n:'WPC'},
+  {w:155,t:9,  c:['KP010','KP050','KP051'], n:'WPC'}
+];
+var MOF={}; MOULD.forEach(function(m){ m.c.forEach(function(code){ MOF[code]=m; }); });
+
+var staffList=[], cost={}, cat={}, soldOut={}, me=null;
+var SET={rate:33.6346, fr:20, len:2.9, cut:0.95};
+var $=function(id){ return document.getElementById(id); };
+var num=function(v){ var x=parseFloat(v); return isFinite(x)?x:0; };
+var esc=function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+var f2=function(v){ return v.toFixed(2).replace('.',','); };
+var f0=function(v){ return Math.round(v).toLocaleString('de-DE'); };
+
+/* ── PIN ─────────────────────────────────────────────────────────────────
+   Only the accounting flag opens this page. Purchase prices and margins are
+   not something the office login should hand out, so posAllowed()'s rule
+   (any office person) is deliberately NOT reused here.                     */
+function allowed(s){ return !!(s && s.active!==false && s.acctAccess); }
+
+var pin='';
+function dots(){
+  $('dots').innerHTML=[0,1,2,3].map(function(i){
+    return '<div class="dot'+(i<pin.length?' on':'')+'"></div>'; }).join('');
+}
+function pad(d){
+  if(d==='<'){ pin=pin.slice(0,-1); dots(); return; }
+  if(pin.length>=4) return;
+  pin+=d; dots();
+  if(pin.length===4) setTimeout(tryPin, 90);
+}
+function tryPin(){
+  var s=staffList.find(function(x){ return allowed(x) && String(x.pin||'')===pin; });
+  if(!s){
+    // Ein richtiger PIN ohne Recht sieht sonst aus wie ein falscher PIN, und man
+    // sucht am falschen Ende. Also die beiden Faelle auseinanderhalten.
+    var any=staffList.find(function(x){ return String(x.pin||'')===pin; });
+    197610'pin-err').textContent = !staffList.length ? 'ยังโหลดไม่เสร็จ / still loading'
+      : any ? (any.name+': ไม่มีสิทธิ์บัญชี / no accounting access')
+            : 'PIN ไม่ถูกต้อง / wrong PIN';
+    pin=''; dots(); return;
+  }
+  me=s; $('pin-err').textContent='';
+  try{ localStorage.setItem('kp-mould-session', JSON.stringify({id:me.id, ts:Date.now()})); }catch(e){}
+  open_();
+}
+function open_(){
+  $('gate').style.display='none';
+  $('app').style.display='';
+  $('who').textContent=me?me.name:'';
+  render();
+}
+$('pad').innerHTML=['1','2','3','4','5','6','7','8','9','','0','<']
+  .map(function(k){ return k?'<button type="button" data-k="'+k+'">'+(k==='<'?'⌫':k)+'</button>':'<span></span>'; }).join('');
+$('pad').addEventListener('click', function(e){
+  var k=e.target && e.target.getAttribute && e.target.getAttribute('data-k');
+  if(k) pad(k);
+});
+document.addEventListener('keydown', function(e){
+  if($('gate').style.display==='none') return;
+  if(/^[0-9]$/.test(e.key)) pad(e.key);
+  else if(e.key==='Backspace') pad('<');
+});
+dots();
+$('out').addEventListener('click', function(){
+  try{ localStorage.removeItem('kp-mould-session'); }catch(e){}
+  location.reload();
+});
+
+/* ── settings, per device ── */
+try{ var sv=JSON.parse(localStorage.getItem('kp-mould-set')||'null'); if(sv) SET=Object.assign(SET,sv); }catch(e){}
+['rate','fr','len','cut'].forEach(function(k){
+  var el=$('s-'+k); el.value=SET[k];
+  el.addEventListener('input', function(){
+    SET[k]=num(el.value)|| (k==='fr'?0:SET[k]);
+    try{ localStorage.setItem('kp-mould-set', JSON.stringify(SET)); }catch(e){}
+    render();
+  });
+});
+
+/* ── grouping + maths ── */
+function groupKey(code){
+  var m=MOF[code];
+  if(m) return m.w+'x'+m.t;
+  var w=num((cat[code]||{}).w);
+  return w ? w*10+'x?' : 'x?';               // catalogue width is in cm, mould in mm
+}
+function build(){
+  var G={};
+  Object.keys(cat).forEach(function(code){
+    var p=cat[code]; if(!p || (p.mat!=='WPC' && p.mat!=='PVC')) return;
+    var m=MOF[code], key=groupKey(code);
+    var g=G[key]||(G[key]={ w:m?m.w:num(p.w)*10, t:m?m.t:null, mat:p.mat,
+                            name:m?m.n:'', codes:[], landed:[], sell:[], out:0 });
+    g.codes.push(code);
+    if(soldOut[code]) g.out++;
+    if(num(cost[code])>0) g.landed.push(num(cost[code]));
+    if(num(p.price)>0) g.sell.push(num(p.price));
+  });
+  return Object.keys(G).map(function(k){ return G[k]; });
+}
+var avg=function(a){ return a.length ? a.reduce(function(x,y){ return x+y; },0)/a.length : 0; };
+
+function render(){
+  if(!me) return;
+  var list=build();
+  list.forEach(function(g){
+    g.la=avg(g.landed);
+    g.se=avg(g.sell);
+    g.area=(SET.len||2.9)*(g.w/1000);
+    g.perM=(SET.len>0)?g.la/SET.len:0;
+    g.sqm=g.area>0?g.la/g.area:0;
+    g.vkSqm=g.area>0?g.se/g.area:0;
+  });
+  list.sort(function(a,b){ return (a.sqm||1e9)-(b.sqm||1e9); });
+  var best=Math.min.apply(null, list.map(function(g){ return g.sqm>0?g.sqm:1e9; }));
+
+  $('rows').innerHTML=list.map(function(g){
+    var spread = g.landed.length>1
+      && (Math.max.apply(null,g.landed)-Math.min.apply(null,g.landed))/Math.max(1,Math.min.apply(null,g.landed)) > 0.25;
+    var marge = (g.vkSqm>0 && g.sqm>0) ? (g.vkSqm-g.sqm)/g.vkSqm*100 : null;
+    return '<tr>'
+      +'<td class="lbl">'+esc(g.mat+' '+(g.name||''))
+        +'<span class="codes">'+esc(g.codes.join(', '))
+        +(g.out?' · '+g.out+' ausverkauft':'')
+        +(spread?' · <span class="warn">Kostenspanne groß — mischt evtl. Moulds</span>':'')+'</span></td>'
+      +'<td class="n mono">'+g.w+' mm</td>'
+      +'<td class="n mono">'+(g.t?g.t+' mm':'<span class="miss">?</span>')+'</td>'
+      +'<td class="n mono">'+g.codes.length+'</td>'
+      +'<td class="n mono">'+(g.la?f2(g.la):'<span class="miss">—</span>')+'</td>'
+      +'<td class="n mono">'+(g.perM?f2(g.perM):'<span class="miss">—</span>')+'</td>'
+      +'<td class="n mono'+(g.sqm>0 && Math.abs(g.sqm-best)<0.01?' best':'')+'">'
+        +(g.sqm?f0(g.sqm):'<span class="miss">—</span>')+'</td>'
+      +'<td class="n mono">'+f2(g.area)+'</td>'
+      +'<td class="n mono">'+(g.perM?f2(g.perM*(SET.cut||0)):'<span class="miss">—</span>')+'</td>'
+      +'<td class="n mono">'+(g.vkSqm?f0(g.vkSqm):'<span class="miss">—</span>')+'</td>'
+      +'<td class="n mono">'+(marge!=null?f0(marge)+' %':'<span class="miss">—</span>')+'</td>'
+      +'</tr>';
+  }).join('');
+
+  var noCost=[];
+  Object.keys(cat).forEach(function(c){
+    var p=cat[c]; if(p && (p.mat==='WPC'||p.mat==='PVC') && !(num(cost[c])>0)) noCost.push(c);
+  });
+  $('foot').innerHTML='Stand: live aus der App · '+list.length+' Moulds · '
+    +Object.keys(cat).length+' Produkte im Katalog'
+    +(noCost.length?' · <span class="warn">ohne Kostenwert: '+esc(noCost.join(', '))+'</span>':'');
+}
+
+/* ── live data ── */
+function sub(){
+  MDB.ref('staffList').on('value', function(s){
+    staffList=s.val()||[];
+    if(!Array.isArray(staffList)) staffList=Object.keys(staffList).map(function(k){ return staffList[k]; });
+    if(!me){
+      try{
+        var ses=JSON.parse(localStorage.getItem('kp-mould-session')||'null');
+        if(ses && (Date.now()-ses.ts)<4*3600*1000){
+          var s2=staffList.find(function(x){ return x.id===ses.id && allowed(x); });
+          if(s2){ me=s2; open_(); }
+        }
+      }catch(e){}
+    }
+  });
+  MDB.ref('acctData/cost').on('value', function(s){ cost=s.val()||{}; render(); mark(); });
+  MDB.ref('webCatalog').on('value',    function(s){ cat=s.val()||{};  render(); mark(); });
+  _rootDb.ref('pub/soldOut').on('value', function(s){ soldOut=s.val()||{}; render(); });
+}
+function mark(){
+  var n=Object.keys(cat).length;
+  $('status').textContent = n ? ('verbunden · '+n+' Produkte, '+Object.keys(cost).length+' Kostenwerte')
+                              : 'warte auf Daten …';
+}
+mAuthReady.then(function(){ sub(); }).catch(function(){
+  $('status').textContent='Keine Verbindung zur Datenbank.';
+});
+</script>
