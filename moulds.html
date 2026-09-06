@@ -168,6 +168,13 @@ td{padding:9px 10px;border-bottom:1px solid #282850;white-space:nowrap;
 td:first-child{width:92px;padding:9px 0 9px 10px}
 td.n,th.n{text-align:right}
 th{vertical-align:bottom}
+/* Sortierbare Köpfe. Der Pfeil steht im ::after, damit die Spaltenbreite beim
+   Umschalten nicht springt — er ist immer da, nur meist leer. */
+th.s{cursor:pointer;user-select:none}
+th.s:hover{color:var(--coin)}
+th.s::after{content:attr(data-dir);display:inline-block;width:1.1em;
+  text-align:center;color:var(--coin)}
+th.s.act{color:var(--coin)}
 td.mono,.mono{font-family:var(--num);font-variant-numeric:tabular-nums;font-size:15.5px}
 tbody tr:nth-child(even) td{background:rgba(255,255,255,.028)}
 tbody tr:hover td{background:rgba(107,176,245,.13)}
@@ -251,10 +258,11 @@ footer{margin-top:30px;padding-top:15px;border-top:3px solid var(--edge);
   <div class="tw">
     <table>
       <thead><tr>
-        <th></th><th>Mould</th>
-        <th class="n">Einkauf ฿/Stk</th>
-        <th class="n">Fracht ฿/Stk</th>
-        <th class="n">Gesamt ฿/Stk</th>
+        <th></th>
+        <th class="s" data-s="mould">Mould</th>
+        <th class="n s" data-s="goods">Einkauf ฿/Stk</th>
+        <th class="n s" data-s="frei">Fracht ฿/Stk</th>
+        <th class="n s" data-s="tot">Gesamt ฿/Stk</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -326,6 +334,14 @@ var MOF={}; MOULD.forEach(function(m){ m.c.forEach(function(code){ MOF[code]=m; 
 
 var staffList=[], cost={}, cat={}, soldOut={}, me=null;
 var SET={rate:33.6346, fr:20, len:2.9, cont:120000};
+// Sortierung merkt sich das Gerät — sie ist eine Ansichtssache, keine Firmenzahl.
+var SORT={k:'tot', d:1};
+try{ var _sv=JSON.parse(localStorage.getItem('kp-mould-sort')||'null'); if(_sv&&_sv.k) SORT=_sv; }catch(e){}
+function sortBy(k){
+  SORT = (SORT.k===k) ? {k:k, d:-SORT.d} : {k:k, d:1};
+  try{ localStorage.setItem('kp-mould-sort', JSON.stringify(SORT)); }catch(e){}
+  render();
+}
 var $=function(id){ return document.getElementById(id); };
 var num=function(v){ var x=parseFloat(v); return isFinite(x)?x:0; };
 var esc=function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -395,6 +411,9 @@ document.addEventListener('keydown', function(e){
   else if(e.key==='Enter') pad('✓');
 });
 dots();
+document.querySelectorAll('th.s').forEach(function(th){
+  th.addEventListener('click', function(){ sortBy(th.getAttribute('data-s')); });
+});
 $('out').addEventListener('click', function(){
   try{ localStorage.removeItem('kp-mould-session'); }catch(e){}
   location.reload();
@@ -447,8 +466,27 @@ function render(){
     g.frei  = g.pcs>0 ? (SET.cont||0)/g.pcs : 0;    // Frachtanteil je Stück
     g.tot   = g.goods>0 ? g.goods+g.frei : 0;
   });
-  list.sort(function(a,b){ return (a.tot||1e9)-(b.tot||1e9); });
+  /* Sortierung liegt beim Nutzer: Kopfzeile anklicken, nochmal klicken dreht
+     um. Leere Werte wandern immer ans Ende, egal in welche Richtung sortiert
+     wird — sonst stünde bei absteigend eine Reihe Striche ganz oben. */
+  var key=SORT.k, dir=SORT.d;
+  list.sort(function(a,b){
+    if(key==='mould'){
+      if(a.mat!==b.mat) return (a.mat<b.mat?-1:1)*dir;
+      return (a.w-b.w||a.t-b.t)*dir;
+    }
+    var A=a[key]||0, B=b[key]||0;
+    if(!A && !B) return 0;
+    if(!A) return 1;                 // ohne Wert immer nach unten
+    if(!B) return -1;
+    return (A-B)*dir;
+  });
   var best=Math.min.apply(null, list.map(function(g){ return g.tot>0?g.tot:1e9; }));
+  document.querySelectorAll('th.s').forEach(function(th){
+    var on=th.getAttribute('data-s')===key;
+    th.setAttribute('data-dir', on ? (dir>0?'▲':'▼') : '');
+    th.classList.toggle('act', on);
+  });
 
   $('rows').innerHTML=list.map(function(g){
     var shot=g.codes.find(function(c){ return !soldOut[c]; }) || g.codes[0];
