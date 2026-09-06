@@ -40849,6 +40849,70 @@ function pfExpGrey(blk,c){
   if(blk.kind==='finsal'){ var st=(staffList||[]).find(function(s){ return s.id===c.id; }); return !!(st&&st.finPayGrey); }
   try{ return finBillIsGrey(_finBillKey(blk,c)); }catch(e){ return false; }
 }
+/* ── STILL TO PAY ─────────────────────────────────────────────────────────
+   Rent, water, power and every salary are settled at the END of the month.
+   Their AMOUNT is known from the first day — the fixed-cost line carries over
+   from last month and the payroll grid computes the month — but whether the
+   money has actually left the account is something the app cannot know until
+   somebody says so. Until this tick existed, blue claimed it had.
+
+   Ticked  = paid, counted blue exactly as before.
+   Unticked = still expected: the figure goes grey and is summed into
+   "voraussichtlich zum Monatsende" underneath.
+
+   Deliberately NOT the same grey as pfExpGrey above. That one means "park
+   this, do not count it at all". This one means "it will be paid, just not
+   yet" — the two must never be read as the same thing, which is why this one
+   is never called grey in the interface, only "ยังไม่จ่าย / not yet".        */
+function pfDueKind(blk){
+  if(!blk) return '';
+  if(blk.kind==='fixed')  return 'fx';
+  if(blk.kind==='finsal') return 'sal';
+  return '';
+}
+// Firebase keys may not hold . # $ / [ ] — sanitise HERE so the value written
+// and the value read back are the same string, not two that drift apart.
+function pfPaidKey(blk,c){
+  var k=pfDueKind(blk); if(!k) return '';
+  return (k+':'+String((c&&(c.id||c.label))||'')).replace(/[.#$/\[\]]/g,'_').slice(0,90);
+}
+function pfIsPaid(mk,key){
+  if(!key) return true;                       // not a month-end item: always "paid"
+  try{ return !!(((acctData.pfPaid||{})[mk]||{})[key]); }catch(e){ return true; }
+}
+function pfTogglePaid(mk,key,label){
+  if(!key) return;
+  var now=false;
+  try{
+    acctData.pfPaid=acctData.pfPaid||{};
+    acctData.pfPaid[mk]=acctData.pfPaid[mk]||{};
+    now=!acctData.pfPaid[mk][key];
+    if(now) acctData.pfPaid[mk][key]=1; else delete acctData.pfPaid[mk][key];
+    // Field-level write: acSync() would push the whole acctData node and wipe
+    // whatever another device changed in the meantime.
+    if(window.fbDB){
+      var ref=window.fbDB.ref('acctData/pfPaid/'+mk+'/'+key);
+      if(now) ref.set(1); else ref.remove();
+    }
+  }catch(e){}
+  try{ auditAdd({type:'payment', area:'finance', orderId:'💸 '+mk,
+    by:(typeof currentStaffName!=='undefined'?currentStaffName:''),
+    detail:(now?'จ่ายแล้ว / marked paid':'ยังไม่จ่าย / unmarked')+' — '+(label||key)}); }catch(e){}
+  pfRender();
+}
+// The pill in the row. Clicking it must not also fold the row open.
+function pfPaidPill(mk,pk,label,paid){
+  if(!pk) return '';
+  var safe=String(label||'').replace(/['\\]/g,'');
+  return '<span onclick="event.stopPropagation();pfTogglePaid(\''+mk+'\',\''+pk+'\',\''+_esc(safe)+'\')" '
+    +'title="'+(paid?'จ่ายแล้ว — กดเพื่อยกเลิก / paid, tap to undo':'ยังไม่จ่าย — กดเมื่อจ่ายแล้ว / not paid yet, tap when it is')+'" '
+    +'style="display:inline-block;margin-left:7px;padding:1px 8px;border-radius:20px;cursor:pointer;'
+    +'font-size:10px;font-weight:800;white-space:nowrap;'
+    +(paid?'background:#dcfce7;color:#166534;border:1px solid #86efac'
+          :'background:var(--bg2);color:var(--text3);border:1px dashed var(--border)')+'">'
+    +(paid?'✓ จ่ายแล้ว':'☐ ยังไม่จ่าย')+'</span>';
+}
+
 function pfExpenses(mk){
   var data=null; try{ data=billsCostData(mk,{finance:true, finSalaries:true}); }catch(e){}
   var blocks=[], grey=[], blue=0, greyTot=0;
@@ -41275,17 +41339,36 @@ function pfRender(){
         +'goods and container money is already inside the per-piece purchase cost and comes off when the pieces are sold. Booked as an expense as well, it is subtracted twice.<br>'
         +'<b>'+_esc(dup.slice(0,6).join(' · '))+(dup.length>6?' +'+(dup.length-6):'')+'</b></div></div>';
     b+='<div style="font-size:11.5px;font-weight:800;color:var(--text);margin:12px 0 2px">🗂️ ทุกกลุ่ม ทุกใบเสร็จ / Every group, every receipt</div>';
+    var _pfOpen=0;                       // was am Monatsende noch fällig wird
     exp.blocks.forEach(function(g,gi){
       var gk='pf-g'+gi+'-'+pfKey(g.blk.label);
+      var gOpen=0;
       var inner=g.kids.map(function(c,ci){
         var ck=gk+'-c'+ci+'-'+pfKey(c.id||c.label);
-        return pfSub(ck,false,_esc(c.label||'—'),
-          (c.items?c.items.length+' รายการ / entries':(c.lines?c.lines.length+' บรรทัด / lines':(c.rows?c.rows.length+' ออเดอร์ / orders':''))),
-          pfM(c.total||0),'var(--text)',pfKidDetail(g.blk,c), g.total>0?(c.total||0)/g.total*100:0,'var(--blue)');
+        var pk=pfPaidKey(g.blk,c), paid=pfIsPaid(mk,pk);
+        if(pk && !paid){ gOpen+=(c.total||0); _pfOpen+=(c.total||0); }
+        return pfSub(ck,false,_esc(c.label||'—')+pfPaidPill(mk,pk,c.label,paid),
+          (pk&&!paid ? 'ยังไม่จ่าย รอสิ้นเดือน / not paid yet, due at month end'
+            : (c.items?c.items.length+' รายการ / entries':(c.lines?c.lines.length+' บรรทัด / lines':(c.rows?c.rows.length+' ออเดอร์ / orders':'')))),
+          pfM(c.total||0),(pk&&!paid)?'var(--text3)':'var(--text)',pfKidDetail(g.blk,c),
+          g.total>0?(c.total||0)/g.total*100:0,(pk&&!paid)?'var(--text3)':'var(--blue)');
       }).join('');
-      b+=pfSub(gk,false,_esc(g.blk.label),g.kids.length+' หมวด / categories'+(t.blue>0?' · '+pfP(g.total/t.blue*100)+' ของรายจ่าย / of expenses':''),
+      b+=pfSub(gk,false,_esc(g.blk.label),g.kids.length+' หมวด / categories'
+        +(t.blue>0?' · '+pfP(g.total/t.blue*100)+' ของรายจ่าย / of expenses':'')
+        +(gOpen>0?' · <b style="color:var(--text3)">ยังไม่จ่าย '+pfM(gOpen)+'</b>':''),
         pfM(g.total),'var(--blue)',inner, t.blue>0?g.total/t.blue*100:0,'var(--blue)');
     });
+    if(_pfOpen>0) b+='<div style="border:1px dashed var(--border);border-radius:10px;background:var(--bg2);padding:10px 12px;margin-top:8px">'
+      +'<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">'
+        +'<span style="font-size:12px;font-weight:800;color:var(--text2)">⏳ ยังไม่จ่าย รอสิ้นเดือน / still to pay this month</span>'
+        +'<span style="font-size:14px;font-weight:800;color:var(--text3);font-variant-numeric:tabular-nums">'+pfM(_pfOpen)+'</span></div>'
+      +'<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline;margin-top:5px;padding-top:5px;border-top:1px solid var(--border)">'
+        +'<span style="font-size:12px;font-weight:800;color:var(--text)">📅 รายจ่ายทั้งเดือน (คาด) / expenses at month end</span>'
+        +'<span style="font-size:14px;font-weight:900;color:var(--blue);font-variant-numeric:tabular-nums">'+pfM(t.blue+_pfOpen)+'</span></div>'
+      +'<div style="font-size:10.5px;color:var(--text2);margin-top:5px;line-height:1.5">'
+        +'ค่าเช่า น้ำไฟ และเงินเดือน จ่ายสิ้นเดือน — ยอดรู้ตั้งแต่ต้นเดือน แต่ยังไม่ออกจากบัญชี กดติ๊กเมื่อจ่ายแล้ว<br>'
+        +'rent, utilities and wages are settled at month end. The amount is known from day one, the payment is not — tick a line once it is actually paid.</div></div>';
+
     if(exp.grey.length){
       var gb=exp.grey.map(function(g,gi){
         var gk='pf-gy'+gi+'-'+pfKey(g.blk.label);
