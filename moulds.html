@@ -574,12 +574,6 @@ h2.ch{font-family:"Press Start 2P",monospace;font-size:13px;color:var(--coin);
       <input type="checkbox" id="c-ovh" checked style="width:17px;height:17px;accent-color:#58D858">
       Betriebsanteil</label>
       <span class="chint" id="c-ovhhint"></span></span>
-    <span class="og"><label>Euer Preis ฿</label>
-      <input type="number" id="c-sell" value="" min="0" step="1" placeholder="leer = Minimum">
-      <span class="chint" id="c-sellhint"></span></span>
-    <span class="og"><label>Stück je Paket</label>
-      <input type="number" id="c-per" value="12" min="1" step="1">
-      <span class="chint" id="c-perhint"></span></span>
   </div>
 
   <div class="cout">
@@ -1461,7 +1455,7 @@ $('o-add').addEventListener('click', ovEigener);
    Die Eingaben liegen unter mktCalc, also auf jedem Gerät gleich: was André
    im Büro eintippt, steht abends auf dem Handy schon da.
    ══════════════════════════════════════════════════════════════════════════ */
-var CFELD=['c-mould','c-len','c-plat','c-aff','c-sell','c-per','c-ovh'];
+var CFELD=['c-mould','c-len','c-plat','c-aff','c-ovh'];
 var CSTORE='kp-mould-calc';
 var calcSet={}, _cSaveT=null, _cFirst=true;
 
@@ -1549,6 +1543,22 @@ function calcFill(){
   else if(kann(calcSet['c-mould'])) sel.value=calcSet['c-mould'];
   else { var e=list.find(function(g){ return +g.usd>0; }); if(e) sel.value=e.id; }
 }
+function ladenVergleich(g, mindest, jePanele){
+  var p=cat[g.code] || cat[ovNorm(g.code)];
+  var laden=p && +p.price>0 ? +p.price : 0;
+  var jePan=mindest*jePanele;
+  var t='<div style="margin-bottom:10px">Aus einem 2,90-m-Paneel werden '+jePanele+' Stück, '
+    +'zum Mindestpreis zusammen <b>'+f2(jePan)+' ฿</b>.';
+  if(laden>0){
+    t+=' Dasselbe Paneel bringt im Laden <b>'+f0(laden)+' ฿</b> — '
+      +(jePan<laden
+        ? 'der Marktplatz muss also <b style="color:var(--pipe)">'+f2(laden/jePan*100-100)+' %</b> '
+          +'über dem Minimum liegen, um mit dem Laden gleichzuziehen.'
+        : '<span class="warn">der Zuschnitt für den Marktplatz kostet euch also mehr, als das '
+          +'ganze Paneel im Laden einbringt.</span>');
+  }
+  return t+'</div>';
+}
 function calcRun(){
   if(!me) return;
   var sel=$('c-mould'); if(!sel) return;
@@ -1560,7 +1570,6 @@ function calcRun(){
 
   var geb    = cNum('c-plat')/100;
   var aff    = cNum('c-aff')/100;
-  var jePaket= Math.max(1, cNum('c-per'));
 
   /* Wie viele Schnitte kostet EIN Stück? Aus 2,90 m fallen n ganze Stücke.
      Bleibt ein Rest, braucht auch das letzte einen eigenen Schnitt, sonst wäre
@@ -1576,13 +1585,15 @@ function calcRun(){
   var material = t.tot;
 
   var km       = calcKgM(g);
-  var paketKg  = km.kg*lenM*jePaket;
+  var stkKg    = km.kg*lenM;                      // ein Stück
   var lang     = lenM*100 + 3;                    // Karton ≈ Paneel + 3 cm
   var sperr    = lang>100;
-  var tab      = sperr?BULK_SELLER:STD_SELLER, zeile=null;
-  for(var i=0;i<tab.length;i++){ if(paketKg<=tab[i][0]){ zeile=tab[i]; break; } }
-  var versand  = (zeile?zeile[1]:tab[tab.length-1][1])/jePaket;
-  var zuSchwer = !sperr && paketKg>20;
+  /* Der Verkäuferanteil am Versand steht hier NICHT mehr drin: er ist ein fester
+     Betrag JE PAKET in Gewichtsstufen, also erst bekannt, wenn die Paketgröße
+     feststeht — und er liegt zwischen 0,20 und 0,35 ฿ je Stück, unter dem
+     Rundungsschritt eines Preises. Lieber weglassen als eine Paketgröße
+     unterstellen, die dann keiner mehr sieht. */
+  var versand  = 0;
 
   /* Der Mindestpreis: Gebühr und Provision hängen am Verkaufspreis, alles
      andere nicht. Also
@@ -1605,24 +1616,15 @@ function calcRun(){
   var teiler = 1 - geb - aff;
   var moeglich = teiler > 0.02;
   var mindest= moeglich ? fest/teiler : 0;
-  var eigen  = cNum('c-sell');                       // leer = kein eigener Preis
-  var preis  = (eigen>0) ? eigen : mindest;
+  var preis  = mindest;
   var gebuehr  = preis*geb;
   var provision= preis*aff;
-  var gewinn = preis*teiler - fest;
+  var gewinn = 0;
 
   // Was der Zuschnitt vor jeder Arbeit kostet — gehoert neben die Auswahl.
   var lh=$('c-lenhint'); if(lh) lh.textContent=f0(lenM*100)+' cm';
   var mh=$('c-mhint');
   if(mh) mh.textContent=f2(t.goods)+' + '+f2(t.frei)+' ฿ Ware · '+f2(material/lenM)+' ฿/m';
-  var sh2=$('c-sellhint');
-  if(sh2) sh2.innerHTML = eigen>0
-    ? (gewinn>=0 ? '<b style="color:var(--pipe)">+'+f2(gewinn)+' ฿</b> je Stück · '
-                    +f2(preis>0?gewinn/preis*100:0)+' % vom Preis'
-                 : '<span class="warn">'+f2(gewinn)+' ฿ — unter dem Minimum</span>')
-    : 'leer lassen, dann steht unten das Minimum';
-  var ph2=$('c-perhint');
-  if(ph2) ph2.textContent='Paket '+f2(paketKg)+' kg · Versandanteil '+f2(versand)+' ฿ je Stück';
   var oh=$('c-ovhhint');
   if(oh) oh.textContent = oa.ok ? (ovhAn ? '+ '+f2(oa.v)+' ฿ · '+oa.txt : 'aus — nur Ware und Zuschnitt')
                                 : 'noch kein Monat erfasst';
@@ -1635,29 +1637,27 @@ function calcRun(){
     $('c-be').innerHTML=''; cSave(); return;
   }
 
-  var zn=[[(eigen>0?'Euer Preis':'Mindestpreis'), preis, '']];
+  var zn=[['Mindestpreis', preis, '']];
   if(geb>0)       zn.push(['Plattformgebühr · '+f2(geb*100)+' %', -gebuehr, 'neg']);
   if(provision>0) zn.push(['Affiliate', -provision, 'neg']);
   zn.push(['Material · Einkauf '+f2(t.goods)+' + Fracht '+f2(t.frei), -material, 'neg']);
   if(gemein>0) zn.push(['Betriebsanteil · '+oa.txt, -gemein, 'neg']);
-  zn.push(['Versandanteil', -versand, 'neg']);
 
   var html=zn.map(function(z){
     return '<div class="cw '+z[2]+'"><span class="cl">'+esc(z[0])+'</span><span>'
       +(z[1]<0?'−':'')+f2(Math.abs(z[1]))+' ฿</span></div>';
   }).join('');
-  html+='<div class="cw sum'+(gewinn<0?' bad':'')+'"><span class="cl">'
-    +(eigen>0?'Gewinn je Stück':'Gewinn bei diesem Preis')+'</span><span>'
+  html+='<div class="cw sum"><span class="cl">bleibt übrig</span><span>'
     +f2(gewinn)+' ฿</span></div>';
-  html+='<div class="cfoot">Mindestpreis <b>'+f2(mindest)+' ฿</b> — darunter zahlt ihr drauf. '
-    +'Jeder Baht darüber bringt euch <b>'+f2(teiler)+' ฿</b>, den Rest nimmt die Plattform.</div>';
+  html+='<div class="cfoot">Genau null — das ist ja der Mindestpreis. '
+    +'Jeder Baht, den ihr darüber verlangt, bringt euch <b>'+f2(teiler)+' ฿</b>; '
+    +'den Rest nimmt die Plattform.</div>';
   html+='<div class="cfoot">Aus einem 2,90-m-Paneel fallen <b>'+jePanele+'</b> Stück, '
-    +'das kostet '+f2(jeStk)+' Schnitte je Stück · '
-    +'Paket mit '+jePaket+' Stück wiegt <b>'+f2(paketKg)+' kg</b>'
+    +'das kostet '+f2(jeStk)+' Schnitte je Stück. Ein Stück wiegt <b>'+f2(stkKg)+' kg</b>'
     +(km.echt?'':' <span class="miss">(geschätzt, kg/m fehlt oben)</span>')
-    +', ist '+f0(lang)+' cm lang → <b>'+(sperr?'Sperrgut':'Standardversand')+'</b>'
-    +(zuSchwer?' <span class="warn">· über 20 kg, muss doch als Sperrgut</span>':'')
+    +' und ist '+f0(lang)+' cm lang → <b>'+(sperr?'Sperrgut':'Standardversand')+'</b>'
     +(!sperr&&lang>97?' <span class="warn">· dicht an der 100-cm-Grenze</span>':'')
+    +'. 20 kg Standardgrenze sind damit '+Math.floor(20/stkKg)+' Stück je Paket.'
     +'<br>Ein 40HQ auf dieser Länge: '+f0(t.pcs)+' Stück.</div>';
   $('c-wf').innerHTML=html;
 
@@ -1666,30 +1666,21 @@ function calcRun(){
      an dieser Stelle würde die beiden echten entwerten. */
   var ohneGem = material + versand;                     // ohne Betriebsanteil
   var pDeck   = ohneGem/teiler;
-  var jePan   = gewinn*jePanele;
   $('c-be').innerHTML=
      '<div class="cw sum" style="margin-top:0"><span class="cl">Mindestpreis</span><span>'
       +f2(mindest)+' ฿</span></div>'
-    +'<div style="margin:10px 0">Darunter zahlt ihr drauf. Er enthält alles: die Ware, den Anteil '
-      +'am Betrieb, euren Versandanteil und die Plattformgebühr. '
+    +'<div style="margin:10px 0">Darunter zahlt ihr drauf. Er enthält die Ware samt Fracht, den '
+      +'Anteil am Betrieb und die Plattformgebühr. '
       +(gemein>0?'':'<span class="warn">Der Betriebsanteil ist gerade abgeschaltet — dieser Preis '
         +'trägt Halle, Büro und Werbung also nicht.</span>')+'</div>'
     +'<div style="margin-bottom:10px"><b>'+f2(pDeck)+' ฿</b> ist die absolute Untergrenze für eine '
       +'einzelne Zusatzmenge — ohne Betriebsanteil, weil Halle und Löhne an dem Tag ohnehin laufen. '
       +'Zwischen '+f2(pDeck)+' und '+f2(mindest)+' ฿ verdient ihr am Stück, tragt den Betrieb aber '
       +'nicht mit. Für einen einzelnen Auftrag in Ordnung, als Listenpreis nicht.</div>'
-    +(eigen>0
-      ? '<div style="margin-bottom:10px">Bei eurem Preis von <b>'+f0(eigen)+' ฿</b> bleiben '
-        +(gewinn>=0
-          ? '<b style="color:var(--pipe)">'+f2(gewinn)+' ฿</b> je Stück, das sind '
-            +f2(gewinn/eigen*100)+' % vom Preis und <b>'+f2(jePan)+' ฿</b> je 2,90-m-Paneel.'
-          : '<span class="warn">'+f2(gewinn)+' ฿</span> — der Preis liegt unter dem Minimum.')
-        +'</div>'
-      : '<div style="margin-bottom:10px">Trag oben einen Preis ein, den ihr am Markt für machbar '
-        +'haltet — dann steht hier, was dabei je Stück und je Paneel hängen bleibt.</div>')
-    +'<div style="font-size:12.5px;color:var(--ink3)">Aus einem 2,90-m-Paneel werden '+jePanele+' Stück, '
-      +'der Betriebsanteil je Paneel verteilt sich also auf '+jePanele+'. Mehr Stück je Paket senken '
-      +'nur den Versandanteil — von '+f2(versand)+' ฿ je Stück ist da wenig zu holen.</div>';
+    +ladenVergleich(g, mindest, jePanele)
+    +'<div style="font-size:12.5px;color:var(--ink3)">Der Verkäuferanteil am Versand steckt hier '
+      +'nicht drin — er ist ein fester Betrag je Paket und liegt je nach Paketgröße zwischen 0,20 '
+      +'und 0,35 ฿ je Stück.</div>';
   cSave();
 }
 /* Von render() gerufen: Auswahl auffrischen, dann neu rechnen. */
