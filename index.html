@@ -9536,8 +9536,9 @@ function printReceiptDoc(bodyHTML, cssOverride, w, h){
    flowing them, which is why there is no arithmetic here. min-height 96 mm keeps
    a label a label (3 × 96 = 288 mm, comfortably inside 297); max-height 148 mm
    guarantees at least two per sheet however long the address gets.
-   Cut along any dashed line. Several cartons → one label per carton, numbered
-   กล่อง 1/2.
+   Cut along any dashed line. One label per package: every carton gets its own
+   (กล่อง 1/2) and every bundle its own (มัด 1/1), so an order of 2 cartons
+   plus 1 bundle prints three labels.
 ════════════════════════════════════════════════════════════════════════════ */
 var LABEL_PRINT_CSS = '@page{size:A4 portrait;margin:0}'
   +'*{box-sizing:border-box}'
@@ -9570,7 +9571,7 @@ function _lblPhone(p){
 }
 // Font sizes follow the text length — a short Thai name gets the full 46pt, a long
 // one shrinks instead of spilling off a label nobody can re-cut.
-function _labelPageHTML(o, name, addr, tel, idx, total){
+function _labelPageHTML(o, name, addr, tel, pk){
   var esc=function(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
   // Sizes tuned so an ordinary name + address lands inside the 96 mm minimum,
   // which is what leaves room for a third label. A long address grows past it and
@@ -9587,10 +9588,20 @@ function _labelPageHTML(o, name, addr, tel, idx, total){
   var dateTxt=o.date ? (function(){ try{ return fmtD(o.date); }catch(e){ return String(o.date); } })() : '—';
   // The tour ID is stamped onto the order as tourNo; blank until it joins a tour.
   var tourTxt=(typeof tidOk==='function' && tidOk(o.tourNo)) ? esc(o.tourNo) : '—';
+  var nc=parseInt(o.ctn,10)||0, nb=parseInt(o.bundle,10)||0;
+  // Top right names the ONE package this label belongs on — a boxed one counts as
+  // กล่อง, goods tied without a box as มัด. Each is numbered inside its own kind, so
+  // 2 cartons + 1 bundle read กล่อง 1/2, กล่อง 2/2, มัด 1/1.
+  var packTxt = pk.kind==='ctn' ? '📦 กล่อง / Carton '+pk.idx+' / '+pk.tot
+              : pk.kind==='bun' ? '🧶 มัด / Bundle '+pk.idx+' / '+pk.tot
+              : [nc?'📦 '+nc+' CTN':'', nb?'🧶 '+nb+' มัด':''].filter(Boolean).join(' · ');
+  // Only when an order carries cartons AND bundles: what else belongs to it, so
+  // nobody hands over the boxes and leaves the มัด standing in the warehouse.
+  var mixTxt = (nc>0&&nb>0) ? '<span>รวม / Total 📦 '+nc+' · 🧶 '+nb+'</span>' : '';
   return '<div class="lbl">'
     +'<div class="lbl-top"><span>'+head+'</span>'
-      +'<span>'+(total>1?'📦 กล่อง / Carton '+idx+' / '+total:(o.ctn?'📦 '+esc(o.ctn)+' CTN':''))+'</span></div>'
-    +'<div class="lbl-meta"><span>📅 วันที่ / Date '+esc(dateTxt)+'</span>'
+      +'<span>'+packTxt+'</span></div>'
+    +'<div class="lbl-meta"><span>📅 วันที่ / Date '+esc(dateTxt)+'</span>'+mixTxt
       +'<span class="lbl-tour">🚚 Tour '+tourTxt+'</span></div>'
     +'<div class="lbl-name" style="font-size:'+ns+'pt">'+esc(name||'—')+'</div>'
     +(addr?'<div class="lbl-addr" style="font-size:'+as+'pt">'+esc(addr)+'</div>':'<div class="lbl-addr"></div>')
@@ -9600,30 +9611,46 @@ function _labelPageHTML(o, name, addr, tel, idx, total){
     +'</div>'
   +'</div>';
 }
+// Every package of an order, in the order the pile comes off the printer: the
+// cartons first, then the bundles. perPack false = one label for the whole order.
+// An order with neither counted yet still gets its single label.
+function _lblPacks(o, perPack){
+  var c=parseInt(o&&o.ctn,10)||0, b=parseInt(o&&o.bundle,10)||0, out=[], i;
+  if(perPack){
+    for(i=1;i<=c;i++) out.push({kind:'ctn', idx:i, tot:c});
+    for(i=1;i<=b;i++) out.push({kind:'bun', idx:i, tot:b});
+  }
+  if(!out.length) out.push({kind:'', idx:1, tot:1});
+  return out;
+}
 // The labels of ONE order, ready to stack — shared by the single print and the
 // batch sheet, so both roads produce the identical label.
-function _labelsOfOrder(o, n){
+function _labelsOfOrder(o, perPack){
   var name=String(o.customer||'').trim();
   var addr=String(o.address||'').trim(); if(addr==='—') addr='';
   var tel=_lblPhone((o.phone&&o.phone!=='—')?o.phone:'');
   if(!name && !addr) return null;
-  var html='';
-  for(var i=1;i<=n;i++) html+=_labelPageHTML(o, name, addr, tel, i, n);
-  return html;
+  return _lblPacks(o, perPack).map(function(pk){
+    return _labelPageHTML(o, name, addr, tel, pk);
+  }).join('');
 }
 function printOrderLabel(orderId){
   var o=(orders||[]).find(function(x){return x.id===orderId;});
   if(!o){ alert('Order not found / ไม่พบออเดอร์'); return; }
-  var ctn=parseInt(o.ctn,10)||0, n=1;
-  if(ctn>1){
-    n = confirm('ออเดอร์นี้มี '+ctn+' กล่อง — พิมพ์ '+ctn+' ใบ (ใบละกล่อง)?\n'
-      +'This order has '+ctn+' cartons — print '+ctn+' labels, one per carton?\n\n'
-      +'ยกเลิก = พิมพ์ใบเดียว / Cancel = one label') ? ctn : 1;
+  // Cartons and bundles are both packages that travel on their own, so both need
+  // their own label — counting only the cartons left every มัด without one.
+  var ctn=parseInt(o.ctn,10)||0, bun=parseInt(o.bundle,10)||0, tot=ctn+bun, perPack=true;
+  if(tot>1){
+    var th=[ctn?ctn+' กล่อง':'', bun?bun+' มัด':''].filter(Boolean).join(' + ');
+    var en=[ctn?ctn+' carton'+(ctn!==1?'s':''):'', bun?bun+' bundle'+(bun!==1?'s':''):''].filter(Boolean).join(' + ');
+    perPack = confirm('ออเดอร์นี้มี '+th+' — พิมพ์ '+tot+' ใบ (ใบละกล่อง/มัด)?\n'
+      +'This order has '+en+' — print '+tot+' labels, one per carton and bundle?\n\n'
+      +'ยกเลิก = พิมพ์ใบเดียว / Cancel = one label');
   }
   // No sheet grouping and no arithmetic: the labels are simply stacked and the
   // browser fills each page with as many as fit (three when the address is short,
   // two when it is long). page-break-inside:avoid keeps one from being sliced.
-  var pages=_labelsOfOrder(o, n);
+  var pages=_labelsOfOrder(o, perPack);
   if(!pages){ alert('ออเดอร์นี้ไม่มีชื่อและที่อยู่ / no name or address on this order'); return; }
   printReceiptDoc(pages, LABEL_PRINT_CSS, '210mm', '297mm');
 }
@@ -9667,7 +9694,7 @@ function lblBatchRender(){
     +'<input type="text" value="'+_esc(_lblQ)+'" oninput="_lblQ=this.value;lblBatchList()" placeholder="ค้นหา / search: order, customer, zone" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text);margin-bottom:8px">'
     +'<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;margin-bottom:8px;cursor:pointer">'
       +'<input type="checkbox" '+(_lblPerCtn?'checked':'')+' onchange="_lblPerCtn=this.checked;lblBatchList()" style="width:16px;height:16px">'
-      +'ใบละกล่อง / one label per carton <span style="font-weight:500;color:var(--text2)">(ไม่ติ๊ก = ออเดอร์ละใบ / off = one per order)</span>'
+      +'ใบละกล่อง/มัด / one label per carton &amp; bundle <span style="font-weight:500;color:var(--text2)">(ไม่ติ๊ก = ออเดอร์ละใบ / off = one per order)</span>'
     +'</label>'
     +'<div id="lblb-list" style="border:1px solid var(--border);border-radius:var(--rs);overflow:hidden;max-height:46vh;overflow-y:auto"></div>'
     +'<div id="lblb-printwrap"></div>';
@@ -9679,7 +9706,7 @@ function lblBatchList(){
   var nSel=Object.keys(_lblSel).length;
   var nLbl=0; Object.keys(_lblSel).forEach(function(id){
     var o=(orders||[]).find(function(x){return x.id===id;});
-    nLbl+=(_lblPerCtn ? Math.max(1, parseInt(o&&o.ctn,10)||0) : 1);
+    nLbl+=_lblPacks(o, _lblPerCtn).length;
   });
   // One tap ticks a whole tour — in the Tour tab that IS the common case: the
   // truck is being loaded and every carton on it wants its label.
@@ -9695,13 +9722,13 @@ function lblBatchList(){
   var chipsEl=document.getElementById('lblb-chips');
   if(chipsEl){ chipsEl.innerHTML=tourChips; chipsEl.style.display=tourChips?'flex':'none'; }
   listEl.innerHTML=(list.length ? list.map(function(o){
-      var on=!!_lblSel[o.id], ctn=parseInt(o.ctn,10)||0;
+      var on=!!_lblSel[o.id], ctn=parseInt(o.ctn,10)||0, bun=parseInt(o.bundle,10)||0;
       var idJs=String(o.id).replace(/['"\\]/g,'');
       return '<div onclick="lblBatchTick(\''+idJs+'\')" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;'+(on?'background:var(--blue-bg)':'')+'">'
         +'<span style="flex-shrink:0;width:19px;height:19px;border-radius:5px;border:1.5px solid '+(on?'var(--blue)':'var(--border)')+';background:'+(on?'var(--blue)':'var(--bg)')+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:800">'+(on?'✓':'')+'</span>'
         +'<div style="flex:1;min-width:0">'
           +'<div style="font-size:13px;font-weight:700">'+_esc(o.id)+' <span style="font-weight:500;color:var(--text2)">· '+_esc(o.customer||'—')+'</span></div>'
-          +'<div style="font-size:11px;color:var(--text2)">'+_esc(o.status)+(o.zone?' · '+_esc(o.zone):'')+(ctn?' · 📦 '+ctn+' CTN':'')+'</div>'
+          +'<div style="font-size:11px;color:var(--text2)">'+_esc(o.status)+(o.zone?' · '+_esc(o.zone):'')+(ctn?' · 📦 '+ctn+' CTN':'')+(bun?' · 🧶 '+bun+' มัด':'')+'</div>'
         +'</div>'
       +'</div>';
     }).join('') : '<div style="padding:16px;text-align:center;color:var(--text2);font-size:12.5px">— ไม่พบออเดอร์ / nothing found —</div>');
@@ -9731,8 +9758,7 @@ function lblBatchPrint(){
   var pages='', skipped=[];
   _lblOrders().forEach(function(o){
     if(!_lblSel[o.id]) return;
-    var n=_lblPerCtn ? Math.max(1, parseInt(o.ctn,10)||0) : 1;
-    var h=_labelsOfOrder(o, n);
+    var h=_labelsOfOrder(o, _lblPerCtn);
     if(h) pages+=h; else skipped.push(o.id);
   });
   if(!pages){ alert('ออเดอร์ที่เลือกไม่มีชื่อ-ที่อยู่ / the ticked orders have no name or address'); return; }
