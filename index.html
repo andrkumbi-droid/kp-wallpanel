@@ -23915,11 +23915,16 @@ function fataxNum(v){ return Math.round((parseFloat(String(v==null?0:v).replace(
 // FlowAccount originals. Discount lines become the document discount; free lines
 // carry no money and land in the remarks instead.
 function fataxDoc(o, info){
-  var items=[], disc=0, remarks=[];
+  var items=[], disc=0, remarks=[], deliv=0;
   (o.lineItems||[]).forEach(function(li){
     if(!li) return;
     var amt=fataxNum(li.amount), qty=parseFloat(li.qty)||0;
     if(li.type==='discount'){ disc+=Math.abs(amt); return; }
+    // Die Liefergebuehr gehoert nicht auf die Steuerrechnung — weder als Zeile
+    // noch als Bemerkung. Sie faellt hier vollstaendig heraus; weil Zwischensumme,
+    // VAT und Endbetrag unten aus items gerechnet werden, sinkt der Rechnungs-
+    // betrag automatisch um sie. Der Auftrag selbst behaelt sie unveraendert.
+    if(li.type==='delivery'){ deliv+=amt; return; }
     if(li.type==='free-clips'||li.type==='free-gift-clips'){
       // Both free types count PIECES (auto = 10 per panel, gift = as typed).
       // Only the PAID 'clips' line counts packs of 100 — the ×100 that used to
@@ -23929,8 +23934,7 @@ function fataxDoc(o, info){
     }
     if(o.free) return;                        // free claim → no priced lines at all
     if(qty<=0 && amt<=0) return;
-    var name=(li.type==='delivery')?'ค่าขนส่ง / Delivery'
-            :(li.type==='extra')?((li.code||li.label||'Extra')+'')
+    var name=(li.type==='extra')?((li.code||li.label||'Extra')+'')
             :String(li.code||'')+(li.grade==='B'?' (Grade B)':(li.grade==='C'?(' (Pre-cut / ตัดแล้ว'+((parseInt(li.cutLen)||0)>0?' '+(parseInt(li.cutLen)||0)+' cm':'')+')'):''));
     items.push({ type:1, name:name, description:'',
       quantity: qty>0?qty:1, unitName: fataxUnit(li.type),
@@ -23955,7 +23959,11 @@ function fataxDoc(o, info){
     subTotal: sub, discountPercentage:0, discountAmount: disc,
     totalAfterDiscount: after, vatAmount: vat, grandTotal: after,
     remarks: remarks.join(' · '), internalNotes:'', showSignatureOrStamp:true,
-    items: items
+    items: items,
+    // Nur fuer die Vorschau im Buero: um diesen Betrag liegt die Rechnung unter
+    // der Auftragssumme. Steht bewusst NICHT im Dokument — kein Feld, das
+    // FlowAccount druckt, heisst so.
+    _deliveryExcluded: Math.round(deliv*100)/100
   };
 }
 // The dialog: customer block (name/address prefilled from the order, TIN + branch
@@ -24021,7 +24029,14 @@ function fataxOpen(id){
     +'<div style="border-top:1px solid var(--border);margin-top:5px;padding-top:5px;display:flex;justify-content:space-between;color:var(--text2)"><span>ราคาไม่รวม VAT</span><span>'+(Math.round((d.grandTotal-d.vatAmount)*100)/100).toLocaleString('en-US')+' ฿</span></div>'
     +'<div style="display:flex;justify-content:space-between;color:var(--text2)"><span>ภาษีมูลค่าเพิ่ม 7%</span><span>'+d.vatAmount.toLocaleString('en-US')+' ฿</span></div>'
     +'<div style="display:flex;justify-content:space-between;font-weight:800"><span>รวมทั้งสิ้น</span><span>'+d.grandTotal.toLocaleString('en-US')+' ฿</span></div>'
-    +(d.remarks?'<div style="color:var(--text2);margin-top:4px">📝 '+_esc(d.remarks)+'</div>':'');
+    +(d.remarks?'<div style="color:var(--text2);margin-top:4px">📝 '+_esc(d.remarks)+'</div>':'')
+    // Sonst sucht das Buero spaeter den Unterschied zur Auftragssumme. Diese
+    // Zeile steht nur hier im Fenster, nicht auf der Rechnung.
+    +(d._deliveryExcluded>0
+      ? '<div style="color:var(--text3);margin-top:5px;font-size:11px;border-top:1px dashed var(--border);padding-top:5px">'
+        +'ค่าขนส่ง '+d._deliveryExcluded.toLocaleString('en-US')+' ฿ ไม่อยู่ในใบกำกับภาษี'
+        +' / delivery is not on the tax invoice</div>'
+      : '');
 }
 // ── ค้นหาจากกรมสรรพากร / Revenue-Department lookup ──────────────────────────
 // The order knows who ordered and where the panels go; the tax invoice must name
