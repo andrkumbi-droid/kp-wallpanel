@@ -476,7 +476,7 @@ h2.ch{font-family:"Press Start 2P",monospace;font-size:13px;color:var(--coin);
   <div class="octl">
     <span class="og"><label>Zeitraum</label>
       <select id="o-sel"></select></span>
-    <span class="og"><button type="button" class="nach" id="o-add">+ Monat nachtragen</button></span>
+    <span class="og"><button type="button" class="nach" id="o-add">+ eigener Posten</button></span>
     <span class="og"><label>Grundlage für den Preis</label>
     <span class="obas">
       <button type="button" id="o-b-stk">gleich je Paneel</button>
@@ -1102,15 +1102,22 @@ function ovFenster(){
    nehmen wäre falsch — ein schwacher Monat mit wenig Stück zählte dann genauso
    viel wie ein starker. */
 function ovAgg(){
-  var ms=ovFenster(), a={ms:ms, kosten:0, aus:0, panels:0, umsatz:0, orders:0, mix:{}, je:[], bl:{}};
+  var ms=ovFenster(), a={ms:ms, kosten:0, aus:0, ware:0, panels:0, umsatz:0, orders:0, mix:{}, je:[], bl:{}};
   ms.forEach(function(k){
-    var r=OVALL[k]||{}, b=r.blocks||{}, an=0;
-    Object.keys(b).forEach(function(id){
-      var x=b[id], v=+x.v||0, sl=ovSlug(x.n);
-      var z=a.bl[sl]||(a.bl[sl]={n:x.n, v:0, q:x.q, ids:{}});
-      z.v+=v; z.ids[k]=id;
-      if(ovAus(x)) a.aus+=v; else an+=v;
+    var r=OVALL[k]||{}, an=0;
+    /* Zwei Quellen, ein Topf: was die App gerechnet hat (blocks) und was hier
+       von Hand dazukam (extra). Getrennt gespeichert, damit der nächste Lauf
+       der App die eigenen Posten nicht wegputzt. */
+    [['blocks', r.blocks||{}], ['extra', r.extra||{}]].forEach(function(paar){
+      var wo=paar[0], b=paar[1];
+      Object.keys(b).forEach(function(id){
+        var x=b[id], v=+x.v||0, sl=ovSlug(x.n);
+        var z=a.bl[sl]||(a.bl[sl]={n:x.n, v:0, q:(wo==='extra'?'hand':x.q), wo:wo, ids:{}});
+        z.v+=v; z.ids[k]=id;
+        if(ovAus(x)) a.aus+=v; else an+=v;
+      });
     });
+    a.ware+=+r.ware||0;
     a.kosten+=an; a.panels+=+r.panels||0; a.umsatz+=+r.umsatz||0; a.orders+=+r.orders||0;
     Object.keys(r.mix||{}).forEach(function(c){ a.mix[c]=(a.mix[c]||0)+(+r.mix[c]||0); });
     a.je.push({m:k, panels:+r.panels||0, kosten:an, je:(+r.panels>0?an/(+r.panels):0)});
@@ -1192,7 +1199,7 @@ function ovhRender(){
   var alleM=ovMonate();
   if(!alleM.length){
     wrap.innerHTML='<div class="oblk"><div class="on"><b>Noch kein Monat erfasst</b>'
-      +'<i>„+ Monat nachtragen" drücken</i></div></div>';
+      +'<i>die Office-App trägt ihn beim nächsten Öffnen ein</i></div></div>';
     $('o-monate').innerHTML=''; $('o-sum').innerHTML=''; $('o-rows').innerHTML='';
     $('o-note').innerHTML=''; ovSelFill(); return;
   }
@@ -1212,8 +1219,9 @@ function ovhRender(){
   /* Die Blöcke. Bei einem Monat sind die Beträge änderbar, bei mehreren steht
      dort die Summe des Zeitraums — die ließe sich nicht sinnvoll auf die Monate
      zurückrechnen, also bleibt sie schreibgeschützt. */
-  var QT={bills:'aus Bills', lohn:'aus der Lohnliste', extern:'von Hand',
-          offen:'nicht gebucht', uebernommen:'übernommen · prüfen'};
+  var QT={app:'aus der App', hand:'eigener Posten', bills:'aus Bills',
+          lohn:'aus der Lohnliste', extern:'von Hand', offen:'nicht gebucht',
+          uebernommen:'übernommen · prüfen'};
   var sl=Object.keys(a.bl).sort(function(x,y){ return a.bl[y].v-a.bl[x].v; });
   wrap.innerHTML=sl.map(function(k){
     var x=a.bl[k], an=!ovAus(x);
@@ -1222,7 +1230,10 @@ function ovhRender(){
       +'<span class="on"><b>'+esc(x.n||k)+'</b><i>'+esc(QT[x.q]||x.q||'')
         +(einer?'':' · '+a.ms.length+' Monate')+'</i></span>'
       +'<input type="number" step="100" data-ov="'+esc(k)+'" value="'+Math.round(x.v)+'"'
-        +(einer?'':' readonly title="Summe mehrerer Monate — zum Ändern einen einzelnen Monat wählen"')+'>'
+        +((einer && x.wo==='extra')?''
+          : ' readonly title="'+(x.wo==='extra'
+              ? 'Summe mehrerer Monate — zum Ändern einen einzelnen Monat wählen'
+              : 'Diese Zahl rechnet die Office-App aus den Belegen und der Lohnliste. Ändern geht dort, nicht hier.')+'"')+'>'
     +'</div>';
   }).join('');
 
@@ -1308,6 +1319,13 @@ function ovhRender(){
         +'Schnitt der übrigen hochgerechnet. Trag diese Profile oben ein, dann wird die Spalte scharf.'
       : 'Es fehlt keine Sorte.')
     +spanne
+    +(a.ware>0 ? '<br><br><b>Container- und Wareneinkäufe sind absichtlich draußen.</b> '+'Im Zeitraum waren das '+f0(a.ware)+' ฿. Dieses Geld steckt schon in der Spalte '+'"Einkauf + Fracht" je Paneel — noch einmal als laufende Kosten gezählt, zöge die Liste '+'es zweimal ab.' : '')
+    +'<br><br><b>Woher die Monate kommen.</b> Die Office-App trägt jeden abgeschlossenen Monat von '
+    +'selbst ein, sobald jemand mit Zugang sie öffnet — mit demselben Ausgabensatz, den die '
+    +'Finance-Übersicht als รายจ่าย zeigt, Löhne eingeschlossen. Deshalb sind diese Beträge hier '
+    +'schreibgeschützt: korrigiert wird im Bills- oder Finance-Tab, dann steht es beim nächsten '
+    +'Öffnen auch hier. Nur was in der App gar nicht gebucht ist — Strom ohne Rechnung etwa — '
+    +'legt ihr mit „+ eigener Posten" dazu; das bleibt beim nächsten Lauf erhalten.'
     +'<br><br><b>Was hier NICHT drin ist:</b> Sägen und Verpacken für den Zuschnitt. Die hängen '
     +'an der Länge, nicht am Monat, und stehen im Rechner darunter.';
 }
@@ -1340,117 +1358,40 @@ $('o-blocks').addEventListener('change', function(e){
     OVVIEW.aus[kb]=!t.checked;
     ovhRender(); ovViewSave();
   } else if(kv && !t.readOnly){
-    // Nur bei EINEM Monat änderbar — dann ist auch klar, wohin der Wert gehört.
+    // Nur bei EINEM Monat und nur bei eigenen Posten — die Zahlen der App
+    // gehören der App, sonst stünden hier zwei Wahrheiten nebeneinander.
     var a=ovAgg(); if(a.ms.length!==1) return;
-    var mon=a.ms[0], id=a.bl[kv] && a.bl[kv].ids[mon];
-    if(!id) return;
+    var mon=a.ms[0], z=a.bl[kv]; if(!z || z.wo!=='extra') return;
+    var id=z.ids[mon]; if(!id) return;
     var v=num(t.value);
-    OVALL[mon].blocks[id].v=v;
-    ovhRender(); ovSave(mon+'/blocks/'+id+'/v', v);
+    OVALL[mon].extra[id].v=v;
+    ovhRender(); ovSave(mon+'/extra/'+id+'/v', v);
   }
 });
 
-/* ── Einen abgeschlossenen Monat nachtragen ────────────────────────────────
-   Absichtlich eine Taste und kein Automatismus: die Bestellungen und die Bills
-   sind zusammen einige zehn Megabyte, die will niemand bei jedem Seitenaufruf
-   laden. Einmal im Monat, am Rechner, gedrückt — das reicht.
-   Gemessen wird, was messbar ist: Paneele, Umsatz und der Verkaufsmix aus den
-   Bestellungen, die Bills-Blöcke aus den Bills. Löhne, Miete und Spediteure
-   stehen dort nicht; die werden aus dem Vormonat übernommen und als
-   „übernommen · prüfen" markiert, damit niemand sie für gemessen hält.       */
-function ovMonatLabel(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2); }
-async function ovNachtragen(){
-  var heute=new Date();
-  var vor=new Date(heute.getFullYear(), heute.getMonth()-1, 1);
-  var da=ovMonate();
-  var vorschlag=ovMonatLabel(vor);
-  var mon=prompt('Welchen abgeschlossenen Monat nachtragen? (JJJJ-MM)', vorschlag);
-  if(!mon) return;
-  mon=String(mon).trim();
-  if(!/^\d{4}-\d{2}$/.test(mon)){ alert('Bitte im Format 2026-08.'); return; }
-  if(mon===ovMonatLabel(heute) && !confirm(mon+' läuft noch. Trotzdem erfassen?')) return;
-  if(da.indexOf(mon)>=0 && !confirm(mon+' ist schon erfasst. Neu berechnen und überschreiben?')) return;
-
-  var st=$('status'), alt=st.textContent;
-  try{
-    st.textContent='Lade Bestellungen für '+mon+' …';
-    var ords=(await MDB.ref('orders').once('value')).val()||{};
-    var panels=0, umsatz=0, orders=0, mix={};
-    Object.keys(ords).forEach(function(k){
-      var o=ords[k]; if(!o || String(o.date||'').slice(0,7)!==mon) return;
-      if(String(o.status||'')==='cancelled') return;
-      orders++;
-      (o.lineItems||[]).forEach(function(li){
-        var q=parseInt(li.qty,10)||0;
-        umsatz+=parseFloat(li.amount)||0;
-        if(li.type==='panel' && q>0){
-          panels+=q;
-          var c=String(li.code||'').trim().toUpperCase();
-          if(c) mix[c]=(mix[c]||0)+q;
-        }
-      });
-    });
-    if(!panels){ alert('Für '+mon+' stehen keine verkauften Paneele in den Bestellungen.'); st.textContent=alt; return; }
-
-    st.textContent='Lade Belege für '+mon+' … (das dauert einen Moment)';
-    var bl=(await MDB.ref('bills').once('value')).val()||{};
-    var blocks={}, n=1;
-    var billSum={};
-    Object.keys(bl).forEach(function(k){
-      var x=bl[k]; if(!x || String(x.date||'').slice(0,7)!==mon) return;
-      var lab=x.subcatLabel || x.what || 'อื่นๆ / Other';
-      billSum[lab]=(billSum[lab]||0)+(parseFloat(x.amount)||0);
-    });
-    Object.keys(billSum).forEach(function(lab){
-      blocks['b'+('0'+(n++)).slice(-2)]={n:lab, v:Math.round(billSum[lab]), q:'bills'};
-    });
-
-    /* Was nicht in den Bills steht — Löhne, Miete — kommt aus dem zuletzt
-       erfassten Monat. Dabei lauert die Doppelzählung: derselbe Posten heißt in
-       den Bills oft anders. „🚚 ขนส่ง / Spediteure" von Hand und
-       „🚛 ค่าขนส่งบริษัทขนส่ง / Carrier" aus den Bills sind dasselbe Geld, und
-       „⚡ ค่าไฟ / Strom" steckt in „⚡ ค่าไฟฟ้า / Electricity". Deshalb wird nicht
-       nur auf gleiche Namen geprüft, sondern auf den thailändischen Wortkern:
-       enthält einer den anderen, wird NICHT übernommen — die Bills-Zahl ist die
-       gebuchte und gewinnt. */
-    var quelle=da.filter(function(k){ return k<mon; }).pop() || da[da.length-1];
-    var uebernommen=0, doppelt=[];
-    if(quelle && OVALL[quelle] && OVALL[quelle].blocks){
-      var thai=function(t){ var m2=String(t||'').match(/[\u0E00-\u0E7F]+/g); return m2?m2.join(''):''; };
-      var billNamen=Object.keys(blocks).map(function(id){ return {n:blocks[id].n, th:thai(blocks[id].n)}; });
-      var haben={}; Object.keys(blocks).forEach(function(id){ haben[ovSlug(blocks[id].n)]=1; });
-      var qb=OVALL[quelle].blocks;
-      Object.keys(qb).forEach(function(id){
-        var x=qb[id];
-        if(x.q==='bills' || haben[ovSlug(x.n)]) return;
-        var th=thai(x.n);
-        var treffer = th.length>=3 && billNamen.find(function(b){
-          return b.th.length>=3 && (b.th.indexOf(th)>=0 || th.indexOf(b.th)>=0);
-        });
-        if(treffer){ doppelt.push(x.n+' ↔ '+treffer.n); return; }
-        blocks['b'+('0'+(n++)).slice(-2)]={n:x.n, v:+x.v||0, q:'uebernommen'};
-        uebernommen++;
-      });
-    }
-    var rec={monat:mon, panels:panels, umsatz:Math.round(umsatz), orders:orders, mix:mix,
-             blocks:blocks, stand:'erfasst '+new Date().toISOString().slice(0,10)+' von '+(me&&me.name||'')};
-    await MDB.ref('ovh/'+mon).set(rec);
-    st.textContent=alt;
-    var sum=Object.keys(blocks).reduce(function(a2,k){ return a2+blocks[k].v; },0);
-    OVVIEW.sel=mon; ovViewSave();
-    alert(mon+' erfasst.\n\n'+f0(panels)+' Paneele · '+f0(Math.round(umsatz))+' ฿ Umsatz\n'
-      +f0(sum)+' ฿ Kosten · '+f2(sum/panels)+' ฿ je Paneel\n\n'
-      +(uebernommen?uebernommen+' Blöcke aus '+quelle+' übernommen — die Beträge bitte prüfen, '
-        +'Löhne und Miete stehen nicht in den Bills.\n':'Alle Blöcke aus den Bills.\n')
-      +(doppelt.length?'\nNicht übernommen, weil schon in den Bills:\n· '+doppelt.join('\n· '):'')
-      +'\n\nVergleicht die Blockliste mit dem Vormonat: fehlt ein großer Posten, war er in '
-      +'diesem Monat anders gebucht.');
-  }catch(err){
-    st.textContent=alt;
-    alert('Nicht erfasst: '+(err&&err.message||err));
-  }
+/* ── Ein eigener Posten ────────────────────────────────────────────────────
+   Die Monate schreibt die Office-App: sie hat Bestellungen, Belege und die
+   Lohnliste beim Start ohnehin geladen und rechnet die Ausgaben mit derselben
+   Formel wie die Finance-Übersicht. Hier bleibt nur, was dort nicht steht —
+   Strom ohne Rechnung zum Beispiel. Das liegt getrennt unter extra, damit der
+   nächste Lauf der App es nicht überschreibt.                                */
+function ovEigener(){
+  var a=ovAgg();
+  if(a.ms.length!==1){ alert('Erst einen einzelnen Monat wählen — sonst ist nicht klar, in welchen der Posten gehört.'); return; }
+  var mon=a.ms[0];
+  var n=prompt('Wie heißt der Posten? (z. B. „⚡ Strom, ohne Rechnung")');
+  if(!n) return;
+  var v=prompt('Wie viel ฿ im Monat '+mon+'?','0');
+  if(v===null) return;
+  var b=parseFloat(String(v).replace(/[^0-9.,-]/g,'').replace(',','.'))||0;
+  if(!(b>0)){ alert('Kein Betrag eingetragen.'); return; }
+  var id='x'+Date.now();
+  OVALL[mon]=OVALL[mon]||{}; OVALL[mon].extra=OVALL[mon].extra||{};
+  OVALL[mon].extra[id]={n:String(n).trim().slice(0,80), v:Math.round(b), q:'hand'};
+  ovhRender();
+  ovSave(mon+'/extra/'+id, OVALL[mon].extra[id]);
 }
-$('o-add').addEventListener('click', ovNachtragen);
+$('o-add').addEventListener('click', ovEigener);
 
 /* ══════════════════════════════════════════════════════════════════════════
    MARKTPLATZ-RECHNER

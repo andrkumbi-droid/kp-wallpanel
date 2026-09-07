@@ -4152,6 +4152,9 @@ function _enterOffice(s){
   document.getElementById('s-office').classList.add('active');
   window.scrollTo(0,0);
   try{ setTimeout(kpGoalWatch,600); }catch(e){}
+  // Monatssatz für die Selbstkosten-Liste der Mould-Seite. Spät und nur einmal:
+  // er braucht Bestellungen, Belege und die Lohnliste vollständig.
+  try{ setTimeout(function(){ try{ ovhAuto(1); }catch(e){} }, 25000); }catch(e){}
   document.getElementById('of-date').value = kpTodayStr();
   const nameEl = document.getElementById('of-logged-in-name');
   if(nameEl) nameEl.textContent = 'Logged in: ' + s.name + ' / เข้าสู่ระบบ';
@@ -41158,6 +41161,119 @@ function pfExpenses(mk){
   blocks.sort(function(a,b){ return b.total-a.total; });
   grey.sort(function(a,b){ return b.total-a.total; });
   return { blocks:blocks, grey:grey, blue:blue, greyTotal:greyTot, dueOpen:dueOpen };
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MONATSSATZ FÜR DIE SELBSTKOSTEN-LISTE (moulds.html)
+   --------------------------------------------------------------------------
+   Die Mould-Seite legt die laufenden Kosten eines abgeschlossenen Monats auf
+   ein Paneel um. Dafür braucht sie zwei Dinge: was der Monat gekostet hat und
+   wie viele Paneele durchgegangen sind. Beides liegt HIER schon im Speicher —
+   pfExpenses() ist derselbe Satz, den die Finance-Übersicht als „รายจ่าย"
+   zeigt, Löhne über pgCalc eingeschlossen.
+
+   Deshalb schreibt die App den Satz, nicht die Mould-Seite: dort müsste man
+   Bestellungen und Belege eigens laden, zusammen rund 35 MB, und die
+   Lohnrechnung ein zweites Mal nachbauen. Zwei Rechenwege für dieselbe Zahl
+   sind zwei Wahrheiten, und eine davon ist immer falsch.
+
+   Nur abgeschlossene Monate — ein angebrochener würde den Schnitt verzerren.
+   Geschrieben wird mit update(), also bleibt alles erhalten, was die
+   Mould-Seite selbst dort abgelegt hat (eigene Posten unter extra, die
+   Ansichtseinstellungen unter _view).
+   ══════════════════════════════════════════════════════════════════════════ */
+function ovhOrdersOfMonth(mk){
+  var panels=0, umsatz=0, cnt=0, mix={};
+  (orders||[]).forEach(function(o){
+    if(!o || kpMKey(o.date)!==mk) return;
+    if(String(o.status||'')==='cancelled') return;
+    cnt++;
+    (o.lineItems||[]).forEach(function(li){
+      var q=parseInt(li.qty,10)||0;
+      umsatz+=parseFloat(li.amount)||0;
+      if(li.type==='panel' && q>0){
+        panels+=q;
+        var c=String(li.code||'').trim().toUpperCase();
+        if(c) mix[c]=(mix[c]||0)+q;
+      }
+    });
+  });
+  return {panels:panels, umsatz:Math.round(umsatz), orders:cnt, mix:mix};
+}
+function ovhMonthRec(mk){
+  var o=ovhOrdersOfMonth(mk);
+  if(!o.panels) return null;                       // Monat ohne Verkäufe
+  var exp=null; try{ exp=pfExpenses(mk); }catch(e){ return null; }
+  var blocks={}, n=1, sum=0, ware=0, wareN=[];
+  ((exp&&exp.blocks)||[]).forEach(function(g){
+    (g.kids||[]).forEach(function(c){
+      var v=Math.round(parseFloat(c.total)||0);
+      if(!v) return;
+      /* Container- und Wareneinkäufe gehören hier NICHT hinein. Die Mould-Seite
+         rechnet Einkauf und Fracht bereits je Paneel — stünde das Geld auch
+         noch als laufende Kosten in der Liste, zöge sie es zweimal ab. Dieselbe
+         Falle, vor der der Gewinnblock oben warnt, nur andersherum. */
+      if(PF_GOODS_RE.test(String(c.label||''))){
+        ware+=v; if(wareN.length<8) wareN.push(String(c.label||'').slice(0,40));
+        return;
+      }
+      blocks['a'+('00'+(n++)).slice(-3)]={
+        n:String(c.label||'—').slice(0,80), v:v, q:'app',
+        g:String((g.blk&&g.blk.label)||'').slice(0,60) };
+      sum+=v;
+    });
+  });
+  if(!sum) return null;
+  return {monat:mk, panels:o.panels, umsatz:o.umsatz, orders:o.orders, mix:o.mix,
+          blocks:blocks, summe:sum, auto:1, ware:ware, wareN:wareN,
+          stand:kpTodayStr()+' · '+(typeof currentStaffName!=='undefined'?currentStaffName:'')};
+}
+/* Die letzten drei abgeschlossenen Monate. Weiter zurück lohnt nicht: was
+   einmal geschrieben ist, bleibt stehen, und ältere Belege ändern sich nicht
+   mehr. */
+function ovhMonthsToCheck(){
+  var d=new Date(), out=[];
+  for(var i=1;i<=3;i++){
+    var x=new Date(d.getFullYear(), d.getMonth()-i, 1);
+    out.push(x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'));
+  }
+  return out;
+}
+var _ovhAutoDone=false;
+function ovhAuto(versuch){
+  if(_ovhAutoDone || !window.fbDB) return;
+  // Nur wer die Mould-Seite sehen darf, schreibt auch ihre Zahlen.
+  var me2=null; try{ me2=(staffList||[]).find(function(x){ return x.id===currentStaffId; }); }catch(e){}
+  if(!me2 || !me2.acctAccess) return;
+  // Erst rechnen, wenn wirklich alles da ist — halb geladene Daten ergäben
+  // einen zu kleinen Monat, und der stünde dann als Wahrheit in der Liste.
+  var bereit = (orders||[]).length>0 && typeof pfExpenses==='function'
+            && typeof billsCostData==='function' && typeof pgCalc==='function';
+  if(!bereit){
+    if((versuch||1)<3) setTimeout(function(){ ovhAuto((versuch||1)+1); }, 30000);
+    return;
+  }
+  _ovhAutoDone=true;
+  ovhMonthsToCheck().forEach(function(mk){
+    var rec=null;
+    try{ rec=ovhMonthRec(mk); }catch(e){ return; }
+    if(!rec) return;
+    window.fbDB.ref('ovh/'+mk).once('value').then(function(sn){
+      var alt=sn.val();
+      // Unverändert? Dann nicht schreiben — sonst rauscht jeder Login durch
+      // die Datenbank und die Mould-Seite baut sich grundlos neu auf.
+      if(alt && alt.auto && alt.summe===rec.summe && alt.panels===rec.panels) return;
+      var patch={monat:rec.monat, panels:rec.panels, umsatz:rec.umsatz, orders:rec.orders,
+                 mix:rec.mix, blocks:rec.blocks, summe:rec.summe, auto:1, stand:rec.stand,
+                 ware:rec.ware||0, wareN:rec.wareN||[]};
+      // Der erste Satz war von Hand zusammengetragen. Bevor die App ihn
+      // ersetzt, wird er einmal beiseitegelegt — nachrechnen kann man ihn
+      // hinterher nicht mehr.
+      if(alt && !alt.auto) patch.handBackup=alt;
+      window.fbDB.ref('ovh/'+mk).update(patch).catch(function(){});
+    }).catch(function(){});
+  });
 }
 
 /* ── VAT ──────────────────────────────────────────────────────────────────
