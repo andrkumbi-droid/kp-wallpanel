@@ -1102,9 +1102,14 @@ function ovFenster(){
    nehmen wäre falsch — ein schwacher Monat mit wenig Stück zählte dann genauso
    viel wie ein starker. */
 function ovAgg(){
-  var ms=ovFenster(), a={ms:ms, kosten:0, aus:0, ware:0, panels:0, umsatz:0, orders:0, mix:{}, je:[], bl:{}};
+  var ms=ovFenster(), a={ms:ms, wartet:[], kosten:0, aus:0, ware:0, panels:0, umsatz:0, orders:0, mix:{}, je:[], bl:{}};
   ms.forEach(function(k){
     var r=OVALL[k]||{}, an=0;
+    /* Ein Monat ohne Stückzahl zählt nicht mit. Das passiert genau dann, wenn
+       hier schon ein eigener Posten liegt, die App den Monat aber noch nicht
+       gerechnet hat: seine Kosten wären dann im Topf, seine Paneele nicht, und
+       der Anteil je Paneel spränge nach oben. Lieber wartet er sichtbar. */
+    if(!(+r.panels>0)){ a.wartet.push(k); return; }
     /* Zwei Quellen, ein Topf: was die App gerechnet hat (blocks) und was hier
        von Hand dazukam (extra). Getrennt gespeichert, damit der nächste Lauf
        der App die eigenen Posten nicht wegputzt. */
@@ -1204,16 +1209,19 @@ function ovhRender(){
     $('o-note').innerHTML=''; ovSelFill(); return;
   }
   ovSelFill();
+  // "einer" entscheidet, ob Betraege aenderbar sind — dafuer zaehlt der
+  // gewaehlte Zeitraum, nicht ob die App den Monat schon gerechnet hat.
   var a=ovAgg(), einer=(a.ms.length===1);
 
   /* Monatsstreifen: was drin ist, was draußen, und wie sich ฿/Paneel bewegt.
      Erst daran sieht man, ob der Durchschnitt ruhig liegt oder wandert. */
   $('o-monate').innerHTML=alleM.slice().reverse().map(function(k){
-    var drin=a.ms.indexOf(k)>=0;
+    var wartet=a.wartet.indexOf(k)>=0;
+    var drin=a.ms.indexOf(k)>=0 && !wartet;
     var z=a.je.find(function(x){ return x.m===k; });
     var r=OVALL[k]||{};
     return '<div class="mo'+(drin?'':' aus')+'"><b>'+esc(k)+'</b>'
-      +'<span>'+f0(+r.panels||0)+' Stk<br>'+(z?f2(z.je)+' ฿/Stk':'—')+'</span></div>';
+      +'<span>'+(wartet ? 'wartet auf<br>die App' : f0(+r.panels||0)+' Stk<br>'+(z?f2(z.je)+' ฿/Stk':'—'))+'</span></div>';
   }).join('');
 
   /* Die Blöcke. Bei einem Monat sind die Beträge änderbar, bei mehreren steht
@@ -1245,11 +1253,13 @@ function ovhRender(){
   var ges = we.stk+we.offen;
   var deck = ges>0 ? we.stk/ges : 0;
   var scharf = ges>0 ? we.genau/ges : 0;
-  var titel = einer ? a.ms[0] : a.ms[0]+' – '+a.ms[a.ms.length-1];
+  // Wartende Monate stehen nicht in der Ueberschrift: sie zaehlen ja nicht mit.
+  var gez = a.ms.filter(function(k){ return a.wartet.indexOf(k)<0; });
+  var titel = gez.length===1 ? gez[0] : (gez.length?gez[0]+' – '+gez[gez.length-1]:'—');
 
   $('o-sum').innerHTML=
      '<div><div class="k">Zeitraum</div><div class="v">'+esc(titel)+'</div>'
-      +'<div class="z">'+a.ms.length+' Monat'+(a.ms.length===1?'':'e')+' · '+f0(a.orders)+' Orders · '
+      +'<div class="z">'+gez.length+' Monat'+(gez.length===1?'':'e')+(a.wartet.length?' · '+a.wartet.length+' wartet':'')+' · '+f0(a.orders)+' Orders · '
         +f0(a.umsatz)+' ฿ Umsatz</div></div>'
     +'<div><div class="k">Laufende Kosten</div><div class="v">'+f0(a.kosten)+' ฿</div>'
       +'<div class="z">'+(a.aus>0?f0(a.aus)+' ฿ abgewählt':'alle Blöcke drin')+'</div></div>'
