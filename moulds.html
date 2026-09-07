@@ -430,7 +430,8 @@ h2.ch{font-family:"Press Start 2P",monospace;font-size:13px;color:var(--coin);
     <div class="cbox">
       <h4>1 · Das Produkt</h4>
       <label>Mould<select id="c-mould"></select></label>
-      <label>Länge in cm<input type="number" id="c-len" value="95" min="10" max="290" step="1"></label>
+      <label>Länge m <span class="chint" id="c-lenhint"></span>
+        <input type="number" id="c-len" value="0.95" min="0.1" max="2.9" step="0.05"></label>
       <label>Plattform<select id="c-plat">
         <option value="21.94">TikTok Shop · 21,94 %</option>
         <option value="19.26">Shopee · 19,26 %</option>
@@ -928,11 +929,14 @@ function sub(){
   // zeigen. Beim ersten Mal setzen sie die Felder, danach nur noch, wenn hier
   // gerade niemand tippt — sonst überschriebe ein fremdes Gerät die Eingabe.
   MDB.ref('mktCalc').on('value', function(s){
-    var v=s.val(); if(!v) return;
+    var v=s.val();
+    // Auch ein leerer Knoten zählt als gesehen — sonst bliebe das Schreiben
+    // beim allerersten Mal für immer gesperrt.
+    _cFirst=false;
+    if(!v) return;
     calcSet=v; cApply(v);
-    if(_cFirst){ _cFirst=false; }
     try{ calcSync(); }catch(e){}
-  }, function(){});
+  }, function(){ _cFirst=false; });   // kein Zugriff: dann eben nur localStorage
   MDB.ref('webCatalog').on('value',    function(s){ cat=s.val()||{};  render(); mark(); });
 }
 function mark(){
@@ -980,6 +984,14 @@ function cNum(id){ var e=$(id); return e?(parseFloat(e.value)||0):0; }
 function cSave(){
   CFELD.forEach(function(id){ var e=$(id); if(e) calcSet[id]=e.value; });
   try{ localStorage.setItem(CSTORE, JSON.stringify(calcSet)); }catch(e){}
+  /* Und jetzt der Grund für _cFirst: Beim Öffnen rechnet die Seite sofort los,
+     der gespeicherte Stand aus der Datenbank kommt aber erst eine Netzrunde
+     später. Ohne diese Sperre schriebe der erste Lauf seine Startwerte über
+     die echten Einstellungen — auf einer langsamen Leitung genau so, und dann
+     kämen die Startwerte als „gespeicherter Stand" zurück. Erst wenn wir den
+     Stand einmal gesehen haben, darf zurückgeschrieben werden. Der
+     localStorage oben ist davon nicht betroffen, der ist geräteeigen. */
+  if(_cFirst) return;
   // Gebündelt in die Datenbank: sonst schriebe jeder Tastendruck einen Satz.
   clearTimeout(_cSaveT);
   _cSaveT=setTimeout(function(){
@@ -991,7 +1003,9 @@ function cApply(o){
   CFELD.forEach(function(id){
     var e=$(id); if(!e || o[id]==null || o[id]==='') return;
     if(document.activeElement===e) return;      // niemandem ins Tippen fahren
-    e.value=o[id];
+    var v=o[id];
+    if(id==='c-len' && parseFloat(v)>3) v=String(parseFloat(v)/100);   // alte cm-Fassung
+    e.value=v;
   });
 }
 /* Die Auswahl steht in DERSELBEN Reihenfolge wie die Tabelle oben — render()
@@ -1024,7 +1038,7 @@ function calcRun(){
   if(!g){ $('c-wf').innerHTML='<div class="cfoot">Trag oben ein Mould mit Dollarpreis ein, dann rechnet es hier.</div>'; $('c-be').innerHTML=''; return; }
   g=Object.assign({}, g);
 
-  var lenM   = Math.max(0.1, cNum('c-len'))/100;
+  var lenM   = Math.min(MEAS_LEN, Math.max(0.1, cNum('c-len')));
   var want   = cNum('c-want');
   var geb    = cNum('c-plat')/100;
   var aff    = cNum('c-aff')/100;
@@ -1077,6 +1091,7 @@ function calcRun(){
   var gewinn = want;
 
   // Was der Zuschnitt vor jeder Arbeit kostet — gehoert neben die Auswahl.
+  var lh=$('c-lenhint'); if(lh) lh.textContent=f0(lenM*100)+' cm';
   var ce=$('c-cost');
   if(ce) ce.textContent=f2(material)+' ฿';
   var ch=$('c-costhint');
