@@ -291,6 +291,15 @@ footer{margin-top:30px;padding-top:15px;border-top:3px solid var(--edge);
 .osum .v{font-family:var(--num);font-size:21px;font-weight:700;color:var(--coin);margin-top:4px}
 .osum .z{font-size:11px;color:var(--ink3);margin-top:2px;line-height:1.4}
 .og{display:flex;align-items:center;gap:7px}
+.omon{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.omon .mo{border:3px solid var(--edge);background:var(--panel);padding:6px 10px;box-shadow:3px 3px 0 #000;
+  font-size:11.5px;line-height:1.45;min-width:104px}
+.omon .mo b{display:block;font-family:var(--num);font-size:14px;color:var(--coin)}
+.omon .mo span{color:var(--ink3)}
+.omon .mo.aus{opacity:.34}
+.octl button.nach{font-size:11.5px;font-weight:700;border:3px solid var(--pipe);background:var(--panel2);
+  color:var(--pipe);padding:5px 11px;cursor:pointer}
+.octl button.nach:hover{background:var(--pipe);color:#0B0B18}
 .octl{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:12px;
   border:3px solid var(--edge);background:var(--panel);padding:10px 12px;box-shadow:4px 4px 0 #000}
 .octl label{font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--sky);font-weight:700}
@@ -460,10 +469,14 @@ h2.ch{font-family:"Press Start 2P",monospace;font-size:13px;color:var(--coin);
   ist das kein Zirkelschluss, sondern eine Nachkalkulation. Haken raus bei jedem Block, der zu
   dem Kanal nicht gehört, den ihr gerade betrachtet.</p>
 
+  <div class="omon" id="o-monate"></div>
   <div class="obar" id="o-blocks"></div>
   <div class="osum" id="o-sum"></div>
 
   <div class="octl">
+    <span class="og"><label>Zeitraum</label>
+      <select id="o-sel"></select></span>
+    <span class="og"><button type="button" class="nach" id="o-add">+ Monat nachtragen</button></span>
     <span class="og"><label>Grundlage für den Preis</label>
     <span class="obas">
       <button type="button" id="o-b-stk">gleich je Paneel</button>
@@ -1017,13 +1030,13 @@ function sub(){
   /* Die Monatszahlen. Es kann mehrere Monate geben; genommen wird der neueste,
      denn die Nachkalkulation gilt immer für den zuletzt abgeschlossenen. */
   MDB.ref('ovh').on('value', function(s){
-    var all=s.val()||{}, keys=Object.keys(all).sort();
-    OVKEY=keys.length?keys[keys.length-1]:'';
-    OVH=OVKEY?all[OVKEY]:null;
-    if(OVH && OVH.view){
-      OVBAS=OVH.view.basis||'stk';
-      if(OVH.view.plat!=null && document.activeElement!==$('o-plat')) $('o-plat').value=OVH.view.plat;
-      if(OVH.view.want!=null && document.activeElement!==$('o-want')) $('o-want').value=OVH.view.want;
+    OVALL=s.val()||{};
+    var v=OVALL._view;
+    if(v){
+      OVVIEW={sel:v.sel||'all', basis:v.basis||'stk', plat:v.plat!=null?v.plat:'21.94',
+              want:v.want!=null?v.want:'0', aus:v.aus||{}};
+      if(document.activeElement!==$('o-plat')) $('o-plat').value=OVVIEW.plat;
+      if(document.activeElement!==$('o-want')) $('o-want').value=OVVIEW.want;
     }
     try{ ovhRender(); }catch(e){}
   }, function(){});
@@ -1059,8 +1072,61 @@ function mark(){
    Beide Wege verteilen dieselbe Summe — nur anders. Wo sie weit auseinander
    liegen, ist die Zahl unsicher, und genau das soll man sehen können.
    ══════════════════════════════════════════════════════════════════════════ */
-var OVH=null, OVKEY='', OVBAS='stk', _ovSaveT=null;
+var OVALL={}, OVVIEW={sel:'all', basis:'stk', plat:'21.94', want:'0', aus:{}}, _ovSaveT=null;
 
+/* Ein Kostenblock wird über den NAMEN wiedererkannt, nicht über seinen
+   Schlüssel: die Blöcke eines neuen Monats entstehen aus den Bills und tragen
+   dort eigene Schlüssel. Wer „Fahrer" einmal abgewählt hat, meint ihn in jedem
+   Monat — deshalb hängt der Haken am Namen. */
+function ovSlug(n){
+  return String(n||'').toLowerCase().replace(/[^a-z\u0E00-\u0E7F]/g,'').slice(0,40) || 'x';
+}
+function ovAus(blk){
+  var k=ovSlug(blk&&blk.n);
+  if(OVVIEW.aus && OVVIEW.aus[k]!=null) return !!OVVIEW.aus[k];
+  return !!(blk && blk.on===false);          // Fassung vor dem Mehrmonatsumbau
+}
+function ovMonate(){
+  return Object.keys(OVALL).filter(function(k){ return k.charAt(0)!=='_'; }).sort();
+}
+/* Welche Monate zählen gerade? "all" alle, "lN" die letzten N, sonst genau einer. */
+function ovFenster(){
+  var m=ovMonate(), v=OVVIEW.sel||'all';
+  if(v==='all') return m;
+  var n=/^l(\d+)$/.exec(v);
+  if(n) return m.slice(-(+n[1]));
+  return m.indexOf(v)>=0 ? [v] : m;
+}
+/* Der gewichtete Durchschnitt, und nur der ist richtig: Summe aller Kosten
+   geteilt durch die Summe aller Paneele. Den Mittelwert der Monats-฿/Paneel zu
+   nehmen wäre falsch — ein schwacher Monat mit wenig Stück zählte dann genauso
+   viel wie ein starker. */
+function ovAgg(){
+  var ms=ovFenster(), a={ms:ms, kosten:0, aus:0, panels:0, umsatz:0, orders:0, mix:{}, je:[], bl:{}};
+  ms.forEach(function(k){
+    var r=OVALL[k]||{}, b=r.blocks||{}, an=0;
+    Object.keys(b).forEach(function(id){
+      var x=b[id], v=+x.v||0, sl=ovSlug(x.n);
+      var z=a.bl[sl]||(a.bl[sl]={n:x.n, v:0, q:x.q, ids:{}});
+      z.v+=v; z.ids[k]=id;
+      if(ovAus(x)) a.aus+=v; else an+=v;
+    });
+    a.kosten+=an; a.panels+=+r.panels||0; a.umsatz+=+r.umsatz||0; a.orders+=+r.orders||0;
+    Object.keys(r.mix||{}).forEach(function(c){ a.mix[c]=(a.mix[c]||0)+(+r.mix[c]||0); });
+    a.je.push({m:k, panels:+r.panels||0, kosten:an, je:(+r.panels>0?an/(+r.panels):0)});
+  });
+  return a;
+}
+function ovSave(pfad, wert){
+  if(!MDB) return;
+  MDB.ref('ovh/'+pfad).set(wert).catch(function(){
+    $('status').textContent='Gemeinkosten nicht gespeichert.';
+  });
+}
+function ovViewSave(){
+  clearTimeout(_ovSaveT);
+  _ovSaveT=setTimeout(function(){ ovSave('_view', OVVIEW); }, 900);
+}
 /* KP36 und KP036 sind dasselbe Dekor, in den Bestellzeilen steht mal so, mal so. */
 function ovNorm(c){
   c=String(c==null?'':c).trim().toUpperCase().replace(/\s+/g,'');
@@ -1103,8 +1169,9 @@ function ovMould(code, list){
 /* Wareneinsatz des Monats: jede verkaufte Menge mal dem Preis ihrer Zeile, alles
    auf 2,90 m. Was sich keiner Zeile zuordnen lässt, wird NICHT stillschweigend
    mit null bewertet, sondern am Ende hochgerechnet und offen ausgewiesen. */
-function ovWareneinsatz(list){
-  var mix=(OVH&&OVH.mix)||{}, wert=0, stk=0, genau=0, offen=0, ohne=[];
+function ovWareneinsatz(list, mix){
+  mix=mix||{};
+  var wert=0, stk=0, genau=0, offen=0, ohne=[];
   Object.keys(mix).forEach(function(c){
     var q=+mix[c]||0, m=ovMould(c, list);
     if(!m){ offen+=q; if(ohne.length<10) ohne.push(c); return; }
@@ -1119,64 +1186,74 @@ function ovWareneinsatz(list){
   return { wert:wert, stk:stk, genau:genau, offen:offen, ohne:ohne, schnitt:schnitt,
            hoch: wert + offen*schnitt };          // hochgerechnet auf alle Stück
 }
-function ovSum(){
-  var b=(OVH&&OVH.blocks)||{}, an=0, aus=0;
-  Object.keys(b).forEach(function(k){ if(b[k].on===false) aus+=+b[k].v||0; else an+=+b[k].v||0; });
-  return {an:an, aus:aus};
-}
-function ovSave(pfad, wert){
-  if(!MDB || !OVKEY) return;
-  MDB.ref('ovh/'+OVKEY+'/'+pfad).set(wert).catch(function(){
-    $('status').textContent='Gemeinkosten nicht gespeichert.';
-  });
-}
 function ovhRender(){
   if(!me) return;
   var wrap=$('o-blocks'); if(!wrap) return;
-  if(!OVH){
-    wrap.innerHTML='<div class="oblk"><div class="on"><b>Noch keine Monatszahlen</b>'
-      +'<i>v2/ovh fehlt</i></div></div>';
-    $('o-sum').innerHTML=''; $('o-rows').innerHTML=''; $('o-note').innerHTML=''; return;
+  var alleM=ovMonate();
+  if(!alleM.length){
+    wrap.innerHTML='<div class="oblk"><div class="on"><b>Noch kein Monat erfasst</b>'
+      +'<i>„+ Monat nachtragen" drücken</i></div></div>';
+    $('o-monate').innerHTML=''; $('o-sum').innerHTML=''; $('o-rows').innerHTML='';
+    $('o-note').innerHTML=''; ovSelFill(); return;
   }
-  var b=OVH.blocks||{};
-  var QT={bills:'aus Bills', lohn:'aus der Lohnliste', extern:'von Hand', offen:'nicht gebucht'};
-  wrap.innerHTML=Object.keys(b).sort(function(x,y){ return (+b[y].v||0)-(+b[x].v||0); })
-    .map(function(k){
-      var x=b[k], an=x.on!==false;
-      return '<div class="oblk'+(an?'':' off')+'">'
-        +'<input type="checkbox" data-ob="'+esc(k)+'"'+(an?' checked':'')+'>'
-        +'<span class="on"><b>'+esc(x.n||k)+'</b><i>'+esc(QT[x.q]||x.q||'')+'</i></span>'
-        +'<input type="number" step="100" data-ov="'+esc(k)+'" value="'+(+x.v||0)+'">'
-      +'</div>';
-    }).join('');
+  ovSelFill();
+  var a=ovAgg(), einer=(a.ms.length===1);
+
+  /* Monatsstreifen: was drin ist, was draußen, und wie sich ฿/Paneel bewegt.
+     Erst daran sieht man, ob der Durchschnitt ruhig liegt oder wandert. */
+  $('o-monate').innerHTML=alleM.slice().reverse().map(function(k){
+    var drin=a.ms.indexOf(k)>=0;
+    var z=a.je.find(function(x){ return x.m===k; });
+    var r=OVALL[k]||{};
+    return '<div class="mo'+(drin?'':' aus')+'"><b>'+esc(k)+'</b>'
+      +'<span>'+f0(+r.panels||0)+' Stk<br>'+(z?f2(z.je)+' ฿/Stk':'—')+'</span></div>';
+  }).join('');
+
+  /* Die Blöcke. Bei einem Monat sind die Beträge änderbar, bei mehreren steht
+     dort die Summe des Zeitraums — die ließe sich nicht sinnvoll auf die Monate
+     zurückrechnen, also bleibt sie schreibgeschützt. */
+  var QT={bills:'aus Bills', lohn:'aus der Lohnliste', extern:'von Hand',
+          offen:'nicht gebucht', uebernommen:'übernommen · prüfen'};
+  var sl=Object.keys(a.bl).sort(function(x,y){ return a.bl[y].v-a.bl[x].v; });
+  wrap.innerHTML=sl.map(function(k){
+    var x=a.bl[k], an=!ovAus(x);
+    return '<div class="oblk'+(an?'':' off')+'">'
+      +'<input type="checkbox" data-ob="'+esc(k)+'"'+(an?' checked':'')+'>'
+      +'<span class="on"><b>'+esc(x.n||k)+'</b><i>'+esc(QT[x.q]||x.q||'')
+        +(einer?'':' · '+a.ms.length+' Monate')+'</i></span>'
+      +'<input type="number" step="100" data-ov="'+esc(k)+'" value="'+Math.round(x.v)+'"'
+        +(einer?'':' readonly title="Summe mehrerer Monate — zum Ändern einen einzelnen Monat wählen"')+'>'
+    +'</div>';
+  }).join('');
 
   var list=(_calcList.length?_calcList:mList()).filter(function(g){ return +g.usd>0; });
-  var sum=ovSum();
-  var panels=+OVH.panels||0;
-  var jeStk = panels>0 ? sum.an/panels : 0;                    // ฿ je 2,90-m-Paneel
-  var we = ovWareneinsatz(list);
-  var satz = we.hoch>0 ? sum.an/we.hoch : 0;                   // Zuschlagssatz
+  var jeStk = a.panels>0 ? a.kosten/a.panels : 0;
+  var we = ovWareneinsatz(list, a.mix);
+  var satz = we.hoch>0 ? a.kosten/we.hoch : 0;
   var lf = (SET.len>0?SET.len:MEAS_LEN)/MEAS_LEN;
-  var ges  = we.stk+we.offen;
+  var ges = we.stk+we.offen;
   var deck = ges>0 ? we.stk/ges : 0;
   var scharf = ges>0 ? we.genau/ges : 0;
+  var titel = einer ? a.ms[0] : a.ms[0]+' – '+a.ms[a.ms.length-1];
 
   $('o-sum').innerHTML=
-     '<div><div class="k">Monat</div><div class="v">'+esc(OVH.monat||OVKEY)+'</div>'
-      +'<div class="z">'+f0(OVH.orders||0)+' Orders · '+f0(OVH.umsatz||0)+' ฿ Umsatz</div></div>'
-    +'<div><div class="k">Laufende Kosten</div><div class="v">'+f0(sum.an)+' ฿</div>'
-      +'<div class="z">'+(sum.aus>0?f0(sum.aus)+' ฿ abgewählt':'alle Blöcke drin')+'</div></div>'
-    +'<div><div class="k">Paneele im Monat</div><div class="v">'+f0(panels)+'</div>'
+     '<div><div class="k">Zeitraum</div><div class="v">'+esc(titel)+'</div>'
+      +'<div class="z">'+a.ms.length+' Monat'+(a.ms.length===1?'':'e')+' · '+f0(a.orders)+' Orders · '
+        +f0(a.umsatz)+' ฿ Umsatz</div></div>'
+    +'<div><div class="k">Laufende Kosten</div><div class="v">'+f0(a.kosten)+' ฿</div>'
+      +'<div class="z">'+(a.aus>0?f0(a.aus)+' ฿ abgewählt':'alle Blöcke drin')+'</div></div>'
+    +'<div><div class="k">Paneele im Zeitraum</div><div class="v">'+f0(a.panels)+'</div>'
       +'<div class="z">verkauft, ohne stornierte</div></div>'
     +'<div><div class="k">Gleich je Paneel</div><div class="v">'+f2(jeStk*lf)+' ฿</div>'
-      +'<div class="z">'+(SET.len!==MEAS_LEN?f2(jeStk)+' ฿ je 2,90 m':'je 2,90-m-Paneel')+'</div></div>'
+      +'<div class="z">'+(SET.len!==MEAS_LEN?f2(jeStk)+' ฿ je 2,90 m':'je 2,90-m-Paneel')
+        +(einer?'':' · gewichtet')+'</div></div>'
     +'<div><div class="k">Zuschlag auf den Einkauf</div><div class="v">'+f2(satz*100)+' %</div>'
       +'<div class="z">Wareneinsatz '+f0(we.hoch)+' ฿ · '+f2(scharf*100)+' % eindeutig'
         +(deck>scharf?', '+f2((deck-scharf)*100)+' % ungefähr':'')
         +(deck<0.999?', '+f2((1-deck)*100)+' % offen':'')+'</div></div>';
 
-  $('o-b-stk').classList.toggle('on', OVBAS==='stk');
-  $('o-b-pct').classList.toggle('on', OVBAS==='pct');
+  $('o-b-stk').classList.toggle('on', OVVIEW.basis==='stk');
+  $('o-b-pct').classList.toggle('on', OVVIEW.basis==='pct');
   var plat=num($('o-plat').value)/100, want=num($('o-want').value);
   var teiler=1-plat;
 
@@ -1184,21 +1261,33 @@ function ovhRender(){
     var basis=calcTot(g, SET.len>0?SET.len:MEAS_LEN).tot;
     var gkA=jeStk*lf, gkB=basis*satz;
     var sA=basis+gkA, sB=basis+gkB;
-    var selbst=(OVBAS==='stk')?sA:sB;
+    var selbst=(OVVIEW.basis==='stk')?sA:sB;
     var preis= teiler>0.02 ? (selbst+want)/teiler : 0;
     var dim=function(an){ return an?'':' dim2'; };
     return '<tr>'
       +'<td class="lbl"><span class="dim">'+esc(g.mat||'')+' '+esc(g.w)+' × '+esc(g.t)+' mm</span>'
         +(g.code?'<span class="codes">'+esc(g.code)+'</span>':'')+'</td>'
       +'<td class="n mono">'+f2(basis)+' ฿</td>'
-      +'<td class="n mono gk'+dim(OVBAS==='stk')+'">+ '+f2(gkA)+'</td>'
-      +'<td class="n mono'+dim(OVBAS==='stk')+'"><b>'+f2(sA)+' ฿</b></td>'
-      +'<td class="n mono gk'+dim(OVBAS==='pct')+'">+ '+f2(gkB)+'</td>'
-      +'<td class="n mono'+dim(OVBAS==='pct')+'"><b>'+f2(sB)+' ฿</b></td>'
+      +'<td class="n mono gk'+dim(OVVIEW.basis==='stk')+'">+ '+f2(gkA)+'</td>'
+      +'<td class="n mono'+dim(OVVIEW.basis==='stk')+'"><b>'+f2(sA)+' ฿</b></td>'
+      +'<td class="n mono gk'+dim(OVVIEW.basis==='pct')+'">+ '+f2(gkB)+'</td>'
+      +'<td class="n mono'+dim(OVVIEW.basis==='pct')+'"><b>'+f2(sB)+' ฿</b></td>'
       +'<td class="n mono">'+(preis>0?'<b class="best">'+f2(preis)+' ฿</b>':'<span class="warn">—</span>')+'</td>'
     +'</tr>';
   }).join('');
 
+  var spanne='';
+  if(a.je.length>1){
+    var w=a.je.map(function(x){ return x.je; }).filter(function(v){ return v>0; });
+    if(w.length>1){
+      var lo=Math.min.apply(null,w), hi=Math.max.apply(null,w);
+      spanne='<br><br><b>Wie ruhig der Durchschnitt liegt.</b> Über '+a.je.length+' Monate schwankt '
+        +'der Anteil je Paneel zwischen '+f2(lo)+' und '+f2(hi)+' ฿'
+        +(lo>0 ? ', das sind '+f2((hi-lo)/lo*100)+' % Unterschied zwischen dem günstigsten und dem '
+          +'teuersten Monat' : '')+'. Liegen die Monate dicht beieinander, ist der Durchschnitt '
+        +'belastbar; laufen sie auseinander, sagt euch der Monatsstreifen oben, woran es liegt.';
+    }
+  }
   $('o-note').innerHTML='<b>Wie die letzte Spalte entsteht.</b> Selbstkosten plus euer Gewinn, '
     +'geteilt durch das, was nach der Plattformgebühr übrig bleibt: '
     +'Preis = (Selbstkosten + Gewinn) ÷ '+f2(teiler)+'. Die Gebühr wird also vom '
@@ -1218,29 +1307,150 @@ function ovhRender(){
         +esc(we.ohne.join(', '))+(we.ohne.length>=10?' …':'')+')</span> — ihr Wert ist mit dem '
         +'Schnitt der übrigen hochgerechnet. Trag diese Profile oben ein, dann wird die Spalte scharf.'
       : 'Es fehlt keine Sorte.')
+    +spanne
     +'<br><br><b>Was hier NICHT drin ist:</b> Sägen und Verpacken für den Zuschnitt. Die hängen '
     +'an der Länge, nicht am Monat, und stehen im Rechner darunter.';
+}
+/* Die Zeitraumwahl: erst die Durchschnitte, dann die einzelnen Monate. */
+function ovSelFill(){
+  var sel=$('o-sel'); if(!sel) return;
+  var m=ovMonate(), alt=OVVIEW.sel||'all', o=[];
+  o.push('<option value="all">'+(m.length===1?'nur '+m[0]:'Ø alle '+m.length+' Monate')+'</option>');
+  if(m.length>3) o.push('<option value="l3">Ø letzte 3 Monate</option>');
+  if(m.length>6) o.push('<option value="l6">Ø letzte 6 Monate</option>');
+  m.slice().reverse().forEach(function(k){ o.push('<option value="'+esc(k)+'">'+esc(k)+' einzeln</option>'); });
+  sel.innerHTML=o.join('');
+  sel.value=alt;
+  if(!sel.value) { sel.value='all'; OVVIEW.sel='all'; }
 }
 /* ── Bedienung ── */
 ['o-plat','o-want'].forEach(function(id){
   var e=$(id); if(!e) return;
-  e.addEventListener('input', function(){ ovhRender(); ovViewSave(); });
-  e.addEventListener('change', function(){ ovhRender(); ovViewSave(); });
+  var f=function(){ OVVIEW[id==='o-plat'?'plat':'want']=e.value; ovhRender(); ovViewSave(); };
+  e.addEventListener('input', f); e.addEventListener('change', f);
 });
-$('o-b-stk').addEventListener('click', function(){ OVBAS='stk'; ovhRender(); ovViewSave(); });
-$('o-b-pct').addEventListener('click', function(){ OVBAS='pct'; ovhRender(); ovViewSave(); });
-function ovViewSave(){
-  clearTimeout(_ovSaveT);
-  _ovSaveT=setTimeout(function(){
-    ovSave('view', {basis:OVBAS, plat:$('o-plat').value, want:$('o-want').value});
-  }, 900);
-}
+$('o-sel').addEventListener('change', function(){ OVVIEW.sel=this.value; ovhRender(); ovViewSave(); });
+$('o-b-stk').addEventListener('click', function(){ OVVIEW.basis='stk'; ovhRender(); ovViewSave(); });
+$('o-b-pct').addEventListener('click', function(){ OVVIEW.basis='pct'; ovhRender(); ovViewSave(); });
 $('o-blocks').addEventListener('change', function(e){
   var t=e.target; if(!t) return;
   var kb=t.getAttribute('data-ob'), kv=t.getAttribute('data-ov');
-  if(kb){ OVH.blocks[kb].on=t.checked; ovhRender(); ovSave('blocks/'+kb+'/on', t.checked); }
-  else if(kv){ var v=num(t.value); OVH.blocks[kv].v=v; ovhRender(); ovSave('blocks/'+kv+'/v', v); }
+  if(kb){
+    OVVIEW.aus=OVVIEW.aus||{};
+    OVVIEW.aus[kb]=!t.checked;
+    ovhRender(); ovViewSave();
+  } else if(kv && !t.readOnly){
+    // Nur bei EINEM Monat änderbar — dann ist auch klar, wohin der Wert gehört.
+    var a=ovAgg(); if(a.ms.length!==1) return;
+    var mon=a.ms[0], id=a.bl[kv] && a.bl[kv].ids[mon];
+    if(!id) return;
+    var v=num(t.value);
+    OVALL[mon].blocks[id].v=v;
+    ovhRender(); ovSave(mon+'/blocks/'+id+'/v', v);
+  }
 });
+
+/* ── Einen abgeschlossenen Monat nachtragen ────────────────────────────────
+   Absichtlich eine Taste und kein Automatismus: die Bestellungen und die Bills
+   sind zusammen einige zehn Megabyte, die will niemand bei jedem Seitenaufruf
+   laden. Einmal im Monat, am Rechner, gedrückt — das reicht.
+   Gemessen wird, was messbar ist: Paneele, Umsatz und der Verkaufsmix aus den
+   Bestellungen, die Bills-Blöcke aus den Bills. Löhne, Miete und Spediteure
+   stehen dort nicht; die werden aus dem Vormonat übernommen und als
+   „übernommen · prüfen" markiert, damit niemand sie für gemessen hält.       */
+function ovMonatLabel(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2); }
+async function ovNachtragen(){
+  var heute=new Date();
+  var vor=new Date(heute.getFullYear(), heute.getMonth()-1, 1);
+  var da=ovMonate();
+  var vorschlag=ovMonatLabel(vor);
+  var mon=prompt('Welchen abgeschlossenen Monat nachtragen? (JJJJ-MM)', vorschlag);
+  if(!mon) return;
+  mon=String(mon).trim();
+  if(!/^\d{4}-\d{2}$/.test(mon)){ alert('Bitte im Format 2026-08.'); return; }
+  if(mon===ovMonatLabel(heute) && !confirm(mon+' läuft noch. Trotzdem erfassen?')) return;
+  if(da.indexOf(mon)>=0 && !confirm(mon+' ist schon erfasst. Neu berechnen und überschreiben?')) return;
+
+  var st=$('status'), alt=st.textContent;
+  try{
+    st.textContent='Lade Bestellungen für '+mon+' …';
+    var ords=(await MDB.ref('orders').once('value')).val()||{};
+    var panels=0, umsatz=0, orders=0, mix={};
+    Object.keys(ords).forEach(function(k){
+      var o=ords[k]; if(!o || String(o.date||'').slice(0,7)!==mon) return;
+      if(String(o.status||'')==='cancelled') return;
+      orders++;
+      (o.lineItems||[]).forEach(function(li){
+        var q=parseInt(li.qty,10)||0;
+        umsatz+=parseFloat(li.amount)||0;
+        if(li.type==='panel' && q>0){
+          panels+=q;
+          var c=String(li.code||'').trim().toUpperCase();
+          if(c) mix[c]=(mix[c]||0)+q;
+        }
+      });
+    });
+    if(!panels){ alert('Für '+mon+' stehen keine verkauften Paneele in den Bestellungen.'); st.textContent=alt; return; }
+
+    st.textContent='Lade Belege für '+mon+' … (das dauert einen Moment)';
+    var bl=(await MDB.ref('bills').once('value')).val()||{};
+    var blocks={}, n=1;
+    var billSum={};
+    Object.keys(bl).forEach(function(k){
+      var x=bl[k]; if(!x || String(x.date||'').slice(0,7)!==mon) return;
+      var lab=x.subcatLabel || x.what || 'อื่นๆ / Other';
+      billSum[lab]=(billSum[lab]||0)+(parseFloat(x.amount)||0);
+    });
+    Object.keys(billSum).forEach(function(lab){
+      blocks['b'+('0'+(n++)).slice(-2)]={n:lab, v:Math.round(billSum[lab]), q:'bills'};
+    });
+
+    /* Was nicht in den Bills steht — Löhne, Miete — kommt aus dem zuletzt
+       erfassten Monat. Dabei lauert die Doppelzählung: derselbe Posten heißt in
+       den Bills oft anders. „🚚 ขนส่ง / Spediteure" von Hand und
+       „🚛 ค่าขนส่งบริษัทขนส่ง / Carrier" aus den Bills sind dasselbe Geld, und
+       „⚡ ค่าไฟ / Strom" steckt in „⚡ ค่าไฟฟ้า / Electricity". Deshalb wird nicht
+       nur auf gleiche Namen geprüft, sondern auf den thailändischen Wortkern:
+       enthält einer den anderen, wird NICHT übernommen — die Bills-Zahl ist die
+       gebuchte und gewinnt. */
+    var quelle=da.filter(function(k){ return k<mon; }).pop() || da[da.length-1];
+    var uebernommen=0, doppelt=[];
+    if(quelle && OVALL[quelle] && OVALL[quelle].blocks){
+      var thai=function(t){ var m2=String(t||'').match(/[\u0E00-\u0E7F]+/g); return m2?m2.join(''):''; };
+      var billNamen=Object.keys(blocks).map(function(id){ return {n:blocks[id].n, th:thai(blocks[id].n)}; });
+      var haben={}; Object.keys(blocks).forEach(function(id){ haben[ovSlug(blocks[id].n)]=1; });
+      var qb=OVALL[quelle].blocks;
+      Object.keys(qb).forEach(function(id){
+        var x=qb[id];
+        if(x.q==='bills' || haben[ovSlug(x.n)]) return;
+        var th=thai(x.n);
+        var treffer = th.length>=3 && billNamen.find(function(b){
+          return b.th.length>=3 && (b.th.indexOf(th)>=0 || th.indexOf(b.th)>=0);
+        });
+        if(treffer){ doppelt.push(x.n+' ↔ '+treffer.n); return; }
+        blocks['b'+('0'+(n++)).slice(-2)]={n:x.n, v:+x.v||0, q:'uebernommen'};
+        uebernommen++;
+      });
+    }
+    var rec={monat:mon, panels:panels, umsatz:Math.round(umsatz), orders:orders, mix:mix,
+             blocks:blocks, stand:'erfasst '+new Date().toISOString().slice(0,10)+' von '+(me&&me.name||'')};
+    await MDB.ref('ovh/'+mon).set(rec);
+    st.textContent=alt;
+    var sum=Object.keys(blocks).reduce(function(a2,k){ return a2+blocks[k].v; },0);
+    OVVIEW.sel=mon; ovViewSave();
+    alert(mon+' erfasst.\n\n'+f0(panels)+' Paneele · '+f0(Math.round(umsatz))+' ฿ Umsatz\n'
+      +f0(sum)+' ฿ Kosten · '+f2(sum/panels)+' ฿ je Paneel\n\n'
+      +(uebernommen?uebernommen+' Blöcke aus '+quelle+' übernommen — die Beträge bitte prüfen, '
+        +'Löhne und Miete stehen nicht in den Bills.\n':'Alle Blöcke aus den Bills.\n')
+      +(doppelt.length?'\nNicht übernommen, weil schon in den Bills:\n· '+doppelt.join('\n· '):'')
+      +'\n\nVergleicht die Blockliste mit dem Vormonat: fehlt ein großer Posten, war er in '
+      +'diesem Monat anders gebucht.');
+  }catch(err){
+    st.textContent=alt;
+    alert('Nicht erfasst: '+(err&&err.message||err));
+  }
+}
+$('o-add').addEventListener('click', ovNachtragen);
 
 /* ══════════════════════════════════════════════════════════════════════════
    MARKTPLATZ-RECHNER
