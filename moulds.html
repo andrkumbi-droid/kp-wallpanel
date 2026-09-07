@@ -272,7 +272,29 @@ footer{margin-top:30px;padding-top:15px;border-top:3px solid var(--edge);
 /* Ein Block ist ein Schalter mit einer Zahl daran. Ausgeschaltet bleibt er
    sichtbar und wird blass — er soll nicht verschwinden, sonst vergisst man,
    dass man ihn herausgenommen hat. */
-.obar{display:grid;grid-template-columns:repeat(auto-fit,minmax(232px,1fr));gap:8px;margin-top:16px}
+/* Die App gibt jeden Fahrer und jeden Lagerarbeiter als eigenen Posten heraus —
+   vierzig Kacheln, in denen man nichts mehr findet. Also eine Zeile je Gruppe,
+   zugeklappt, mit Summe und einem Haken, der die ganze Gruppe schaltet. */
+.obar{display:grid;grid-template-columns:1fr;gap:8px;margin-top:16px}
+.ogrp{border:3px solid var(--edge);background:var(--panel);box-shadow:4px 4px 0 #000}
+.ogrp > summary{display:flex;align-items:center;gap:10px;padding:9px 11px;cursor:pointer;
+  list-style:none;user-select:none}
+.ogrp > summary::-webkit-details-marker{display:none}
+.ogrp > summary::marker{content:''}
+.ogrp > summary:hover{background:rgba(107,176,245,.09)}
+.ogrp[open] > summary{border-bottom:3px solid var(--edge)}
+.ogrp .pfeil{color:var(--sky);font-size:11px;width:11px;flex-shrink:0}
+.ogrp[open] .pfeil::after{content:'▼'}
+.ogrp:not([open]) .pfeil::after{content:'▶'}
+.ogrp .gn{flex:1;min-width:0;font-size:13px;font-weight:700;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ogrp .gi{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);
+  font-weight:600;flex-shrink:0}
+.ogrp .gv{font-family:var(--num);font-size:15px;font-weight:700;color:var(--coin);
+  white-space:nowrap;flex-shrink:0}
+.ogrp.off .gn,.ogrp.off .gv{opacity:.4}
+.ogrp .inner{padding:9px;display:grid;grid-template-columns:repeat(auto-fit,minmax(228px,1fr));gap:8px}
+.ogrp input[type=checkbox]{width:17px;height:17px;flex-shrink:0;accent-color:var(--pipe);cursor:pointer}
 .oblk{display:flex;align-items:center;gap:9px;border:3px solid var(--edge);background:var(--panel);
   padding:7px 9px;box-shadow:3px 3px 0 #000}
 .oblk.off{opacity:.4}
@@ -1072,6 +1094,7 @@ function mark(){
    Beide Wege verteilen dieselbe Summe — nur anders. Wo sie weit auseinander
    liegen, ist die Zahl unsicher, und genau das soll man sehen können.
    ══════════════════════════════════════════════════════════════════════════ */
+var OVOPEN={};            // welche Gruppen offen stehen, nur für dieses Fenster
 var OVALL={}, OVVIEW={sel:'all', basis:'stk', plat:'21.94', want:'0', aus:{}}, _ovSaveT=null;
 
 /* Ein Kostenblock wird über den NAMEN wiedererkannt, nicht über seinen
@@ -1117,7 +1140,8 @@ function ovAgg(){
       var wo=paar[0], b=paar[1];
       Object.keys(b).forEach(function(id){
         var x=b[id], v=+x.v||0, sl=ovSlug(x.n);
-        var z=a.bl[sl]||(a.bl[sl]={n:x.n, v:0, q:(wo==='extra'?'hand':x.q), wo:wo, ids:{}});
+        var z=a.bl[sl]||(a.bl[sl]={n:x.n, v:0, q:(wo==='extra'?'hand':x.q), wo:wo,
+          g:(wo==='extra' ? '✍️ Eigene Posten' : (x.g||'📋 Ohne Gruppe')), ids:{}});
         z.v+=v; z.ids[k]=id;
         if(ovAus(x)) a.aus+=v; else an+=v;
       });
@@ -1231,19 +1255,43 @@ function ovhRender(){
           lohn:'aus der Lohnliste', extern:'von Hand', offen:'nicht gebucht',
           uebernommen:'übernommen · prüfen'};
   var sl=Object.keys(a.bl).sort(function(x,y){ return a.bl[y].v-a.bl[x].v; });
-  wrap.innerHTML=sl.map(function(k){
-    var x=a.bl[k], an=!ovAus(x);
-    return '<div class="oblk'+(an?'':' off')+'">'
-      +'<input type="checkbox" data-ob="'+esc(k)+'"'+(an?' checked':'')+'>'
-      +'<span class="on"><b>'+esc(x.n||k)+'</b><i>'+esc(QT[x.q]||x.q||'')
-        +(einer?'':' · '+a.ms.length+' Monate')+'</i></span>'
-      +'<input type="number" step="100" data-ov="'+esc(k)+'" value="'+Math.round(x.v)+'"'
-        +((einer && x.wo==='extra')?''
-          : ' readonly title="'+(x.wo==='extra'
-              ? 'Summe mehrerer Monate — zum Ändern einen einzelnen Monat wählen'
-              : 'Diese Zahl rechnet die Office-App aus den Belegen und der Lohnliste. Ändern geht dort, nicht hier.')+'"')+'>'
-    +'</div>';
+  var gr={}, gord=[];
+  sl.forEach(function(k){
+    var g=a.bl[k].g || '📋 Ohne Gruppe';
+    if(!gr[g]){ gr[g]={v:0, an:0, n:0, keys:[]}; gord.push(g); }
+    gr[g].keys.push(k); gr[g].v+=a.bl[k].v; gr[g].n++;
+    if(!ovAus(a.bl[k])) gr[g].an++;
+  });
+  gord.sort(function(x,y){ return gr[y].v-gr[x].v; });
+  wrap.innerHTML=gord.map(function(g){
+    var G=gr[g], allesAus=(G.an===0), teils=(G.an>0 && G.an<G.n);
+    var kacheln=G.keys.map(function(k){
+      var x=a.bl[k], an=!ovAus(x);
+      return '<div class="oblk'+(an?'':' off')+'">'
+        +'<input type="checkbox" data-ob="'+esc(k)+'"'+(an?' checked':'')+'>'
+        +'<span class="on"><b>'+esc(x.n||k)+'</b><i>'+esc(QT[x.q]||x.q||'')+'</i></span>'
+        +'<input type="number" step="100" data-ov="'+esc(k)+'" value="'+Math.round(x.v)+'"'
+          +((einer && x.wo==='extra')?''
+            : ' readonly title="'+(x.wo==='extra'
+                ? 'Summe mehrerer Monate — zum Ändern einen einzelnen Monat wählen'
+                : 'Diese Zahl rechnet die Office-App aus den Belegen und der Lohnliste. Ändern geht dort, nicht hier.')+'"')+'>'
+      +'</div>';
+    }).join('');
+    return '<details class="ogrp'+(allesAus?' off':'')+'" data-g="'+esc(g)+'"'+(OVOPEN[g]?' open':'')+'>'
+      +'<summary>'
+        +'<input type="checkbox" data-gr="'+esc(g)+'"'+(G.an>0?' checked':'')+'>'
+        +'<span class="pfeil"></span>'
+        +'<span class="gn">'+esc(g)+'</span>'
+        +'<span class="gi">'+G.n+' Posten'+(teils?' · '+(G.n-G.an)+' aus':'')
+          +(einer?'':' · '+a.ms.length+' Monate')+'</span>'
+        +'<span class="gv">'+f0(G.v)+' ฿</span>'
+      +'</summary><div class="inner">'+kacheln+'</div></details>';
   }).join('');
+  // Ein halb abgewählter Haken zeigt den Zwischenzustand statt zu lügen.
+  wrap.querySelectorAll('input[data-gr]').forEach(function(cb){
+    var G=gr[cb.getAttribute('data-gr')];
+    cb.indeterminate = !!(G && G.an>0 && G.an<G.n);
+  });
 
   var list=(_calcList.length?_calcList:mList()).filter(function(g){ return +g.usd>0; });
   var jeStk = a.panels>0 ? a.kosten/a.panels : 0;
@@ -1360,8 +1408,28 @@ function ovSelFill(){
 $('o-sel').addEventListener('change', function(){ OVVIEW.sel=this.value; ovhRender(); ovViewSave(); });
 $('o-b-stk').addEventListener('click', function(){ OVVIEW.basis='stk'; ovhRender(); ovViewSave(); });
 $('o-b-pct').addEventListener('click', function(){ OVVIEW.basis='pct'; ovhRender(); ovViewSave(); });
+// Aufgeklappt bleibt aufgeklappt, auch wenn die Liste sich neu baut.
+$('o-blocks').addEventListener('toggle', function(e){
+  var d=e.target; if(!d || d.tagName!=='DETAILS') return;
+  var g=d.getAttribute('data-g'); if(g) OVOPEN[g]=d.open;
+}, true);
+// Ein Klick auf den Gruppenhaken soll nicht auch noch die Gruppe auf- und zuklappen.
+$('o-blocks').addEventListener('click', function(e){
+  if(e.target && e.target.getAttribute && e.target.getAttribute('data-gr')) e.stopPropagation();
+});
 $('o-blocks').addEventListener('change', function(e){
   var t=e.target; if(!t) return;
+  var gr2=t.getAttribute('data-gr');
+  if(gr2){
+    // Die ganze Gruppe auf einmal — das ist der eigentliche Zweck der Zeile:
+    // „Fahrer gehören nicht auf ein TikTok-Paket“ ist eine Entscheidung, keine sechs.
+    var an=t.checked, a2=ovAgg();
+    OVVIEW.aus=OVVIEW.aus||{};
+    Object.keys(a2.bl).forEach(function(k){
+      if((a2.bl[k].g||'📋 Ohne Gruppe')===gr2) OVVIEW.aus[k]=!an;
+    });
+    ovhRender(); ovViewSave(); return;
+  }
   var kb=t.getAttribute('data-ob'), kv=t.getAttribute('data-ov');
   if(kb){
     OVVIEW.aus=OVVIEW.aus||{};
