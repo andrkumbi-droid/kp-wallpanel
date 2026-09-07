@@ -404,6 +404,9 @@ h2.ch{font-family:"Press Start 2P",monospace;font-size:13px;color:var(--coin);
   white-space:nowrap;color:var(--ink)}
 .cw.neg span:last-child{color:var(--ink2)}
 .cw .cl{color:var(--ink2)}
+.cw.mid{border-top:3px solid var(--edge);margin-top:7px;padding-top:9px;font-size:15px}
+.cw.mid .cl{color:var(--ink);font-weight:700}
+.cw.mid span:last-child{color:var(--sky);font-weight:700}
 .cw.sum{border-bottom:none;border-top:3px solid var(--edge);margin-top:7px;padding-top:10px;font-size:16px}
 .cw.sum .cl{color:var(--ink);font-weight:700}
 .cw.sum span:last-child{color:var(--pipe);font-size:20px}
@@ -592,6 +595,12 @@ h2.ch{font-family:"Press Start 2P",monospace;font-size:13px;color:var(--coin);
     Büro und Fahrer laufen an diesem Tag ohnehin, sie werden durch den zusätzlichen Auftrag nicht
     teurer. Was dann übrig bleibt, heißt Deckungsbeitrag, und er darf niedriger sein als der
     Vollkostenpreis, solange er über null liegt. Dauerhaft davon leben kann man nicht.
+    <br><br>
+    <b>Warum die Umsatzsteuer im Mindestpreis steckt.</b> Eure Preise sind Bruttopreise — von
+    107 ฿ gehören 7 ฿ dem Finanzamt. Eure Einkaufs- und Frachtkosten oben sind dagegen netto, weil
+    die Einfuhrsteuer erstattet wird. Wer beides ohne Abzug gegenüberstellt, rechnet jeden
+    Mindestpreis rund 7 % zu niedrig. Aus der Plattformgebühr holt ihr euch die darin enthaltene
+    Steuer als Vorsteuer zurück — daher die Zeile „abzüglich Vorsteuer".
     <br><br>
     <b>Die Gebühren sind belegt, nicht geschätzt.</b> TikTok Shop Thailand: 10,70 % Kommission
     + 3,21 % Transaktion + 8,03 % Commerce Growth Fee + 1,07 ฿ je Bestellung = <b>21,94 %</b>.
@@ -1307,7 +1316,7 @@ function ovhRender(){
 
   /* Die Tabelle beantwortet nur noch eine Frage: was kostet uns ein Paneel,
      alles eingerechnet. Was es kosten MUSS, hängt an Plattform, Länge und
-     Wunschgewinn — das steht im Rechner darunter, für ein Stück auf einmal. */
+     Plattform — das steht im Rechner darunter, für ein Stück auf einmal. */
 
   var sc=$('o-scol'); if(sc) sc.textContent=f2(satz*100)+' % auf den Einkauf';
   var billig=Infinity;
@@ -1340,7 +1349,7 @@ function ovhRender(){
   $('o-note').innerHTML='<b>Was in dieser Liste steht.</b> Was ein Paneel euch kostet, wenn alles '
     +'mitgerechnet ist: die Ware samt Fracht und der Anteil am Betrieb. Das ist die Untergrenze — '
     +'darunter verkauft ihr mit Verlust. Was ihr wirklich verlangen müsst, hängt an Plattform, '
-    +'Länge und Wunschgewinn und steht im Rechner darunter. Die Länge dieser Liste stellt ihr '
+    +'Länge und Umsatzsteuer und steht im Rechner darunter. Die Länge dieser Liste stellt ihr '
     +'ganz oben ein, sie gilt für alle Zeilen.'
     +'<br><br><b>Warum der Anteil am Einkaufspreis hängt.</b> Die laufenden Kosten werden im '
     +'Verhältnis zum Warenwert verteilt: ein teures Profil bindet mehr Platz und mehr Kapital als '
@@ -1475,6 +1484,13 @@ function calcTot(g, lenM){
   var frei=pcs>0 ? (SET.cont||0)/pcs : 0;
   return {pcs:pcs, goods:goods, frei:frei, tot:goods>0?goods+frei:0};
 }
+/* Der Umsatzsteueranteil in einem BRUTTOPREIS. Jeder Preis in dieser Firma ist
+   brutto — die Rechnung an den Kunden weist 7/107 als VAT aus. Die Einkaufs-
+   und Frachtkosten oben sind dagegen NETTO, weil die Einfuhr-VAT erstattet
+   wird. Beides in einer Formel zu mischen, ohne die Steuer abzuziehen, macht
+   jeden Mindestpreis um rund 7 % zu niedrig. */
+var VAT_ANTEIL = 7/107;
+
 /* Verkäuferanteil am Versand, [bis kg, ฿] — aus den Rate Cards. */
 var STD_SELLER=[[3,0],[5,2],[11,3],[15,4],[20,5]];
 var BULK_SELLER=[[3,0],[10,3],[15,4],[20,5],[100,7]];
@@ -1613,7 +1629,14 @@ function calcRun(){
      künstlich teuer. Genau deshalb ist der Zuschnittkasten weggefallen. */
   var selbst = material + gemein + versand;
   var fest   = selbst;
-  var teiler = 1 - geb - aff;
+  /* Was von einem Baht Verkaufspreis wirklich bei euch ankommt. Zwei Abzüge,
+     in dieser Reihenfolge:
+       1. 7/107 gehören dem Finanzamt — die Umsatzsteuer war nie euer Geld.
+       2. Vom Rest nimmt die Plattform ihren Anteil. Ihre Gebühr enthält selbst
+          VAT, die ihr als Vorsteuer zurückholt, deshalb wirkt sie nur auf den
+          Nettoteil.
+     Kurz: teiler = (1 − VAT) × (1 − Gebühr − Provision). */
+  var teiler = (1 - VAT_ANTEIL) * (1 - geb - aff);
   var moeglich = teiler > 0.02;
   var mindest= moeglich ? fest/teiler : 0;
   var preis  = mindest;
@@ -1637,21 +1660,25 @@ function calcRun(){
     $('c-be').innerHTML=''; cSave(); return;
   }
 
-  var zn=[['Mindestpreis', preis, '']];
-  if(geb>0)       zn.push(['Plattformgebühr · '+f2(geb*100)+' %', -gebuehr, 'neg']);
-  if(provision>0) zn.push(['Affiliate', -provision, 'neg']);
-  zn.push(['Material · Einkauf '+f2(t.goods)+' + Fracht '+f2(t.frei), -material, 'neg']);
-  if(gemein>0) zn.push(['Betriebsanteil · '+oa.txt, -gemein, 'neg']);
-
-  var html=zn.map(function(z){
-    return '<div class="cw '+z[2]+'"><span class="cl">'+esc(z[0])+'</span><span>'
-      +(z[1]<0?'−':'')+f2(Math.abs(z[1]))+' ฿</span></div>';
-  }).join('');
-  html+='<div class="cw sum"><span class="cl">bleibt übrig</span><span>'
-    +f2(gewinn)+' ฿</span></div>';
-  html+='<div class="cfoot">Genau null — das ist ja der Mindestpreis. '
-    +'Jeder Baht, den ihr darüber verlangt, bringt euch <b>'+f2(teiler)+' ฿</b>; '
-    +'den Rest nimmt die Plattform.</div>';
+  /* Aufwärts statt abwärts: erst was das Stück kostet, dann was oben drauf
+     muss. So endet die Rechnung mit der Zahl, die man sucht, statt mit einer
+     Null, die nichts sagt. */
+  var ustNetto = preis*VAT_ANTEIL - (gebuehr+provision)*VAT_ANTEIL;   // abzüglich Vorsteuer
+  var html='';
+  var zeile=function(lbl, wert, cls, vz){
+    return '<div class="cw '+(cls||'')+'"><span class="cl">'+esc(lbl)+'</span><span>'
+      +(vz||'')+f2(wert)+' ฿</span></div>';
+  };
+  html+=zeile('Material · Einkauf '+f2(t.goods)+' + Fracht '+f2(t.frei), material, '', '');
+  if(gemein>0) html+=zeile('Betriebsanteil · '+oa.txt, gemein, '', '+ ');
+  html+=zeile('Selbstkosten je Stück', selbst, 'mid', '= ');
+  if(gebuehr>0)   html+=zeile('Plattformgebühr · '+f2(geb*100)+' %', gebuehr, 'neg', '+ ');
+  if(provision>0) html+=zeile('Affiliate · '+f2(aff*100)+' %', provision, 'neg', '+ ');
+  html+=zeile('Umsatzsteuer 7 %, abzüglich Vorsteuer', ustNetto, 'neg', '+ ');
+  html+='<div class="cw sum"><span class="cl">Mindestpreis</span><span>'+f2(preis)+' ฿</span></div>';
+  html+='<div class="cfoot">Das ist der Preis, bei dem genau null übrig bleibt. '
+    +'Jeder Baht darüber bringt euch <b>'+f2(teiler)+' ฿</b> — den Rest teilen sich '
+    +(geb>0?'Plattform und Finanzamt':'das Finanzamt')+'.</div>';
   html+='<div class="cfoot">Aus einem 2,90-m-Paneel fallen <b>'+jePanele+'</b> Stück, '
     +'das kostet '+f2(jeStk)+' Schnitte je Stück. Ein Stück wiegt <b>'+f2(stkKg)+' kg</b>'
     +(km.echt?'':' <span class="miss">(geschätzt, kg/m fehlt oben)</span>')
@@ -1670,7 +1697,8 @@ function calcRun(){
      '<div class="cw sum" style="margin-top:0"><span class="cl">Mindestpreis</span><span>'
       +f2(mindest)+' ฿</span></div>'
     +'<div style="margin:10px 0">Darunter zahlt ihr drauf. Er enthält die Ware samt Fracht, den '
-      +'Anteil am Betrieb und die Plattformgebühr. '
+      +'Anteil am Betrieb, die Plattformgebühr und die 7 % Umsatzsteuer, die von jedem '
+      +'Verkaufspreis ans Finanzamt gehen. '
       +(gemein>0?'':'<span class="warn">Der Betriebsanteil ist gerade abgeschaltet — dieser Preis '
         +'trägt Halle, Büro und Werbung also nicht.</span>')+'</div>'
     +'<div style="margin-bottom:10px"><b>'+f2(pDeck)+' ฿</b> ist die absolute Untergrenze für eine '
