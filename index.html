@@ -9501,9 +9501,17 @@ function salesReportPrint(scope){
     +'.note{font-size:8pt;color:#555;margin-top:5px;line-height:1.5}';
   var body='<div class="hd"><h1>'+e(title)+'</h1><div class="d">KP Wallpanel · บริษัท พิมมิแกรนด์ จำกัด<br>'
     +'พิมพ์ / printed '+now.toLocaleDateString('th-TH')+' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0')+'</div></div>'+h;
-  printReceiptDoc(body, CSS, '210mm', '297mm');
+  /* Dateiname fuer "Als PDF speichern": Zeitraum im Namen, damit zwoelf
+     Monatsberichte im Ordner unterscheidbar bleiben. */
+  var datei = scope==='year' ? ('KP-Wallpanel-Year-Report-'+R.year)
+                             : ('KP-Wallpanel-Month-Report-'+mk);
+  printReceiptDoc(body, CSS, '210mm', '297mm', datei);
 }
-function printReceiptDoc(bodyHTML, cssOverride, w, h){
+/* fileName ist optional und rein kosmetisch — aber es entscheidet, wie die
+   Datei heisst, wenn jemand im Druckdialog "Als PDF speichern" waehlt. Ohne
+   Titel heisst sie so wie die App, und im Ordner liegen zehn gleichnamige
+   Dateien. */
+function printReceiptDoc(bodyHTML, cssOverride, w, h, fileName){
   var old=document.getElementById('kp-print-iframe'); if(old&&old.parentNode) old.parentNode.removeChild(old);
   var f=document.createElement('iframe'); f.id='kp-print-iframe';
   // Off-screen (not display:none / visibility:hidden — those can print blank on mobile).
@@ -9511,7 +9519,10 @@ function printReceiptDoc(bodyHTML, cssOverride, w, h){
   document.body.appendChild(f);
   var doc=f.contentWindow.document;
   doc.open();
-  doc.write('<!DOCTYPE html><html><head><meta charset="utf-8"><style>'+(cssOverride||RECEIPT_PRINT_CSS)+'</style></head><body>'+bodyHTML+'</body></html>');
+  var _t = fileName ? String(fileName).replace(/[<>&"]/g,'').slice(0,120) : '';
+  doc.write('<!DOCTYPE html><html><head><meta charset="utf-8">'
+    +(_t?'<title>'+_t+'</title>':'')
+    +'<style>'+(cssOverride||RECEIPT_PRINT_CSS)+'</style></head><body>'+bodyHTML+'</body></html>');
   doc.close();
   var done=false;
   function fire(){
@@ -9522,6 +9533,16 @@ function printReceiptDoc(bodyHTML, cssOverride, w, h){
     // rasterizing — so removing the iframe then prints a blank page. Leave it in place;
     // it's cleaned up at the start of the next print, plus a long safety-net fallback.
     setTimeout(function(){ if(f&&f.parentNode) f.parentNode.removeChild(f); }, 120000);
+    /* Welchen Titel Chrome als Dateinamen nimmt, haengt an der Version: mal den
+       des Iframes, mal den der Seite. Also beide setzen und den der Seite
+       danach zurueckdrehen — sonst steht der Berichtsname dauerhaft im Tab. */
+    if(_t){
+      var _alt=document.title;
+      document.title=_t;
+      var _back=function(){ document.title=_alt; };
+      try{ window.addEventListener('afterprint', function(){ setTimeout(_back, 2000); }, {once:true}); }catch(e){}
+      setTimeout(_back, 30000);
+    }
     try{ iw.focus(); iw.print(); }catch(e){ try{ window.print(); }catch(_){} }
   }
   // Give the iframe a beat to lay out (fonts/tables) before printing.
