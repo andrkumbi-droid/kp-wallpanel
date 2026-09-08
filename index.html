@@ -1865,8 +1865,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
 <!-- MANAGER -->
 <div class="screen" id="s-manager"><div class="pb">
   <div class="header"><button type="button" class="back-btn" onclick="back()"><i class="ti ti-arrow-left"></i></button><div><div class="h-title">Management</div><div class="h-sub">KP Wallpanel</div></div></div>
-  <div class="tabs" style="grid-template-columns:repeat(5,1fr)">
+  <div class="tabs" style="grid-template-columns:repeat(3,1fr)">
     <button type="button" class="tab active" onclick="mgt('stock')" id="mgt-stock">Stock / สต็อก</button>
+    <button type="button" class="tab" onclick="mgt('inv')" id="mgt-inv">📊 Monthly / รายเดือน</button>
     <button type="button" class="tab" onclick="mgt('incoming')" id="mgt-incoming">Incoming / ขาเข้า</button>
     <button type="button" class="tab" onclick="mgt('aging')" id="mgt-aging">📦 Lageralter</button>
     <button type="button" class="tab" onclick="mgt('staff')" id="mgt-staff">Staff / พนักงาน</button>
@@ -1920,6 +1921,16 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <button type="button" class="btnsm" onclick="agRender()"><i class="ti ti-refresh"></i></button>
     </div>
     <div id="ag-body"></div>
+  </div></div>
+  <div class="view" id="mgv-inv"><div class="sec">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <div class="stit" style="margin-bottom:0">📊 Monthly inventory / รายงานสต็อกรายเดือน</div>
+      <div style="display:flex;gap:6px">
+        <button type="button" class="btnsm btnsmp" onclick="invSaveSnap()"><i class="ti ti-camera"></i> Save count</button>
+        <button type="button" class="btnsm" onclick="invRender()"><i class="ti ti-refresh"></i></button>
+      </div>
+    </div>
+    <div id="inv-body"></div>
   </div></div>
   <div class="view" id="mgv-drivers"><div class="sec">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="stit" style="margin-bottom:0">Drivers / คนขับ</div><button type="button" class="btnsm btnsmp" onclick="openDM(null)"><i class="ti ti-plus"></i> Add</button></div>
@@ -6028,7 +6039,7 @@ function stAudit(action, code, detail, extra){
 function initials(n){return n.trim().split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);}
 
 // MANAGER
-function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();if(t==='audit')auditRender();if(t==='incoming')clRender();if(t==='aging')agRender();if(t==='block')blockRender();}
+function mgt(t){document.querySelectorAll('#s-manager .tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('#s-manager .view').forEach(x=>x.classList.remove('active'));document.getElementById('mgt-'+t).classList.add('active');document.getElementById('mgv-'+t).classList.add('active');mgRender();if(t==='staff')mgRenderStaff();if(t==='audit')auditRender();if(t==='incoming')clRender();if(t==='aging')agRender();if(t==='inv')invRender();if(t==='block')blockRender();}
 
 function mgCleanup() {
   if(!window.fbDB) { alert('Not connected'); return; }
@@ -6951,6 +6962,541 @@ function stockOnHandOf(code){
   var m=stockOnHandMap(), k=ofNormCode(code);
   return (m[k]==null) ? null : m[k];
 }
+// ════════════════════════════════════════════════════════════
+//  MONTHLY INVENTORY REPORT / รายงานสต็อกรายเดือน
+//  What the accounting firm asks for every month: how much stock stood in the
+//  warehouse at the end of each month, what came in, what went out — and,
+//  kept strictly apart, what was already paid for but still on the water.
+//
+//  Two halves of very different quality, and the report says which is which:
+//
+//  MEASURED — arrivals and goods in transit. Every container carries its
+//    deposit / loading / arrived-Thailand / arrived-warehouse date plus the
+//    pieces per code, so both are exact for any past month end.
+//
+//  DERIVED — the closing stock per month. There is no stock history: the app
+//    holds one current count. So the month ends are walked BACKWARDS from
+//    today: opening = closing − arrived + sold. Arrivals and sales are exact,
+//    but a hand correction (breakage, a miscount) lands silently in the
+//    opening figure of its month. The further back, the softer. That is the
+//    honest reason for invSnap() below.
+//
+//  From now on it can be measured instead: invSnap() writes the full count to
+//  v2/stockSnap/<YYYY-MM> once a month, and every month that has a snapshot is
+//  marked as counted rather than calculated.
+// ════════════════════════════════════════════════════════════
+var INV_START='2026-06';     // first container with a warehouse date — nothing before that exists
+var INV_SNAP={};             // v2/stockSnap — month key → {ts, by, codes:{code:qty}}
+var _invOpen=null;           // which month is expanded on screen
+
+function invMonthKey(d){ return String(d||'').slice(0,7); }
+function invThisMonth(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+function invMonthEnd(mk){
+  var y=+mk.slice(0,4), m=+mk.slice(5,7);
+  var d=new Date(y, m, 0);          // day 0 of the next month = last day of this one
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function invMonths(){
+  var out=[], mk=INV_START, last=invThisMonth();
+  while(mk<=last && out.length<120){
+    out.push(mk);
+    var y=+mk.slice(0,4), m=+mk.slice(5,7)+1;
+    if(m>12){ m=1; y++; }
+    mk=y+'-'+String(m).padStart(2,'0');
+  }
+  return out;
+}
+function invMonthLabel(mk){
+  var N=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return N[+mk.slice(5,7)]+' '+mk.slice(0,4);
+}
+
+/* Alles, was heute im Lager liegt — Grade A, B und C zusammen. Der Bericht
+   fuer die Buchhaltung fragt nach der MENGE im Lager, nicht nach ihrem
+   Zustand; Grade B ist beschaedigte Ware, sie liegt trotzdem da. */
+function invOnHand(){
+  var m={};
+  (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
+    if(!s||!s.code) return;
+    var k=ofNormCode(s.code);
+    var e=m[k]||(m[k]={a:0,b:0,c:0});
+    e.a+=parseInt(s.qty)||0; e.b+=parseInt(s.damaged)||0; e.c+=parseInt(s.precut)||0;
+  });
+  return m;
+}
+function invOnHandTotal(){
+  var m=invOnHand(), t={};
+  Object.keys(m).forEach(function(k){ t[k]=m[k].a+m[k].b+m[k].c; });
+  return t;
+}
+
+/* Zugang je Monat: was wirklich im Lager angekommen ist (arrivedWh), nicht was
+   bestellt oder bezahlt wurde. */
+function invArrivals(){
+  var by={};
+  (typeof containerLog!=='undefined'?containerLog:[]).forEach(function(c){
+    if(!c||!c.arrivedWh) return;
+    var mk=invMonthKey(c.arrivedWh); if(mk<INV_START) return;
+    var e=by[mk]||(by[mk]={qty:0, codes:{}, conts:[]});
+    var sum=0;
+    (c.items||[]).forEach(function(i){
+      if(!i||!i.code) return;
+      var q=parseInt(i.qty)||0; if(q<=0) return;
+      var k=ofNormCode(i.code);
+      e.codes[k]=(e.codes[k]||0)+q; e.qty+=q; sum+=q;
+    });
+    e.conts.push({c:c, qty:sum});
+  });
+  Object.keys(by).forEach(function(mk){
+    by[mk].conts.sort(function(a,b){ return String(a.c.arrivedWh).localeCompare(String(b.c.arrivedWh)); });
+  });
+  return by;
+}
+
+/* Abgang je Monat. Stornierte Orders zaehlen nicht — die Ware hat das Lager nie
+   verlassen. Gratis-Ersatz (claims) zaehlt sehr wohl: das Brett ist raus,
+   auch wenn kein Geld hereinkam. Grade-B-Zeilen ebenso, sie liegen mit im
+   Bestand oben. */
+function invSales(){
+  var by={};
+  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
+    if(!o || o.status==='cancelled') return;
+    var mk=invMonthKey(o.date); if(!mk || mk<INV_START) return;
+    (o.lineItems||[]).forEach(function(li){
+      if(!li || !li.code || !BT_PROD[li.type]) return;
+      var q=parseInt(li.qty)||0; if(q<=0) return;
+      var k=ofNormCode(li.code);
+      var e=by[mk]||(by[mk]={qty:0, codes:{}});
+      e.codes[k]=(e.codes[k]||0)+q; e.qty+=q;
+      by[mk]=e;
+    });
+  });
+  return by;
+}
+
+/* Landed Cost je Stueck aus acctData/cost — dieselbe Quelle wie der
+   Accounting-Space, damit nicht zwei Wahrheiten nebeneinander stehen. */
+/* Clips sind die eine Ausnahme: eingekauft und gezaehlt werden sie in STUECK,
+   bepreist sind sie unter CLIP als PACKUNG à 100 (20 ฿ = 0,20 ฿ je Clip). Ohne
+   diese Umrechnung stuenden 150.000 Clips mit 3 Mio ฿ im Lagerwert. */
+var INV_CLIP_PACK=100;
+function invCost(k){
+  var c=(typeof acctData!=='undefined' && acctData.cost) ? acctData.cost : {};
+  var v=c[acCostKey(k)];
+  if(!(v!=null && +v>0)) return 0;
+  return /^CLIP/.test(String(k)) ? (+v)/INV_CLIP_PACK : +v;
+}
+/* Wert einer Mengenkarte. Was keinen Preis hat, wird NICHT geschaetzt, sondern
+   getrennt ausgewiesen — sonst stuende im Bericht eine Zahl, die keiner belegen
+   kann. */
+function invValue(map){
+  var val=0, qKnown=0, qUnknown=0, nUnknown=0;
+  Object.keys(map||{}).forEach(function(k){
+    var q=map[k]||0; if(q<=0) return;
+    var c=invCost(k);
+    if(c>0){ val+=c*q; qKnown+=q; } else { qUnknown+=q; nUnknown++; }
+  });
+  return {val:val, qKnown:qKnown, qUnknown:qUnknown, nUnknown:nUnknown,
+          pct: (qKnown+qUnknown)>0 ? qKnown/(qKnown+qUnknown) : 1};
+}
+
+/* Unterwegs am Monatsende: angezahlt, aber noch nicht im Lager. Die Stufe wird
+   auf das Monatsende zurueckgerechnet, nicht von heute genommen. */
+function invTransit(monthEnd){
+  return (typeof containerLog!=='undefined'?containerLog:[]).filter(function(c){
+    if(!c) return false;
+    var dep=String(c.deposit||'').slice(0,10);
+    if(!dep || dep>monthEnd) return false;               // damals noch nicht bestellt
+    var wh=String(c.arrivedWh||'').slice(0,10);
+    return !wh || wh>monthEnd;                            // damals noch nicht angekommen
+  }).map(function(c){
+    var th=String(c.arrivedThAct||c.arrivedTh||'').slice(0,10);
+    var ld=String(c.loading||'').slice(0,10);
+    var stage = (th && th<=monthEnd) ? {k:'th',  t:'🏪 In Thailand / ถึงไทย'}
+              : (ld && ld<=monthEnd) ? {k:'sea', t:'🛳️ On the way / กำลังมา'}
+              :                        {k:'pro', t:'🏭 Production / กำลังผลิต'};
+    var codes={}, qty=0;
+    (c.items||[]).forEach(function(i){
+      if(!i||!i.code) return;
+      var q=parseInt(i.qty)||0; if(q<=0) return;
+      var k=ofNormCode(i.code);
+      codes[k]=(codes[k]||0)+q; qty+=q;
+    });
+    return {c:c, stage:stage, codes:codes, qty:qty};
+  }).sort(function(a,b){ return String(a.c.deposit).localeCompare(String(b.c.deposit)); });
+}
+
+/* Der Rueckwaertslauf. Endbestand des letzten Monats = was heute im Lager
+   liegt; von dort Monat fuer Monat zurueck. Liegt fuer einen Monat ein
+   Schnappschuss vor, wird er als Endbestand GESETZT statt gerechnet — ab da
+   ist die Kette gemessen. */
+function invLedger(){
+  var months=invMonths(), arr=invArrivals(), sal=invSales();
+  var closing=invOnHandTotal();
+  var rows=[];
+  for(var i=months.length-1;i>=0;i--){
+    var mk=months[i];
+    /* Ein Schnappschuss ist eine GEZAEHLTE Zahl und schlaegt die Rechnung. Nur
+       dieser eine Monat gilt damit als gezaehlt — die Monate davor haengen
+       weiter an der Rueckwaertsrechnung, nur eben von einem besseren Anker
+       aus. Deshalb steht das Haekchen an genau einer Zeile, nicht an allen. */
+    var snap=INV_SNAP[mk] && INV_SNAP[mk].codes;
+    if(snap){ closing={}; Object.keys(snap).forEach(function(k){ closing[k]=+snap[k]||0; }); }
+    var a=(arr[mk]||{codes:{}}).codes, s=(sal[mk]||{codes:{}}).codes;
+    var keys={};
+    Object.keys(closing).forEach(function(k){ keys[k]=1; });
+    Object.keys(a).forEach(function(k){ keys[k]=1; });
+    Object.keys(s).forEach(function(k){ keys[k]=1; });
+    var opening={};
+    Object.keys(keys).forEach(function(k){ opening[k]=(closing[k]||0)-(a[k]||0)+(s[k]||0); });
+    var sum=function(m){ var t=0; Object.keys(m).forEach(function(k){ t+=m[k]||0; }); return t; };
+    var neg=Object.keys(opening).filter(function(k){ return opening[k]<0; });
+    rows.unshift({
+      mk:mk, end:invMonthEnd(mk), label:invMonthLabel(mk),
+      opening:opening, arrived:a, sold:s, closing:closing,
+      qOpen:sum(opening), qIn:sum(a), qOut:sum(s), qClose:sum(closing),
+      conts:(arr[mk]||{conts:[]}).conts,
+      transit:invTransit(invMonthEnd(mk)),
+      snap: !!snap, live: (mk===invThisMonth()),
+      neg: neg
+    });
+    closing=opening;
+  }
+  return rows;
+}
+
+/* Welche Warengruppe ein Code ist. Erst die Stock-Liste fragen (dort steht es
+   gepflegt), sonst am Praefix erkennen — ein Code, der nur auf einem Container
+   stand und nie im Stock angelegt wurde, faellt sonst aus dem Bericht. */
+var INV_GROUPS=[
+  {t:'panel',   n:'KP — WPC Wall Panels / แผ่นผนัง WPC'},
+  {t:'pvc',     n:'K-PVC — PVC Ceiling / ฝ้าเพดาน PVC'},
+  {t:'lcorner', n:'L-Corner / อลูมิเนียมขอบ L'},
+  {t:'ttrim',   n:'T-Trim / ขอบ T'},
+  {t:'utrim',   n:'U-Trim / ขอบ U'},
+  {t:'clip',    n:'Clips / คลิป'}
+];
+function invType(k){
+  /* Clips zuerst, VOR der Stock-Liste: dort steht CLIP als type "panel", und
+     150.000 Clips in der Paneelgruppe machen deren Summe sinnlos. */
+  if(/^CLIP/.test(k)) return 'clip';
+  var s=(typeof stockItems!=='undefined'?stockItems:[]).find(function(x){ return x && ofNormCode(x.code)===k; });
+  if(s && s.type) return (s.type==='clips'?'clip':s.type);
+  if(/^K-PVC/.test(k)) return 'pvc';
+  if(/^L/.test(k)) return 'lcorner';
+  if(/^T/.test(k)) return 'ttrim';
+  if(/^U/.test(k)) return 'utrim';
+  return 'panel';
+}
+function invProdName(k){
+  var p=(window.QT_PRODUCTS||[]).find(function(x){ return x && ofNormCode(x.code)===k; });
+  if(p && p.name) return p.name;
+  var s=(typeof stockItems!=='undefined'?stockItems:[]).find(function(x){ return x && ofNormCode(x.code)===k; });
+  return (s && s.notes) || '';
+}
+function invEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function invN(n){ return Math.round(n||0).toLocaleString('en-US'); }
+function invB(n){ return invN(n)+' ฿'; }
+
+/* Die Schnappschuesse werden einmal geholt, nicht dauerhaft abonniert: der Tab
+   wird selten geoeffnet, und ein Listener im Head-IIFE koennte die Variable
+   hier ueberschreiben, bevor sie ueberhaupt existiert. */
+function invLoadSnaps(cb){
+  if(!window.fbDB){ cb&&cb(); return; }
+  window.fbDB.ref('stockSnap').once('value').then(function(s){
+    INV_SNAP=s.val()||{};
+    cb&&cb();
+  }).catch(function(){ cb&&cb(); });
+}
+/* Den heutigen Zaehlstand als Monatsende festschreiben. Ab hier ist dieser
+   Monat gezaehlt statt gerechnet — und jeder Monat davor haengt an einem
+   besseren Anker als "heute". */
+function invSaveSnap(){
+  var mk=invThisMonth();
+  var have=INV_SNAP[mk];
+  var q='Save today\'s count as the closing stock for '+invMonthLabel(mk)+'?'
+    +'\nบันทึกยอดวันนี้เป็นสต็อกปลายเดือน '+invMonthLabel(mk)+'?'
+    +(have?'\n\n⚠ There is already a saved count for this month — it will be replaced.':'');
+  if(!confirm(q)) return;
+  var codes=invOnHandTotal();
+  var rec={ ts:Date.now(), date:new Date().toISOString().slice(0,10),
+            by:(window.currentStaffName||'Management'), codes:codes };
+  if(!window.fbDB){ alert('No database connection'); return; }
+  window.fbDB.ref('stockSnap/'+mk).set(rec).then(function(){
+    INV_SNAP[mk]=rec;
+    try{ stAudit('edit','—','Inventory snapshot '+mk+' · '+Object.keys(codes).length+' codes',{}); }catch(e){}
+    invRender();
+  }).catch(function(){ alert('Could not save / บันทึกไม่สำเร็จ'); });
+}
+
+function invToggle(mk){ _invOpen = (_invOpen===mk ? null : mk); invRender(); }
+
+function invRender(){
+  var body=document.getElementById('inv-body'); if(!body) return;
+  if(!window._invSnapLoaded){ window._invSnapLoaded=true; invLoadSnaps(invRender); }
+  var rows=invLedger();
+  if(!rows.length){ body.innerHTML='<div class="empty" style="padding:1rem;font-size:13px">No months yet</div>'; return; }
+
+  var costN=Object.keys((typeof acctData!=='undefined'&&acctData.cost)||{}).length;
+  var head='<div class="card" style="padding:12px 14px;font-size:12.5px;line-height:1.65;color:var(--text2);margin-bottom:10px">'
+    +'<b style="color:var(--text)">What this report is / รายงานนี้คืออะไร</b><br>'
+    +'Closing stock at the end of every month, what arrived, what was sold — and, kept apart, '
+    +'the containers already paid for but not yet in the warehouse.<br>'
+    +'<span style="color:var(--green);font-weight:700">✓ Measured:</span> arrivals and goods in transit — every container carries its dates and pieces.<br>'
+    +'<span style="color:var(--orange);font-weight:700">≈ Derived:</span> the closing stock. The app keeps only one current count, so the month ends are '
+    +'calculated backwards from today (closing − arrived + sold). Hand corrections land silently in the month they happened.<br>'
+    +'<b style="color:var(--text)">📸 Save count</b> writes today\'s count as this month\'s closing stock — from then on that month is counted, not calculated.'
+    +'</div>';
+
+  var warn='';
+  var negTot=rows.reduce(function(a,r){ return a+r.neg.length; },0);
+  if(negTot) warn+='<div class="card" style="padding:10px 14px;font-size:12.5px;line-height:1.6;border-left:4px solid var(--orange);margin-bottom:10px">'
+    +'<b>⚠ '+negTot+' negative opening figures.</b> More was sold in those months than the app can account for — '
+    +'the containers from before '+invMonthLabel(INV_START)+' were never entered, so their stock is invisible. '
+    +'The figures from '+invMonthLabel(INV_START)+' onwards are unaffected in the columns Arrived and Sold.</div>';
+  if(costN<20) warn+='<div class="card" style="padding:10px 14px;font-size:12.5px;line-height:1.6;border-left:4px solid var(--orange);margin-bottom:10px">'
+    +'<b>⚠ Only '+costN+' products carry a landed cost.</b> The value column shows just those; the rest is listed as pieces without value.</div>';
+
+  var out='<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">'
+    +'<thead><tr style="background:var(--bg2)">'
+      +'<th style="text-align:left;padding:8px 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--text2)">Month</th>'
+      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">Opening</th>'
+      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--green)">+ Arrived</th>'
+      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--red)">− Sold</th>'
+      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">= Closing</th>'
+      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">Value</th>'
+      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--blue)">In transit</th>'
+      +'<th style="padding:8px 6px"></th>'
+    +'</tr></thead><tbody>';
+
+  rows.slice().reverse().forEach(function(r){
+    var v=invValue(r.closing);
+    var tQty=r.transit.reduce(function(a,t){ return a+t.qty; },0);
+    var tCodes={}; r.transit.forEach(function(t){ Object.keys(t.codes).forEach(function(k){ tCodes[k]=(tCodes[k]||0)+t.codes[k]; }); });
+    var tv=invValue(tCodes);
+    var open=_invOpen===r.mk;
+    out+='<tr onclick="invToggle(\''+r.mk+'\')" style="cursor:pointer;border-top:1px solid var(--border)'+(open?';background:var(--blue-bg)':'')+'">'
+      +'<td style="padding:9px 10px;font-weight:700">'+invEsc(r.label)
+        +(r.snap?' <span title="counted" style="color:var(--green)">✓</span>':'')
+        +(r.live?' <span style="font-size:10px;color:var(--text3)">· today</span>':'')+'</td>'
+      +'<td style="text-align:right;padding:9px 6px'+(r.neg.length?';color:var(--orange)':'')+'">'+invN(r.qOpen)+'</td>'
+      +'<td style="text-align:right;padding:9px 6px;color:var(--green);font-weight:700">'+(r.qIn?'+'+invN(r.qIn):'—')+'</td>'
+      +'<td style="text-align:right;padding:9px 6px;color:var(--red)">'+(r.qOut?'−'+invN(r.qOut):'—')+'</td>'
+      +'<td style="text-align:right;padding:9px 6px;font-weight:800">'+invN(r.qClose)+'</td>'
+      +'<td style="text-align:right;padding:9px 6px;font-weight:700;color:var(--green)">'+invB(v.val)
+        +(v.pct<0.999?'<div style="font-size:9.5px;color:var(--text3);font-weight:400">'+Math.round(v.pct*100)+'% priced</div>':'')+'</td>'
+      +'<td style="text-align:right;padding:9px 6px;color:var(--blue)">'+(tQty?invN(tQty)+'<div style="font-size:9.5px;color:var(--text3)">'+r.transit.length+' cont · '+invB(tv.val)+'</div>':'—')+'</td>'
+      +'<td style="text-align:right;padding:9px 8px"><button type="button" class="btnsm" onclick="event.stopPropagation();invPrint(\''+r.mk+'\')"><i class="ti ti-printer"></i></button></td>'
+    +'</tr>';
+    if(open) out+='<tr><td colspan="8" style="padding:0;background:var(--bg2)">'+invDetail(r)+'</td></tr>';
+  });
+  out+='</tbody></table></div>';
+  body.innerHTML=head+warn+out;
+}
+
+/* Die aufgeklappte Monatsansicht: erst die Container, dann was unterwegs war,
+   dann jede Warengruppe mit ihren Codes. */
+function invDetail(r){
+  var h='<div style="padding:12px 14px">';
+  h+='<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text2);margin-bottom:6px">'
+    +'🚢 Arrived in '+invEsc(r.label)+' / มาถึงคลัง</div>';
+  h+= r.conts.length
+    ? '<div style="font-size:12.5px;line-height:1.8;margin-bottom:12px">'+r.conts.map(function(x){
+        return '<div>No. <b>'+invEsc(x.c.containerNo||'—')+'</b> · '+invEsc(x.c.supplier||'—')
+          +' · PI '+invEsc(x.c.piNo||'—')+' · '+invEsc(String(x.c.arrivedWh).slice(0,10))
+          +' · <b style="color:var(--green)">'+invN(x.qty)+' pcs</b></div>';
+      }).join('')+'</div>'
+    : '<div style="font-size:12.5px;color:var(--text3);margin-bottom:12px">nothing arrived / ไม่มีตู้เข้า</div>';
+
+  h+='<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text2);margin-bottom:6px">'
+    +'⏳ In transit at '+invEsc(r.end)+' / ระหว่างทาง</div>';
+  h+= r.transit.length
+    ? '<div style="font-size:12.5px;line-height:1.8;margin-bottom:12px">'+r.transit.map(function(t){
+        return '<div>'+t.stage.t+' · No. <b>'+invEsc(t.c.containerNo||'—')+'</b> · '+invEsc(t.c.supplier||'—')
+          +' · deposit '+invEsc(String(t.c.deposit).slice(0,10))
+          +' · <b style="color:var(--blue)">'+invN(t.qty)+' pcs</b> · '+invB(invValue(t.codes).val)+'</div>';
+      }).join('')+'</div>'
+    : '<div style="font-size:12.5px;color:var(--text3);margin-bottom:12px">nothing in transit / ไม่มีของระหว่างทาง</div>';
+
+  var keys={};
+  [r.opening,r.arrived,r.sold,r.closing].forEach(function(m){ Object.keys(m).forEach(function(k){ keys[k]=1; }); });
+  var all=Object.keys(keys).filter(function(k){
+    return (r.opening[k]||0)||(r.arrived[k]||0)||(r.sold[k]||0)||(r.closing[k]||0);
+  });
+  INV_GROUPS.forEach(function(g){
+    var ks=all.filter(function(k){ return invType(k)===g.t; })
+              .sort(function(a,b){ return String(a).localeCompare(String(b), undefined, {numeric:true}); });
+    if(!ks.length) return;
+    h+='<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text2);margin:10px 0 4px">'+invEsc(g.n)+'</div>'
+      +'<table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<thead><tr style="color:var(--text3);font-size:10px;text-transform:uppercase">'
+        +'<th style="text-align:left;padding:3px 4px">Code</th><th style="text-align:right;padding:3px 4px">Open</th>'
+        +'<th style="text-align:right;padding:3px 4px">+ In</th><th style="text-align:right;padding:3px 4px">− Out</th>'
+        +'<th style="text-align:right;padding:3px 4px">Close</th><th style="text-align:right;padding:3px 4px">฿/pc</th>'
+        +'<th style="text-align:right;padding:3px 4px">Value</th></tr></thead><tbody>'
+      +ks.map(function(k){
+        var o=r.opening[k]||0, i=r.arrived[k]||0, s=r.sold[k]||0, c=r.closing[k]||0, u=invCost(k);
+        return '<tr style="border-top:1px solid var(--border)">'
+          +'<td style="padding:3px 4px;font-weight:700">'+invEsc(k)+'</td>'
+          +'<td style="text-align:right;padding:3px 4px'+(o<0?';color:var(--orange);font-weight:700':'')+'">'+invN(o)+'</td>'
+          +'<td style="text-align:right;padding:3px 4px;color:var(--green)">'+(i?'+'+invN(i):'')+'</td>'
+          +'<td style="text-align:right;padding:3px 4px;color:var(--red)">'+(s?'−'+invN(s):'')+'</td>'
+          +'<td style="text-align:right;padding:3px 4px;font-weight:700">'+invN(c)+'</td>'
+          +'<td style="text-align:right;padding:3px 4px;color:var(--text3)">'+(u>0?invN(u):'—')+'</td>'
+          +'<td style="text-align:right;padding:3px 4px;color:var(--green)">'+(u>0&&c>0?invB(u*c):'—')+'</td>'
+        +'</tr>';
+      }).join('')+'</tbody></table>';
+  });
+  return h+'</div>';
+}
+
+/* Die Druckseite fuer das Steuerbuero. Zweisprachig Thai/Englisch wie der
+   Lagerwert-Druck, A4 hoch, und mit einer Fussnote, die sagt, welche Zahl
+   gezaehlt und welche gerechnet ist — ein Bericht, der das verschweigt, ist
+   fuer eine Buchhaltung wertlos. */
+function invPrint(mk){
+  var rows=invLedger(), r=rows.find(function(x){ return x.mk===mk; });
+  if(!r){ alert('Month not found'); return; }
+  var E=invEsc, N=invN, B=invB;
+  var v=invValue(r.closing);
+  var tCodes={}; r.transit.forEach(function(t){ Object.keys(t.codes).forEach(function(k){ tCodes[k]=(tCodes[k]||0)+t.codes[k]; }); });
+  var tv=invValue(tCodes);
+  var tQty=r.transit.reduce(function(a,t){ return a+t.qty; },0);
+  var now=new Date();
+  var stamp=now.toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'})
+    +' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+
+  var keys={};
+  [r.opening,r.arrived,r.sold,r.closing].forEach(function(m){ Object.keys(m).forEach(function(k){ keys[k]=1; }); });
+  var all=Object.keys(keys).filter(function(k){
+    return (r.opening[k]||0)||(r.arrived[k]||0)||(r.sold[k]||0)||(r.closing[k]||0);
+  });
+
+  function grp(g){
+    var ks=all.filter(function(k){ return invType(k)===g.t; })
+              .sort(function(a,b){ return String(a).localeCompare(String(b), undefined, {numeric:true}); });
+    if(!ks.length) return '';
+    var t={o:0,i:0,s:0,c:0,v:0};
+    var body=ks.map(function(k,n){
+      var o=r.opening[k]||0, i=r.arrived[k]||0, s=r.sold[k]||0, c=r.closing[k]||0, u=invCost(k);
+      t.o+=o; t.i+=i; t.s+=s; t.c+=c; t.v+=(u>0?u*c:0);
+      return '<tr>'
+        +'<td class="c muted">'+(n+1)+'</td>'
+        +'<td class="cd">'+E(k)+'</td>'
+        +'<td>'+E(invProdName(k))+'</td>'
+        +'<td class="r'+(o<0?' neg':'')+'">'+N(o)+'</td>'
+        +'<td class="r in">'+(i?N(i):'—')+'</td>'
+        +'<td class="r out">'+(s?N(s):'—')+'</td>'
+        +'<td class="r cl">'+N(c)+'</td>'
+        +'<td class="r">'+(u>0?N(u):'—')+'</td>'
+        +'<td class="r val">'+(u>0&&c>0?B(u*c):'—')+'</td>'
+      +'</tr>';
+    }).join('');
+    return '<div class="sec"><div class="sect">'+E(g.n)+' <span class="cnt">'+ks.length+' รายการ / items · '+B(t.v)+'</span></div>'
+      +'<table><thead><tr>'
+        +'<th class="c">#</th><th>รหัส / Code</th><th>ชื่อ / Name</th>'
+        +'<th class="r">ยกมา / Opening</th><th class="r">รับเข้า / In</th><th class="r">จ่ายออก / Out</th>'
+        +'<th class="r">คงเหลือ / Closing</th><th class="r">ทุน ฿/ชิ้น</th><th class="r">มูลค่า / Value</th>'
+      +'</tr></thead><tbody>'+body+'</tbody>'
+      +'<tfoot><tr><td colspan="3" class="r">รวม / Total</td>'
+        +'<td class="r">'+N(t.o)+'</td><td class="r">'+N(t.i)+'</td><td class="r">'+N(t.s)+'</td>'
+        +'<td class="r">'+N(t.c)+'</td><td></td><td class="r val">'+B(t.v)+'</td></tr></tfoot></table></div>';
+  }
+
+  var contTbl = r.conts.length
+    ? '<table><thead><tr><th class="c">#</th><th>ตู้ / Container</th><th>ผู้ขาย / Supplier</th><th>PI</th>'
+      +'<th class="c">ถึงคลัง / Arrived</th><th class="r">ชิ้น / Pieces</th></tr></thead><tbody>'
+      +r.conts.map(function(x,i){
+        return '<tr><td class="c muted">'+(i+1)+'</td><td class="cd">No. '+E(x.c.containerNo||'—')+'</td>'
+          +'<td>'+E(x.c.supplier||'—')+'</td><td>'+E(x.c.piNo||'—')+'</td>'
+          +'<td class="c">'+E(String(x.c.arrivedWh).slice(0,10))+'</td>'
+          +'<td class="r in">'+N(x.qty)+'</td></tr>';
+      }).join('')
+      +'</tbody><tfoot><tr><td colspan="5" class="r">รวม / Total</td><td class="r in">'+N(r.qIn)+'</td></tr></tfoot></table>'
+    : '<div class="none">ไม่มีตู้เข้าคลังในเดือนนี้ / no container arrived this month</div>';
+
+  var transTbl = r.transit.length
+    ? '<table><thead><tr><th class="c">#</th><th>ตู้ / Container</th><th>ผู้ขาย / Supplier</th>'
+      +'<th>สถานะ / Stage</th><th class="c">มัดจำ / Deposit</th><th class="r">ชิ้น / Pieces</th><th class="r">มูลค่า / Value</th></tr></thead><tbody>'
+      +r.transit.map(function(t,i){
+        return '<tr><td class="c muted">'+(i+1)+'</td><td class="cd">No. '+E(t.c.containerNo||'—')+'</td>'
+          +'<td>'+E(t.c.supplier||'—')+'</td><td>'+E(t.stage.t)+'</td>'
+          +'<td class="c">'+E(String(t.c.deposit).slice(0,10))+'</td>'
+          +'<td class="r">'+N(t.qty)+'</td><td class="r val">'+B(invValue(t.codes).val)+'</td></tr>';
+      }).join('')
+      +'</tbody><tfoot><tr><td colspan="5" class="r">รวม / Total</td><td class="r">'+N(tQty)+'</td>'
+      +'<td class="r val">'+B(tv.val)+'</td></tr></tfoot></table>'
+    : '<div class="none">ไม่มีของระหว่างทาง / nothing in transit</div>';
+
+  var method = r.snap
+    ? 'ยอดคงเหลือปลายเดือนนี้มาจากการ<b>นับจริง</b> เมื่อ '+E((INV_SNAP[mk]&&INV_SNAP[mk].date)||'—')
+      +' / Closing stock <b>counted</b> on '+E((INV_SNAP[mk]&&INV_SNAP[mk].date)||'—')+'.'
+    : 'ยอดคงเหลือปลายเดือนนี้<b>คำนวณย้อนหลัง</b>จากยอดสต็อกปัจจุบัน (คงเหลือ − รับเข้า + จ่ายออก) '
+      +'/ Closing stock is <b>derived</b> backwards from the current count (closing − arrived + sold). '
+      +'Arrivals and sales are exact; manual stock corrections are absorbed into the month they happened.';
+
+  var full='<!DOCTYPE html><html><head><meta charset="UTF-8">'
+    +'<title>Inventory '+E(mk)+' — KP Wallpanel</title><style>'
+    +'*{box-sizing:border-box;margin:0;padding:0}'
+    +'@page{size:A4 portrait;margin:10mm}'
+    +'body{font-family:Arial,"Noto Sans Thai",sans-serif;color:#000;background:#fff;font-size:10pt}'
+    +'.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:5px;margin-bottom:4px}'
+    +'.hd h1{font-size:14pt}.hd .d{font-size:9.5pt;color:#444;text-align:right}'
+    +'.grand{display:flex;gap:6px;margin:8px 0 2px}'
+    +'.gbox{flex:1;border:1.5px solid #111;border-radius:4px;padding:5px 6px;text-align:center}'
+    +'.gbox .l{font-size:8pt;color:#555;font-weight:700;letter-spacing:.03em}.gbox .v{font-size:12pt;font-weight:800}'
+    +'.gbox.big{background:#dcfce7;border-color:#15803d}.gbox.big .v{font-size:14pt;color:#15803d}'
+    +'.gbox.tr{background:#dbeafe;border-color:#1d4ed8}.gbox.tr .v{color:#1d4ed8}'
+    +'.sec{margin-top:12px;page-break-inside:auto}'
+    +'.sect{font-size:11pt;font-weight:800;background:#ffeb3b;border:1px solid #999;padding:3px 7px;margin-bottom:3px}'
+    +'.sect .cnt{font-size:9pt;font-weight:600;color:#444;float:right}'
+    +'table{width:100%;border-collapse:collapse}'
+    +'th,td{border:1px solid #999;padding:3px 5px;font-size:9pt}'
+    +'th{background:#f1f5f9;font-size:8pt;text-transform:uppercase;letter-spacing:.02em}'
+    +'thead{display:table-header-group}tr{page-break-inside:avoid}'
+    +'.c{text-align:center}.r{text-align:right}.muted{color:#777}'
+    +'.cd{font-weight:800}.val{font-weight:800;color:#15803d}'
+    +'.in{color:#15803d;font-weight:700}.out{color:#b91c1c}.cl{font-weight:800}.neg{color:#b45309;font-weight:800}'
+    +'tfoot td{background:#f1f5f9;font-weight:800}'
+    +'.none{font-size:9.5pt;color:#666;padding:4px 2px}'
+    +'.note{margin-top:10px;font-size:8.5pt;color:#444;line-height:1.6;border-top:1px solid #999;padding-top:6px}'
+    +'</style></head><body>'
+    +'<div class="hd"><h1>📦 รายงานสต็อกรายเดือน / Monthly inventory — KP Wallpanel</h1>'
+      +'<div class="d"><b style="font-size:12pt">'+E(r.label)+'</b><br>ณ วันที่ / as at '+E(r.end)
+      +'<br><span style="font-size:8pt">พิมพ์ / printed '+E(stamp)+'</span></div></div>'
+    +'<div class="grand">'
+      +'<div class="gbox"><div class="l">ยกมา / OPENING</div><div class="v">'+N(r.qOpen)+'</div></div>'
+      +'<div class="gbox"><div class="l">รับเข้า / ARRIVED</div><div class="v" style="color:#15803d">+'+N(r.qIn)+'</div></div>'
+      +'<div class="gbox"><div class="l">จ่ายออก / SOLD</div><div class="v" style="color:#b91c1c">−'+N(r.qOut)+'</div></div>'
+      +'<div class="gbox big"><div class="l">คงเหลือ / CLOSING</div><div class="v">'+N(r.qClose)+'</div></div>'
+    +'</div>'
+    +'<div class="grand">'
+      +'<div class="gbox big" style="flex:2"><div class="l">มูลค่าสต็อกในคลัง / STOCK VALUE IN WAREHOUSE</div><div class="v">'+B(v.val)+'</div></div>'
+      +'<div class="gbox tr" style="flex:2"><div class="l">ของระหว่างทาง / GOODS IN TRANSIT ('+r.transit.length+' ตู้)</div><div class="v">'+B(tv.val)+' · '+N(tQty)+' ชิ้น</div></div>'
+    +'</div>'
+    +'<div class="sec"><div class="sect">🚢 ตู้ที่เข้าคลังในเดือนนี้ / Containers arrived this month</div>'+contTbl+'</div>'
+    +'<div class="sec"><div class="sect">⏳ ของระหว่างทาง ณ '+E(r.end)+' / Goods in transit</div>'+transTbl+'</div>'
+    +INV_GROUPS.map(grp).join('')
+    +'<div class="note"><b>วิธีคำนวณ / Method.</b> '+method
+      +'<br><b>ตู้และของระหว่างทาง / Containers and transit</b> มาจากบันทึกตู้โดยตรง ทุกตัวเลขมีเอกสารรองรับ '
+      +'/ come straight from the container records — every figure is documented.'
+      +'<br><b>คลิป / Clips</b> นับเป็นชิ้น แต่ราคาทุนเก็บเป็นแพ็ค '+INV_CLIP_PACK+' ชิ้น จึงหารก่อนคิดมูลค่า '
+      +'/ counted in pieces but costed per pack of '+INV_CLIP_PACK+', divided before valuation.'
+      +'<br><b>มูลค่า / Value</b> = จำนวนคงเหลือ × ทุนนำเข้าต่อชิ้น (landed cost: สินค้า + ค่าขนส่ง + ภาษี + ค่าธนาคาร, ไม่รวม VAT). '
+      +'ครอบคลุม '+Math.round(v.pct*100)+'% ของจำนวนชิ้น'
+      +(v.qUnknown>0?' — อีก '+N(v.qUnknown)+' ชิ้น ('+v.nUnknown+' รหัส) ยังไม่มีราคาทุน จึงแสดงเป็นจำนวนโดยไม่มีมูลค่า / '
+        +N(v.qUnknown)+' pieces in '+v.nUnknown+' codes carry no cost yet and are listed without value.':'.')
+      +(r.neg.length?'<br><b>⚠ ยอดยกมาติดลบ '+r.neg.length+' รหัส</b> — ตู้ก่อนเดือน '+E(invMonthLabel(INV_START))
+        +' ไม่ได้บันทึกไว้ในระบบ / '+r.neg.length+' codes show a negative opening figure: the containers from before '
+        +E(invMonthLabel(INV_START))+' were never entered into the app.':'')
+    +'</div>'
+    +'<scr'+'ipt>setTimeout(function(){window.print();},300);<\/scr'+'ipt></body></html>';
+
+  var w=window.open('','_blank');
+  if(!w){ alert('Please allow popups for printing! / กรุณาอนุญาต popup'); return; }
+  w.document.open(); w.document.write(full); w.document.close(); w.focus();
+}
+
 // ════════════════════════════════════════════════════════════
 //  BATCH / SELL-THROUGH — how fast the products of ONE container sold
 //  Received quantity per product (from the container record) against everything sold
