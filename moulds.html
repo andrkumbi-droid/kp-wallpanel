@@ -520,7 +520,8 @@ h2.ch{font-family:"Press Start 2P",monospace;font-size:13px;color:var(--coin);
   durchgehen. Diese Liste legt diese Kosten aus dem <b style="color:var(--sky)">abgelaufenen
   Monat</b> auf ein Paneel um. Weil Menge und Kosten dort gemessen und nicht geschätzt sind,
   ist das kein Zirkelschluss, sondern eine Nachkalkulation. Haken raus bei jedem Block, der zu
-  dem Kanal nicht gehört, den ihr gerade betrachtet.</p>
+  dem Kanal nicht gehört, den ihr gerade betrachtet — die Lieferkosten schaltet die
+  Plattformwahl im Rechner unten von selbst.</p>
 
   <div class="omon" id="o-monate"></div>
   <div class="obar" id="o-blocks"></div>
@@ -569,7 +570,7 @@ h2.ch{font-family:"Press Start 2P",monospace;font-size:13px;color:var(--coin);
       <option value="21.94">TikTok · 21,94 %</option>
       <option value="19.26">Shopee / Lazada · 19,26 %</option>
       <option value="0">direkt, ohne Plattform</option>
-    </select><span class="chint"></span></span>
+    </select><span class="chint" id="c-plathint"></span></span>
     <span class="og"><label>Affiliate %</label>
       <input type="number" id="c-aff" value="0" min="0" max="40" step="1">
       <span class="chint">nur wenn ihr mit Creators arbeitet</span></span>
@@ -1208,6 +1209,30 @@ function ovWareneinsatz(list, mix){
   return { wert:wert, stk:stk, genau:genau, offen:offen, ohne:ohne, schnitt:schnitt,
            hoch: wert + offen*schnitt };          // hochgerechnet auf alle Stück
 }
+/* ── Lieferkosten hängen am Kanal ─────────────────────────────────────────
+   Verkauft ihr über TikTok, Shopee oder Lazada, liefert die Plattform. Fahrer,
+   Spediteure und Lalamove haben mit so einem Verkauf nichts zu tun und dürfen
+   den Preis nicht belasten. Verkauft ihr direkt, fahrt ihr selbst — dann
+   gehören sie hinein. Deshalb schaltet die Plattformwahl diese drei Gruppen
+   mit um, statt dass man es jedes Mal von Hand nachzieht und irgendwann
+   vergisst. Von Hand übersteuern geht weiter: die Regel greift nur, wenn man
+   die Plattform WECHSELT, nicht laufend. Weicht der Stand danach von der Regel
+   ab, sagt der Hinweis unter der Auswahl das offen.                        */
+var OV_LIEFER=/driver|\u0e04\u0e19\u0e02\u0e31\u0e1a|shipper|\u0e04\u0e48\u0e32\u0e2a\u0e48\u0e07|lalamove/i;
+function ovLieferKeys(){
+  var a; try{ a=ovAgg(); }catch(e){ return []; }
+  return Object.keys(a.bl).filter(function(k){ return OV_LIEFER.test(a.bl[k].g||''); });
+}
+function ovLieferSet(aus){
+  var k=ovLieferKeys(); if(!k.length) return;
+  OVVIEW.aus=OVVIEW.aus||{};
+  k.forEach(function(x){ OVVIEW.aus[x]=!!aus; });
+  ovhRender(); ovViewSave();
+  /* Der Rechner muss NACH dem Umschalten noch einmal laufen: der allgemeine
+     Feld-Zuhoerer hat ihn schon mit dem alten Stand gerechnet, sonst haengt der
+     Hinweis unter der Plattformwahl eine Auswahl hinterher. */
+  try{ calcRun(); }catch(e){}
+}
 function ovhRender(){
   if(!me) return;
   var wrap=$('o-blocks'); if(!wrap) return;
@@ -1659,6 +1684,15 @@ function calcRun(){
   var lh=$('c-lenhint'); if(lh) lh.textContent=f0(lenM*100)+' cm';
   var mh=$('c-mhint');
   if(mh) mh.textContent='Paneel '+f2(tVoll.tot)+' ฿ · davon je Stück '+f2(material)+' ฿';
+  var lk=ovLieferKeys();
+  var lAn=lk.filter(function(x){ return !(OVVIEW.aus && OVVIEW.aus[x]); }).length;
+  var pl=$('c-plathint');
+  if(pl) pl.innerHTML = !lk.length ? ''
+    : (geb>0
+        ? (lAn===0 ? 'Fahrer, Spediteure und Lalamove sind draußen — die Plattform liefert.'
+                   : '<span class="warn">Lieferkosten sind noch im Betriebsanteil, obwohl die Plattform liefert.</span>')
+        : (lAn===lk.length ? 'Lieferkosten sind im Betriebsanteil — ihr fahrt selbst.'
+                           : '<span class="warn">Lieferkosten fehlen im Betriebsanteil, obwohl ihr selbst liefert.</span>'));
   var oh=$('c-ovhhint');
   if(oh) oh.textContent = oa.ok ? (ovhAn ? '+ '+f2(oa.v)+' ฿ · '+oa.txt : 'aus — nur Ware und Zuschnitt')
                                 : 'noch kein Monat erfasst';
@@ -1734,6 +1768,9 @@ CFELD.forEach(function(id){
   e.addEventListener('input',  calcRun);
   e.addEventListener('change', calcRun);
 });
+// Kanalwechsel: Lieferkosten mitschalten. Nur beim WECHSEL, damit eine
+// abweichende Einstellung von Hand nicht dauernd zurückgesetzt wird.
+$('c-plat').addEventListener('change', function(){ ovLieferSet(num(this.value)>0); });
 
 mAuthReady.then(function(){ sub(); }).catch(function(){
   $('status').textContent='Keine Verbindung zur Datenbank.';
