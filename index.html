@@ -7057,6 +7057,20 @@ function invArrivals(){
    verlassen. Gratis-Ersatz (claims) zaehlt sehr wohl: das Brett ist raus,
    auch wenn kein Geld hereinkam. Grade-B-Zeilen ebenso, sie liegen mit im
    Bestand oben. */
+/* Ab wann liegen ueberhaupt Orders vor? Der Saison-Knoten v2 traegt sie erst ab
+   Juli 2026, Container aber schon ab Juni. Ein Monat davor haette einen Zugang
+   und einen Abgang von null — das SIEHT aus wie "nichts verkauft" und ist in
+   einem Bericht fuers Steuerbuero eine Luege. Deshalb wird er als Monat ohne
+   Orderdaten gekennzeichnet, statt eine Null hinzuschreiben. */
+function invFirstSaleMonth(){
+  var min=null;
+  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
+    if(!o || o.status==='cancelled') return;
+    var mk=invMonthKey(o.date); if(!mk) return;
+    if(min===null || mk<min) min=mk;
+  });
+  return min;
+}
 function invSales(){
   var by={};
   (typeof orders!=='undefined'?orders:[]).forEach(function(o){
@@ -7132,6 +7146,7 @@ function invTransit(monthEnd){
    ist die Kette gemessen. */
 function invLedger(){
   var months=invMonths(), arr=invArrivals(), sal=invSales();
+  var firstSale=invFirstSaleMonth();
   var closing=invOnHandTotal();
   var rows=[];
   for(var i=months.length-1;i>=0;i--){
@@ -7158,6 +7173,9 @@ function invLedger(){
       conts:(arr[mk]||{conts:[]}).conts,
       transit:invTransit(invMonthEnd(mk)),
       snap: !!snap, live: (mk===invThisMonth()),
+      /* Kein Abgang, weil keine Orders da sind — nicht, weil nichts verkauft
+         wurde. Der Anfangsbestand dieses Monats ist damit ebenfalls wertlos. */
+      noSales: !!(firstSale && mk<firstSale),
       neg: neg
     });
     closing=opening;
@@ -7256,6 +7274,13 @@ function invRender(){
     +'The figures from '+invMonthLabel(INV_START)+' onwards are unaffected in the columns Arrived and Sold.</div>';
   if(costN<20) warn+='<div class="card" style="padding:10px 14px;font-size:12.5px;line-height:1.6;border-left:4px solid var(--orange);margin-bottom:10px">'
     +'<b>⚠ Only '+costN+' products carry a landed cost.</b> The value column shows just those; the rest is listed as pieces without value.</div>';
+  var noSaleRows=rows.filter(function(r){ return r.noSales; });
+  if(noSaleRows.length) warn+='<div class="card" style="padding:10px 14px;font-size:12.5px;line-height:1.6;border-left:4px solid var(--orange);margin-bottom:10px">'
+    +'<b>⚠ No order data before '+invMonthLabel(invFirstSaleMonth())+'.</b> '
+    +noSaleRows.map(function(r){ return r.label; }).join(', ')
+    +(noSaleRows.length===1?' has':' have')+' containers on record but no orders, so the Sold column is empty — '
+    +'that is missing data, not a month without sales. Arrivals and closing stock for '
+    +(noSaleRows.length===1?'that month':'those months')+' are still correct; the opening figure is not.</div>';
 
   var out='<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">'
     +'<thead><tr style="background:var(--bg2)">'
@@ -7279,9 +7304,11 @@ function invRender(){
       +'<td style="padding:9px 10px;font-weight:700">'+invEsc(r.label)
         +(r.snap?' <span title="counted" style="color:var(--green)">✓</span>':'')
         +(r.live?' <span style="font-size:10px;color:var(--text3)">· today</span>':'')+'</td>'
-      +'<td style="text-align:right;padding:9px 6px'+(r.neg.length?';color:var(--orange)':'')+'">'+invN(r.qOpen)+'</td>'
+      +'<td style="text-align:right;padding:9px 6px'+(r.neg.length||r.noSales?';color:var(--orange)':'')+'">'
+        +(r.noSales?'<span title="no order data">n/a</span>':invN(r.qOpen))+'</td>'
       +'<td style="text-align:right;padding:9px 6px;color:var(--green);font-weight:700">'+(r.qIn?'+'+invN(r.qIn):'—')+'</td>'
-      +'<td style="text-align:right;padding:9px 6px;color:var(--red)">'+(r.qOut?'−'+invN(r.qOut):'—')+'</td>'
+      +'<td style="text-align:right;padding:9px 6px;color:'+(r.noSales?'var(--orange)':'var(--red)')+'">'
+        +(r.noSales?'<span style="font-size:10.5px">no orders</span>':(r.qOut?'−'+invN(r.qOut):'—'))+'</td>'
       +'<td style="text-align:right;padding:9px 6px;font-weight:800">'+invN(r.qClose)+'</td>'
       +'<td style="text-align:right;padding:9px 6px;font-weight:700;color:var(--green)">'+invB(v.val)
         +(v.pct<0.999?'<div style="font-size:9.5px;color:var(--text3);font-weight:400">'+Math.round(v.pct*100)+'% priced</div>':'')+'</td>'
@@ -7465,9 +7492,10 @@ function invPrint(mk){
       +'<div class="d"><b style="font-size:12pt">'+E(r.label)+'</b><br>ณ วันที่ / as at '+E(r.end)
       +'<br><span style="font-size:8pt">พิมพ์ / printed '+E(stamp)+'</span></div></div>'
     +'<div class="grand">'
-      +'<div class="gbox"><div class="l">ยกมา / OPENING</div><div class="v">'+N(r.qOpen)+'</div></div>'
+      +'<div class="gbox"><div class="l">ยกมา / OPENING</div><div class="v">'+(r.noSales?'n/a':N(r.qOpen))+'</div></div>'
       +'<div class="gbox"><div class="l">รับเข้า / ARRIVED</div><div class="v" style="color:#15803d">+'+N(r.qIn)+'</div></div>'
-      +'<div class="gbox"><div class="l">จ่ายออก / SOLD</div><div class="v" style="color:#b91c1c">−'+N(r.qOut)+'</div></div>'
+      +'<div class="gbox"><div class="l">จ่ายออก / SOLD</div><div class="v" style="color:#b91c1c">'
+        +(r.noSales?'<span style="font-size:9pt;color:#b45309">ไม่มีข้อมูล<br>no data</span>':'−'+N(r.qOut))+'</div></div>'
       +'<div class="gbox big"><div class="l">คงเหลือ / CLOSING</div><div class="v">'+N(r.qClose)+'</div></div>'
     +'</div>'
     +'<div class="grand">'
@@ -7486,6 +7514,10 @@ function invPrint(mk){
       +'ครอบคลุม '+Math.round(v.pct*100)+'% ของจำนวนชิ้น'
       +(v.qUnknown>0?' — อีก '+N(v.qUnknown)+' ชิ้น ('+v.nUnknown+' รหัส) ยังไม่มีราคาทุน จึงแสดงเป็นจำนวนโดยไม่มีมูลค่า / '
         +N(v.qUnknown)+' pieces in '+v.nUnknown+' codes carry no cost yet and are listed without value.':'.')
+      +(r.noSales?'<br><b>⚠ เดือนนี้ยังไม่มีข้อมูลออร์เดอร์ในระบบ</b> ช่อง "จ่ายออก" จึงว่าง — ไม่ได้แปลว่าไม่มีการขาย '
+        +'ยอดรับเข้าและยอดคงเหลือยังถูกต้อง แต่ยอดยกมาใช้ไม่ได้ / <b>No order data exists for this month.</b> '
+        +'The Sold column is empty because the records start in '+E(invMonthLabel(invFirstSaleMonth()||''))
+        +' — not because nothing was sold. Arrivals and closing stock are still correct; the opening figure is not.':'')
       +(r.neg.length?'<br><b>⚠ ยอดยกมาติดลบ '+r.neg.length+' รหัส</b> — ตู้ก่อนเดือน '+E(invMonthLabel(INV_START))
         +' ไม่ได้บันทึกไว้ในระบบ / '+r.neg.length+' codes show a negative opening figure: the containers from before '
         +E(invMonthLabel(INV_START))+' were never entered into the app.':'')
