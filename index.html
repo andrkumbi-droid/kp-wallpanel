@@ -4183,6 +4183,11 @@ function _enterOffice(s){
   document.getElementById('s-office').classList.add('active');
   window.scrollTo(0,0);
   try{ setTimeout(kpGoalWatch,600); }catch(e){}
+  /* Monatsende automatisch festschreiben. Der Buero-Screen wird jeden
+     Morgen geoeffnet — naeher an "am 1. um 8 Uhr" kommt eine Seite ohne
+     Server nicht. Der Stand wird ohnehin auf den Monatsletzten
+     zurueckgerollt, der genaue Zeitpunkt ist also egal. */
+  try{ setTimeout(function(){ try{ invAutoSnap(); }catch(e){} }, 4000); }catch(e){}
   // Monatssatz für die Selbstkosten-Liste der Mould-Seite. Spät und nur einmal:
   // er braucht Bestellungen, Belege und die Lohnliste vollständig.
   try{ setTimeout(function(){ try{ ovhAuto(1); }catch(e){} }, 25000); }catch(e){}
@@ -6089,7 +6094,7 @@ function mgCleanup() {
     });
   });
 }
-function mgRender(){mgStock();mgIncoming();mgDrivers();mgRenderStaff();mgRevenue();try{agRenderIfOpen();}catch(e){}}
+function mgRender(){mgStock();mgIncoming();mgDrivers();mgRenderStaff();mgRevenue();try{agRenderIfOpen();}catch(e){}try{invAutoSnap();}catch(e){}}
 
 function mgStock(){
   const TRIM_TYPES=['lcorner','utrim','ttrim','pvc'];
@@ -7273,6 +7278,80 @@ function invLoadSnaps(cb){
     cb&&cb();
   }).catch(function(){ cb&&cb(); });
 }
+/* ── Bestand an einem STICHTAG ────────────────────────────────────────────
+   Der heutige Stand, zurueckgerollt: was nach dem Stichtag angekommen ist,
+   kommt wieder weg; was danach rausgegangen ist, kommt wieder drauf.
+
+   Das ist der Grund, warum der Schnappschuss nicht Punkt 08:00 fallen muss.
+   Ob er am 1. um 08:00 oder am 3. um 14:00 gezogen wird, aendert nichts: die
+   Bewegungen dazwischen sind auf den Tag dokumentiert und werden
+   herausgerechnet. Uebrig bleibt nur, was ohnehin niemand sieht — eine
+   Handkorrektur aus genau diesen Tagen.
+
+   Was ein Schnappschuss NICHT ist: ein unabhaengiger Beleg fuer den
+   Monatsendbestand. Er ist die heutige Zahl, sauber zurueckgerechnet. Sein
+   Wert liegt darin, sie festzuhalten, BEVOR Monate von Korrekturen sie
+   verschieben. */
+function invMoveSince(fromDate){
+  var arr={}, sold={};
+  (typeof containerLog!=='undefined'?containerLog:[]).forEach(function(c){
+    if(!c || !c.arrivedWh) return;
+    if(String(c.arrivedWh).slice(0,10) <= fromDate) return;
+    (c.items||[]).forEach(function(i){
+      if(!i||!i.code) return;
+      var q=parseInt(i.qty)||0; if(q<=0) return;
+      var k=ofNormCode(i.code); arr[k]=(arr[k]||0)+q;
+    });
+  });
+  (typeof orders!=='undefined'?orders:[]).forEach(function(o){
+    if(!o || o.status==='cancelled') return;
+    if(String(o.date||'').slice(0,10) <= fromDate) return;
+    (o.lineItems||[]).forEach(function(li){
+      if(!li || !li.code || !INV_GOODS[li.type]) return;
+      var q=invSaleQty(li); if(q<=0) return;
+      var k=invSaleCode(li); sold[k]=(sold[k]||0)+q;
+    });
+  });
+  return {arr:arr, sold:sold};
+}
+function invStockAt(dateStr){
+  var now=invOnHandTotal(), mv=invMoveSince(dateStr), keys={}, out={};
+  [now, mv.arr, mv.sold].forEach(function(m){ Object.keys(m).forEach(function(k){ keys[k]=1; }); });
+  Object.keys(keys).forEach(function(k){ out[k]=(now[k]||0)-(mv.arr[k]||0)+(mv.sold[k]||0); });
+  return out;
+}
+
+/* ── Monatsende von selbst festschreiben ──────────────────────────────────
+   Laeuft beim ersten Oeffnen im neuen Monat: fehlt fuer den Vormonat ein
+   Schnappschuss, wird er angelegt. Kein Klick, kein Server, kein Termin —
+   und dank invStockAt trotzdem der Stand vom Monatsletzten.
+   Ohne geladene Daten passiert nichts: ein leerer Schnappschuss waere
+   schlimmer als gar keiner, weil er als "gezaehlt" gilt und die Rechnung
+   fuer alle frueheren Monate daran haengt. */
+var _invAutoDone=false;
+function invAutoSnap(){
+  if(_invAutoDone || !window.fbDB) return;
+  if(!(typeof stockItems!=='undefined' && stockItems.length)) return;
+  if(!(typeof orders!=='undefined' && orders.length)) return;
+  if(!(typeof containerLog!=='undefined' && containerLog.length)) return;
+  var prev=invPrevMonth(invThisMonth());
+  if(prev<INV_START) return;
+  invLoadSnaps(function(){
+    if(_invAutoDone) return;
+    if(INV_SNAP[prev]){ _invAutoDone=true; return; }   // schon da, von Hand oder automatisch
+    _invAutoDone=true;
+    var end=invMonthEnd(prev);
+    var rec={ ts:Date.now(), date:kpTodayStr(), asOf:end, auto:true,
+              by:'auto', codes:invStockAt(end) };
+    window.fbDB.ref('stockSnap/'+prev).set(rec).then(function(){
+      INV_SNAP[prev]=rec;
+      try{ stAudit('edit','—','Monatsende '+prev+' automatisch festgeschrieben ('
+        +Object.keys(rec.codes).length+' Codes, Stand '+end+')',{}); }catch(e){}
+      try{ invRender(); }catch(e){}
+    }).catch(function(){ _invAutoDone=false; });
+  });
+}
+
 /* Den heutigen Zaehlstand als Monatsende festschreiben. Ab hier ist dieser
    Monat gezaehlt statt gerechnet — und jeder Monat davor haengt an einem
    besseren Anker als "heute". */
@@ -7307,10 +7386,12 @@ function invSaveSnap(){
   var have=INV_SNAP[mk];
   if(have && !confirm('⚠ There is already a count for '+invMonthLabel(mk)
       +' (from '+(have.date||'?')+') — it will be replaced.')) return;
-  var codes=invOnHandTotal();
+  /* Auch von Hand wird auf das Monatsende zurueckgerollt — sonst waere eine
+     Zaehlung vom 9. um die Bewegungen dieser neun Tage daneben. */
+  var codes=invStockAt(end);
   /* kpTodayStr statt toISOString: letzteres liefert UTC und haette vor
      07:00 Bangkok das Datum von GESTERN eingetragen. */
-  var rec={ ts:Date.now(), date:heute,
+  var rec={ ts:Date.now(), date:heute, asOf:end,
             by:(window.currentStaffName||'Management'), codes:codes };
   if(!window.fbDB){ alert('No database connection'); return; }
   window.fbDB.ref('stockSnap/'+mk).set(rec).then(function(){
@@ -7336,7 +7417,10 @@ function invRender(){
     +'<span style="color:var(--green);font-weight:700">✓ Measured:</span> arrivals and goods in transit — every container carries its dates and pieces.<br>'
     +'<span style="color:var(--orange);font-weight:700">≈ Derived:</span> the closing stock. The app keeps only one current count, so the month ends are '
     +'calculated backwards from today (closing − arrived + sold). Hand corrections land silently in the month they happened.<br>'
-    +'<b style="color:var(--text)">📸 Save count</b> writes today\'s count as this month\'s closing stock — from then on that month is counted, not calculated.'
+    +'<b style="color:var(--green)">Automatic:</b> the first time the app is opened in a new month, the month before is written down by itself. '
+    +'The figure is rolled back to the last day of that month — what arrived afterwards is taken out again, what went out is added back — '
+    +'so it does not matter whether that happens on the 1st at 8am or on the 3rd. '
+    +'<b style="color:var(--text)">📸 Save count</b> does the same on demand, for any month you pick.'
     +'</div>';
 
   var warn='';
@@ -7378,8 +7462,9 @@ function invRender(){
         /* Das Zaehldatum gehoert sichtbar daneben: eine Zaehlung vom 9. ist ein
            anderer Beleg als eine vom 30., auch wenn beide denselben Monat
            abschliessen. */
-        +(r.snap?' <span title="counted '+invEsc((INV_SNAP[r.mk]||{}).date||'')
-            +' by '+invEsc((INV_SNAP[r.mk]||{}).by||'')+'" style="color:var(--green)">✓ '
+        +(r.snap?' <span title="'+(((INV_SNAP[r.mk]||{}).auto)?'automatically recorded':'saved by hand')
+            +' on '+invEsc((INV_SNAP[r.mk]||{}).date||'')+' · '+invEsc((INV_SNAP[r.mk]||{}).by||'')
+            +'" style="color:var(--green)">✓ '
             +invEsc(String((INV_SNAP[r.mk]||{}).date||'').slice(5))+'</span>':'')
         +(r.live?' <span style="font-size:10px;color:var(--text3)">· today</span>':'')+'</td>'
       +'<td style="text-align:right;padding:9px 6px'+(r.neg.length||r.noSales?';color:var(--orange)':'')+'">'
