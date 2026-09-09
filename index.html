@@ -6727,7 +6727,7 @@ function ofStockCatalog(){
     var _pr = ofStockPrice(s), _val = ofStockIsClip(s) ? 0 : _pr*(parseInt(s.qty)||0);
     // The SELLING price stays — a walk-in seller needs it. Only what the shelf is
     // worth in total (price × quantity) is a money figure and goes away.
-    var price = _pr>0 ? (_pr+'฿/'+(typeof unitFor==='function'?unitFor(s.code):'แผ่น')
+    var price = _pr>0 ? (_pr+'฿/'+(typeof priceUnitFor==='function'?priceUnitFor(s.code):'แผ่น')
         + ((_showVal && _val>0) ? '<span style="color:var(--text2);font-weight:600"> × '+(parseInt(s.qty)||0).toLocaleString()+' = </span><span style="color:#16a34a">'+_val.toLocaleString()+'฿</span>' : '')) : '';
     return '<div class="srow" style="align-items:center">'
       +'<img loading="lazy" src="'+IMG_BASE+s.code+'.jpg" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0;margin-right:10px" onerror="this.style.display=\'none\'">'
@@ -7150,7 +7150,17 @@ function invSaleCode(li){
    zaehlen in Stueck — sonst waere dieser Abgang um den Faktor 100 zu klein. */
 function invSaleQty(li){
   var q=parseInt(li.qty)||0;
-  return li.type==='clips' ? q*INV_CLIP_PACK : q;
+  /* type 'clips' heisst PACKUNG — so legen die Bestellmaske und der POS die
+     Zeile an, und alle 32 echten Zeilen tragen 199 ฿ und heissen 'Clip Pack'.
+     Das bleibt die Vorgabe: fehlt der Stueckpreis, wird weiter als Packung
+     gerechnet, sonst wuerde der Abgang um den Faktor 100 zu klein — genau der
+     Fehler, der die Clips ueberhaupt erst verschwinden liess.
+     Abgewichen wird nur bei klarem Gegenbeleg: ein Stueckpreis unter 50 ฿ kann
+     keine Packung sein (die kostet 199), also hat dort jemand in Stueck
+     getippt. */
+  var up=parseFloat(li.unitPrice);
+  var jeStueck = isFinite(up) && up>0 && up<50;
+  return (li.type==='clips' && !jeStueck) ? q*INV_CLIP_PACK : q;
 }
 function invSales(){
   var by={};
@@ -27103,6 +27113,14 @@ function mirrorClassify(code){
 // L/L-P/T/U corners & profiles by the length/strip (เส้น); clips by piece (ตัว).
 // WPC vs PVC material doesn't matter — the product type (code prefix) decides.
 function unitFor(code){ var t=mirrorClassify(code); return t==='clip'?'ตัว':(t==='panel'?'แผ่น':'เส้น'); }
+/* Zwei Einheiten, die man nicht verwechseln darf:
+     unitFor()      = worin die MENGE zaehlt. Clips liegen als Einzelstueck
+                      im Lager, also ตัว.
+     priceUnitFor() = worauf sich der PREIS bezieht. Die 199 ฿ gelten fuer
+                      eine TUETE (คลิป (ถุง)), nicht fuer einen Clip.
+   Genau diese Verwechslung liess '199฿/ตัว' in der Stock-Zeile stehen — die
+   Beschriftung sah richtig aus und der Lagerwert stieg auf 75 Mio ฿. */
+function priceUnitFor(code){ return mirrorClassify(code)==='clip' ? 'ถุง' : unitFor(code); }
 // Column-name → index map: built once per sheet from the header row.
 // Fallback indices are the current fixed positions so nothing breaks if
 // the header row is missing or a keyword isn't found.
@@ -27288,7 +27306,20 @@ function mirrorToAppOrder(g){
 // nothing until you know whether they are 95 or 120 cm. st.precut is kept as a
 // roll-up of that list (precutRollup) purely so the stock rows, the value, the count
 // sheets and the landed-cost totals can go on reading one number per code.
-function _stockFind(code){ return stockItems.find(function(x){ return (x.code||'').toUpperCase()===(code||'').toUpperCase().trim(); }); }
+/* Erst exakt, dann normalisiert. Der Abgleich lief bisher NUR exakt, und die
+   Bestellzeilen schreiben den Code kuerzer als die Lagerliste: L11 gegen
+   L011, LP11 gegen L-P-11, U44 gegen U044. Wo die Schreibweise abwich, fand
+   die Abbuchung nichts und tat still gar nichts — bis 09.09.2026 waren das
+   6.330 Stueck ueber 45 Codes, die verkauft, aber nie vom Bestand abgezogen
+   wurden. Der exakte Treffer bleibt vorn, damit zwei wirklich verschiedene
+   Artikel mit aehnlichem Code nicht zusammenfallen. */
+function _stockFind(code){
+  var c=String(code||'').toUpperCase().trim();
+  var hit=stockItems.find(function(x){ return (x.code||'').toUpperCase().trim()===c; });
+  if(hit) return hit;
+  var n=ofNormCode(c);
+  return stockItems.find(function(x){ return ofNormCode(x.code)===n; });
+}
 function precutNorm(c){ return ofNormCode(String(c||'').toUpperCase().trim()); }
 function precutFind(code, len){
   var c=precutNorm(code), n=parseInt(len)||0;
@@ -30001,7 +30032,7 @@ function qtSoldOutState(p){
 }
 function qtAvailable(p){ return qtQuotable(p) && !qtSoldOutState(p); }
 function qtProductRow(p) {
-  var priceStr = p.price > 0 ? p.price+'฿/'+unitFor(p.code) : '—';
+  var priceStr = p.price > 0 ? p.price+'฿/'+priceUnitFor(p.code) : '—';
   var sub = p.mat === 'ACC' ? p.name : p.name+' · '+p.mat+(p.w?' '+p.w+'cm':'');
   var state = qtSoldOutState(p);
   var out = !!state;
