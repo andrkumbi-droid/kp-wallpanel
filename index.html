@@ -7246,6 +7246,35 @@ var INV_GROUPS=[
   {t:'utrim',   n:'U-Trim / ขอบ U'},
   {t:'clip',    n:'Clips / คลิป'}
 ];
+/* Drei Warengruppen fuer die Mengenspalten. Ohne die Aufteilung erschlagen
+   die Clips alles: 312.000 Clips neben 31.000 Paneelen, und die Paneele —
+   die Zahl, um die es eigentlich geht — verschwinden im Rauschen.
+   P = Paneele (WPC und PVC) · T = L-Winkel, T- und U-Profil · C = Clips  */
+function invCatOf(code){
+  var t=invType(code);
+  if(t==='clip') return 'clip';
+  return (t==='panel'||t==='pvc') ? 'panel' : 'trim';
+}
+function invSplit(map){
+  var o={panel:0, trim:0, clip:0};
+  Object.keys(map||{}).forEach(function(k){
+    var q=map[k]||0; if(!q) return;
+    o[invCatOf(k)] += q;
+  });
+  return o;
+}
+/* Die Aufteilung als schmale Zweitzeile unter der Zahl. Eine Gruppe ohne
+   Menge faellt weg, damit die Zeile nicht mit Nullen zulaeuft. */
+function invSplitLine(map, sign){
+  var o=invSplit(map), p=[];
+  if(o.panel) p.push('P '+invN(o.panel));
+  if(o.trim)  p.push('T '+invN(o.trim));
+  if(o.clip)  p.push('C '+invN(o.clip));
+  if(p.length<2) return '';
+  return '<div title="P = panels · T = L-corner, T-trim, U-trim · C = clips" '
+    +'style="font-size:9.5px;color:var(--text3);font-weight:400;line-height:1.5">'
+    +(sign||'')+p.join(' · ')+'</div>';
+}
 function invType(k){
   /* Clips zuerst, VOR der Stock-Liste: dort steht CLIP als type "panel", und
      150.000 Clips in der Paneelgruppe machen deren Summe sinnlos. */
@@ -7468,11 +7497,13 @@ function invRender(){
             +invEsc(String((INV_SNAP[r.mk]||{}).date||'').slice(5))+'</span>':'')
         +(r.live?' <span style="font-size:10px;color:var(--text3)">· today</span>':'')+'</td>'
       +'<td style="text-align:right;padding:9px 6px'+(r.neg.length||r.noSales?';color:var(--orange)':'')+'">'
-        +(r.noSales?'<span title="no order data">n/a</span>':invN(r.qOpen))+'</td>'
-      +'<td style="text-align:right;padding:9px 6px;color:var(--green);font-weight:700">'+(r.qIn?'+'+invN(r.qIn):'—')+'</td>'
+        +(r.noSales?'<span title="no order data">n/a</span>':invN(r.qOpen)+invSplitLine(r.opening))+'</td>'
+      +'<td style="text-align:right;padding:9px 6px;color:var(--green);font-weight:700">'
+        +(r.qIn?'+'+invN(r.qIn)+invSplitLine(r.arrived,'+'):'—')+'</td>'
       +'<td style="text-align:right;padding:9px 6px;color:'+(r.noSales?'var(--orange)':'var(--red)')+'">'
-        +(r.noSales?'<span style="font-size:10.5px">no orders</span>':(r.qOut?'−'+invN(r.qOut):'—'))+'</td>'
-      +'<td style="text-align:right;padding:9px 6px;font-weight:800">'+invN(r.qClose)+'</td>'
+        +(r.noSales?'<span style="font-size:10.5px">no orders</span>'
+                   :(r.qOut?'−'+invN(r.qOut)+invSplitLine(r.sold,'−'):'—'))+'</td>'
+      +'<td style="text-align:right;padding:9px 6px;font-weight:800">'+invN(r.qClose)+invSplitLine(r.closing)+'</td>'
       +'<td style="text-align:right;padding:9px 6px;font-weight:700;color:var(--green)">'+invB(v.val)
         +(v.qUnknown>0?'<div style="font-size:9.5px;color:var(--text3);font-weight:400">'+invPct(v.pct)+'% priced</div>':'')+'</td>'
       +'<td style="text-align:right;padding:9px 6px;color:var(--blue)">'+(tQty?invN(tQty)+'<div style="font-size:9.5px;color:var(--text3)">'+r.transit.length+' cont · '+invB(tv.val)+'</div>':'—')+'</td>'
@@ -7480,7 +7511,10 @@ function invRender(){
     +'</tr>';
     if(open) out+='<tr><td colspan="8" style="padding:0;background:var(--bg2)">'+invDetail(r)+'</td></tr>';
   });
-  out+='</tbody></table></div>';
+  out+='</tbody></table></div>'
+    +'<div style="font-size:11.5px;color:var(--text3);padding:8px 4px 0;line-height:1.6">'
+    +'<b>P</b> = panels (WPC + PVC) &nbsp; <b>T</b> = L-corner, T-trim, U-trim &nbsp; <b>C</b> = clips'
+    +' — clips are counted in single pieces, which is why their number dwarfs the rest.</div>';
   body.innerHTML=head+warn+out;
 }
 
@@ -7492,9 +7526,13 @@ function invDetail(r){
     +'🚢 Arrived in '+invEsc(r.label)+' / มาถึงคลัง</div>';
   h+= r.conts.length
     ? '<div style="font-size:12.5px;line-height:1.8;margin-bottom:12px">'+r.conts.map(function(x){
+        var sp=invSplit(x.codes||{});
         return '<div>No. <b>'+invEsc(x.c.containerNo||'—')+'</b> · '+invEsc(x.c.supplier||'—')
           +' · PI '+invEsc(x.c.piNo||'—')+' · '+invEsc(String(x.c.arrivedWh).slice(0,10))
-          +' · <b style="color:var(--green)">'+invN(x.qty)+' pcs</b></div>';
+          +' · <b style="color:var(--green)">'+invN(x.qty)+' pcs</b>'
+          +'<span style="color:var(--text3);font-size:11.5px"> ('
+            +[sp.panel?'P '+invN(sp.panel):'', sp.trim?'T '+invN(sp.trim):'', sp.clip?'C '+invN(sp.clip):'']
+              .filter(Boolean).join(' · ')+')</span></div>';
       }).join('')+'</div>'
     : '<div style="font-size:12.5px;color:var(--text3);margin-bottom:12px">nothing arrived / ไม่มีตู้เข้า</div>';
 
@@ -7502,9 +7540,13 @@ function invDetail(r){
     +'⏳ In transit at '+invEsc(r.end)+' / ระหว่างทาง</div>';
   h+= r.transit.length
     ? '<div style="font-size:12.5px;line-height:1.8;margin-bottom:12px">'+r.transit.map(function(t){
+        var sp=invSplit(t.codes||{});
         return '<div>'+t.stage.t+' · No. <b>'+invEsc(t.c.containerNo||'—')+'</b> · '+invEsc(t.c.supplier||'—')
           +' · deposit '+invEsc(String(t.c.deposit).slice(0,10))
-          +' · <b style="color:var(--blue)">'+invN(t.qty)+' pcs</b> · '+invB(invValue(t.codes).val)+'</div>';
+          +' · <b style="color:var(--blue)">'+invN(t.qty)+' pcs</b>'
+          +'<span style="color:var(--text3);font-size:11.5px"> ('
+            +[sp.panel?'P '+invN(sp.panel):'', sp.trim?'T '+invN(sp.trim):'', sp.clip?'C '+invN(sp.clip):'']
+              .filter(Boolean).join(' · ')+')</span> · '+invB(invValue(t.codes).val)+'</div>';
       }).join('')+'</div>'
     : '<div style="font-size:12.5px;color:var(--text3);margin-bottom:12px">nothing in transit / ไม่มีของระหว่างทาง</div>';
 
@@ -7545,6 +7587,15 @@ function invDetail(r){
    gezaehlt und welche gerechnet ist — ein Bericht, der das verschweigt, ist
    fuer eine Buchhaltung wertlos. */
 function invPrint(mk){
+  /* Die drei Warengruppen auch auf dem Papier — ein Buchhalter, der 400.000
+     Stueck liest, muss sehen koennen, dass davon 315.000 Clips sind. */
+  var pSplit=function(map){
+    var o=invSplit(map||{}), p=[];
+    if(o.panel) p.push('P '+invN(o.panel));
+    if(o.trim)  p.push('T '+invN(o.trim));
+    if(o.clip)  p.push('C '+invN(o.clip));
+    return p.length<2 ? '' : '<div class="sp3">'+p.join(' · ')+'</div>';
+  };
   var rows=invLedger(), r=rows.find(function(x){ return x.mk===mk; });
   if(!r){ alert('Month not found'); return; }
   var E=invEsc, N=invN, B=invB;
@@ -7635,6 +7686,7 @@ function invPrint(mk){
     +'.grand{display:flex;gap:6px;margin:8px 0 2px}'
     +'.gbox{flex:1;border:1.5px solid #111;border-radius:4px;padding:5px 6px;text-align:center}'
     +'.gbox .l{font-size:8pt;color:#555;font-weight:700;letter-spacing:.03em}.gbox .v{font-size:12pt;font-weight:800}'
+    +'.gbox .sp3{font-size:7.5pt;color:#555;font-weight:600;margin-top:1px}'
     +'.gbox.big{background:#dcfce7;border-color:#15803d}.gbox.big .v{font-size:14pt;color:#15803d}'
     +'.gbox.tr{background:#dbeafe;border-color:#1d4ed8}.gbox.tr .v{color:#1d4ed8}'
     +'.sec{margin-top:12px;page-break-inside:auto}'
@@ -7655,11 +7707,15 @@ function invPrint(mk){
       +'<div class="d"><b style="font-size:12pt">'+E(r.label)+'</b><br>ณ วันที่ / as at '+E(r.end)
       +'<br><span style="font-size:8pt">พิมพ์ / printed '+E(stamp)+'</span></div></div>'
     +'<div class="grand">'
-      +'<div class="gbox"><div class="l">ยกมา / OPENING</div><div class="v">'+(r.noSales?'n/a':N(r.qOpen))+'</div></div>'
-      +'<div class="gbox"><div class="l">รับเข้า / ARRIVED</div><div class="v" style="color:#15803d">+'+N(r.qIn)+'</div></div>'
+      +'<div class="gbox"><div class="l">ยกมา / OPENING</div><div class="v">'+(r.noSales?'n/a':N(r.qOpen))+'</div>'
+        +(r.noSales?'':pSplit(r.opening))+'</div>'
+      +'<div class="gbox"><div class="l">รับเข้า / ARRIVED</div><div class="v" style="color:#15803d">+'+N(r.qIn)+'</div>'
+        +pSplit(r.arrived)+'</div>'
       +'<div class="gbox"><div class="l">จ่ายออก / SOLD</div><div class="v" style="color:#b91c1c">'
-        +(r.noSales?'<span style="font-size:9pt;color:#b45309">ไม่มีข้อมูล<br>no data</span>':'−'+N(r.qOut))+'</div></div>'
-      +'<div class="gbox big"><div class="l">คงเหลือ / CLOSING</div><div class="v">'+N(r.qClose)+'</div></div>'
+        +(r.noSales?'<span style="font-size:9pt;color:#b45309">ไม่มีข้อมูล<br>no data</span>':'−'+N(r.qOut))+'</div>'
+        +(r.noSales?'':pSplit(r.sold))+'</div>'
+      +'<div class="gbox big"><div class="l">คงเหลือ / CLOSING</div><div class="v">'+N(r.qClose)+'</div>'
+        +pSplit(r.closing)+'</div>'
     +'</div>'
     +'<div class="grand">'
       +'<div class="gbox big" style="flex:2"><div class="l">มูลค่าสต็อกในคลัง / STOCK VALUE IN WAREHOUSE</div><div class="v">'+B(v.val)+'</div></div>'
@@ -7671,6 +7727,7 @@ function invPrint(mk){
     +'<div class="note"><b>วิธีคำนวณ / Method.</b> '+method
       +'<br><b>ตู้และของระหว่างทาง / Containers and transit</b> มาจากบันทึกตู้โดยตรง ทุกตัวเลขมีเอกสารรองรับ '
       +'/ come straight from the container records — every figure is documented.'
+      +'<br><b>P / T / C</b> = แผ่นผนัง / อุปกรณ์ขอบ (L, T, U) / คลิป — panels / trims / clips.'
       +'<br><b>คลิป / Clips</b> นับเป็นชิ้น แต่ราคาทุนเก็บเป็นแพ็ค '+INV_CLIP_PACK+' ชิ้น จึงหารก่อนคิดมูลค่า '
       +'/ counted in pieces but costed per pack of '+INV_CLIP_PACK+', divided before valuation.'
       +'<br><b>มูลค่า / Value</b> = จำนวนคงเหลือ × ทุนนำเข้าต่อชิ้น (landed cost: สินค้า + ค่าขนส่ง + ภาษี + ค่าธนาคาร, ไม่รวม VAT). '
