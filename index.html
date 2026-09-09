@@ -6444,6 +6444,27 @@ function ofRenderStock(){
 // Selling price for a stock row. Codes in stock can be typed in short form (KP36),
 // so look the catalog up on the normalised code as well. L / T / U profiles are all
 // 89฿ — if a profile is missing from the catalog it still gets that price.
+/* Clips gehen NICHT in den Lagerwert. Zwei Gruende, von denen jeder allein
+   reichen wuerde:
+
+   1. Die Einheit passt nicht. Im Katalog steht 199 ฿ fuer eine TUETE
+      ("Cliplock / คลิป (ถุง)"), gezaehlt wird aber in einzelnen Clips.
+      199 × 315.000 ergab 62,7 Mio ฿ — vier Fuenftel eines Lagerwerts, den es
+      nie gab. Derselbe Fehler steckt im Einkaufspreis: die 19,10 ฿ unter
+      acctData.cost.CLIP gelten je Packung à 100.
+   2. Verkauft werden sie ohnehin kaum. Der weitaus groesste Teil geht als
+      Zugabe mit den Paneelen raus — 581.620 von 593.100 Stueck in Jul-Sep
+      2026 liefen als "free-clips". Was verschenkt wird, ist kein Lagerwert.
+
+   Die MENGE bleibt ueberall sichtbar: es liegen ja wirklich 315.000 Clips da.
+   Nur in Baht taucht sie nicht mehr auf. */
+function ofStockIsClip(s){
+  var c=String((s&&s.code)||'').toUpperCase().replace(/\s+/g,'');
+  if(!c) return false;
+  if(/^CLIP/.test(c)) return true;
+  var p=(window.QT_PRODUCTS||[]).find(function(x){ return String(x.code).toUpperCase()===c; });
+  return !!(p && p.profile==='clip');
+}
 function ofStockPrice(s){
   var code = (typeof ofNormCode==='function') ? ofNormCode(s.code) : String(s.code==null?'':s.code).trim().toUpperCase();
   var list = window.QT_PRODUCTS||[];
@@ -6456,7 +6477,10 @@ function ofStockPrice(s){
 // counted but not valued; Grade C is only shorter, sells at the normal price and
 // therefore has to be in the value — leaving it out would quietly shrink the
 // inventory total by every panel that was cut.
-function ofStockValue(s){ return ofStockPrice(s) * ((parseInt(s.qty)||0)+(parseInt(s.precut)||0)); }
+function ofStockValue(s){
+  if(ofStockIsClip(s)) return 0;
+  return ofStockPrice(s) * ((parseInt(s.qty)||0)+(parseInt(s.precut)||0));
+}
 function ofStockValueSum(items){ return (items||[]).reduce(function(a,s){ return a+ofStockValue(s); }, 0); }
 
 // Office → Stock tab: the pre-cut area. Staff keep this themselves — model, length
@@ -6700,7 +6724,7 @@ function ofStockCatalog(){
     } else if(s.notes){
       subHtml='<div style="font-size:12px;color:var(--text2)">'+s.notes+'</div>';
     }
-    var _pr = ofStockPrice(s), _val = _pr*(parseInt(s.qty)||0);
+    var _pr = ofStockPrice(s), _val = ofStockIsClip(s) ? 0 : _pr*(parseInt(s.qty)||0);
     // The SELLING price stays — a walk-in seller needs it. Only what the shelf is
     // worth in total (price × quantity) is a money figure and goes away.
     var price = _pr>0 ? (_pr+'฿/'+(typeof unitFor==='function'?unitFor(s.code):'แผ่น')
@@ -6735,10 +6759,14 @@ function ofStockCatalog(){
       +'<div class="card">'+items.map(row).join('')+'</div></div>';
   }
   // Panel totals summary bar: WPC, PVC, and both combined (accessories excluded)
-  var wpcP = stockItems.filter(function(s){return s.type==='panel';}).filter(match);
+  /* CLIP traegt in der Stock-Liste den type "panel" — ohne diese Trennung
+     sassen 315.000 Clips in "WPC Wall Panels" und blaehten die Paneelzahl
+     von 48.832 auf 363.832 auf. */
+  var wpcP = stockItems.filter(function(s){return s.type==='panel' && !ofStockIsClip(s);}).filter(match);
+  var clipP = stockItems.filter(ofStockIsClip).filter(match);
   var pvcP = stockItems.filter(function(s){return s.type==='pvc';}).filter(match);
   var lutP = stockItems.filter(function(s){return s.type==='lcorner'||s.type==='utrim'||s.type==='ttrim';}).filter(match);
-  var tw = tot(wpcP), tp = tot(pvcP), tl = tot(lutP), tb = {a:tw.a+tp.a, b:tw.b+tp.b};
+  var tw = tot(wpcP), tp = tot(pvcP), tl = tot(lutP), tc = tot(clipP), tb = {a:tw.a+tp.a, b:tw.b+tp.b};
   // Stock value per group (Grade A × selling price) — L/T/U all 89฿
   var vw=ofStockValueSum(wpcP), vp=ofStockValueSum(pvcP), vl=ofStockValueSum(lutP), vtot=vw+vp+vl;
   function cell(lbl,t,accent,val){ return '<div style="flex:1">'
@@ -6747,15 +6775,18 @@ function ofStockCatalog(){
       +(t.b>0?'<div style="font-size:11px;font-weight:700;color:var(--orange)">+'+t.b.toLocaleString()+' B</div>':'')
       +(val>0?'<div style="font-size:11.5px;font-weight:800;color:#16a34a">'+val.toLocaleString()+'฿</div>':'')+'</div>'; }
   var summary = (tw.a||tp.a||tl.a||tb.a) ? '<div class="card" style="display:flex;text-align:center;gap:6px;padding:10px 8px;margin-bottom:4px">'
-      +cell('WPC',tw,'',_showVal?vw:0)+cell('PVC',tp,'',_showVal?vp:0)+cell('TOTAL / รวม',tb,'var(--blue)',_showVal?vw+vp:0)+cell('L·U·T',tl,'',_showVal?vl:0)+'</div>'
+      +cell('WPC',tw,'',_showVal?vw:0)+cell('PVC',tp,'',_showVal?vp:0)+cell('TOTAL / รวม',tb,'var(--blue)',_showVal?vw+vp:0)+cell('L·U·T',tl,'',_showVal?vl:0)
+      +(tc.a?cell('CLIPS',tc,'',0):'')+'</div>'
     +(_showVal ? '<div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;margin-bottom:4px;background:rgba(22,163,74,0.08);border:1px solid rgba(22,163,74,0.35)">'
       +'<div><div style="font-size:12px;font-weight:800;color:var(--text)">💰 มูลค่าสต็อกรวม / Total stock value</div>'
-      +'<div style="font-size:10.5px;color:var(--text2)">Grade A × ราคาขาย · L/T/U 89฿</div></div>'
+      +'<div style="font-size:10.5px;color:var(--text2)">Grade A × ราคาขาย · L/T/U 89฿ · '
+        +'ไม่รวมคลิป / clips excluded</div></div>'
       +'<div style="font-size:20px;font-weight:800;color:#16a34a">'+vtot.toLocaleString()+'฿</div></div>' : '') : '';
   var html = summary
-    + sec('WPC Wall Panels', stockItems.filter(function(s){return s.type==='panel';}))
+    + sec('WPC Wall Panels', stockItems.filter(function(s){return s.type==='panel' && !ofStockIsClip(s);}))
     + sec('PVC Ceiling', stockItems.filter(function(s){return s.type==='pvc';}))
-    + sec('L-Corner, U-Trim, T-Trim / อลูมิเนียมขอบ', stockItems.filter(function(s){return s.type==='lcorner'||s.type==='utrim'||s.type==='ttrim';}));
+    + sec('L-Corner, U-Trim, T-Trim / อลูมิเนียมขอบ', stockItems.filter(function(s){return s.type==='lcorner'||s.type==='utrim'||s.type==='ttrim';}))
+    + sec('Clips / คลิป — ไม่คิดมูลค่า / not valued', stockItems.filter(ofStockIsClip));
   host.innerHTML = html || '<div class="empty" style="padding:1rem;font-size:13px">No stock found</div>';
 }
 
@@ -6888,7 +6919,7 @@ function ofStockValuePrint(){
         var a=parseInt(s.qty)||0, b=parseInt(s.damaged)||0, c=parseInt(s.precut)||0;
         // Value counts A + C, exactly like ofStockValue() — otherwise the row values
         // would no longer add up to the section total the moment something is cut.
-        var pr=ofStockPrice(s), v=pr*(a+c);
+        var pr=ofStockPrice(s), v=ofStockValue(s);
         return '<tr>'
           +'<td class="c muted">'+(i+1)+'</td>'
           +'<td class="cd">'+esc(s.code)+'</td>'
@@ -42286,6 +42317,7 @@ function pfStockValue(){
   var G={panel:{lbl:'WPC Wall Panels',qty:0,goods:0,landed:0,sell:0},
          pvc:  {lbl:'K-PVC Ceiling',   qty:0,goods:0,landed:0,sell:0},
          trim: {lbl:'L · U · T',       qty:0,goods:0,landed:0,sell:0},
+         clip: {lbl:'Clips (ไม่คิดมูลค่า / not valued)', qty:0,goods:0,landed:0,sell:0},
          other:{lbl:'อื่นๆ / Other',    qty:0,goods:0,landed:0,sell:0}};   // a type nobody thought of must show, not vanish
   var tot={qty:0,goods:0,landed:0,sell:0}, missing=[], missQty=0, dmgQty=0;
   (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
@@ -42293,18 +42325,24 @@ function pfStockValue(){
     dmgQty+=parseInt(s.damaged)||0;
     var q=(parseInt(s.qty)||0)+(parseInt(s.precut)||0);
     if(q<=0) return;
-    var g = s.type==='panel' ? G.panel : (s.type==='pvc' ? G.pvc
-          : (['lcorner','utrim','ttrim'].indexOf(s.type)>=0 ? G.trim : G.other));
+    /* Clips zuerst — sie tragen den type "panel" und saessen sonst mit
+       315.000 Stueck in der Paneelgruppe. Geld tragen sie keines: Verkaufs-
+       wie Einkaufspreis gelten je Tuete bzw. je Packung, die Menge zaehlt in
+       Stueck, und verschenkt wird der groesste Teil ohnehin. */
+    var isClip = (typeof ofStockIsClip==='function') && ofStockIsClip(s);
+    var g = isClip ? G.clip
+          : (s.type==='panel' ? G.panel : (s.type==='pvc' ? G.pvc
+          : (['lcorner','utrim','ttrim'].indexOf(s.type)>=0 ? G.trim : G.other)));
     var k=''; try{ k=acCostKey(s.code, s.type); }catch(e){ k=String(s.code).toUpperCase(); }
-    var gUnit=(gu[k]&&gu[k].unit)||0, lUnit=acN(cost[k]);
-    var sell=0; try{ sell=ofStockPrice(s)||0; }catch(e){}
+    var gUnit=isClip?0:((gu[k]&&gu[k].unit)||0), lUnit=isClip?0:acN(cost[k]);
+    var sell=0; if(!isClip){ try{ sell=ofStockPrice(s)||0; }catch(e){} }
     g.qty+=q; tot.qty+=q;
     g.goods+=gUnit*q;  tot.goods+=gUnit*q;
     g.landed+=lUnit*q; tot.landed+=lUnit*q;
     g.sell+=sell*q;    tot.sell+=sell*q;
-    if(!(gUnit>0)){ missing.push(k); missQty+=q; }
+    if(!isClip && !(gUnit>0)){ missing.push(k); missQty+=q; }
   });
-  return {groups:[G.panel,G.pvc,G.trim].concat(G.other.qty>0?[G.other]:[]),
+  return {groups:[G.panel,G.pvc,G.trim].concat(G.clip.qty>0?[G.clip]:[]).concat(G.other.qty>0?[G.other]:[]),
           tot:tot, missing:missing, missQty:missQty, dmgQty:dmgQty};
 }
 
