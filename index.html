@@ -7263,18 +7263,40 @@ function invSplit(map){
   });
   return o;
 }
-/* Die Aufteilung als schmale Zweitzeile unter der Zahl. Eine Gruppe ohne
-   Menge faellt weg, damit die Zeile nicht mit Nullen zulaeuft. */
-function invSplitLine(map, sign){
-  var o=invSplit(map), p=[];
-  if(o.panel) p.push('P '+invN(o.panel));
-  if(o.trim)  p.push('T '+invN(o.trim));
-  if(o.clip)  p.push('C '+invN(o.clip));
-  if(p.length<2) return '';
-  return '<div title="P = panels · T = L-corner, T-trim, U-trim · C = clips" '
-    +'style="font-size:9.5px;color:var(--text3);font-weight:400;line-height:1.5">'
-    +(sign||'')+p.join(' · ')+'</div>';
+/* Dieselbe Aufteilung, aber als drei getrennte Mengenkarten — damit sich
+   auch Lagerwert und Wareneinsatz je Gruppe rechnen lassen und nicht nur
+   die Stueckzahl. */
+function invByCat(map){
+  var o={panel:{}, trim:{}, clip:{}};
+  Object.keys(map||{}).forEach(function(k){
+    var q=map[k]||0; if(!q) return;
+    o[invCatOf(k)][k]=q;
+  });
+  return o;
 }
+function invSum(map){ var t=0; Object.keys(map||{}).forEach(function(k){ t+=map[k]||0; }); return t; }
+
+/* Eine Zelle des Berichts: Paneele als Kopfzahl, darunter Zubehoer und Clips,
+   unten die Summe. Die Reihenfolge ist Absicht — die Paneele sind die Zahl,
+   um die es geht, und in einer Gesamtsumme gehen sie neben 300.000 Clips
+   unter. fmt() macht aus einer Menge entweder Stueck oder Baht. */
+function invCell3(map, fmt, sign, col){
+  var c=invByCat(map), sg=sign||'';
+  var line=function(lbl, m, cls){
+    var v=fmt(m); if(v===null) return '';
+    return '<div style="'+cls+'"><span style="color:var(--text3);font-weight:400;font-size:9px">'
+      +lbl+'</span> '+sg+v+'</div>';
+  };
+  var tot=fmt(map);
+  return line('P', c.panel, 'font-weight:800;font-size:13px'+(col?';color:'+col:''))
+    +line('A', c.trim,  'font-size:11px;color:var(--text2)')
+    +line('C', c.clip,  'font-size:11px;color:var(--text2)')
+    +(tot===null?'':'<div style="font-size:10.5px;color:var(--text3);border-top:1px solid var(--border);'
+      +'margin-top:3px;padding-top:2px">Σ '+sg+tot+'</div>');
+}
+var invFmtQty = function(m){ var t=invSum(m); return t?invN(t):null; };
+var invFmtVal = function(m){ var v=invValue(m); return v.val>0?invB(v.val):null; };
+
 function invType(k){
   /* Clips zuerst, VOR der Stock-Liste: dort steht CLIP als type "panel", und
      150.000 Clips in der Paneelgruppe machen deren Summe sinnlos. */
@@ -7475,7 +7497,8 @@ function invRender(){
       +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--green)">+ Arrived</th>'
       +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--red)">− Sold</th>'
       +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">= Closing</th>'
-      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">Value</th>'
+      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">Stock value</th>'
+      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">COGS</th>'
       +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--blue)">In transit</th>'
       +'<th style="padding:8px 6px"></th>'
     +'</tr></thead><tbody>';
@@ -7497,24 +7520,31 @@ function invRender(){
             +invEsc(String((INV_SNAP[r.mk]||{}).date||'').slice(5))+'</span>':'')
         +(r.live?' <span style="font-size:10px;color:var(--text3)">· today</span>':'')+'</td>'
       +'<td style="text-align:right;padding:9px 6px'+(r.neg.length||r.noSales?';color:var(--orange)':'')+'">'
-        +(r.noSales?'<span title="no order data">n/a</span>':invN(r.qOpen)+invSplitLine(r.opening))+'</td>'
-      +'<td style="text-align:right;padding:9px 6px;color:var(--green);font-weight:700">'
-        +(r.qIn?'+'+invN(r.qIn)+invSplitLine(r.arrived,'+'):'—')+'</td>'
-      +'<td style="text-align:right;padding:9px 6px;color:'+(r.noSales?'var(--orange)':'var(--red)')+'">'
-        +(r.noSales?'<span style="font-size:10.5px">no orders</span>'
-                   :(r.qOut?'−'+invN(r.qOut)+invSplitLine(r.sold,'−'):'—'))+'</td>'
-      +'<td style="text-align:right;padding:9px 6px;font-weight:800">'+invN(r.qClose)+invSplitLine(r.closing)+'</td>'
-      +'<td style="text-align:right;padding:9px 6px;font-weight:700;color:var(--green)">'+invB(v.val)
-        +(v.qUnknown>0?'<div style="font-size:9.5px;color:var(--text3);font-weight:400">'+invPct(v.pct)+'% priced</div>':'')+'</td>'
+        +(r.noSales?'<span title="no order data">n/a</span>':invCell3(r.opening, invFmtQty))+'</td>'
+      +'<td style="text-align:right;padding:9px 6px">'
+        +(r.qIn?invCell3(r.arrived, invFmtQty, '+', 'var(--green)'):'—')+'</td>'
+      +'<td style="text-align:right;padding:9px 6px">'
+        +(r.noSales?'<span style="font-size:10.5px;color:var(--orange)">no orders</span>'
+                   :(r.qOut?invCell3(r.sold, invFmtQty, '−', 'var(--red)'):'—'))+'</td>'
+      +'<td style="text-align:right;padding:9px 6px">'+invCell3(r.closing, invFmtQty)+'</td>'
+      +'<td style="text-align:right;padding:9px 6px">'+invCell3(r.closing, invFmtVal, '', 'var(--green)')
+        +(v.qUnknown>0?'<div style="font-size:9px;color:var(--text3);font-weight:400">'+invPct(v.pct)+'% priced</div>':'')+'</td>'
+      /* Wareneinsatz: was die im Monat rausgegangene Ware im Einkauf gekostet
+         hat. Ohne Orderdaten gibt es ihn nicht — dann steht dort nichts. */
+      +'<td style="text-align:right;padding:9px 6px">'
+        +(r.noSales?'<span style="font-size:10.5px;color:var(--orange)">n/a</span>'
+                   :(r.qOut?invCell3(r.sold, invFmtVal, '', 'var(--text)'):'—'))+'</td>'
       +'<td style="text-align:right;padding:9px 6px;color:var(--blue)">'+(tQty?invN(tQty)+'<div style="font-size:9.5px;color:var(--text3)">'+r.transit.length+' cont · '+invB(tv.val)+'</div>':'—')+'</td>'
       +'<td style="text-align:right;padding:9px 8px"><button type="button" class="btnsm" onclick="event.stopPropagation();invPrint(\''+r.mk+'\')"><i class="ti ti-printer"></i></button></td>'
     +'</tr>';
-    if(open) out+='<tr><td colspan="8" style="padding:0;background:var(--bg2)">'+invDetail(r)+'</td></tr>';
+    if(open) out+='<tr><td colspan="9" style="padding:0;background:var(--bg2)">'+invDetail(r)+'</td></tr>';
   });
   out+='</tbody></table></div>'
     +'<div style="font-size:11.5px;color:var(--text3);padding:8px 4px 0;line-height:1.6">'
-    +'<b>P</b> = panels (WPC + PVC) &nbsp; <b>T</b> = L-corner, T-trim, U-trim &nbsp; <b>C</b> = clips'
-    +' — clips are counted in single pieces, which is why their number dwarfs the rest.</div>';
+    +'Every cell reads top down: <b>P</b> panels (WPC + PVC) · <b>A</b> accessories (L-corner, T-trim, U-trim) · '
+    +'<b>C</b> clips · <b>Σ</b> total. Panels sit on top because that is the figure that matters — '
+    +'next to 300,000 clips they disappear in a single sum. '
+    +'<b>COGS</b> = what the goods that left in that month cost in purchase (landed cost).</div>';
   body.innerHTML=head+warn+out;
 }
 
@@ -7531,7 +7561,7 @@ function invDetail(r){
           +' · PI '+invEsc(x.c.piNo||'—')+' · '+invEsc(String(x.c.arrivedWh).slice(0,10))
           +' · <b style="color:var(--green)">'+invN(x.qty)+' pcs</b>'
           +'<span style="color:var(--text3);font-size:11.5px"> ('
-            +[sp.panel?'P '+invN(sp.panel):'', sp.trim?'T '+invN(sp.trim):'', sp.clip?'C '+invN(sp.clip):'']
+            +[sp.panel?'P '+invN(sp.panel):'', sp.trim?'A '+invN(sp.trim):'', sp.clip?'C '+invN(sp.clip):'']
               .filter(Boolean).join(' · ')+')</span></div>';
       }).join('')+'</div>'
     : '<div style="font-size:12.5px;color:var(--text3);margin-bottom:12px">nothing arrived / ไม่มีตู้เข้า</div>';
@@ -7545,7 +7575,7 @@ function invDetail(r){
           +' · deposit '+invEsc(String(t.c.deposit).slice(0,10))
           +' · <b style="color:var(--blue)">'+invN(t.qty)+' pcs</b>'
           +'<span style="color:var(--text3);font-size:11.5px"> ('
-            +[sp.panel?'P '+invN(sp.panel):'', sp.trim?'T '+invN(sp.trim):'', sp.clip?'C '+invN(sp.clip):'']
+            +[sp.panel?'P '+invN(sp.panel):'', sp.trim?'A '+invN(sp.trim):'', sp.clip?'C '+invN(sp.clip):'']
               .filter(Boolean).join(' · ')+')</span> · '+invB(invValue(t.codes).val)+'</div>';
       }).join('')+'</div>'
     : '<div style="font-size:12.5px;color:var(--text3);margin-bottom:12px">nothing in transit / ไม่มีของระหว่างทาง</div>';
@@ -7589,10 +7619,16 @@ function invDetail(r){
 function invPrint(mk){
   /* Die drei Warengruppen auch auf dem Papier — ein Buchhalter, der 400.000
      Stueck liest, muss sehen koennen, dass davon 315.000 Clips sind. */
+  var pSplitVal=function(map){
+    var c=invByCat(map), p=[];
+    var one=function(l,m){ var v=invValue(m); if(v.val>0) p.push(l+' '+N(v.val)); };
+    one('P',c.panel); one('A',c.trim); one('C',c.clip);
+    return p.length<2 ? '' : '<div class="sp3">'+p.join(' · ')+'</div>';
+  };
   var pSplit=function(map){
     var o=invSplit(map||{}), p=[];
     if(o.panel) p.push('P '+invN(o.panel));
-    if(o.trim)  p.push('T '+invN(o.trim));
+    if(o.trim)  p.push('A '+invN(o.trim));
     if(o.clip)  p.push('C '+invN(o.clip));
     return p.length<2 ? '' : '<div class="sp3">'+p.join(' · ')+'</div>';
   };
@@ -7719,6 +7755,8 @@ function invPrint(mk){
     +'</div>'
     +'<div class="grand">'
       +'<div class="gbox big" style="flex:2"><div class="l">มูลค่าสต็อกในคลัง / STOCK VALUE IN WAREHOUSE</div><div class="v">'+B(v.val)+'</div></div>'
+      +'<div class="gbox"><div class="l">ต้นทุนขาย / COGS</div><div class="v">'
+        +(r.noSales?'n/a':B(invValue(r.sold).val))+'</div>'+(r.noSales?'':pSplitVal(r.sold))+'</div>'
       +'<div class="gbox tr" style="flex:2"><div class="l">ของระหว่างทาง / GOODS IN TRANSIT ('+r.transit.length+' ตู้)</div><div class="v">'+B(tv.val)+' · '+N(tQty)+' ชิ้น</div></div>'
     +'</div>'
     +'<div class="sec"><div class="sect">🚢 ตู้ที่เข้าคลังในเดือนนี้ / Containers arrived this month</div>'+contTbl+'</div>'
