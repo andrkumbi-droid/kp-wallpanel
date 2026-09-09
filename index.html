@@ -7276,15 +7276,41 @@ function invLoadSnaps(cb){
 /* Den heutigen Zaehlstand als Monatsende festschreiben. Ab hier ist dieser
    Monat gezaehlt statt gerechnet — und jeder Monat davor haengt an einem
    besseren Anker als "heute". */
+function invPrevMonth(mk){
+  var y=+mk.slice(0,4), m=+mk.slice(5,7)-1;
+  if(m<1){ m=12; y--; }
+  return y+'-'+String(m).padStart(2,'0');
+}
 function invSaveSnap(){
-  var mk=invThisMonth();
+  /* Gezaehlt wird fast immer fuer den Monat, der gerade zu Ende ist — am
+     letzten Tag oder am ersten Morgen danach. In den ersten Tagen eines
+     Monats ist deshalb der VORMONAT die richtige Vorgabe. Ohne das haette
+     ein Zaehlen am 1. Oktober den Oktober abgeschlossen, der noch gar nicht
+     gelaufen ist — und der September waere weiter gerechnet statt gezaehlt. */
+  var heute=kpTodayStr();
+  var def = (+heute.slice(8,10) <= 7) ? invPrevMonth(invThisMonth()) : invThisMonth();
+  var mk = prompt('Save today\'s count as the closing stock for which month?'
+    +'\nบันทึกยอดวันนี้เป็นสต็อกปลายเดือนไหน? (YYYY-MM)', def);
+  if(mk===null) return;
+  mk=String(mk).trim();
+  if(!/^\d{4}-\d{2}$/.test(mk)){ alert('Month must look like 2026-09 / รูปแบบ 2026-09'); return; }
+  if(mk>invThisMonth()){ alert('That month has not happened yet / เดือนนั้นยังไม่ถึง'); return; }
+  if(mk<INV_START){ alert('No data before '+invMonthLabel(INV_START)); return; }
+  /* Eine Zaehlung mitten im Monat ist KEIN Monatsendbestand. Sie darf trotzdem
+     gespeichert werden — besser ein Anker vom 9. als gar keiner —, aber nicht
+     stillschweigend: der Bericht weist das Zaehldatum aus. */
+  var end=invMonthEnd(mk);
+  var weg=Math.round(Math.abs(new Date(heute+'T00:00:00')-new Date(end+'T00:00:00'))/86400000);
+  if(weg>3 && !confirm('⚠ Counted on '+heute+', but '+invMonthLabel(mk)+' ends on '+end+' — '
+      +weg+' days apart.\nThe count will be recorded as that month\'s closing stock anyway.'
+      +'\n\nนับวันที่ '+heute+' แต่สิ้นเดือนคือ '+end+' ห่างกัน '+weg+' วัน — บันทึกต่อไหม?')) return;
   var have=INV_SNAP[mk];
-  var q='Save today\'s count as the closing stock for '+invMonthLabel(mk)+'?'
-    +'\nบันทึกยอดวันนี้เป็นสต็อกปลายเดือน '+invMonthLabel(mk)+'?'
-    +(have?'\n\n⚠ There is already a saved count for this month — it will be replaced.':'');
-  if(!confirm(q)) return;
+  if(have && !confirm('⚠ There is already a count for '+invMonthLabel(mk)
+      +' (from '+(have.date||'?')+') — it will be replaced.')) return;
   var codes=invOnHandTotal();
-  var rec={ ts:Date.now(), date:new Date().toISOString().slice(0,10),
+  /* kpTodayStr statt toISOString: letzteres liefert UTC und haette vor
+     07:00 Bangkok das Datum von GESTERN eingetragen. */
+  var rec={ ts:Date.now(), date:heute,
             by:(window.currentStaffName||'Management'), codes:codes };
   if(!window.fbDB){ alert('No database connection'); return; }
   window.fbDB.ref('stockSnap/'+mk).set(rec).then(function(){
@@ -7349,7 +7375,12 @@ function invRender(){
     var open=_invOpen===r.mk;
     out+='<tr onclick="invToggle(\''+r.mk+'\')" style="cursor:pointer;border-top:1px solid var(--border)'+(open?';background:var(--blue-bg)':'')+'">'
       +'<td style="padding:9px 10px;font-weight:700">'+invEsc(r.label)
-        +(r.snap?' <span title="counted" style="color:var(--green)">✓</span>':'')
+        /* Das Zaehldatum gehoert sichtbar daneben: eine Zaehlung vom 9. ist ein
+           anderer Beleg als eine vom 30., auch wenn beide denselben Monat
+           abschliessen. */
+        +(r.snap?' <span title="counted '+invEsc((INV_SNAP[r.mk]||{}).date||'')
+            +' by '+invEsc((INV_SNAP[r.mk]||{}).by||'')+'" style="color:var(--green)">✓ '
+            +invEsc(String((INV_SNAP[r.mk]||{}).date||'').slice(5))+'</span>':'')
         +(r.live?' <span style="font-size:10px;color:var(--text3)">· today</span>':'')+'</td>'
       +'<td style="text-align:right;padding:9px 6px'+(r.neg.length||r.noSales?';color:var(--orange)':'')+'">'
         +(r.noSales?'<span title="no order data">n/a</span>':invN(r.qOpen))+'</td>'
