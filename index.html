@@ -7091,15 +7091,37 @@ function invFirstSaleMonth(){
   });
   return min;
 }
+/* Welche Orderzeilen sind WARE, die das Lager verlaesst — bewusst eine eigene
+   Liste statt BT_PROD. Der Batch-Tab laesst Gratis-Clips absichtlich weg, er
+   misst den Abverkauf eines Containers; fuer den Lagerbestand zaehlen sie
+   sehr wohl, sie gehen ja physisch raus. Genau daran hing der erste Fassung
+   des Berichts: 581.620 Clips in Jul-Sep 2026 liefen als Zugang ins Lager,
+   aber nie wieder heraus. delivery/discount/extra sind keine Ware. */
+var INV_GOODS={panel:1, lcorner:1, tedge:1, uedge:1, ttrim:1, utrim:1, pvc:1,
+               clip:1, clips:1, 'free-clips':1, 'free-gift-clips':1};
+/* Clips laufen unter vier Typen und tragen als Code den Anzeigetext
+   ("Free Clips / คลิปฟรี (อัตโนมัติ)"), nicht CLIP. Ohne diese Umschluesselung
+   staenden Clip-Abgang und Clip-Zugang nebeneinander, ohne sich je zu treffen. */
+function invSaleCode(li){
+  if(/clip/i.test(String(li.type||''))) return 'CLIP';
+  var k=ofNormCode(li.code);
+  return /^CLIP/.test(k) ? 'CLIP' : k;
+}
+/* Die Packungszeile ("Clip Pack") zaehlt in PACKUNGEN, Lager und Container
+   zaehlen in Stueck — sonst waere dieser Abgang um den Faktor 100 zu klein. */
+function invSaleQty(li){
+  var q=parseInt(li.qty)||0;
+  return li.type==='clips' ? q*INV_CLIP_PACK : q;
+}
 function invSales(){
   var by={};
   (typeof orders!=='undefined'?orders:[]).forEach(function(o){
     if(!o || o.status==='cancelled') return;
     var mk=invMonthKey(o.date); if(!mk || mk<INV_START) return;
     (o.lineItems||[]).forEach(function(li){
-      if(!li || !li.code || !BT_PROD[li.type]) return;
-      var q=parseInt(li.qty)||0; if(q<=0) return;
-      var k=ofNormCode(li.code);
+      if(!li || !li.code || !INV_GOODS[li.type]) return;
+      var q=invSaleQty(li); if(q<=0) return;
+      var k=invSaleCode(li);
       var e=by[mk]||(by[mk]={qty:0, codes:{}});
       e.codes[k]=(e.codes[k]||0)+q; e.qty+=q;
       by[mk]=e;
@@ -7123,6 +7145,11 @@ function invCost(k){
 /* Wert einer Mengenkarte. Was keinen Preis hat, wird NICHT geschaetzt, sondern
    getrennt ausgewiesen — sonst stuende im Bericht eine Zahl, die keiner belegen
    kann. */
+/* Deckungsgrad immer ABRUNDEN, mit einer Nachkommastelle. Math.round machte
+   aus 99,76 % glatte 100 %, obwohl 977 Stueck ohne Kosten dastanden — in einem
+   Bericht fuers Steuerbuero darf keine Vollstaendigkeit stehen, die es nicht
+   gibt. */
+function invPct(p){ return (Math.floor((p||0)*1000)/10).toFixed(1); }
 function invValue(map){
   var val=0, qKnown=0, qUnknown=0, nUnknown=0;
   Object.keys(map||{}).forEach(function(k){
@@ -7331,7 +7358,7 @@ function invRender(){
         +(r.noSales?'<span style="font-size:10.5px">no orders</span>':(r.qOut?'−'+invN(r.qOut):'—'))+'</td>'
       +'<td style="text-align:right;padding:9px 6px;font-weight:800">'+invN(r.qClose)+'</td>'
       +'<td style="text-align:right;padding:9px 6px;font-weight:700;color:var(--green)">'+invB(v.val)
-        +(v.pct<0.999?'<div style="font-size:9.5px;color:var(--text3);font-weight:400">'+Math.round(v.pct*100)+'% priced</div>':'')+'</td>'
+        +(v.qUnknown>0?'<div style="font-size:9.5px;color:var(--text3);font-weight:400">'+invPct(v.pct)+'% priced</div>':'')+'</td>'
       +'<td style="text-align:right;padding:9px 6px;color:var(--blue)">'+(tQty?invN(tQty)+'<div style="font-size:9.5px;color:var(--text3)">'+r.transit.length+' cont · '+invB(tv.val)+'</div>':'—')+'</td>'
       +'<td style="text-align:right;padding:9px 8px"><button type="button" class="btnsm" onclick="event.stopPropagation();invPrint(\''+r.mk+'\')"><i class="ti ti-printer"></i></button></td>'
     +'</tr>';
@@ -7531,7 +7558,7 @@ function invPrint(mk){
       +'<br><b>คลิป / Clips</b> นับเป็นชิ้น แต่ราคาทุนเก็บเป็นแพ็ค '+INV_CLIP_PACK+' ชิ้น จึงหารก่อนคิดมูลค่า '
       +'/ counted in pieces but costed per pack of '+INV_CLIP_PACK+', divided before valuation.'
       +'<br><b>มูลค่า / Value</b> = จำนวนคงเหลือ × ทุนนำเข้าต่อชิ้น (landed cost: สินค้า + ค่าขนส่ง + ภาษี + ค่าธนาคาร, ไม่รวม VAT). '
-      +'ครอบคลุม '+Math.round(v.pct*100)+'% ของจำนวนชิ้น'
+      +'ครอบคลุม '+invPct(v.pct)+'% ของจำนวนชิ้น'
       +(v.qUnknown>0?' — อีก '+N(v.qUnknown)+' ชิ้น ('+v.nUnknown+' รหัส) ยังไม่มีราคาทุน จึงแสดงเป็นจำนวนโดยไม่มีมูลค่า / '
         +N(v.qUnknown)+' pieces in '+v.nUnknown+' codes carry no cost yet and are listed without value.':'.')
       +(r.noSales?'<br><b>⚠ เดือนนี้ยังไม่มีข้อมูลออร์เดอร์ในระบบ</b> ช่อง "จ่ายออก" จึงว่าง — ไม่ได้แปลว่าไม่มีการขาย '
