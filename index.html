@@ -568,6 +568,9 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   /* Pre-orders: volle Breite; die Zweispaltigkeit selbst kommt erst ab 900px */
   #ofv-preorder>.sec{max-width:none}
 
+  /* Monatsbericht: sieben Zahlenspalten brauchen die ganze Breite */
+  #mgv-inv>.sec{max-width:none}
+
   /* Stock: WPC and PVC (K-PVC) side by side */
   #ofv-stock>.sec{max-width:none}
   #of-stockcat-list{display:grid;grid-template-columns:1fr 1fr;gap:0 20px;align-items:start}
@@ -7207,7 +7210,11 @@ function invLedger(){
        dieser eine Monat gilt damit als gezaehlt — die Monate davor haengen
        weiter an der Rueckwaertsrechnung, nur eben von einem besseren Anker
        aus. Deshalb steht das Haekchen an genau einer Zeile, nicht an allen. */
-    var snap=INV_SNAP[mk] && INV_SNAP[mk].codes;
+    /* Nur ABGESCHLOSSENE Monate duerfen einen Schnappschuss tragen. Beim
+       laufenden Monat ist der Endbestand der heutige Stand — ein
+       Schnappschuss wuerde ihn auf dem Zaehltag festnageln, obwohl bis
+       zum Monatsletzten noch Ware rein- und rausgeht. */
+    var snap=(mk<invThisMonth()) && INV_SNAP[mk] && INV_SNAP[mk].codes;
     if(snap){ closing={}; Object.keys(snap).forEach(function(k){ closing[k]=+snap[k]||0; }); }
     var a=(arr[mk]||{codes:{}}).codes, s=(sal[mk]||{codes:{}}).codes;
     var keys={};
@@ -7275,27 +7282,6 @@ function invByCat(map){
   return o;
 }
 function invSum(map){ var t=0; Object.keys(map||{}).forEach(function(k){ t+=map[k]||0; }); return t; }
-
-/* Eine Zelle des Berichts: Paneele als Kopfzahl, darunter Zubehoer und Clips,
-   unten die Summe. Die Reihenfolge ist Absicht — die Paneele sind die Zahl,
-   um die es geht, und in einer Gesamtsumme gehen sie neben 300.000 Clips
-   unter. fmt() macht aus einer Menge entweder Stueck oder Baht. */
-function invCell3(map, fmt, sign, col){
-  var c=invByCat(map), sg=sign||'';
-  var line=function(lbl, m, cls){
-    var v=fmt(m); if(v===null) return '';
-    return '<div style="'+cls+'"><span style="color:var(--text3);font-weight:400;font-size:9px">'
-      +lbl+'</span> '+sg+v+'</div>';
-  };
-  var tot=fmt(map);
-  return line('P', c.panel, 'font-weight:800;font-size:13px'+(col?';color:'+col:''))
-    +line('A', c.trim,  'font-size:11px;color:var(--text2)')
-    +line('C', c.clip,  'font-size:11px;color:var(--text2)')
-    +(tot===null?'':'<div style="font-size:10.5px;color:var(--text3);border-top:1px solid var(--border);'
-      +'margin-top:3px;padding-top:2px">Σ '+sg+tot+'</div>');
-}
-var invFmtQty = function(m){ var t=invSum(m); return t?invN(t):null; };
-var invFmtVal = function(m){ var v=invValue(m); return v.val>0?invB(v.val):null; };
 
 function invType(k){
   /* Clips zuerst, VOR der Stock-Liste: dort steht CLIP als type "panel", und
@@ -7389,9 +7375,17 @@ function invAutoSnap(){
   if(prev<INV_START) return;
   invLoadSnaps(function(){
     if(_invAutoDone) return;
-    if(INV_SNAP[prev]){ _invAutoDone=true; return; }   // schon da, von Hand oder automatisch
-    _invAutoDone=true;
     var end=invMonthEnd(prev);
+    /* Ein vorhandener Schnappschuss bleibt — ABER nur, wenn er den Monat auch
+       abschliessen kann. Einer, der VOR dem Monatsletzten gezogen wurde, ist
+       kein Endbestand: er haelt den Stand irgendeines Tages mitten im Monat
+       fest, waehrend danach noch Ware rein- und rausging. So einer entstand am
+       08.09. fuer den September, bevor die App den Monat abfragte. Er wird
+       ersetzt, sobald der Monat wirklich vorbei ist — von selbst, damit
+       niemand daran denken muss. */
+    var alt=INV_SNAP[prev];
+    if(alt && String(alt.date||'') >= end){ _invAutoDone=true; return; }
+    _invAutoDone=true;
     var rec={ ts:Date.now(), date:kpTodayStr(), asOf:end, auto:true,
               by:'auto', codes:invStockAt(end) };
     window.fbDB.ref('stockSnap/'+prev).set(rec).then(function(){
@@ -7425,6 +7419,13 @@ function invSaveSnap(){
   mk=String(mk).trim();
   if(!/^\d{4}-\d{2}$/.test(mk)){ alert('Month must look like 2026-09 / รูปแบบ 2026-09'); return; }
   if(mk>invThisMonth()){ alert('That month has not happened yet / เดือนนั้นยังไม่ถึง'); return; }
+  /* Ein laufender Monat hat noch keinen Endbestand — bis zum Monatsletzten
+     geht noch Ware rein und raus. Erst danach ist die Zahl eine Zahl. */
+  if(mk===invThisMonth()){
+    alert(invMonthLabel(mk)+' is still running — it has no closing stock yet.'
+      +'\nPick the month before, or wait until it is over.'
+      +'\n\n'+invMonthLabel(mk)+' ยังไม่จบเดือน จึงยังไม่มียอดปลายเดือน'); return;
+  }
   if(mk<INV_START){ alert('No data before '+invMonthLabel(INV_START)); return; }
   /* Eine Zaehlung mitten im Monat ist KEIN Monatsendbestand. Sie darf trotzdem
      gespeichert werden — besser ein Anker vom 9. als gar keiner —, aber nicht
@@ -7490,61 +7491,89 @@ function invRender(){
     +'that is missing data, not a month without sales. Arrivals and closing stock for '
     +(noSaleRows.length===1?'that month':'those months')+' are still correct; the opening figure is not.</div>';
 
-  var out='<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">'
-    +'<thead><tr style="background:var(--bg2)">'
-      +'<th style="text-align:left;padding:8px 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--text2)">Month</th>'
-      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">Opening</th>'
-      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--green)">+ Arrived</th>'
-      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--red)">− Sold</th>'
-      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">= Closing</th>'
-      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">Stock value</th>'
-      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--text2)">COGS</th>'
-      +'<th style="text-align:right;padding:8px 6px;font-size:10.5px;text-transform:uppercase;color:var(--blue)">In transit</th>'
-      +'<th style="padding:8px 6px"></th>'
-    +'</tr></thead><tbody>';
-
+  /* Eine Karte je Monat statt einer Tabelle mit neun engen Spalten. Die vier
+     Warengruppen stehen als ZEILEN untereinander — damit liest sich ein Monat
+     wie ein Kontoauszug und nicht wie ein Zahlenteppich. Vorher standen in
+     jeder Zelle vier Zahlen uebereinander; das war zwar vollstaendig, aber
+     man fand nichts mehr darin. */
+  var out='';
+  var th=function(t, col, al){
+    return '<th style="padding:7px 10px;text-align:'+(al||'right')+';font-size:10px;'
+      +'text-transform:uppercase;letter-spacing:.05em;font-weight:700;color:'+(col||'var(--text2)')+'">'+t+'</th>';
+  };
   rows.slice().reverse().forEach(function(r){
     var v=invValue(r.closing);
     var tQty=r.transit.reduce(function(a,t){ return a+t.qty; },0);
     var tCodes={}; r.transit.forEach(function(t){ Object.keys(t.codes).forEach(function(k){ tCodes[k]=(tCodes[k]||0)+t.codes[k]; }); });
     var tv=invValue(tCodes);
     var open=_invOpen===r.mk;
-    out+='<tr onclick="invToggle(\''+r.mk+'\')" style="cursor:pointer;border-top:1px solid var(--border)'+(open?';background:var(--blue-bg)':'')+'">'
-      +'<td style="padding:9px 10px;font-weight:700">'+invEsc(r.label)
-        /* Das Zaehldatum gehoert sichtbar daneben: eine Zaehlung vom 9. ist ein
-           anderer Beleg als eine vom 30., auch wenn beide denselben Monat
-           abschliessen. */
-        +(r.snap?' <span title="'+(((INV_SNAP[r.mk]||{}).auto)?'automatically recorded':'saved by hand')
+    var cO=invByCat(r.opening), cI=invByCat(r.arrived), cS=invByCat(r.sold), cC=invByCat(r.closing);
+
+    /* Eine Warengruppenzeile. Die Paneele stehen oben und fett — sie sind die
+       Zahl, um die es geht; neben 300.000 Clips gingen sie in einer Summe
+       unter. */
+    var zeile=function(lbl, o, i2, s2, c2, opt){
+      opt=opt||{};
+      var qN=function(m){ var t=invSum(m); return t?invN(t):'—'; };
+      var mN=function(m){ var x=invValue(m).val; return x>0?invB(x):'—'; };
+      var pad='padding:'+(opt.big?'10px':'8px')+' 10px;text-align:right';
+      var sz =opt.big?'font-size:16px;font-weight:800' : (opt.sum?'font-size:13.5px;font-weight:700':'font-size:14px');
+      return '<tr style="'+sz+(opt.sum?';border-top:2px solid var(--border);color:var(--text2)':'')+'">'
+        +'<td style="padding:'+(opt.big?'10px':'8px')+' 12px;text-align:left;white-space:nowrap;'
+          +'font-size:12.5px;font-weight:'+(opt.big?'800':'600')+';color:'+(opt.big?'var(--text)':'var(--text2)')+'">'+lbl+'</td>'
+        +'<td style="'+pad+(r.neg.length?';color:var(--orange)':'')+'">'+(r.noSales?'<span style="color:var(--orange)">n/a</span>':qN(o))+'</td>'
+        +'<td style="'+pad+';color:var(--green)">'+(invSum(i2)?'+'+invN(invSum(i2)):'—')+'</td>'
+        +'<td style="'+pad+';color:var(--red)">'+(r.noSales?'—':(invSum(s2)?'−'+invN(invSum(s2)):'—'))+'</td>'
+        +'<td style="'+pad+'">'+qN(c2)+'</td>'
+        +'<td style="'+pad+';color:var(--green)">'+mN(c2)+'</td>'
+        +'<td style="'+pad.replace('10px','14px')+'">'+(r.noSales?'<span style="color:var(--orange)">n/a</span>':mN(s2))+'</td>'
+      +'</tr>';
+    };
+
+    out+='<div class="card" style="padding:0;overflow:hidden;margin-bottom:14px'
+      +(open?';border-color:var(--blue)':'')+'">'
+      /* Kopf der Karte: Monat, woher der Endbestand kommt, was unterwegs ist. */
+      +'<div onclick="invToggle(\''+r.mk+'\')" style="display:flex;align-items:center;gap:10px;'
+        +'flex-wrap:wrap;padding:12px 14px;cursor:pointer;background:var(--bg2);'
+        +'border-bottom:1px solid var(--border)">'
+        +'<div style="font-size:19px;font-weight:800">'+invEsc(r.label)+'</div>'
+        +(r.snap?'<span title="'+(((INV_SNAP[r.mk]||{}).auto)?'automatically recorded':'saved by hand')
             +' on '+invEsc((INV_SNAP[r.mk]||{}).date||'')+' · '+invEsc((INV_SNAP[r.mk]||{}).by||'')
-            +'" style="color:var(--green)">✓ '
-            +invEsc(String((INV_SNAP[r.mk]||{}).date||'').slice(5))+'</span>':'')
-        +(r.live?' <span style="font-size:10px;color:var(--text3)">· today</span>':'')+'</td>'
-      +'<td style="text-align:right;padding:9px 6px'+(r.neg.length||r.noSales?';color:var(--orange)':'')+'">'
-        +(r.noSales?'<span title="no order data">n/a</span>':invCell3(r.opening, invFmtQty))+'</td>'
-      +'<td style="text-align:right;padding:9px 6px">'
-        +(r.qIn?invCell3(r.arrived, invFmtQty, '+', 'var(--green)'):'—')+'</td>'
-      +'<td style="text-align:right;padding:9px 6px">'
-        +(r.noSales?'<span style="font-size:10.5px;color:var(--orange)">no orders</span>'
-                   :(r.qOut?invCell3(r.sold, invFmtQty, '−', 'var(--red)'):'—'))+'</td>'
-      +'<td style="text-align:right;padding:9px 6px">'+invCell3(r.closing, invFmtQty)+'</td>'
-      +'<td style="text-align:right;padding:9px 6px">'+invCell3(r.closing, invFmtVal, '', 'var(--green)')
-        +(v.qUnknown>0?'<div style="font-size:9px;color:var(--text3);font-weight:400">'+invPct(v.pct)+'% priced</div>':'')+'</td>'
-      /* Wareneinsatz: was die im Monat rausgegangene Ware im Einkauf gekostet
-         hat. Ohne Orderdaten gibt es ihn nicht — dann steht dort nichts. */
-      +'<td style="text-align:right;padding:9px 6px">'
-        +(r.noSales?'<span style="font-size:10.5px;color:var(--orange)">n/a</span>'
-                   :(r.qOut?invCell3(r.sold, invFmtVal, '', 'var(--text)'):'—'))+'</td>'
-      +'<td style="text-align:right;padding:9px 6px;color:var(--blue)">'+(tQty?invN(tQty)+'<div style="font-size:9.5px;color:var(--text3)">'+r.transit.length+' cont · '+invB(tv.val)+'</div>':'—')+'</td>'
-      +'<td style="text-align:right;padding:9px 8px"><button type="button" class="btnsm" onclick="event.stopPropagation();invPrint(\''+r.mk+'\')"><i class="ti ti-printer"></i></button></td>'
-    +'</tr>';
-    if(open) out+='<tr><td colspan="9" style="padding:0;background:var(--bg2)">'+invDetail(r)+'</td></tr>';
+            +'" style="font-size:11.5px;font-weight:700;color:var(--green);background:var(--green-l);'
+            +'padding:3px 9px;border-radius:20px">✓ counted '+invEsc(String((INV_SNAP[r.mk]||{}).date||'').slice(5))+'</span>'
+          :'<span style="font-size:11.5px;font-weight:700;color:var(--orange);background:var(--orange-l);'
+            +'padding:3px 9px;border-radius:20px">≈ derived</span>')
+        +(r.live?'<span style="font-size:11.5px;color:var(--text3)">as at today</span>':'')
+        +(r.noSales?'<span style="font-size:11.5px;font-weight:700;color:var(--orange)">no order data</span>':'')
+        +'<div style="flex:1;min-width:10px"></div>'
+        +(tQty?'<div style="font-size:12px;color:var(--blue);text-align:right;line-height:1.45">'
+            +'<b>'+invN(tQty)+' pcs</b> in transit<div style="color:var(--text3)">'
+            +r.transit.length+' containers · '+invB(tv.val)+'</div></div>':'')
+        +'<button type="button" class="btnsm" style="margin-left:8px" '
+          +'onclick="event.stopPropagation();invPrint(\''+r.mk+'\')"><i class="ti ti-printer"></i></button>'
+        +'<span style="font-size:13px;color:var(--text3)">'+(open?'▲':'▼')+'</span>'
+      +'</div>'
+      +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
+        +'<thead><tr style="border-bottom:1px solid var(--border)">'
+          +th('','',"left")+th('Opening')+th('+ Arrived','var(--green)')+th('− Sold','var(--red)')
+          +th('= Closing')+th('Stock value')+th('COGS')
+        +'</tr></thead><tbody>'
+        +zeile('Panels',      cO.panel, cI.panel, cS.panel, cC.panel, {big:true})
+        +zeile('Accessories', cO.trim,  cI.trim,  cS.trim,  cC.trim)
+        +zeile('Clips',       cO.clip,  cI.clip,  cS.clip,  cC.clip)
+        +zeile('Total',       r.opening, r.arrived, r.sold, r.closing, {sum:true})
+      +'</tbody></table></div>'
+      +(v.qUnknown>0?'<div style="font-size:11px;color:var(--text3);padding:0 14px 8px">'
+        +invPct(v.pct)+'% of the pieces carry a landed cost — '+invN(v.qUnknown)
+        +' pieces in '+v.nUnknown+' codes are listed without value.</div>':'')
+      +(open?'<div style="border-top:1px solid var(--border);background:var(--bg2)">'+invDetail(r)+'</div>':'')
+    +'</div>';
   });
-  out+='</tbody></table></div>'
-    +'<div style="font-size:11.5px;color:var(--text3);padding:8px 4px 0;line-height:1.6">'
-    +'Every cell reads top down: <b>P</b> panels (WPC + PVC) · <b>A</b> accessories (L-corner, T-trim, U-trim) · '
-    +'<b>C</b> clips · <b>Σ</b> total. Panels sit on top because that is the figure that matters — '
-    +'next to 300,000 clips they disappear in a single sum. '
-    +'<b>COGS</b> = what the goods that left in that month cost in purchase (landed cost).</div>';
+  out+='<div style="font-size:12px;color:var(--text3);padding:2px 4px 0;line-height:1.7">'
+    +'<b>Panels</b> = WPC + PVC · <b>Accessories</b> = L-corner, T-trim, U-trim · <b>Clips</b> counted in single pieces. '
+    +'<b>Stock value</b> = closing pieces × landed cost. '
+    +'<b>COGS</b> = what the goods that left in that month cost in purchase. '
+    +'Tap a month to see its containers and every product code.</div>';
   body.innerHTML=head+warn+out;
 }
 
