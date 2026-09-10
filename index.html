@@ -26646,8 +26646,17 @@ function poConvert(id){
     }
   }catch(e){}
   wOrders.unshift({id:no,zone:zone,boxes:o.boxes,panels:o.panels,lcorner:o.lcorner,clips:clips,packed:false,packedAt:null});
-  // deduct stock for products
-  li.forEach(function(x){ if(['panel','lcorner','tedge','uedge','ttrim','utrim'].indexOf(x.type)>=0){ var st=stockItems.find(function(s){return s.code===x.code;}); if(st){ st.qty=Math.max(0,st.qty-(parseInt(x.qty)||0)); addLog(x.code+' -'+x.qty+' pcs (order '+no+')','-'); } } });
+  /* Abbuchung ueber stockBucketDeduct wie bei jeder anderen Bestellung. Die
+     alte Zeile suchte die Lagerzeile ueber die EXAKTE Schreibweise: eine
+     Bestellzeile "L44" fand die Lagerzeile "L044" nicht und buchte still
+     nichts ab — die Ware war verkauft, der Bestand blieb stehen. Ausserdem
+     ging Grade B und Grade C (Zuschnitt) auf Grade A. */
+  li.forEach(function(x){
+    if(['panel','lcorner','tedge','uedge','ttrim','utrim'].indexOf(x.type)<0) return;
+    var _q=parseInt(x.qty)||0; if(!x.code || !_q) return;
+    stockBucketDeduct(x.code, _q, x.grade, x.cutLen);
+    addLog(x.code+' -'+_q+' pcs'+(x.grade==='B'?' (B)':'')+' (order '+no+')','-');
+  });
   // mark pre-order converted (kept for history)
   p.status='converted'; p.convertedId=no; p.convertedAt=Date.now();
   try{ sheetsSyncPreOrders([p]); }catch(e){}
@@ -35378,7 +35387,13 @@ function clArrived(id) {
     // Type from code (K-PVC→pvc, KP→panel, L/L-P→lcorner, T→ttrim, U→utrim)
     var type = smGuessType(code);
     var per = parseInt(item.pcsPerCtn)||0;
-    var existing = stockItems.find(function(s){return s.code===code;});
+    /* Der Bestand wird ueber _stockFind gesucht, NICHT ueber die exakte
+       Schreibweise. Vorher legte ein Container mit "L75" eine zweite Zeile
+       neben das gepflegte "L075" — so entstanden L75/L075, LP09/L-P-09 und
+       LP10/L-P-10 mit je einem Teil der Menge, und Verkaeufe zogen danach
+       immer nur von einer der beiden ab. */
+    var existing = (typeof _stockFind==='function') ? _stockFind(code)
+                 : stockItems.find(function(s){return s.code===code;});
     if(existing) {
       existing.qty += qty;                 // incoming is always Grade A
       if(per>0) existing.pcsPerCtn = per;
