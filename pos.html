@@ -966,11 +966,11 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
     </div>
     <div id="pay-amt-wrap" class="hidden" style="margin-top:14px">
       <label class="fl" style="color:var(--cream)">จำนวนเงินที่รับ <small style="color:var(--cream2)">(฿)</small></label>
-      <input type="number" inputmode="numeric" min="0" id="pay-amt" class="amt-input num" placeholder="0">
+      <input type="text" inputmode="decimal" id="pay-amt" class="amt-input num" placeholder="0" autocomplete="off">
     </div>
     <div id="cash-wrap" class="hidden" style="margin-top:14px">
       <label class="fl" id="cash-lbl" style="color:var(--cream)">รับเงินจากลูกค้า <small style="color:var(--cream2)">(฿) / cash received</small></label>
-      <input type="number" inputmode="numeric" min="0" id="cash-recv" class="amt-input num" placeholder="0">
+      <input type="text" inputmode="decimal" id="cash-recv" class="amt-input num" placeholder="0" autocomplete="off">
       <div id="change-line" class="hidden" style="display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;padding:14px 18px;background:rgba(127,217,154,.1);border:1.5px solid rgba(127,217,154,.45);border-radius:14px">
         <span style="color:#7FD99A;font-weight:700;font-size:17px">เงินทอน / change</span>
         <b class="num" id="change-val" style="font-size:34px;color:#7FD99A">0 ฿</b>
@@ -2513,13 +2513,35 @@ function showConfirm(o,t){
   posGo('confirm');
 }
 var _pay={mode:'', cash:false, online:false, part:false, slips:[]};
+/* Betrag aus einem Geldfeld lesen. Die beiden Felder sind KEINE type="number"
+   mehr: dort loescht der Browser den Wert still, sobald etwas darin steht, das
+   er nicht als Zahl akzeptiert. "20,000" getippt hiess value === "" — auf dem
+   Bildschirm standen 20.000, die App las 0, und der Bestaetigen-Knopf blieb
+   grau, ohne zu sagen warum. Umgekehrt ergab "20.000" die Zahl 20.
+   Regel: Thai-Ziffern werden umgesetzt, alles ausser Ziffern und Trennzeichen
+   faellt weg, und die LETZTE Gruppe entscheidet — genau drei Stellen dahinter
+   ist ein Tausenderpunkt, ein oder zwei Stellen sind Satang. */
+function posNum(v){
+  var s=String(v==null?'':v).trim();
+  if(!s) return 0;
+  s=s.replace(/[๐-๙]/g, function(d){ return String('๐๑๒๓๔๕๖๗๘๙'.indexOf(d)); });
+  s=s.replace(/[^\d.,]/g,'');
+  var last=Math.max(s.lastIndexOf('.'), s.lastIndexOf(','));
+  if(last>=0){
+    var dec=s.slice(last+1);
+    if(/^\d{1,2}$/.test(dec)) s=s.slice(0,last).replace(/[.,]/g,'')+'.'+dec;
+    else                      s=s.replace(/[.,]/g,'');
+  }
+  var n=parseFloat(s);
+  return isFinite(n) && n>0 ? n : 0;
+}
 // The amount this payment is about: the whole bill, or the deposit that was typed.
 function payBase(){
   var due=pendingSale?pendingSale.t.grand:0;
-  return _pay.part ? (parseFloat($('pay-amt').value)||0) : due;
+  return _pay.part ? (posNum($('pay-amt').value)) : due;
 }
 // Cash on the counter for a split — the transfer is whatever is left of the base.
-function paySplitCash(){ return parseFloat($('cash-recv').value)||0; }
+function paySplitCash(){ return posNum($('cash-recv').value); }
 function paySplitOnline(){ return Math.round((payBase()-paySplitCash())*100)/100; }
 function _cashWrapSync(){
   // Cash needs a field in every case now: alone it is 'how much did they hand
@@ -2568,7 +2590,7 @@ $('cash-recv').addEventListener('input', cashChange);
 $('cash-recv').addEventListener('change', cashChange);
 /* cash received → show the change (เงินทอน) live */
 function cashChange(){
-  var base=payBase(), recv=parseFloat($('cash-recv').value)||0;
+  var base=payBase(), recv=posNum($('cash-recv').value);
   if(_pay.mode==='split'){
     // no change and no 'too little' here — what is missing IS the transfer
     var rest=paySplitOnline();
@@ -2595,12 +2617,12 @@ function cashChange(){
 // The photo is NOT part of this check on purpose: a disabled button leaves the
 // seller guessing what is missing. The button stays live and posPayConfirm()
 // says what to do.
+/* Nur noch die Zahlart macht den Knopf scharf. Der Betrag wird beim Tippen auf
+   ✓ geprueft und beim Namen genannt — ein grauer Knopf sagt dem Verkaeufer
+   nicht, was fehlt, und genau daran blieb eine Anzahlung von 20.000 haengen:
+   der Betrag stand da, der Knopf blieb grau. Gleiches Prinzip wie beim Foto. */
 function payValidate(){
-  var ok = !!_pay.mode;
-  if(_pay.part){ ok = ok && (parseFloat($('pay-amt').value)>0); }
-  // a split is only a split while both halves are real money
-  if(ok && _pay.mode==='split'){ ok = paySplitCash()>0 && paySplitOnline()>0; }
-  $('pay-confirm-btn').disabled=!ok;
+  $('pay-confirm-btn').disabled = !_pay.mode;
 }
 // Camera hands over one picture, the gallery may hand over several (cash AND
 // the slip of a split payment, for instance) — take them all.
@@ -2651,8 +2673,15 @@ function addSlipPhotos(orderId, done){
 function posPayConfirm(){
   if(!pendingSale) return;
   var t=pendingSale.t;
-  var amt = _pay.part ? (parseFloat($('pay-amt').value)||0) : t.grand;
-  if(!(amt>0)){ toast('ใส่จำนวนเงิน'); return; }
+  var amt = _pay.part ? (posNum($('pay-amt').value)) : t.grand;
+  if(!(amt>0)){
+    posNotice(_pay.part
+      ? '💰 ใส่จำนวนเงินมัดจำก่อน\nEnter the deposit amount first'
+      : '💰 ยอดเงินเป็น 0 — ตรวจสอบตะกร้า\nThe amount is 0 — check the cart');
+    chime(false);
+    try{ $('pay-amt').focus(); }catch(e){}
+    return;
+  }
   var pm=_pay.mode; if(!pm) return;
   // proof first — cash on the counter or the transfer slip
   if(!_pay.slips.length){
@@ -2672,7 +2701,7 @@ function posPayConfirm(){
   }
   var change=0;
   if(pm==='cash' && !_pay.part){
-    var recv=parseFloat($('cash-recv').value)||0;
+    var recv=posNum($('cash-recv').value);
     if(recv>0 && recv<t.grand){ toast('รับเงินมาน้อยกว่ายอด — ใช้โหมด "มัดจำ" / less than due'); chime(false); return; }
     if(recv>=t.grand) change=recv-t.grand;
   }
