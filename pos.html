@@ -1606,7 +1606,7 @@ function _posLogoutDo(){
 }
 function enterShop(){
   var sn=$('seller-name'); if(sn) sn.textContent=me?me.name:'—';
-  restoreCart();
+  restoreCart(); restoreDraft();
   buildFilters(); renderGrid(); posGo('shop');
   try{ navigator.wakeLock && navigator.wakeLock.request('screen').catch(function(){}); }catch(e){}
 }
@@ -1862,6 +1862,47 @@ function cartAddLine(l){
 /* ═══════════════ CART ═══════════════ */
 function saveCart(){ try{ localStorage.setItem('kp-pos-cart', JSON.stringify(cart)); }catch(e){} }
 function restoreCart(){ try{ var c=JSON.parse(localStorage.getItem('kp-pos-cart')||'null'); if(c&&c.lines) cart=c; }catch(e){} }
+
+/* ── Kundendaten ueberleben einen Neustart ──────────────────────────────────
+   Der Warenkorb wurde schon immer gespeichert, das Kassenformular nicht: nach
+   einem Reload — oder wenn das Tablet die Seite von sich aus neu laedt — waren
+   Name, Telefon und Adresse weg und mussten vor dem wartenden Kunden noch
+   einmal getippt werden. Gespeichert wird lokal auf dem Geraet, geloescht,
+   sobald der Verkauf durch ist oder der Korb geleert wird. */
+var POS_DRAFT_KEY='kp-pos-draft', POS_DRAFT_TTL=12*60*60*1000;
+var POS_DRAFT_FIELDS=['ck-cust','ck-phone','ck-contact-ch','ck-contact-name','ck-addr','ck-province',
+  'ck-round','ck-reqdate','tax-tin','tax-name','tax-branch','tax-phone','tax-addr',
+  'cart-gift','cart-freeminus','cart-packs','cart-extra','cart-extra-label','cart-discount','cart-delivery'];
+function saveDraft(){
+  try{
+    var d={f:{}, fulfil:(typeof ck!=='undefined'&&ck.fulfil)||'', tax:!!(($('ck-tax')||{}).checked), ts:Date.now()};
+    POS_DRAFT_FIELDS.forEach(function(id){ var el=$(id); if(el && el.value!=='') d.f[id]=el.value; });
+    if(!Object.keys(d.f).length && !d.tax && !d.fulfil){ clearDraft(); return; }
+    localStorage.setItem(POS_DRAFT_KEY, JSON.stringify(d));
+  }catch(e){}
+}
+function clearDraft(){ try{ localStorage.removeItem(POS_DRAFT_KEY); }catch(e){} }
+function restoreDraft(){
+  try{
+    var d=JSON.parse(localStorage.getItem(POS_DRAFT_KEY)||'null');
+    if(!d||!d.f) return;
+    // Ein Entwurf von gestern gehoert einem anderen Kunden — der faellt weg.
+    if(!d.ts || (Date.now()-d.ts)>POS_DRAFT_TTL){ clearDraft(); return; }
+    POS_DRAFT_FIELDS.forEach(function(id){ var el=$(id); if(el && d.f[id]!=null) el.value=d.f[id]; });
+    if(d.tax){ var t=$('ck-tax'); if(t){ t.checked=true; try{ posTaxToggle(); }catch(e){} } }
+    if(d.fulfil){ try{ posFulfil(d.fulfil); }catch(e){} }
+    try{ posZoneCheck(); }catch(e){}
+    try{ posCartCalc(); }catch(e){}
+  }catch(e){}
+}
+/* Ein Zuhoerer fuer das ganze Dokument statt zwanzig einzelne — so faellt kein
+   Feld durchs Raster, das spaeter dazukommt. */
+['input','change'].forEach(function(ev){
+  document.addEventListener(ev, function(e){
+    var t=e.target; if(!t||!t.id) return;
+    if(t.id==='ck-tax' || POS_DRAFT_FIELDS.indexOf(t.id)>=0) saveDraft();
+  }, true);
+});
 function posCartOpen(){ posGo('cart'); }
 /* copy the quote as text — same style as the app's Quotation tab. Office only. */
 function posQuoteCopy(){
@@ -1900,7 +1941,7 @@ function posCartClear(){
 function _posCartClearDo(){
   cart={lines:[]};
   ['cart-gift','cart-freeminus','cart-packs','cart-extra','cart-discount','cart-delivery','cart-extra-label'].forEach(function(i){ $(i).value=''; });
-  saveCart(); renderCart();
+  saveCart(); saveDraft(); renderCart();
 }
 function renderCart(){
   var host=$('cart-lines');
@@ -2495,7 +2536,7 @@ function posCreatePending(b){
     audit({type:'pos', orderId:'⏳ POS', by:me?me.name:'', detail:'ส่งออเดอร์จัดส่งให้ออฟฟิศยืนยันโซน — '+draft.customer+' ('+draft.province+') · '+fmtB(t.grand)});
     pushQ('office','⏳ POS รอยืนยันโซน', (me?me.name:'')+' · '+draft.customer+' · '+draft.province, {tag:'pos-pending'});
     _creating=false; $('ck-create-btn').disabled=false;
-    cart={lines:[]}; saveCart();
+    cart={lines:[]}; saveCart(); clearDraft();
     $('done-title').textContent='ส่งให้ออฟฟิศแล้ว ⏳';
     $('done-receipt-btn').classList.add('hidden');
     $('done-no').textContent='รอยืนยันโซน';
@@ -2770,6 +2811,7 @@ function posDone(){
   $('tax-branch').value='สำนักงานใหญ่'; _posTinLast='';
   posTaxRdNote('ใส่เลข 13 หลัก แล้วชื่อ + ที่อยู่จดทะเบียนมาเอง / 13 digits pull the registered name + address');
   ck={fulfil:'', insMode:'', tax:false};
+  clearDraft();   // Verkauf ist durch — der naechste Kunde faengt leer an
   posGo('done');
 }
 function posNewSale(){ lastOrder=null; renderGrid(); posGo('shop'); }
