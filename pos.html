@@ -960,6 +960,10 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
     <div class="cf-card">
       <div class="cf-total"><span class="t">ยอดรวมทั้งหมด / Grand total</span><span class="v num" id="cf-total">0 ฿</span></div>
     </div>
+    <!-- Kundendaten zum Gegenlesen, bevor Geld angenommen wird. Getippt wird
+         am Tresen schnell, und eine falsche Ziffer in der Telefonnummer faellt
+         sonst erst auf, wenn der Fahrer vor der falschen Tuer steht. -->
+    <div class="cf-card" id="cf-cust"></div>
     <div class="cf-foot" id="cf-note">กรุณาตรวจสอบรายการ ก่อนชำระเงิน</div>
   </div>
   <div class="darkbar">
@@ -2615,6 +2619,44 @@ function posPreviewOpen(){
     : 'ยังไม่รวมค่าจัดส่ง (ถ้ามี) — เลือกรับของเลยหรือจัดส่งในขั้นตอนถัดไป / delivery fee, if any, is added in the next step';
   posGo('preview');
 }
+/* Die Kundendaten auf der letzten Seite vor der Zahlung — zum Gegenlesen mit
+   dem Kunden. Telefonnummer und Adresse stehen absichtlich gross: eine
+   verdrehte Ziffer merkt sonst erst der Fahrer. Leere Felder fallen weg,
+   damit bei einem Ladenverkauf nicht sechs Striche untereinander stehen. */
+function posCustCardHtml(o){
+  var row=function(lbl, val, opt){
+    val=String(val==null?'':val).trim();
+    if(!val || val==='—') return '';
+    opt=opt||{};
+    return '<div class="cf-line" style="align-items:flex-start">'
+      +'<span class="l" style="opacity:.6;font-weight:600;white-space:nowrap">'+esc(lbl)+'</span>'
+      +'<span class="r" style="text-align:right;max-width:66%;font-weight:'+(opt.big?'800':'700')
+        +(opt.big?';font-size:17px;letter-spacing:.02em':'')+'">'+esc(val)+'</span></div>';
+  };
+  var h='<div class="cf-line" style="border:0;padding-bottom:2px"><span class="l" style="font-weight:800">👤 ข้อมูลลูกค้า'
+    +'<small style="opacity:.6">ตรวจสอบกับลูกค้าก่อนรับเงิน / check with the customer</small></span><span class="r"></span></div>';
+  h+=row('ประเภท / type', o.zone==='Instore'
+      ? 'ขายหน้าร้าน · ลูกค้ารับเอง'
+      : 'จัดส่ง · โซน '+((typeof ZONE_TH!=='undefined'&&ZONE_TH[o.zone])||o.zone));
+  h+=row('ชื่อ / name', o.customer, {big:true});
+  h+=row('โทร / phone', o.phone, {big:true});
+  h+=row('ที่อยู่ / address', o.address);
+  h+=row('จังหวัด / province', o.province);
+  h+=row('ช่องทาง / channel', o.contact);
+  h+=row('รอบจัดส่ง / round', o.deliveryRound);
+  h+=row('วันที่ต้องการ / wanted', o.reqDate);
+  var tx=o.taxReq;
+  if(tx){
+    h+='<div class="cf-line" style="margin-top:4px"><span class="l" style="font-weight:800">🧾 ใบกำกับภาษี'
+      +'<small style="opacity:.6">tax invoice requested</small></span><span class="r"></span></div>';
+    h+=row('ชื่อผู้ซื้อ / buyer', tx.name);
+    h+=row('เลขภาษี / tax ID', tx.tin, {big:true});
+    h+=row('สาขา / branch', tx.branch);
+    h+=row('ที่อยู่ / address', tx.addr);
+    h+=row('โทร / phone', tx.phone);
+  }
+  return h;
+}
 function showConfirm(o,t){
   var d=new Date();
   $('cf-date').textContent='วันที่ '+d.getDate()+'/'+(d.getMonth()+1)+'/'+(d.getFullYear()+543);
@@ -2626,6 +2668,7 @@ function showConfirm(o,t){
   $('cf-gallery').innerHTML=posSummaryGallery(_lines);
   $('cf-lines').innerHTML=posSummaryRows(_lines, t);
   $('cf-total').textContent=fmtB(t.grand);
+  $('cf-cust').innerHTML=posCustCardHtml(o);
   $('cf-note').textContent = (o.zone==='Instore'
     ? (o.status==='delivered' ? 'ขายหน้าร้าน · ลูกค้ารับของเลย' : 'ขายหน้าร้าน · ส่งแพ็คหลังยืนยัน')
     : 'ออเดอร์จัดส่ง โซน '+(ZONE_TH[o.zone]||o.zone))
