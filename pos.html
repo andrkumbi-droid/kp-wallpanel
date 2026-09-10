@@ -814,7 +814,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   <div class="sheet-bar">
     <!-- office staff only: copy the quote text, same format as the app's Quotation tab -->
     <button class="btn btn-ghost press hidden" id="cart-quote-btn" style="min-width:170px" onclick="posQuoteCopy()">📋 ใบเสนอราคา<span class="sub-en">copy quote</span></button>
-    <button class="btn btn-gold press" style="flex:1" onclick="posCheckoutOpen()">ดำเนินการขาย →<span class="sub-en">checkout</span></button>
+    <button class="btn btn-gold press" style="flex:1" onclick="posPreviewOpen()">ดำเนินการขาย →<span class="sub-en">checkout</span></button>
   </div>
 </section>
 
@@ -836,14 +836,14 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   <div class="darkbar">
     <button class="btn btn-ghost-d press" onclick="posGo('cart')">← กลับ</button>
     <button class="btn btn-ghost-d press" onclick="window.print()">🖨 พิมพ์</button>
-    <button class="btn btn-gold press" onclick="posCheckoutOpen()">ดำเนินการขาย →</button>
+    <button class="btn btn-gold press" onclick="posPreviewOpen()">ดำเนินการขาย →</button>
   </div>
 </section>
 
 <!-- ═══════════════ CHECKOUT ═══════════════ -->
 <section id="scr-checkout" class="sheet">
   <div class="sheet-top">
-    <button class="iconbtn press" onclick="posGo('cart')"><svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M15 5l-7 7 7 7"/></svg></button>
+    <button class="iconbtn press" onclick="posGo('preview')"><svg fill="none" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M15 5l-7 7 7 7"/></svg></button>
     <h2>ข้อมูลการขาย <small style="color:var(--text2);font-size:13px;font-weight:500">/ checkout</small></h2>
   </div>
   <div class="ck-wrap">
@@ -922,6 +922,29 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
 </section>
 
 <!-- ═══════════════ CONFIRM (customer summary) ═══════════════ -->
+<!-- ═══════════ PREVIEW — kurze Übersicht direkt nach dem Warenkorb ═══════════
+     Gleiche Optik wie die große Zusammenfassung, aber ohne Bestellnummer: hier
+     bestätigt der Kunde am Tresen Ware und Preis, erst danach werden seine
+     Daten getippt. -->
+<section id="scr-preview" class="scr dark">
+  <div class="cf-wrap">
+    <div class="cf-head">
+      <div class="kp">K<em>P</em> WALLPANEL</div>
+      <div class="tt">ตรวจสอบรายการ / Order preview</div>
+    </div>
+    <div class="cf-gallery" id="pv-gallery"></div>
+    <div class="cf-card" id="pv-lines"></div>
+    <div class="cf-card">
+      <div class="cf-total"><span class="t">ยอดรวม / Total</span><span class="v num" id="pv-total">0 ฿</span></div>
+    </div>
+    <div class="cf-foot" id="pv-note"></div>
+  </div>
+  <div class="darkbar">
+    <button class="btn btn-ghost-d press" onclick="posGo('cart')">← แก้ไข<span class="sub-en">edit cart</span></button>
+    <button class="btn btn-gold press" style="flex:1" onclick="posCheckoutOpen()">ถัดไป →<span class="sub-en">customer details</span></button>
+  </div>
+</section>
+
 <section id="scr-confirm" class="scr dark">
   <div class="cf-wrap">
     <div class="cf-head">
@@ -1612,7 +1635,7 @@ function enterShop(){
 }
 
 /* ═══════════════ NAV ═══════════════ */
-var SCRS=['login','shop','calc','cart','quote','checkout','confirm','pay','done','cust'];
+var SCRS=['login','shop','calc','cart','quote','preview','checkout','confirm','pay','done','cust'];
 function posGo(name){
   SCRS.forEach(function(s){ var el=$('scr-'+s); if(el) el.classList.toggle('on', s===name); });
   window.scrollTo(0,0);
@@ -2550,6 +2573,48 @@ function posCreatePending(b){
 }
 
 /* ═══════════════ CONFIRM + PAY ═══════════════ */
+/* Bildergalerie und Positionsliste bauen BEIDE Zusammenfassungen — die kurze
+   direkt nach dem Warenkorb und die vollstaendige vor der Zahlung. Ein
+   gemeinsamer Bauplan, damit die beiden nie auseinanderlaufen. */
+function posSummaryGallery(lines){
+  var seen={}, gal='';
+  (lines||[]).forEach(function(l){
+    if(l.type!=='panel' || seen[l.code]) return;
+    seen[l.code]=1;
+    gal+='<div class="g"><img src="'+IMG_BASE+esc(l.code)+'.jpg" alt="" onerror="this.parentElement.style.display=\'none\'"><div class="c">'+esc(l.code)+'</div></div>';
+  });
+  return gal;
+}
+function posSummaryRows(lines, t){
+  var rows=(lines||[]).map(function(l){
+    var sp=lineShowPrice(l);
+    return '<div class="cf-line"><span class="l">'+esc(l.code)+(l.grade==='B'?' <span style="color:#F0B050">(B)</span>':'')+' × '+l.qty
+      +'<small>'+esc(l.name||'')+'</small></span><span class="r num">'+fmtB(l.qty*sp)+'</span></div>';
+  });
+  if(t.packs>0) rows.push('<div class="cf-line"><span class="l">คลิปแพ็ค × '+t.packs+'</span><span class="r num">'+fmtB(t.cc)+'</span></div>');
+  if(t.clips>0) rows.push('<div class="cf-line"><span class="l">คลิปล็อคฟรี × '+fmt(t.clips)+'</span><span class="r free">ฟรี</span></div>');
+  if(t.extra>0) rows.push('<div class="cf-line"><span class="l">'+esc(t.extraLabel||'งานพิเศษ')+'</span><span class="r num">'+fmtB(t.extra)+'</span></div>');
+  if(t.discount>0) rows.push('<div class="cf-line"><span class="l">ส่วนลด<small>'+esc(discDesc(lines,t))+'</small></span><span class="r num" style="color:#F0B050">−'+fmtB(t.discount)+'</span></div>');
+  if(t.delivery>0) rows.push('<div class="cf-line"><span class="l">ค่าจัดส่ง</span><span class="r num">+'+fmtB(t.delivery)+'</span></div>');
+  return rows.join('');
+}
+/* Die kurze Uebersicht gleich nach dem Warenkorb: was der Kunde kauft und was
+   es kostet — bevor irgendjemand Name und Adresse tippt. Am Tresen schaut der
+   Kunde hier drauf und nickt; die Kundendaten kommen danach. */
+function posPreviewOpen(){
+  if(!cart.lines.length){ toast('ตะกร้าว่าง / cart empty'); return; }
+  var t=cartTotals();
+  $('pv-gallery').innerHTML=posSummaryGallery(cart.lines);
+  $('pv-lines').innerHTML=posSummaryRows(cart.lines, t);
+  $('pv-total').textContent=fmtB(t.grand);
+  /* Solange die Versandart nicht gewaehlt ist, ist die Summe noch ohne
+     Liefergebuehr — das muss dranstehen, sonst nickt der Kunde eine Zahl ab,
+     die sich danach noch aendert. */
+  $('pv-note').textContent = (ck.fulfil==='delivery')
+    ? 'รวมค่าจัดส่งแล้ว · ขั้นตอนถัดไป: ข้อมูลลูกค้า / delivery included — customer details next'
+    : 'ยังไม่รวมค่าจัดส่ง (ถ้ามี) — เลือกรับของเลยหรือจัดส่งในขั้นตอนถัดไป / delivery fee, if any, is added in the next step';
+  posGo('preview');
+}
 function showConfirm(o,t){
   var d=new Date();
   $('cf-date').textContent='วันที่ '+d.getDate()+'/'+(d.getMonth()+1)+'/'+(d.getFullYear()+543);
@@ -2558,24 +2623,8 @@ function showConfirm(o,t){
   var _lines=(pendingSale&&pendingSale.lines)||cart.lines;
   // photo gallery between the order number and the summary — panels only,
   // one picture per model, centered, wrapping when there are several
-  var seen={}, gal='';
-  _lines.forEach(function(l){
-    if(l.type!=='panel' || seen[l.code]) return;
-    seen[l.code]=1;
-    gal+='<div class="g"><img src="'+IMG_BASE+esc(l.code)+'.jpg" alt="" onerror="this.parentElement.style.display=\'none\'"><div class="c">'+esc(l.code)+'</div></div>';
-  });
-  $('cf-gallery').innerHTML=gal;
-  var rows=_lines.map(function(l){
-    var sp=lineShowPrice(l);
-    return '<div class="cf-line"><span class="l">'+esc(l.code)+(l.grade==='B'?' <span style="color:#F0B050">(B)</span>':'')+' × '+l.qty
-      +'<small>'+esc(l.name||'')+'</small></span><span class="r num">'+fmtB(l.qty*sp)+'</span></div>';
-  });
-  if(t.packs>0) rows.push('<div class="cf-line"><span class="l">คลิปแพ็ค × '+t.packs+'</span><span class="r num">'+fmtB(t.cc)+'</span></div>');
-  if(t.clips>0) rows.push('<div class="cf-line"><span class="l">คลิปล็อคฟรี × '+fmt(t.clips)+'</span><span class="r free">ฟรี</span></div>');
-  if(t.extra>0) rows.push('<div class="cf-line"><span class="l">'+esc(t.extraLabel||'งานพิเศษ')+'</span><span class="r num">'+fmtB(t.extra)+'</span></div>');
-  if(t.discount>0) rows.push('<div class="cf-line"><span class="l">ส่วนลด<small>'+esc(discDesc(_lines,t))+'</small></span><span class="r num" style="color:#F0B050">−'+fmtB(t.discount)+'</span></div>');
-  if(t.delivery>0) rows.push('<div class="cf-line"><span class="l">ค่าจัดส่ง</span><span class="r num">+'+fmtB(t.delivery)+'</span></div>');
-  $('cf-lines').innerHTML=rows.join('');
+  $('cf-gallery').innerHTML=posSummaryGallery(_lines);
+  $('cf-lines').innerHTML=posSummaryRows(_lines, t);
   $('cf-total').textContent=fmtB(t.grand);
   $('cf-note').textContent = (o.zone==='Instore'
     ? (o.status==='delivered' ? 'ขายหน้าร้าน · ลูกค้ารับของเลย' : 'ขายหน้าร้าน · ส่งแพ็คหลังยืนยัน')
