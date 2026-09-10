@@ -2355,14 +2355,46 @@ function posCreate(){
 /* the actual creation — order number, all writes, pushes — happens HERE,
    after the payment step. pay = {method:'cash'|'online', amt, change} or null. */
 var pendingSale=null, _finalizing=false;
+/* Ein Versprechen, das nicht ewig offen bleiben darf. Firebase-Callbacks
+   feuern bei schlechtem WLAN gar nicht — ohne diese Schranke haengt der
+   Verkaeufer vor einem toten Bildschirm. */
+function posRace(p, ms, label){
+  return Promise.race([p, new Promise(function(_,rej){
+    setTimeout(function(){ rej(new Error(label||'timeout')); }, ms);
+  })]);
+}
+/* Sichtbarer Zustand auf dem Bestaetigen-Knopf. Ein Knopf, der nichts sagt,
+   wird ein zweites Mal gedrueckt — und der Kunde wartet weiter. */
+function posBtnBusy(on, txt){
+  var b=$('pay-confirm-btn'); if(!b) return;
+  if(on){
+    if(!b.dataset.orig) b.dataset.orig=b.innerHTML;
+    b.disabled=true;
+    b.innerHTML='⏳ '+(txt||'กำลังบันทึก…')+'<span class="sub-en">saving — please wait</span>';
+  } else {
+    b.disabled=false;
+    if(b.dataset.orig){ b.innerHTML=b.dataset.orig; }
+  }
+}
 function posFinalize(pay){
   if(!pendingSale || _finalizing) return;
   _finalizing=true;
-  $('pay-confirm-btn').disabled=true;
+  posBtnBusy(true);
+  /* Dauert es laenger als acht Sekunden, sagt die App es — sonst sieht es aus,
+     als haette der Knopf nicht reagiert, und der Verkaeufer legt neu an. */
+  var _slowWarn=setTimeout(function(){
+    if(_finalizing) posBtnBusy(true,'เน็ตช้า กำลังบันทึกอยู่ อย่าปิดแอป');
+  }, 8000);
+  var _clearWarn=function(){ clearTimeout(_slowWarn); };
   var ps=pendingSale, t=ps.t, zone=ps.zone, isDel=ps.isDel, tax=ps.tax;
   var o=JSON.parse(JSON.stringify(ps.o));
   var who=me?me.name:'';
-  Promise.all([reserveOrderNo(zone), reserveReceiptNum()]).then(function(r){
+  /* Nur die Nummernvergabe bekommt eine Frist: hier ist noch NICHTS
+     geschrieben, ein Abbruch kostet hoechstens eine Luecke im Zaehler. Die
+     eigentlichen Schreibvorgaenge duerfen NICHT abgebrochen werden — sonst
+     legt ein zweiter Versuch dieselbe Bestellung ein zweites Mal an. */
+  posRace(Promise.all([reserveOrderNo(zone), reserveReceiptNum()]), 20000, 'orderno')
+    .then(function(r){
     var no=r[0].id;
     o.id=no; o.receiptNum=r[1];
     if(pay){
@@ -2401,30 +2433,41 @@ function posFinalize(pay){
       if(tax) pushQ('office','🧾 ขอใบกำกับภาษี: '+no, (tax.name||'')+' '+(tax.tin||''), {tag:'tax-req'});
       pushQ('office','🏪 POS order: '+no, o.createdBy+' · '+fmtB(t.grand), {tag:'pos-order'});
       function finish(){
+        _clearWarn();
         lastOrder={o:o, t:t, lines:ps.lines, paid:pay?pay.amt:0, change:(pay&&pay.change)||0, method:pay?pay.method:'', cash:(pay&&pay.cash)||0, online:(pay&&pay.online)||0};
         pendingSale=null; _finalizing=false;
+        posBtnBusy(false);
         try{ fillReceipt(lastOrder); }catch(e){}
         posDone(); chime();
       }
       if(pay){
-        addSlipPhotos(no, function(){
-          // pos/posPanels/deposit make the Live monitor announce the sale:
-          // "<seller> ขายหน้าร้าน <N> แผ่น, [มัดจำ] <amt> บาทค่ะ" (kpSayLine)
-          feedAdd({amt:pay.amt, id:no, cust:o.customer, zone:o.zone, prov:o.province||'', fee:0,
-                   kind: pay.method==='online'?'slip':'office', by:who,
-                   pos:1, posPanels:t.pq, deposit: pay.amt<t.grand-0.5?1:0});
-          audit({type:'payment', orderId:no, by:who, detail:'🏪 POS รับเงิน '+fmtB(pay.amt)+' ('+(pay.method==='split'?('💵 '+fmtB(pay.cash)+' + 🏦 '+fmtB(pay.online)):(pay.method==='online'?'โอน':'เงินสด'))+')'+(pay.amt<t.grand?' · มัดจำ':'')});
-          finish();
-        });
+        // pos/posPanels/deposit make the Live monitor announce the sale:
+        // "<seller> ขายหน้าร้าน <N> แผ่น, [มัดจำ] <amt> บาทค่ะ" (kpSayLine)
+        feedAdd({amt:pay.amt, id:no, cust:o.customer, zone:o.zone, prov:o.province||'', fee:0,
+                 kind: pay.method==='online'?'slip':'office', by:who,
+                 pos:1, posPanels:t.pq, deposit: pay.amt<t.grand-0.5?1:0});
+        audit({type:'payment', orderId:no, by:who, detail:'🏪 POS รับเงิน '+fmtB(pay.amt)+' ('+(pay.method==='split'?('💵 '+fmtB(pay.cash)+' + 🏦 '+fmtB(pay.online)):(pay.method==='online'?'โอน':'เงินสด'))+')'+(pay.amt<t.grand?' · มัดจำ':'')});
+        /* Das Slipfoto laeuft NEBENHER weiter. Vorher haftete die Quittung an
+           seiner Bestaetigung: Firebase meldet einen Upload erst zurueck, wenn
+           er den Server erreicht hat — bei schwachem WLAN also womoeglich nie.
+           Die Bestellung stand dann laengst in der Datenbank, waehrend der
+           Verkaeufer vor dem Zahlungsbildschirm sass, keine Quittung bekam und
+           der Kunde wartete. Das Bild kommt an, sobald die Verbindung steht;
+           die Quittung darf darauf nicht warten. */
+        try{ addSlipPhotos(no, function(){}); }catch(e){ console.error(e); }
+        finish();
       } else finish();
     }).catch(function(e){
       console.error(e);
-      _finalizing=false; $('pay-confirm-btn').disabled=false;
+      _clearWarn(); _finalizing=false; posBtnBusy(false);
       toast('⚠️ บันทึกไม่สำเร็จ ลองใหม่ / save failed', 6000); chime(false);
     });
   }).catch(function(e){
-    _finalizing=false; $('pay-confirm-btn').disabled=false;
-    toast('⚠️ ออกเลขออเดอร์ไม่สำเร็จ ลองใหม่ / order number failed', 6000); chime(false);
+    _clearWarn(); _finalizing=false; posBtnBusy(false);
+    posNotice(e && e.message==='orderno'
+      ? '📶 เน็ตช้าหรือหลุด — ออกเลขออเดอร์ไม่ได้\nกดยืนยันอีกครั้งเมื่อสัญญาณกลับมา\n\nSlow or lost connection — no order number.\nTap confirm again once the signal is back. Nothing was saved.'
+      : '⚠️ ออกเลขออเดอร์ไม่สำเร็จ ลองใหม่\nOrder number failed — please try again');
+    chime(false);
   });
 }
 /* delivery order with unclear zone → office approval queue, no number yet */
