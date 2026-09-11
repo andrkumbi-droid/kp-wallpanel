@@ -28,12 +28,19 @@ pro Nachricht nimmt.
 5. Fertig. **Keine weitere Einrichtung** — kein Konto, kein Passwort, kein Token.
    Die Erweiterung liest nur die öffentliche Produktliste.
 
+### Auswahl: was rausgeht, steht im Panel
+
+Unter dem Knopf liegen alle lieferbaren Produkte als Bildchen, **alle angetickt**.
+Ein Klick auf ein Bild wählt es ab (grau), noch ein Klick wieder an. **ทั้งหมด /
+alle** und **ไม่เลือก / keine** setzen alles auf einmal. Der Knopf sagt immer, wie
+viele Fotos rausgehen. Nach einem Versand sind wieder alle angetickt, damit der
+nächste Kunde nicht die Auswahl des vorigen erbt.
+
 ### Einmal ausprobieren, bevor es zum Kunden geht
 
-Den Haken **„ทดสอบ: ใส่รูปแต่ยังไม่ส่ง / nur einfügen"** setzen und den Knopf
-drücken: es landen dann 10 Bilder im Antwortfeld, **gesendet wird nichts**. Sieht
-das gut aus: Bilder mit ✕ wieder wegklicken, **Haken raus** — ab dann sendet der
-Knopf wirklich. Der Haken merkt sich seinen Stand, im Alltag bleibt er aus.
+Auf jedem neuen Rechner: einen **eigenen Testchat** öffnen (sich selbst von privat
+an die Seite schreiben), **ไม่เลือก / keine** drücken, **ein** Produkt anticken und
+senden. Kommt das eine Foto an, stimmt alles.
 
 ## Updates verteilen / อัปเดต
 

@@ -224,7 +224,10 @@ const KPCAT = {
     try { data = await this.catalog(); }
     catch (e) { say('⚠ โหลดรายการสินค้าไม่ได้ / Katalog nicht erreichbar (' + e.message + ')'); return { ok: false, reason: e.message }; }
 
-    const items = data.items;
+    // Auswahl aus dem Panel: leer/fehlend = alles, was lieferbar ist.
+    const pick = (opts && opts.codes && opts.codes.length) ? new Set(opts.codes) : null;
+    const items = pick ? data.items.filter(i => pick.has(i.code)) : data.items;
+    if (!items.length) { say('⚠ ยังไม่ได้เลือกสินค้า / nichts ausgewählt'); return { ok: false, reason: 'nothing_selected' }; }
     const batches = Math.ceil(items.length / this.BATCH);
     const who = kpCustomerName() || 'diesen Chat';
     if (!dry && !confirm(

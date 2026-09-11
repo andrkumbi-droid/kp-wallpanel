@@ -1,15 +1,18 @@
-// Panel in der Business Suite — seit 11.09. nur noch EINE Aufgabe: das ganze
-// lieferbare Sortiment als Fotos in den offenen Chat schicken.
+// Panel in der Business Suite — seit 11.09. nur noch EINE Aufgabe: lieferbare
+// Produkte als Fotos in den offenen Chat schicken.
 //
-// Übersetzung, Antwortvorschläge und das Stil-Lernen sind draussen (Wunsch des
-// Büros). Der Code dafür liegt weiter im Repo (overlay-assistant.js.off,
-// inbox-live.js, composer.js, inbox-observer.js) und lässt sich über die
-// content_scripts im Manifest wieder einschalten; das Backend läuft unberührt
-// weiter. Dadurch braucht dieses Panel auch KEINE Einrichtung mehr: keine
-// Backend-Adresse, kein Token — es liest nur die öffentliche Produktliste.
+// Angezeigt wird, WAS rausgeht: jedes Produkt als Bildchen zum Ab- und Anwählen.
+// Voreinstellung ist alles; fragt ein Kunde nur nach hellen Hölzern, tickt das
+// Büro die anderen aus und schickt drei statt neunundzwanzig.
+//
+// Übersetzung, Antwortvorschläge und Stil-Lernen sind draussen (Wunsch des
+// Büros). Der Code liegt weiter im Repo (overlay-assistant.js.off & Co.) und
+// lässt sich über die content_scripts im Manifest wieder einschalten.
 
 const KPUI = {
   root: null,
+  items: [],
+  sel: null,     // Set der angetickten Codes
 
   init() {
     if (this.root || !document.body) return;
@@ -22,12 +25,13 @@ const KPUI = {
       </div>
       <div class="kp-body">
         <div class="kp-sec kp-cat">
-          <button id="kp-sendall" class="kp-btn kp-primary"
-            title="ส่งรูปสินค้าที่มีของทั้งหมด ครั้งละ 10 รูป / alle verfügbaren Produktfotos in 10er-Schüben"
-            >📦 ส่งรูปสินค้าทั้งหมด / Alle senden</button>
-          <label class="kp-dry"><input type="checkbox" id="kp-dry">
-            <span>ทดสอบ: ใส่รูปแต่ยังไม่ส่ง / nur einfügen</span></label>
-          <div class="kp-hint" id="kp-cat-count"></div>
+          <button id="kp-sendall" class="kp-btn kp-primary">📦 ส่งรูปสินค้า / senden</button>
+          <div class="kp-pickbar">
+            <button id="kp-all" class="kp-link">ทั้งหมด / alle</button>
+            <button id="kp-none" class="kp-link">ไม่เลือก / keine</button>
+            <span id="kp-cat-count"></span>
+          </div>
+          <div class="kp-grid" id="kp-grid"></div>
           <div class="kp-hint" id="kp-cat-info"></div>
         </div>
       </div>`;
@@ -36,43 +40,89 @@ const KPUI = {
 
     el.querySelector('.kp-min').onclick = () => el.classList.toggle('kp-closed');
     el.querySelector('#kp-sendall').onclick = () => this.sendAllPhotos();
+    el.querySelector('#kp-all').onclick = () => this.setAll(true);
+    el.querySelector('#kp-none').onclick = () => this.setAll(false);
 
-    // Der Haken merkt sich seinen Stand. Voreinstellung: AUS — im Alltag drückt
-    // das Büro nur den Knopf. Zum Einrichten eines neuen Rechners setzt man ihn
-    // einmal, sieht dass die zehn Bilder im Feld landen, und nimmt ihn wieder raus.
-    const dry = el.querySelector('#kp-dry');
-    try {
-      chrome.storage?.local?.get(['dryRun'], v => { dry.checked = !!(v && v.dryRun); });
-      dry.onchange = () => { try { chrome.storage?.local?.set({ dryRun: dry.checked }); } catch (e) { /* egal */ } };
-    } catch (e) { /* ohne Speicher bleibt der Haken einfach aus */ }
-
-    this.catalogInfo();
+    this.load();
   },
 
-  // Bestand anzeigen: wie viele Produkte gerade lieferbar sind und wie viele
-  // Nachrichten das gibt. Eigene Zeile, damit Statusmeldungen sie nicht überschreiben.
-  async catalogInfo() {
-    const el = this.root && this.root.querySelector('#kp-cat-count');
-    if (!el) return;
-    try {
-      const d = await KPCAT.catalog();
-      const when = d.updatedAt ? new Date(d.updatedAt).toLocaleString() : '';
-      el.textContent = 'มีของ ' + d.items.length + ' รายการ · '
-        + Math.ceil(d.items.length / KPCAT.BATCH) + ' ข้อความ' + (when ? ' · อัปเดต ' + when : '');
-    } catch (e) {
-      el.textContent = '⚠ โหลดรายการสินค้าไม่ได้ / Katalog nicht erreichbar (' + e.message + ')';
+  async load() {
+    const info = this.root.querySelector('#kp-cat-info');
+    let d;
+    try { d = await KPCAT.catalog(); }
+    catch (e) { info.textContent = '⚠ โหลดรายการสินค้าไม่ได้ / Katalog nicht erreichbar (' + e.message + ')'; return; }
+    this.items = d.items;
+    this.sel = new Set(this.items.map(i => i.code));
+    this.renderGrid();
+    this.renderCount();
+    this.loadThumbs();
+  },
+
+  renderGrid() {
+    const grid = this.root.querySelector('#kp-grid');
+    grid.innerHTML = this.items.map(i => {
+      const code = i.code.replace(/[^A-Za-z0-9_.\-]/g, '');
+      return '<button type="button" class="kp-tile on" data-code="' + code + '" title="' + code + '">'
+        + '<span class="kp-thumb" id="kp-th-' + code + '"></span>'
+        + '<span class="kp-code">' + code + '</span>'
+        + '<span class="kp-tick">✓</span>'
+        + '</button>';
+    }).join('');
+    grid.querySelectorAll('.kp-tile').forEach(t => {
+      t.onclick = () => {
+        const c = t.dataset.code;
+        if (this.sel.has(c)) { this.sel.delete(c); t.classList.remove('on'); }
+        else { this.sel.add(c); t.classList.add('on'); }
+        this.renderCount();
+      };
+    });
+  },
+
+  // Die Bildchen kommen über den Service Worker (CSP: ein direktes <img> auf
+  // github.io wäre auf facebook.com heikel) und als blob:-Adresse derselben
+  // Herkunft. Es sind dieselben Dateien, die auch gesendet werden — der Cache
+  // von KPCAT trägt also doppelt.
+  async loadThumbs() {
+    for (const it of this.items) {
+      const box = this.root.querySelector('#kp-th-' + it.code.replace(/[^A-Za-z0-9_.\-]/g, ''));
+      if (!box) continue;
+      const f = await KPCAT.photo(it);
+      if (!f) { box.textContent = '—'; continue; }
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(f);
+      img.alt = it.code;
+      box.appendChild(img);
     }
+  },
+
+  setAll(on) {
+    this.sel = new Set(on ? this.items.map(i => i.code) : []);
+    this.root.querySelectorAll('.kp-tile').forEach(t => t.classList.toggle('on', on));
+    this.renderCount();
+  },
+
+  renderCount() {
+    const n = this.sel ? this.sel.size : 0;
+    const total = this.items.length;
+    this.root.querySelector('#kp-cat-count').textContent = n + '/' + total + ' · ' + Math.ceil(n / KPCAT.BATCH) + ' ข้อความ';
+    const btn = this.root.querySelector('#kp-sendall');
+    btn.textContent = '📦 ส่งรูปสินค้า ' + n + ' รูป / senden';
+    btn.disabled = !n;
   },
 
   async sendAllPhotos() {
     const btn = this.root.querySelector('#kp-sendall');
     const info = this.root.querySelector('#kp-cat-info');
-    const dry = this.root.querySelector('#kp-dry').checked;
     btn.disabled = true;
     try {
-      await KPCAT.sendAll({ dryRun: dry, onStatus: t => { info.textContent = t; } });
-      this.catalogInfo();   // der Bestand kann sich inzwischen geändert haben
-    } finally { btn.disabled = false; }
+      const r = await KPCAT.sendAll({
+        codes: Array.from(this.sel),
+        onStatus: t => { info.textContent = t; }
+      });
+      // Nach einem gelaufenen Versand wieder alles anticken: der nächste Kunde
+      // soll nicht aus Versehen die Auswahl des vorigen bekommen.
+      if (r && r.ok) await this.load();
+    } finally { btn.disabled = false; this.renderCount(); }
   }
 };
 
