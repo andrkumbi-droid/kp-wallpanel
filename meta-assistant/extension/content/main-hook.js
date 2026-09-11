@@ -86,3 +86,46 @@
     window.dispatchEvent(new CustomEvent('kp-attach-result', { detail: { how, way } }));
   });
 })();
+
+// Senden aus der Seiten-Welt — letzter Weg, falls Metas Handler auf Ereignisse
+// aus dieser Welt anders reagieren als auf die aus dem Content-Script.
+(() => {
+  const SEND_RE = /^(send|senden|ส่ง|ส่งข้อความ)$/i;
+  function findSend() {
+    for (const c of document.querySelectorAll('[role="button"], button')) {
+      const l = (c.getAttribute('aria-label') || c.getAttribute('title') || c.innerText || '').trim();
+      if (SEND_RE.test(l) && c.offsetParent !== null && c.getAttribute('aria-disabled') !== 'true') return c;
+    }
+    for (const n of document.querySelectorAll('span, div')) {
+      if (n.children.length || n.offsetParent === null) continue;
+      if (!SEND_RE.test((n.textContent || '').trim())) continue;
+      const hit = n.closest('[role="button"], button, [tabindex]') || n.parentElement;
+      if (hit) return hit;
+    }
+    return null;
+  }
+  window.addEventListener('kp-send', () => {
+    let how = null;
+    const btn = findSend();
+    const o = { bubbles: true, cancelable: true, view: window, button: 0 };
+    if (btn) {
+      try { btn.dispatchEvent(new PointerEvent('pointerdown', o)); } catch (e) { /* egal */ }
+      try { btn.dispatchEvent(new MouseEvent('mousedown', o)); } catch (e) { /* egal */ }
+      try { btn.dispatchEvent(new PointerEvent('pointerup', o)); } catch (e) { /* egal */ }
+      try { btn.dispatchEvent(new MouseEvent('mouseup', o)); } catch (e) { /* egal */ }
+      try { btn.click(); how = 'button'; } catch (e) { /* egal */ }
+    }
+    if (!how) {
+      const b = document.querySelectorAll('div[role="textbox"][contenteditable="true"]');
+      const box = b[b.length - 1];
+      if (box) {
+        box.focus();
+        ['keydown', 'keypress', 'keyup'].forEach(t => box.dispatchEvent(new KeyboardEvent(t, {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
+        })));
+        how = 'enter';
+      }
+    }
+    window.dispatchEvent(new CustomEvent('kp-send-result', { detail: { how } }));
+  });
+})();

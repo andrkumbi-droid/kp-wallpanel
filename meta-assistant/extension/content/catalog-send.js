@@ -130,17 +130,54 @@ const KPCAT = {
     return n;   // 0 = gar nichts, dazwischen = nur ein Teil
   },
 
-  // Senden: erst der Knopf (sprachunabhängig über aria-label), sonst Enter.
-  send() {
-    const btn = kpFindSendButton();
-    if (btn) { btn.click(); return 'button'; }
-    const box = kpFindComposer();
-    if (!box) return null;
-    box.focus();
-    ['keydown', 'keypress', 'keyup'].forEach(t => box.dispatchEvent(new KeyboardEvent(t, {
-      key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
-    })));
-    return 'enter';
+  // Senden: erst der Knopf, dann Enter, dann beides aus der Seiten-Welt. Nach
+  // jedem Versuch wird nachgesehen, ob die Dateizeilen verschwunden sind — nur
+  // das heisst „raus". Der Weg, der trägt, wird gemerkt.
+  // (Am 11.09. scheiterte der zweite Anlauf genau hier: angehängt war alles,
+  // der Klick auf „Senden" bewirkte nichts.)
+  _sendWay: null,
+  async sendAndWait(names) {
+    const tried = [];
+    const ways = {
+      button: () => { const b = kpFindSendButton(); if (!b) return false; tried.push('knopf'); return kpClickHard(b); },
+      enter: () => {
+        const box = kpFindComposer(); if (!box) return false;
+        box.focus();
+        ['keydown', 'keypress', 'keyup'].forEach(t => box.dispatchEvent(new KeyboardEvent(t, {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
+        })));
+        tried.push('enter'); return true;
+      },
+      page: async () => { tried.push('seite'); return !!await this.sendViaPage(); }
+    };
+    const names_ = names;
+    const order = this._sendWay ? [this._sendWay].concat(Object.keys(ways).filter(w => w !== this._sendWay))
+      : Object.keys(ways);
+    // Zwei Runden: beim ersten Mal können die Bilder noch hochladen, dann ist
+    // der Senden-Knopf kurz wirkungslos.
+    for (let round = 0; round < 2; round++) {
+      for (const w of order) {
+        if (!await ways[w]()) continue;
+        if (await this.waitSent(names_, 6000)) { this._sendWay = w; return w; }
+      }
+    }
+    return { failed: true, tried: tried.length ? tried.join('·') : 'kein Knopf gefunden' };
+  },
+
+  // Klicken in der Welt der Seite — falls Metas Handler an Ereignissen hängen,
+  // die aus dieser Welt nicht durchkommen.
+  sendViaPage() {
+    return new Promise(res => {
+      let done = false;
+      const onResult = ev => {
+        if (done) return; done = true;
+        window.removeEventListener('kp-send-result', onResult);
+        res((ev.detail && ev.detail.how) || null);
+      };
+      window.addEventListener('kp-send-result', onResult);
+      window.dispatchEvent(new CustomEvent('kp-send'));
+      setTimeout(() => { if (!done) { done = true; window.removeEventListener('kp-send-result', onResult); res(null); } }, 5000);
+    });
   },
 
   // Gesendet = die Dateizeilen sind wieder weg.
@@ -200,8 +237,11 @@ const KPCAT = {
 
         if (dry) { say('🧪 ทดสอบ: ' + n + ' รูปอยู่ในช่องแล้ว (' + how + ') — ยังไม่ได้ส่ง / nichts gesendet'); return { ok: true, dry: true, attached: n, how, missing }; }
 
-        this.send();
-        if (!await this.waitSent(got.names)) { say('⚠ ชุดที่ ' + (b + 1) + ' ส่งไม่ออก — กดส่งเองแล้วเริ่มใหม่ / von Hand senden'); return { ok: false, reason: 'send_failed', sent, missing }; }
+        const sendWay = await this.sendAndWait(got.names);
+        if (sendWay && sendWay.failed) {
+          say('⚠ ชุดที่ ' + (b + 1) + ' ส่งไม่ออก (' + sendWay.tried + ') — กดส่งเองแล้วเริ่มใหม่ / von Hand senden');
+          return { ok: false, reason: 'send_failed', tried: sendWay.tried, sent, missing };
+        }
         sent += n; msgs++;
         say('✅ ส่งแล้ว ' + sent + '/' + items.length + ' (' + msgs + ' ข้อความ)');
         if (b < batches - 1) await this.sleep(this.GAP_MS);

@@ -104,14 +104,41 @@ function kpAttachmentCount(names) {
 // Senden-Knopf, sprachunabhängig: Business Suite läuft je nach Konto auf
 // Englisch, Deutsch oder Thai.
 const KP_SEND_RE = /^(send|senden|ส่ง|ส่งข้อความ)$/i;
+// Erst im Antwortkasten suchen, dann im ganzen Dokument, und zuletzt nach einem
+// blossen Textknoten „Senden" (Meta rendert den Knopf schon mal als Span in
+// einem klickbaren Eltern-Element, ohne aria-label).
 function kpFindSendButton() {
-  const area = kpComposerArea() || document;
-  const cands = area.querySelectorAll('[data-kp="send"], [role="button"], button');
-  for (const c of cands) {
-    const lbl = (c.getAttribute('aria-label') || c.getAttribute('title') || c.innerText || '').trim();
-    if (KP_SEND_RE.test(lbl) && c.offsetParent !== null && c.getAttribute('aria-disabled') !== 'true') return c;
+  const area = kpComposerArea();
+  const scopes = area && area !== document ? [area, document] : [document];
+  for (const scope of scopes) {
+    for (const c of scope.querySelectorAll('[data-kp="send"], [role="button"], button')) {
+      const lbl = (c.getAttribute('aria-label') || c.getAttribute('title') || c.innerText || '').trim();
+      if (KP_SEND_RE.test(lbl) && c.offsetParent !== null && c.getAttribute('aria-disabled') !== 'true') return c;
+    }
+  }
+  for (const scope of scopes) {
+    for (const n of scope.querySelectorAll('span, div')) {
+      if (!KP_SEND_RE.test((n.textContent || '').trim())) continue;
+      if (n.children.length || n.offsetParent === null) continue;      // nur der reine Textknoten
+      const hit = n.closest('[role="button"], button, [tabindex]') || n.parentElement;
+      if (hit) return hit;
+    }
   }
   return null;
+}
+
+// Ein .click() reicht manchen Oberflächen nicht — sie hängen an den Maus-
+// Ereignissen davor. Deshalb die ganze Kette, so wie ein echter Klick sie macht.
+function kpClickHard(el) {
+  if (!el) return false;
+  const o = { bubbles: true, cancelable: true, view: window, button: 0 };
+  try { el.scrollIntoView({ block: 'nearest' }); } catch (e) { /* egal */ }
+  try { el.dispatchEvent(new PointerEvent('pointerdown', o)); } catch (e) { /* alt: kein PointerEvent */ }
+  try { el.dispatchEvent(new MouseEvent('mousedown', o)); } catch (e) { /* egal */ }
+  try { el.dispatchEvent(new PointerEvent('pointerup', o)); } catch (e) { /* egal */ }
+  try { el.dispatchEvent(new MouseEvent('mouseup', o)); } catch (e) { /* egal */ }
+  try { el.click(); } catch (e) { try { el.dispatchEvent(new MouseEvent('click', o)); } catch (e2) { return false; } }
+  return true;
 }
 
 // Name des offenen Chats — nur für die Rückfrage vor dem Versand.
