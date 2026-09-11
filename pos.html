@@ -3064,26 +3064,48 @@ var RECEIPT_CSS =
 +".rc-foot{text-align:center;font-size:11px;color:#444;margin-top:14px;border-top:1px solid #ccc;padding-top:8px}";
 function posPrintHtml(bodyHTML, fileName){
   var t=String(fileName||'KP-receipt').replace(/[<>&"]/g,'').slice(0,120);
+  /* KEIN externes Stylesheet (Google Fonts) im Druckdokument: den Druckauftrag
+     baut Android ein ZWEITES Mal auf, und dieser zweite Aufbau haengt oder
+     bricht ab, wenn er dafuer erst wieder ins Netz muss — Vorschau schoen,
+     Ausdruck leer. Thai kommt mit den Systemschriften des Tablets. */
   _posPrintFrame('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+t+'</title>'
-    +'<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;700;800&display=swap" rel="stylesheet">'
     +'<style>'+RECEIPT_CSS+'</style></head><body>'+bodyHTML+'</body></html>', t);
 }
+var _posPrintUrl='';
 function _posPrintFrame(docHTML, t){
   var old=document.getElementById('kp-print-iframe'); if(old&&old.parentNode) old.parentNode.removeChild(old);
+  if(_posPrintUrl){ try{ URL.revokeObjectURL(_posPrintUrl); }catch(e){} _posPrintUrl=''; }
   var f=document.createElement('iframe'); f.id='kp-print-iframe';
   /* Off-Screen, NICHT display:none und nicht visibility:hidden — beides druckt
      am Handy leere Seiten. */
   f.style.cssText='position:fixed;left:-9999px;top:0;width:190mm;height:270mm;border:0';
+  /* Das Dokument als echte ADRESSE (blob:) statt per document.write:
+     Android baut den Druckauftrag beim Tippen auf 🖨 ein zweites Mal auf und
+     holt sich das Dokument dafuer NEU. Ein nur hineingeschriebenes Dokument
+     gibt es dann nicht mehr — Vorschau richtig, Ausdruck leer. Eine blob-URL
+     laesst sich beliebig oft neu laden; sie bleibt darum stehen, bis der
+     naechste Druck kommt. */
+  var viaBlob=false;
+  try{
+    _posPrintUrl=URL.createObjectURL(new Blob([docHTML], {type:'text/html'}));
+    f.src=_posPrintUrl; viaBlob=true;
+  }catch(e){ _posPrintUrl=''; }
   document.body.appendChild(f);
   var doc=f.contentWindow.document;
-  doc.open(); doc.write(docHTML); doc.close();
+  function writeIn(){   // Rueckfallweg, falls blob: nicht geht
+    try{ var d=f.contentWindow.document; d.open(); d.write(docHTML); d.close(); doc=d; }catch(e){}
+  }
+  if(!viaBlob) writeIn();
   var done=false;
   function fire(){
     if(done) return; done=true;
     /* Den Rahmen NICHT bei afterprint entfernen: Android meldet das, sobald der
        Auftrag beim Druckdienst liegt — also bevor er gerendert ist. Er wird
        beim naechsten Druck aufgeraeumt, spaetestens nach zwei Minuten. */
-    setTimeout(function(){ if(f&&f.parentNode) f.parentNode.removeChild(f); }, 120000);
+    setTimeout(function(){
+      if(f&&f.parentNode) f.parentNode.removeChild(f);
+      if(_posPrintUrl){ try{ URL.revokeObjectURL(_posPrintUrl); }catch(e){} _posPrintUrl=''; }
+    }, 120000);
     var _alt=document.title;
     if(t){
       document.title=t;
@@ -3094,8 +3116,16 @@ function _posPrintFrame(docHTML, t){
     try{ f.contentWindow.focus(); f.contentWindow.print(); }
     catch(e){ try{ window.print(); }catch(_){} }
   }
-  if(doc.readyState==='complete') setTimeout(fire,400);
-  else f.onload=function(){ setTimeout(fire,400); };
+  f.onload=function(){ setTimeout(fire,450); };
+  if(!viaBlob && doc && doc.readyState==='complete') setTimeout(fire,450);
+  /* Notbremse: laedt die blob-Adresse aus irgendeinem Grund nicht (alte
+     WebView, Richtlinie), nach 2,5 s doch hineinschreiben und drucken —
+     lieber der alte Weg als gar kein Druck. */
+  setTimeout(function(){
+    if(done) return;
+    if(viaBlob) writeIn();
+    fire();
+  }, 2500);
 }
 function posPrintReceipt(){
   var b=$('print-receipt').innerHTML;
