@@ -146,3 +146,9 @@ function kpCustomerName() {
   const el = kpQuery(KPSEL.customerName);
   return el ? (el.innerText || '').trim() : '';
 }
+
+// Das Antwortfeld. Stand früher in composer.js — die Datei gehörte zum
+// Übersetzer-Panel und ist seit 11.09. abgeschaltet (composer.js.off).
+function kpFindComposer() {
+  return kpQuery(KPSEL.composer);
+}
