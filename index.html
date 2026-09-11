@@ -4928,6 +4928,51 @@ function kpCopyText(txt){
   try{ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done).catch(function(){ alert(txt); }); return; } }catch(e){}
   try{ var t=document.createElement('textarea'); t.value=txt; document.body.appendChild(t); t.select(); document.execCommand('copy'); document.body.removeChild(t); done(); }catch(e){ alert(txt); }
 }
+// ── DRIVER PHONE, EVERYWHERE THE NAME SHOWS ──────────────────────────────
+// The office rings drivers all day long. Wherever a driver's name appears —
+// an order card, a tour, the Drivers tab — the number stands right next to it
+// and one tap copies it, so nobody has to dig through the staff list first.
+// Drivers are derived from staffList, so both lists are searched: by id first
+// (old tours carry driverId), then by name (Lalamove/manual tours carry only a
+// name). t.driverPhone (Lalamove) wins when it is passed in explicitly.
+function drvPhoneOf(name, id){
+  var ok=function(p){ p=String(p==null?'':p).trim(); return (p&&p!=='—')?p:''; };
+  var lists=[(typeof drivers!=='undefined'&&drivers)||[], (typeof staffList!=='undefined'&&staffList)||[]];
+  var li,i,s;
+  if(id){ for(li=0;li<2;li++){ for(i=0;i<lists[li].length;i++){ s=lists[li][i];
+    if(s && (s.id===id || s.driverId===id) && ok(s.phone)) return ok(s.phone); } } }
+  var n=String(name==null?'':name).trim().toLowerCase();
+  if(!n) return '';
+  for(li=0;li<2;li++){ for(i=0;i<lists[li].length;i++){ s=lists[li][i];
+    if(s && String(s.name||'').trim().toLowerCase()===n && ok(s.phone)) return ok(s.phone); } }
+  return '';
+}
+// One tap = the bare number on the clipboard (dashes/spaces stripped, so it can
+// be pasted straight into the dialler or LINE).
+function drvPhoneCopy(ph, ev){
+  try{ if(ev&&ev.stopPropagation){ ev.stopPropagation(); ev.preventDefault&&ev.preventDefault(); } }catch(e){}
+  var raw=String(ph||'').trim(); if(!raw) return;
+  var digits=raw.replace(/[^0-9+]/g,'')||raw;
+  var done=function(){ try{ showNotif('📞 '+raw+' · คัดลอกแล้ว / copied'); }catch(e){} };
+  try{ if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(digits).then(done).catch(function(){ _ofCopyFallback(digits); done(); }); return; } }catch(e){}
+  _ofCopyFallback(digits); done();
+}
+function _drvPhSafe(p){ return String(p==null?'':p).replace(/['"\<>&]/g,'').trim(); }
+// Chip form — for headings and badges (orders, tour cards, Drivers tab).
+function drvPhoneTag(name, id, phone){
+  var ph=_drvPhSafe(phone)||_drvPhSafe(drvPhoneOf(name,id));
+  if(!ph) return '';
+  return '<span onclick="drvPhoneCopy(\''+ph+'\',event)" title="แตะเพื่อคัดลอกเบอร์ / tap to copy the number"'
+    +' style="cursor:pointer;display:inline-block;font-size:11px;font-weight:700;color:#0369a1;background:#e0f2fe;'
+    +'border-radius:8px;padding:1px 6px;margin-left:5px;white-space:nowrap;flex-shrink:0;vertical-align:1px">📞 '+ph+'</span>';
+}
+// Plain form — for places that already print the number as quiet grey text.
+function drvPhoneInline(phone){
+  var ph=_drvPhSafe(phone); if(!ph) return '';
+  return '<span onclick="drvPhoneCopy(\''+ph+'\',event)" title="แตะเพื่อคัดลอกเบอร์ / tap to copy the number"'
+    +' style="cursor:pointer;font-weight:700;color:#0369a1;text-decoration:underline dotted">📞 '+ph+'</span>';
+}
 /* Die Steuernummer allein — das ist die eine Zahl, die der Kassierer eintippt.
    Ohne Leerzeichen, damit sie sich in jedes Kassensystem einfuegen laesst. */
 function taxInfoCopyId(){ kpCopyText(TAXID_DIGITS); }
@@ -6281,12 +6326,12 @@ function mgStock(){
 function mgIncoming(){ clRender(); }
 
 function mgDrivers(){
-  var driverCards=drivers.map(function(d){const tour=activeTours.find(t=>t&&t.driverId===d.id);const tOrds=tour&&tour.orders?tour.orders:[];return`<div class="dcard"><div class="dav">${initials(d.name)}</div><div style="flex:1"><div style="font-size:14px;font-weight:600">${d.name}</div><div style="font-size:12px;color:var(--text2)">${d.phone||'No phone'}${d.vehicle?' &middot; '+d.vehicle:''}</div>${tour?`<div style="font-size:11px;color:var(--green);margin-top:2px"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> On tour &middot; ${tOrds.length} orders</div>`:'<div style="font-size:11px;color:var(--text2);margin-top:2px">Available</div>'}</div><button type="button" class="btnsm" onclick="openDM('${d.id}')"><i class="ti ti-pencil"></i></button></div>`;}).join('');
+  var driverCards=drivers.map(function(d){const tour=activeTours.find(t=>t&&t.driverId===d.id);const tOrds=tour&&tour.orders?tour.orders:[];return`<div class="dcard"><div class="dav">${initials(d.name)}</div><div style="flex:1"><div style="font-size:14px;font-weight:600">${d.name}</div><div style="font-size:12px;color:var(--text2)">${d.phone?drvPhoneInline(d.phone):'No phone'}${d.vehicle?' &middot; '+d.vehicle:''}</div>${tour?`<div style="font-size:11px;color:var(--green);margin-top:2px"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> On tour &middot; ${tOrds.length} orders</div>`:'<div style="font-size:11px;color:var(--text2);margin-top:2px">Available</div>'}</div><button type="button" class="btnsm" onclick="openDM('${d.id}')"><i class="ti ti-pencil"></i></button></div>`;}).join('');
   var staffDrivers=staffList.filter(function(s){return s.role&&s.role.toLowerCase().includes('driver');});
-  var staffDriverCards=staffDrivers.map(function(s){return`<div class="dcard"><div class="dav" style="background:var(--blue-l);color:var(--blue-t)">${initials(s.name)}</div><div style="flex:1"><div style="font-size:14px;font-weight:600">${s.name}</div><div style="font-size:12px;color:var(--text2)">${s.phone||'No phone'}${s.vehicle?' &middot; '+s.vehicle:''}</div><div style="font-size:11px;color:var(--text2);margin-top:2px">${s.role}</div></div><button type="button" class="btnsm" onclick="openStaffM('${s.id}')"><i class="ti ti-pencil"></i></button></div>`;}).join('');
+  var staffDriverCards=staffDrivers.map(function(s){return`<div class="dcard"><div class="dav" style="background:var(--blue-l);color:var(--blue-t)">${initials(s.name)}</div><div style="flex:1"><div style="font-size:14px;font-weight:600">${s.name}</div><div style="font-size:12px;color:var(--text2)">${s.phone?drvPhoneInline(s.phone):'No phone'}${s.vehicle?' &middot; '+s.vehicle:''}</div><div style="font-size:11px;color:var(--text2);margin-top:2px">${s.role}</div></div><button type="button" class="btnsm" onclick="openStaffM('${s.id}')"><i class="ti ti-pencil"></i></button></div>`;}).join('');
   var combined=driverCards+(staffDriverCards?'<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 6px">Staff / พนักงานขับรถ</div>'+staffDriverCards:'');
   document.getElementById('mg-drivers').innerHTML=combined||'<div class="empty"><i class="ti ti-users" style="font-size:36px;display:block;margin-bottom:8px"></i>No drivers yet<br>Add your team</div>';
-  document.getElementById('mg-tours').innerHTML=activeTours.length===0?'<div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div>':activeTours.filter(t=>t&&t.orders).map((t,ti)=>{const st=t.status||{};const del=t.orders.filter(id=>st[id]==='delivered').length,can=t.orders.filter(id=>st[id]==='cancelled').length,pen=t.orders.length-del-can;return`<div class="tmgmt"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div><div style="font-size:15px;font-weight:600"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>${t.driverName}</div><div style="font-size:11px;color:var(--text2);margin-top:2px">Started ${t.created}</div></div><span class="badge bactive">Active</span></div><div>${t.orders.map(id=>`<div class="tordr"><span style="font-weight:600">${id}</span><span class="badge ${st[id]==='delivered'?'bready':st[id]==='cancelled'?'bcancelled':'bloaded'}">${st[id]==='delivered'?'Delivered':st[id]==='cancelled'?'Cancelled':'On route'}</span></div>`).join('')}</div><div class="tstats"><div class="tstat">On route: <b>${pen}</b></div><div class="tstat">Delivered: <b style="color:var(--green)">${del}</b></div><div class="tstat">Cancelled: <b style="color:var(--red)">${can}</b></div></div><button type="button" class="btn btng" style="margin-top:10px" onclick="endTour(${ti})"><i class="ti ti-flag-check"></i> End ${t.driverName}'s tour</button></div>`;}).join('');
+  document.getElementById('mg-tours').innerHTML=activeTours.length===0?'<div class="empty" style="padding:1rem;font-size:13px">No active tours / ยังไม่มีทัวร์</div>':activeTours.filter(t=>t&&t.orders).map((t,ti)=>{const st=t.status||{};const del=t.orders.filter(id=>st[id]==='delivered').length,can=t.orders.filter(id=>st[id]==='cancelled').length,pen=t.orders.length-del-can;return`<div class="tmgmt"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div><div style="font-size:15px;font-weight:600"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>${t.driverName}${drvPhoneTag(t.driverName,t.driverId)}</div><div style="font-size:11px;color:var(--text2);margin-top:2px">Started ${t.created}</div></div><span class="badge bactive">Active</span></div><div>${t.orders.map(id=>`<div class="tordr"><span style="font-weight:600">${id}</span><span class="badge ${st[id]==='delivered'?'bready':st[id]==='cancelled'?'bcancelled':'bloaded'}">${st[id]==='delivered'?'Delivered':st[id]==='cancelled'?'Cancelled':'On route'}</span></div>`).join('')}</div><div class="tstats"><div class="tstat">On route: <b>${pen}</b></div><div class="tstat">Delivered: <b style="color:var(--green)">${del}</b></div><div class="tstat">Cancelled: <b style="color:var(--red)">${can}</b></div></div><button type="button" class="btn btng" style="margin-top:10px" onclick="endTour(${ti})"><i class="ti ti-flag-check"></i> End ${t.driverName}'s tour</button></div>`;}).join('');
 }
 
 function ofDailyToday() {
@@ -9458,7 +9503,7 @@ function ofRenderDashboard() {
         return '<div onclick="oft(\'tour\')" style="background:var(--bg);border:1.5px solid var(--border);border-radius:var(--rs);padding:10px 12px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:10px">'
           +'<div style="width:36px;height:36px;border-radius:50%;background:var(--blue-l);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:var(--blue-t);flex-shrink:0">'+t.driverName.charAt(0)+'</div>'
           +'<div style="flex:1">'
-          +'<div style="font-size:13px;font-weight:700">'+t.driverName+'</div>'
+          +'<div style="font-size:13px;font-weight:700">'+t.driverName+drvPhoneTag(t.driverName,t.driverId)+'</div>'
           +'<div style="font-size:11px;color:var(--text2);margin-top:1px">'+del+'/'+tot+' done</div>'
           +'<div style="height:4px;background:var(--bg2);border-radius:2px;margin-top:5px;overflow:hidden"><div style="height:100%;background:var(--green);border-radius:2px;width:'+pct+'%;transition:width 0.5s"></div></div>'
           +'</div>'
@@ -10949,6 +10994,7 @@ function openTourDetail(ti) {
   const pen = t.orders.length - del - can - shp;
 
   document.getElementById('tdm-driver-name').textContent = (tidOk(t.tid)?t.tid+' · ':'') + t.driverName + "'s Tour / ทัวร์ของ" + t.driverName;
+  try{ document.getElementById('tdm-driver-name').insertAdjacentHTML('beforeend', drvPhoneTag(t.driverName, t.driverId, t.driverPhone)); }catch(e){}
   document.getElementById('tdm-stats').textContent = pen + ' pending · ' + (shp>0?shp+' at shipper · ':'') + del + ' delivered · ' + can + ' cancelled — started ' + t.created;
 
   // Build stops list - sort: pending first, then done (shipped/delivered), then cancelled
@@ -12950,7 +12996,7 @@ function ofOrderCard(o, sfx){
   // is no tour ID yet (a tour that has not been given one) — otherwise it would
   // print the same name twice.
   var _tdrv = tidOk(o.tourNo) ? tourDriverOfTid(o.tourNo) : '';
-  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:15px;font-weight:700">'+(_prioActive?'⭐ ':'')+o.id+(tidOk(o.tourNo)?' <span title="Tour ID / รหัสทัวร์ · คนขับ / driver" style="font-size:10px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:1px 6px;vertical-align:2px">'+o.tourNo+(_tdrv?' · 🚚 '+_esc(_tdrv):'')+'</span>':'')+'</span><div style="display:flex;align-items:center;gap:6px">'+((_drvTour&&!_tdrv)?'<span style="font-size:11px;color:#1d4ed8;font-weight:700"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> '+_drvTour.driverName+'</span>':'')+ofAgeBadge(o)+'<span onclick="kpcDiscussOrder(\''+o.id+'\')" title="Ask team / ถามทีม" style="cursor:pointer;font-size:15px;line-height:1">💬</span><span class="badge '+BC[o.status]+'">'+SL[o.status]+'</span></div></div>';
+  s += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:15px;font-weight:700">'+(_prioActive?'⭐ ':'')+o.id+(tidOk(o.tourNo)?' <span title="Tour ID / รหัสทัวร์ · คนขับ / driver" style="font-size:10px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:1px 6px;vertical-align:2px">'+o.tourNo+(_tdrv?' · 🚚 '+_esc(_tdrv):'')+'</span>'+(_tdrv?drvPhoneTag(_tdrv):''):'')+'</span><div style="display:flex;align-items:center;gap:6px">'+((_drvTour&&!_tdrv)?'<span style="font-size:11px;color:#1d4ed8;font-weight:700"><i class="ti ti-truck" style="font-size:11px;vertical-align:-1px"></i> '+_drvTour.driverName+'</span>'+drvPhoneTag(_drvTour.driverName,_drvTour.driverId):'')+ofAgeBadge(o)+'<span onclick="kpcDiscussOrder(\''+o.id+'\')" title="Ask team / ถามทีม" style="cursor:pointer;font-size:15px;line-height:1">💬</span><span class="badge '+BC[o.status]+'">'+SL[o.status]+'</span></div></div>';
   s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-user" style="font-size:12px;vertical-align:-1px"></i> '+o.customer+zoneBadge(o.zone)+'</div>';
   s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-phone" style="font-size:12px;vertical-align:-1px"></i> '+phoneLinks(o.phone,'#0070f3')+'</div>';
   s += '<div style="font-size:12px;color:var(--text2);margin-bottom:2px"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> '+o.address+'</div>';
@@ -12975,7 +13021,7 @@ function ofOrderCard(o, sfx){
       : '<button type="button" onclick="ofAckReq(\''+o.id+'\')" style="font-size:11px;font-weight:700;padding:4px 10px;border:none;border-radius:var(--rs);background:#16a34a;color:#fff;cursor:pointer;margin-bottom:5px">✓ รับทราบ ส่งวันนี้ / Accept (stop blinking)</button>';
   }
   // At-shipper orders: show WHICH shipper the goods are currently with.
-  if(o.status==='shipped'){ var _shp=(o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:'ส่งเอง / self'+(o.driver?' ('+o.driver+')':''); s += '<div style="font-size:12px;color:#4f46e5;font-weight:700;margin-bottom:2px;background:#eef2ff;border-radius:var(--rs);padding:4px 8px;display:inline-block"><i class="ti ti-truck" style="font-size:12px;vertical-align:-1px"></i> ที่ขนส่ง / At shipper: '+_shp+'</div>'; }
+  if(o.status==='shipped'){ var _shp=(o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:'ส่งเอง / self'+(o.driver?' ('+o.driver+')'+drvPhoneTag(o.driver):''); s += '<div style="font-size:12px;color:#4f46e5;font-weight:700;margin-bottom:2px;background:#eef2ff;border-radius:var(--rs);padding:4px 8px;display:inline-block"><i class="ti ti-truck" style="font-size:12px;vertical-align:-1px"></i> ที่ขนส่ง / At shipper: '+_shp+'</div>'; }
   var _clipPacks=(o.lineItems||[]).reduce(function(a,i){return i.type==='clips'?a+(parseInt(i.qty)||0):a;},0);
   s += '<div style="display:flex;align-items:flex-start;gap:8px;margin-top:4px">'
     +'<div style="font-size:13px;flex:1;min-width:0">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':'')+(_clipPacks>0?' · 🛍️ '+_clipPacks+' คลิปแพ็ค / clip pack'+(_clipPacks>1?'s':''):'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+(o.bundle&&o.bundle>0?' <span style="background:#fff7ed;color:#ea580c;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">🧶 '+o.bundle+' มัด</span>':'')+'</div>'
@@ -14457,6 +14503,7 @@ function ofRenderTour(){
         '<div '+(ro?'':'onclick="openTourDetail('+ti+')" ')+'style="display:flex;align-items:center;gap:6px;min-width:0'+(ro?'':';cursor:pointer')+'">'+
           (tidOk(t.tid)?'<span title="Tour ID / รหัสทัวร์" style="flex-shrink:0;font-size:11px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px">'+t.tid+'</span>':'')+
           '<span style="flex:1;min-width:0;font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:5px;color:var(--blue)"></i>'+t.driverName+'</span>'+
+          drvPhoneTag(t.driverName,t.driverId,t.driverPhone)+
           '<span style="flex-shrink:0;font-size:11px;font-weight:700;color:#166534;background:#dcfce7;border-radius:999px;padding:1px 8px">📦 '+t.orders.length+'</span>'+
           // A note the office wrote must not be what folding hides — the marker
           // unfolds the card straight into it.
@@ -14654,11 +14701,11 @@ function ofRenderTour(){
       '<div style="position:absolute;top:8px;right:8px;z-index:2">'+_tourMiniBtn(t.id,false)+'</div>'+
       '<div '+(ro?'':'onclick="openTourDetail('+ti+')" style="cursor:pointer"')+'>'+
       '<div style="text-align:center;font-size:16px;font-weight:700;color:var(--text);margin-bottom:8px;padding-right:26px">'+(tidOk(t.tid)?'<span title="Tour ID / รหัสทัวร์" style="font-size:12px;font-weight:800;color:#4338ca;background:#e0e7ff;border-radius:8px;padding:2px 7px;margin-right:7px;vertical-align:2px">'+t.tid+'</span>':'')+(ro
-        ? '<i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName
+        ? '<i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+t.driverName+drvPhoneTag(t.driverName,t.driverId,t.driverPhone)
         // Tapping the name itself swaps the driver — the rest of the header still opens the tour detail.
         // A tour planned without a driver wears the same chip in amber: tapping it
         // opens the very same picker, which is how it gets handed out later.
-        : '<span onclick="event.stopPropagation();ofSwapDriver(\''+t.id+'\')" title="'+(tourHasDriver(t)?'เปลี่ยนคนขับ / change driver':'เลือกคนขับ / pick a driver')+'" style="cursor:pointer;padding:1px 6px;border-radius:8px;background:'+(tourHasDriver(t)?'var(--blue-l)':'#fef3c7')+'"><i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:'+(tourHasDriver(t)?'var(--blue)':'#b45309')+'"></i>'+t.driverName+'<span style="font-size:12px;font-weight:800;color:'+(tourHasDriver(t)?'var(--blue)':'#b45309')+';margin-left:6px">⇄</span></span>')+
+        : '<span onclick="event.stopPropagation();ofSwapDriver(\''+t.id+'\')" title="'+(tourHasDriver(t)?'เปลี่ยนคนขับ / change driver':'เลือกคนขับ / pick a driver')+'" style="cursor:pointer;padding:1px 6px;border-radius:8px;background:'+(tourHasDriver(t)?'var(--blue-l)':'#fef3c7')+'"><i class="ti ti-truck" style="font-size:15px;vertical-align:-2px;margin-right:6px;color:'+(tourHasDriver(t)?'var(--blue)':'#b45309')+'"></i>'+t.driverName+'<span style="font-size:12px;font-weight:800;color:'+(tourHasDriver(t)?'var(--blue)':'#b45309')+';margin-left:6px">⇄</span></span>'+drvPhoneTag(t.driverName,t.driverId,t.driverPhone))+
       (ro?'':'<i class="ti ti-chevron-right" style="font-size:14px;color:var(--text2);vertical-align:-2px;margin-left:4px"></i>')+'</div>'+
       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:8px">'+
       kpcTourBubble(t.id)+
@@ -14897,7 +14944,7 @@ function ofRenderTour(){
         '<div style="width:36px;height:36px;border-radius:50%;background:var(--blue-l);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:var(--blue-t);margin:0 auto 6px">'+initials(d.name)+'</div>'+
         '<div style="font-size:12px;font-weight:600">'+d.name+'</div>'+
         (ht?(isDriving?'<div style="font-size:11px;color:var(--green);margin-top:2px">🚚 Driving</div>':'<div style="font-size:11px;color:var(--orange);margin-top:2px">Loading...</div>'):'')+
-        (d.phone?'<div style="font-size:11px;color:var(--text2);margin-top:1px">'+d.phone+'</div>':'')+
+        (d.phone?'<div style="font-size:11px;color:var(--text2);margin-top:1px">'+drvPhoneInline(d.phone)+'</div>':'')+
         '</button>';
     }).join('');
   }
@@ -15090,7 +15137,7 @@ function ofRenderLala(){
     var bakTxt=esc((((t.backDate&&t.backDate!==t.departedDate)?fmtD(t.backDate)+' ':'')+(t.backAt||'')).trim());
     return '<div class="tmgmt" style="margin-bottom:14px">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-        +'<div style="font-size:15px;font-weight:700"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+esc(t.driverName)+'</div>'
+        +'<div style="font-size:15px;font-weight:700"><i class="ti ti-truck" style="font-size:14px;vertical-align:-2px;margin-right:6px;color:var(--blue)"></i>'+esc(t.driverName)+drvPhoneTag(t.driverName,t.driverId,t.driverPhone)+'</div>'
         +'<span class="badge '+(departed?'bactive':'')+'" style="'+(departed?'':'background:#e0f2fe;color:#0369a1')+'">'+(departed?('🚀 '+(depTxt||'Departed')+(bakTxt?' · 🏁 '+bakTxt:'')):ords.length+' orders')+'</span>'
       +'</div>'
       +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">'
@@ -15146,7 +15193,7 @@ function ofLalaHistoryHTML(){
     var infoBits=[];
     if(t.lalaDriver) infoBits.push('👤 '+esc(t.lalaDriver));
     if(t.plate) infoBits.push('🚗 '+esc(t.plate));
-    if(t.driverPhone) infoBits.push('📞 '+esc(t.driverPhone));
+    if(t.driverPhone) infoBits.push(drvPhoneInline(t.driverPhone));
     if(t.carFee>0) infoBits.push('💵 ค่ารถ '+Number(t.carFee).toLocaleString()+' ฿');
     else if(t.carFeeByCustomer) infoBits.push('🙋 ลูกค้าจ่ายค่ารถเอง / customer pays');
     var infoHTML=infoBits.length?'<div style="font-size:11px;color:var(--text2);padding:4px 0">'+infoBits.join(' · ')+'</div>':'';
@@ -16348,7 +16395,7 @@ function ofNoSlipHTML(){
         +'<input type="file" accept="image/*" capture="environment" id="poslip-'+p.id+'" style="display:none" onchange="tourPayoutAddSlip(this,\''+p.id+'\')">'
         +'<input type="file" accept="image/*" multiple id="poslipg-'+p.id+'" style="display:none" onchange="tourPayoutAddSlip(this,\''+p.id+'\')">'
         +'<span style="flex:1;min-width:0">'
-          +'<span style="font-size:12.5px;font-weight:800">🚚 '+_esc(p.driverName||'—')+'</span>'
+          +'<span style="font-size:12.5px;font-weight:800">🚚 '+_esc(p.driverName||'—')+'</span>'+drvPhoneTag(p.driverName,p.driverId)
           +'<span style="font-size:13px;font-weight:900;color:var(--green);margin-left:6px">'+(Number(p.amount)||0).toLocaleString()+' ฿</span>'
           +'<div style="font-size:10.5px;color:var(--text2);margin-top:1px">'+(p.date?fmtD(p.date):'')+' · '+ids.slice(0,4).join(', ')+(ids.length>4?' +'+(ids.length-4):'')+'</div>'
         +'</span>'
@@ -16378,7 +16425,7 @@ function ofRenderUnpaid(){
     return '<label style="display:flex;gap:9px;align-items:center;padding:8px 9px;border:1px solid '+(on?'#86efac':'var(--border)')+';border-radius:var(--rs);margin-bottom:6px;background:'+(on?'#f0fdf4':'var(--bg)')+';cursor:pointer'+(dim?';opacity:.45':'')+'">'
       +'<input type="checkbox" '+(on?'checked ':'')+'onchange="tpToggle(\''+g.key+'\')" style="width:17px;height:17px;flex-shrink:0;cursor:pointer">'
       +'<span style="flex:1;min-width:0">'
-        +'<span style="font-size:12.5px;font-weight:800">'+lbl+'</span> <span style="font-size:11.5px;font-weight:700;color:var(--text2)">🚚 '+_esc(g.driverName)+'</span>'
+        +'<span style="font-size:12.5px;font-weight:800">'+lbl+'</span> <span style="font-size:11.5px;font-weight:700;color:var(--text2)">🚚 '+_esc(g.driverName)+'</span>'+drvPhoneTag(g.driverName,g.driverId)
         +'<div style="font-size:10.5px;color:var(--text2);margin-top:1px">🗓 '+dayLbl+(g.ids.length>1?' · '+g.ids.length+' ทัวร์':'')+' · '+g.orders+' orders'
           // More than one tour that day: offer them all in one tap, without making
           // that the only way to pay. preventDefault, or the label's own checkbox
@@ -18761,7 +18808,7 @@ function ofDriversRender(){
       var infoBits=[];
       if(t.lalaDriver) infoBits.push('👤 '+esc(t.lalaDriver));
       if(t.plate) infoBits.push('🚗 '+esc(t.plate));
-      if(t.driverPhone) infoBits.push('📞 '+esc(t.driverPhone));
+      if(t.driverPhone) infoBits.push(drvPhoneInline(t.driverPhone));
       if(t.carFee>0) infoBits.push('💵 ค่ารถ '+Number(t.carFee).toLocaleString()+' ฿');
     else if(t.carFeeByCustomer) infoBits.push('🙋 ลูกค้าจ่ายค่ารถเอง / customer pays');
       var infoHTML=infoBits.length?'<div style="font-size:11px;color:var(--text2);padding:6px 0 0">'+infoBits.join(' · ')+'</div>':'';
@@ -18872,7 +18919,7 @@ function ofDriversRender(){
       : '');
     return '<div class="card" style="margin-bottom:8px">'
       +'<div onclick="ofToggleMore(\''+wid+'\')" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">'
-        +'<div style="font-weight:700;font-size:15px"><i class="ti ti-truck" style="color:var(--blue);vertical-align:-2px"></i> '+(d.name||'')+'</div>'
+        +'<div style="font-weight:700;font-size:15px"><i class="ti ti-truck" style="color:var(--blue);vertical-align:-2px"></i> '+(d.name||'')+drvPhoneTag(d.name,d.id,d.phone)+'</div>'
         +'<span style="font-size:12px;color:var(--text2);text-align:right">'+(kpTourHistLoading()?'… ':cur.length+' tour'+(cur.length!==1?'s':''))+(curPay>0?' · 💰'+curPay.toLocaleString()+' ฿':'')+' <span style="font-size:10px;opacity:.75">'+kpMLabel(curMK)+'</span> ▾</span>'
       +'</div>'
       +'<div id="'+wid+'" style="display:none;margin-top:10px">'+toursHtml+'</div>'
@@ -28127,7 +28174,7 @@ function mgRenderStaff() {
   if(!el) return;
   el.innerHTML = staffList.length === 0
     ? '<div class="empty"><i class="ti ti-user-circle" style="font-size:36px;display:block;margin-bottom:8px"></i>No staff yet<br>Add office team members</div>'
-    : staffList.map(s => '<div class="dcard"'+(s.away?' style="opacity:.55"':'')+'><div class="dav">'+initials(s.name)+'</div><div style="flex:1"><div style="font-size:14px;font-weight:600">'+s.name+(s.away?'<span class="badge" style="margin-left:6px;font-size:10px;background:#ffedd5;color:#9a3412">🌴 Away / พักงาน</span>':'')+(s.salesAccess?'<span class="badge bactive" style="margin-left:6px;font-size:10px">Sales</span>':'')+(s.deleteAccess?'<span class="badge" style="margin-left:4px;font-size:10px;background:#FEE2E2;color:#DC2626">Delete</span>':'')+(s.paymentAccess?'<span class="badge" style="margin-left:4px;font-size:10px;background:#fef3c7;color:#92400e">Payment</span>':'')+(s.isDriver?'<span class="badge" style="margin-left:4px;font-size:10px;background:#dbeafe;color:#0284c7">🚚 Driver</span>':'')+'</div><div style="font-size:12px;color:var(--text2)">'+(s.role||'Office Staff')+(s.isDriver&&(s.phone||s.vehicle)?' &middot; '+[s.phone,s.vehicle].filter(Boolean).join(' · '):'')+' &middot; PIN: &#9679;&#9679;&#9679;&#9679;</div></div><button type="button" class="btnsm" onclick="openStaffM(&quot;'+s.id+'&quot;)"><i class="ti ti-pencil"></i></button></div>').join('');
+    : staffList.map(s => '<div class="dcard"'+(s.away?' style="opacity:.55"':'')+'><div class="dav">'+initials(s.name)+'</div><div style="flex:1"><div style="font-size:14px;font-weight:600">'+s.name+(s.away?'<span class="badge" style="margin-left:6px;font-size:10px;background:#ffedd5;color:#9a3412">🌴 Away / พักงาน</span>':'')+(s.salesAccess?'<span class="badge bactive" style="margin-left:6px;font-size:10px">Sales</span>':'')+(s.deleteAccess?'<span class="badge" style="margin-left:4px;font-size:10px;background:#FEE2E2;color:#DC2626">Delete</span>':'')+(s.paymentAccess?'<span class="badge" style="margin-left:4px;font-size:10px;background:#fef3c7;color:#92400e">Payment</span>':'')+(s.isDriver?'<span class="badge" style="margin-left:4px;font-size:10px;background:#dbeafe;color:#0284c7">🚚 Driver</span>':'')+'</div><div style="font-size:12px;color:var(--text2)">'+(s.role||'Office Staff')+(s.isDriver&&(s.phone||s.vehicle)?' &middot; '+[s.phone?drvPhoneInline(s.phone):'',s.vehicle].filter(Boolean).join(' · '):'')+' &middot; PIN: &#9679;&#9679;&#9679;&#9679;</div></div><button type="button" class="btnsm" onclick="openStaffM(&quot;'+s.id+'&quot;)"><i class="ti ti-pencil"></i></button></div>').join('');
 }
 var STAFF_PALETTE = [
   {bg:'#7c3aed',light:'rgba(124,58,237,0.12)',text:'#7c3aed'},
