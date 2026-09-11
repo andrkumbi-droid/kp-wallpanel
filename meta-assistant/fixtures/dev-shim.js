@@ -65,3 +65,40 @@ window.chrome = {
     }
   }
 };
+
+// ── Mock für den Massen-Foto-Versand ────────────────────────────────────────
+// Im Fixture gibt es keinen Service Worker. Der echte Katalog wird wirklich
+// geladen (pub/ ist öffentlich lesbar), die Fotos aber als winzige erzeugte
+// Bilder zurückgegeben — so läuft der ganze Ablauf offline und ohne Bandbreite.
+// Mit localStorage.kpRealPhotos='1' werden die echten Fotos geholt.
+const _kpOrigSend = window.chrome.runtime.sendMessage;
+window.chrome.runtime.sendMessage = function (msg, cb) {
+  if (msg && msg.type === 'fetchJson') {
+    // Erst den echten Katalog versuchen; solange die App ihn noch nie
+    // veröffentlicht hat, fällt der Test auf die Beispieldatei zurück (gleiche Form).
+    fetch(msg.url).then(r => r.json()).catch(() => null).then(d => {
+      if (d && d.items && d.items.length) return cb({ data: d });
+      return fetch('chat-catalog.sample.json').then(r => r.json())
+        .then(x => cb({ data: x })).catch(e => cb({ error: String(e) }));
+    });
+    return;
+  }
+  if (msg && msg.type === 'fetchImage') {
+    if (localStorage.kpRealPhotos === '1') {
+      fetch(msg.url).then(r => r.ok ? r.blob() : Promise.reject(new Error('http_' + r.status)))
+        .then(b => { const fr = new FileReader(); fr.onload = () => cb({ ok: true, dataUrl: fr.result, size: b.size }); fr.readAsDataURL(b); })
+        .catch(() => cb({ ok: false, status: 404 }));
+      return;
+    }
+    // erzeugtes Platzhalterbild mit dem Produktcode drauf
+    const code = String(msg.url).split('/').pop().replace('.jpg', '');
+    const c = document.createElement('canvas'); c.width = 240; c.height = 240;
+    const x = c.getContext('2d');
+    x.fillStyle = '#' + (parseInt(code.replace(/\D/g, '') || '7', 10) * 37 % 0xffffff).toString(16).padStart(6, '0');
+    x.fillRect(0, 0, 240, 240);
+    x.fillStyle = '#fff'; x.font = 'bold 28px sans-serif'; x.fillText(code, 20, 130);
+    setTimeout(() => cb({ ok: true, dataUrl: c.toDataURL('image/jpeg', 0.8), size: 4000 }), 30);
+    return;
+  }
+  return _kpOrigSend(msg, cb);
+};

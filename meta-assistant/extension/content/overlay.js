@@ -34,6 +34,14 @@ const KPUI = {
           <button id="kp-go" class="kp-btn kp-primary" data-de="Übersetzen & vorschlagen" data-en="Translate & suggest">Übersetzen & vorschlagen</button>
         </div>
         <div class="kp-sec" id="kp-sugs"></div>
+        <div class="kp-sec kp-cat">
+          <div class="kp-cap" data-de="ส่งรูปสินค้า / Sortiment schicken" data-en="ส่งรูปสินค้า / Send the range">ส่งรูปสินค้า / Sortiment schicken</div>
+          <button id="kp-sendall" class="kp-btn kp-primary" title="ส่งรูปสินค้าที่มีของทั้งหมด ครั้งละ 10 รูป / alle verfügbaren Produktfotos in 10er-Schüben"
+            data-de="📦 ส่งรูปสินค้าทั้งหมด / Alle senden" data-en="📦 ส่งรูปสินค้าทั้งหมด / Send all">📦 ส่งรูปสินค้าทั้งหมด / Alle senden</button>
+          <label class="kp-dry"><input type="checkbox" id="kp-dry" checked>
+            <span data-de="ทดสอบ: ใส่รูปแต่ยังไม่ส่ง / nur einfügen" data-en="ทดสอบ: ใส่รูปแต่ยังไม่ส่ง / attach only">ทดสอบ: ใส่รูปแต่ยังไม่ส่ง / nur einfügen</span></label>
+          <div class="kp-hint" id="kp-cat-info"></div>
+        </div>
         <div class="kp-foot">
           <button id="kp-collect" class="kp-btn" title="Nur die letzte Antwort dieses Chats als Stil-Beispiel speichern (PII maskiert)"
             data-de="📚 Stil sammeln" data-en="📚 Collect style">📚 Stil sammeln</button>
@@ -50,6 +58,8 @@ const KPUI = {
     el.querySelector('#kp-go').onclick = () => this.suggest();
     el.querySelector('#kp-collect').onclick = () => this.collectStyle();
     el.querySelector('#kp-collect-hist').onclick = () => this.collectHistory();
+    el.querySelector('#kp-sendall').onclick = () => this.sendAllPhotos();
+    this.catalogInfo();
   },
 
   setLang(l) {
@@ -203,6 +213,29 @@ const KPUI = {
   // Auto-learn: called by the observer on DOM changes. Saves the newest sent reply as a
   // style sample (once), so every new answer is learned without a click. Deduped by
   // recent reply text so revisiting a chat doesn't re-save the same reply.
+  // ── Alle Produktfotos schicken ──────────────────────────────────────────
+  // Ersetzt das Ordner-Kopieren von Hand: der Katalog kommt aus der KP-App,
+  // der Versand läuft in 10er-Schüben (Metas Limit pro Nachricht).
+  async catalogInfo() {
+    const el = this.root && this.root.querySelector("#kp-cat-info");
+    if (!el) return;
+    try {
+      const d = await KPCAT.catalog();
+      const when = d.updatedAt ? new Date(d.updatedAt).toLocaleString() : "";
+      el.textContent = "มีของ " + d.items.length + " รายการ · " + Math.ceil(d.items.length / KPCAT.BATCH) + " ข้อความ" + (when ? " · อัปเดต " + when : "");
+    } catch (e) { el.textContent = "⚠ โหลดรายการสินค้าไม่ได้ / Katalog nicht erreichbar (" + e.message + ")"; }
+  },
+
+  async sendAllPhotos() {
+    const btn = this.root.querySelector("#kp-sendall");
+    const info = this.root.querySelector("#kp-cat-info");
+    const dry = this.root.querySelector("#kp-dry").checked;
+    btn.disabled = true;
+    try {
+      await KPCAT.sendAll({ dryRun: dry, onStatus: t => { info.textContent = t; } });
+    } finally { btn.disabled = false; }
+  },
+
   _autoSigs: null,
   autoCollect() {
     if (typeof kpLiveBubbles !== 'function') return;

@@ -29986,6 +29986,7 @@ function qtRebuildProducts(){
   try{ if(document.getElementById('s-quote') && document.getElementById('s-quote').classList.contains('active') && (!window.qtItems || !qtItems.length)){ qtShowProducts(QT_PRODUCTS, null); if(typeof qtInitCounts==='function') qtInitCounts(); } }catch(e){}
   try{ assistantPublishCatalog(); }catch(e){}
   try{ publishWebCatalog(); }catch(e){}
+  try{ publishChatCatalog(); }catch(e){}
   _kpPhotoDone=false;   // catalogue changed - look at the photos again
 }
 
@@ -30022,6 +30023,38 @@ function publishWebCatalog(){
     // Mirror to season-independent public path for the website (reads pub/webCatalog).
     try{ if(window.fbRootDb) window.fbRootDb.ref('pub/webCatalog').set(obj); }catch(e){}
   },1500);
+}
+// ── CHAT-KATALOG: was der Messenger schickt, wenn ein Kunde nach dem Sortiment fragt ──
+// Bisher pflegte das Büro dafür einen Bilderordner von Hand: zehn Fotos in den
+// Chat kopieren, senden, zurück zum Ordner, die nächsten zehn — fünf Runden pro
+// Kunde, fünfzig Kunden am Tag. Die Liste selbst steht längst in dieser App:
+// was wirklich verkäuflich ist (Lagersatz vorhanden, nicht ausverkauft) und wie
+// das Foto im Repo heißt. Also veröffentlicht die App die FERTIGE Liste samt
+// absoluter Foto-Adressen nach pub/chatCatalog, und die Meta-Extension muss nur
+// noch einen Knoten lesen und einfügen. Öffentlicher Pfad (pub ist per Rules
+// weltlesbar), weil die Extension in business.facebook.com läuft und dort keine
+// Firebase-Anmeldung hat.
+// Ausverkauft in der App = fällt hier in Sekunden raus, bei allen gleichzeitig.
+var KP_PHOTO_BASE = 'https://andrkumbi-droid.github.io/kp-wallpanel/img/products/';
+var _ccPubT=null;
+function publishChatCatalog(){
+  if(!window.fbRootDb) return;
+  clearTimeout(_ccPubT);
+  _ccPubT=setTimeout(function(){
+    var items=[];
+    (window.QT_PRODUCTS||[]).forEach(function(p){
+      if(!p || !p.code) return;
+      var m=(p.mat||'').toUpperCase();
+      if(m!=='WPC' && m!=='PVC') return;          // Zubehör schickt niemand als Musterfoto
+      var avail=true;
+      try{ avail=qtAvailable(p); }catch(e){ avail=!soldOut[p.code]; }
+      if(!avail) return;
+      items.push({ code:p.code, name:p.name||'', nameEN:p.nameEN||'', price:+p.price||0,
+                   w:+p.w||0, mat:m, img:KP_PHOTO_BASE+p.code+'.jpg' });
+    });
+    if(!items.length) return;   // leere Liste = Katalog noch nicht geladen, NICHT veröffentlichen
+    try{ window.fbRootDb.ref('pub/chatCatalog').set({ items:items, n:items.length, updatedAt:Date.now() }); }catch(e){}
+  },4000);
 }
 // ── Website hero video: office pastes a YouTube/TikTok/Facebook/MP4 link and the
 // landing page (kp-wallpanel.com) shows it under the headline. Season-independent
@@ -30314,6 +30347,7 @@ function qtRefreshSoldOut() {
 
 function qtShowProducts(list, activeCat) {
   try{ kpPhotoAuditSoon(); }catch(e){}
+  try{ publishChatCatalog(); }catch(e){}   // Lagerstand kann sich geaendert haben
   // Update filter button styles
   ['WPC','PVC','ACC'].forEach(function(cat) {
     var btn = document.getElementById('qtf-'+cat);

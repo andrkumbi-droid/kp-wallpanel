@@ -46,3 +46,52 @@ function kpQueryAll(list, root) {
   return [];
 }
 const KP_THAI_RE = /[฀-๿]/;
+
+// ── Bild-Versand: Datei-Feld, Anhang-Vorschauen, Senden-Knopf ───────────────
+// Alles, was der Massen-Foto-Versand (catalog-send.js) vom Markup wissen muss.
+// Ändert Meta etwas, wird NUR hier nachgezogen.
+KPSEL.fileInput = ['[data-kp="file-input"]', 'input[type="file"][accept*="image"]', 'input[type="file"]'];
+
+// Der Kasten um das Antwortfeld — Vorschauen und Senden-Knopf stehen darin,
+// und nur darin darf gesucht werden (sonst zählt man Bilder aus dem Verlauf mit).
+function kpComposerArea() {
+  const box = kpQuery(KPSEL.composer);
+  if (!box) return null;
+  let el = box;
+  for (let i = 0; i < 6 && el.parentElement; i++) {
+    el = el.parentElement;
+    if (el.tagName === 'FORM') break;
+  }
+  return el || box.parentElement;
+}
+
+// Wie viele Anhänge liegen gerade im Feld? Vorschauen sind blob:-Bilder bzw.
+// Kacheln mit einem Entfernen-Knopf.
+function kpAttachmentCount() {
+  const area = kpComposerArea();
+  if (!area) return 0;
+  const fx = area.querySelectorAll('[data-kp="attachment"]');
+  if (fx.length) return fx.length;
+  const blobs = area.querySelectorAll('img[src^="blob:"], img[src^="data:image"]');
+  if (blobs.length) return blobs.length;
+  return area.querySelectorAll('[aria-label*="Remove" i], [aria-label*="Entfernen" i], [aria-label*="ลบ"]').length;
+}
+
+// Senden-Knopf, sprachunabhängig: Business Suite läuft je nach Konto auf
+// Englisch, Deutsch oder Thai.
+const KP_SEND_RE = /^(send|senden|ส่ง|ส่งข้อความ)$/i;
+function kpFindSendButton() {
+  const area = kpComposerArea() || document;
+  const cands = area.querySelectorAll('[data-kp="send"], [role="button"], button');
+  for (const c of cands) {
+    const lbl = (c.getAttribute('aria-label') || c.getAttribute('title') || c.innerText || '').trim();
+    if (KP_SEND_RE.test(lbl) && c.offsetParent !== null && c.getAttribute('aria-disabled') !== 'true') return c;
+  }
+  return null;
+}
+
+// Name des offenen Chats — nur für die Rückfrage vor dem Versand.
+function kpCustomerName() {
+  const el = kpQuery(KPSEL.customerName);
+  return el ? (el.innerText || '').trim() : '';
+}
