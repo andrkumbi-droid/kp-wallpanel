@@ -27,6 +27,8 @@ pro Nachricht nimmt.
 4. **„Entpackte Erweiterung laden"** → den Ordner `extension` auswählen
 5. Fertig. **Keine weitere Einrichtung** — kein Konto, kein Passwort, kein Token.
    Die Erweiterung liest nur die öffentliche Produktliste.
+6. **War business.facebook.com schon offen: einmal F5 drücken.** Eine Seite, die
+   vor der Installation geladen wurde, hat das Panel noch nicht.
 
 ### Auswahl: was rausgeht, steht im Panel
 
