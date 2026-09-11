@@ -38,7 +38,7 @@ const KPCAT = {
     if (this._files.has(item.img)) return this._files.get(item.img);
     const r = await this.bg({ type: 'fetchImage', url: item.img });
     if (!r || !r.ok || !r.dataUrl) { this._files.set(item.img, null); return null; }
-    const blob = await (await fetch(r.dataUrl)).blob();
+    const blob = kpDataUrlToBlob(r.dataUrl);
     if (!blob || blob.size < 500) { this._files.set(item.img, null); return null; }   // Platzhalter- oder Fehlerseite
     const file = new File([blob], item.code + '.jpg', { type: blob.type || 'image/jpeg' });
     this._files.set(item.img, file);
@@ -48,6 +48,39 @@ const KPCAT = {
   // ── Dateien in den Composer bekommen ──────────────────────────────────────
   // Drei Wege, weil Meta ihr Markup ohne Vorwarnung ändert. Der erste, der
   // greift, gewinnt; welcher es war, steht in der Statuszeile (für die Fehlersuche).
+  // Erst die Seiten-Welt fragen (main-hook.js): nur von dort kommt man an Metas
+  // Datei-Feld, das es erst nach dem Klick auf 'Datei anhängen' gibt.
+  attachViaPage(files, way) {
+    return new Promise(res => {
+      let done = false;
+      const onResult = ev => {
+        if (done) return; done = true;
+        window.removeEventListener('kp-attach-result', onResult);
+        res((ev.detail && ev.detail.how) || null);
+      };
+      window.addEventListener('kp-attach-result', onResult);
+      window.dispatchEvent(new CustomEvent('kp-attach', { detail: { files, way } }));
+      setTimeout(() => { if (!done) { done = true; window.removeEventListener('kp-attach-result', onResult); res(null); } }, 8000);
+    });
+  },
+
+  // Die Wege der Reihe nach durchprobieren und jedes Mal NACHSEHEN, ob wirklich
+  // Vorschaubilder erschienen sind. Ein Weg, der sich ausführen ließ, ist noch
+  // kein Weg, der funktioniert hat — genau daran ist der erste Versuch am
+  // echten Posteingang gescheitert (gemeldet wurde 'paste', angekommen war nichts).
+  _way: null,   // der Weg, der beim ersten Schub geklappt hat — danach direkt der
+  async attachAny(files) {
+    const all = ['input', 'paste', 'drop', 'iso'];
+    const order = this._way ? [this._way].concat(all.filter(w => w !== this._way)) : all;
+    for (const way of order) {
+      const started = (way === 'iso') ? this.attach(files) : await this.attachViaPage(files, way);
+      if (!started) continue;
+      const n = await this.waitAttached(files.length, 5000);
+      if (n) { this._way = way; return { how: way, n }; }
+    }
+    return null;
+  },
+
   attach(files) {
     const dt = new DataTransfer();
     files.forEach(f => dt.items.add(f));
@@ -160,10 +193,9 @@ const KPCAT = {
         if (!files.length) continue;
 
         say('📎 ชุดที่ ' + (b + 1) + '/' + batches + ' — ใส่ ' + files.length + ' รูป…');
-        const how = this.attach(files);
-        if (!how) { say('⚠ ไม่พบช่องพิมพ์ — เปิดแชทไว้หรือยัง? / kein Chat offen?'); return { ok: false, reason: 'composer_not_found', sent, missing }; }
-        const n = await this.waitAttached(files.length);
-        if (!n) { say('⚠ ใส่รูปไม่สำเร็จ / Bilder nicht übernommen (' + how + ')'); return { ok: false, reason: 'attach_failed', how, sent, missing }; }
+        const got = await this.attachAny(files);
+        if (!got) { say('⚠ ใส่รูปไม่สำเร็จ / Bilder nicht übernommen (input·paste·drop)'); return { ok: false, reason: 'attach_failed', sent, missing }; }
+        const how = got.how, n = got.n;
 
         if (dry) { say('🧪 ทดสอบ: ' + n + ' รูปอยู่ในช่องแล้ว (' + how + ') — ยังไม่ได้ส่ง / nichts gesendet'); return { ok: true, dry: true, attached: n, how, missing }; }
 
@@ -180,3 +212,17 @@ const KPCAT = {
     return { ok: true, sent, msgs, missing };
   }
 };
+
+// Base64 → Blob von Hand. fetch('data:…') wäre kürzer, ist auf facebook.com
+// aber durch deren Content-Security-Policy gesperrt (ERR_INVALID_URL) — am
+// echten Posteingang gemessen, nicht vermutet.
+function kpDataUrlToBlob(dataUrl) {
+  try {
+    const [head, b64] = String(dataUrl).split(',');
+    const mime = (head.match(/data:([^;]+)/) || [])[1] || 'image/jpeg';
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return new Blob([buf], { type: mime });
+  } catch (e) { return null; }
+}

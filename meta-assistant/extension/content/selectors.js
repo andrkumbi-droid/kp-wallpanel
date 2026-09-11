@@ -57,10 +57,16 @@ KPSEL.fileInput = ['[data-kp="file-input"]', 'input[type="file"][accept*="image"
 function kpComposerArea() {
   const box = kpQuery(KPSEL.composer);
   if (!box) return null;
+  // So weit hoch, bis der Senden-Knopf mit drin liegt: dann ist der ganze
+  // Antwortkasten erfasst — samt der Anhang-Vorschauen, die je nach Oberfläche
+  // über oder unter dem Textfeld sitzen. Ohne diesen Anker zählt man je nach
+  // Verschachtelung gar nichts oder Bilder aus dem Gesprächsverlauf mit.
   let el = box;
-  for (let i = 0; i < 6 && el.parentElement; i++) {
+  for (let i = 0; i < 10 && el.parentElement; i++) {
     el = el.parentElement;
     if (el.tagName === 'FORM') break;
+    if (Array.from(el.querySelectorAll('[aria-label]'))
+      .some(n => KP_SEND_RE.test((n.getAttribute('aria-label') || '').trim()))) break;
   }
   return el || box.parentElement;
 }

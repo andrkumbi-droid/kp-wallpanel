@@ -40,6 +40,7 @@ const KPUI = {
             data-de="📦 ส่งรูปสินค้าทั้งหมด / Alle senden" data-en="📦 ส่งรูปสินค้าทั้งหมด / Send all">📦 ส่งรูปสินค้าทั้งหมด / Alle senden</button>
           <label class="kp-dry"><input type="checkbox" id="kp-dry" checked>
             <span data-de="ทดสอบ: ใส่รูปแต่ยังไม่ส่ง / nur einfügen" data-en="ทดสอบ: ใส่รูปแต่ยังไม่ส่ง / attach only">ทดสอบ: ใส่รูปแต่ยังไม่ส่ง / nur einfügen</span></label>
+          <div class="kp-hint" id="kp-cat-count"></div>
           <div class="kp-hint" id="kp-cat-info"></div>
         </div>
         <div class="kp-foot">
@@ -217,7 +218,7 @@ const KPUI = {
   // Ersetzt das Ordner-Kopieren von Hand: der Katalog kommt aus der KP-App,
   // der Versand läuft in 10er-Schüben (Metas Limit pro Nachricht).
   async catalogInfo() {
-    const el = this.root && this.root.querySelector("#kp-cat-info");
+    const el = this.root && this.root.querySelector("#kp-cat-count");
     if (!el) return;
     try {
       const d = await KPCAT.catalog();
