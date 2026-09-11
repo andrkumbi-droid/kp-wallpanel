@@ -130,6 +130,28 @@ const KPCAT = {
     return n;   // 0 = gar nichts, dazwischen = nur ein Teil
   },
 
+  // Die Dateizeile erscheint SOFORT mit dem Namen — das Bild ist dann aber noch
+  // nicht hochgeladen. Wer da schon auf Senden drückt, schickt nur die fertigen,
+  // der Rest verschwindet lautlos: am 11.09. kamen so 25 von 29 Fotos an, während
+  // die Anzeige 29 meldete. Also erst warten, bis kein Fortschrittsbalken mehr
+  // läuft, und danach noch eine Schonfrist pro Bild.
+  async waitUploads(count, ms) {
+    const limit = ms || 60000, t0 = Date.now();
+    const area = () => kpComposerArea() || document.body;
+    const busy = () => {
+      try {
+        return area().querySelectorAll('[role="progressbar"], progress, [aria-busy="true"]').length;
+      } catch (e) { return 0; }
+    };
+    let quiet = 0;
+    while (Date.now() - t0 < limit) {
+      if (busy()) { quiet = 0; } else { quiet++; if (quiet >= 3) break; }
+      await this.sleep(400);
+    }
+    // Schonfrist: auch ohne sichtbaren Balken braucht der Upload seine Zeit.
+    await this.sleep(1500 + 350 * count);
+  },
+
   // Senden: erst der Knopf, dann Enter, dann beides aus der Seiten-Welt. Nach
   // jedem Versuch wird nachgesehen, ob die Dateizeilen verschwunden sind — nur
   // das heisst „raus". Der Weg, der trägt, wird gemerkt.
@@ -237,6 +259,11 @@ const KPCAT = {
 
         if (dry) { say('🧪 ทดสอบ: ' + n + ' รูปอยู่ในช่องแล้ว (' + how + ') — ยังไม่ได้ส่ง / nichts gesendet'); return { ok: true, dry: true, attached: n, how, missing }; }
 
+        say('⏳ ชุดที่ ' + (b + 1) + '/' + batches + ' — รออัปโหลด / Upload…');
+        await this.waitUploads(files.length);
+
+        // Für die Nachkontrolle im Chat: welche Codes in welchem Schub rausgingen
+        try { console.log('[KP] ชุด ' + (b + 1) + ':', got.names.join(' ')); } catch (e) { /* egal */ }
         const sendWay = await this.sendAndWait(got.names);
         if (sendWay && sendWay.failed) {
           say('⚠ ชุดที่ ' + (b + 1) + ' ส่งไม่ออก (' + sendWay.tried + ') — กดส่งเองแล้วเริ่มใหม่ / von Hand senden');
