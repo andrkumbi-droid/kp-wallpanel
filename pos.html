@@ -1061,7 +1061,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
       <button class="btn btn-gold btn-big press" style="min-width:280px;width:auto" onclick="posNewSale()">🛒 ขายรายการใหม่<span class="sub-en">new sale</span></button>
     </div>
     <!-- Umweg, wenn der Druckauftrag aus der App nicht beim Drucker ankommt -->
-    <button class="printalt hidden press" onclick="posPrintOpenTab()"
+    <button class="printalt press" id="done-alt-btn" onclick="posPrintOpenTab()"
       style="margin-top:16px;background:none;border:none;color:rgba(245,239,224,.65);font-size:14px;text-decoration:underline;cursor:pointer;font-family:inherit;padding:10px">
       ไม่ออกที่เครื่องพิมพ์? เปิดใบเสร็จในเบราว์เซอร์ / not printing? open in the browser</button>
   </div>
@@ -1123,10 +1123,6 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   </div>
   <div style="max-width:820px;margin:0 auto;padding:14px 16px 40px">
     <input type="search" id="hist-q" class="biginput" placeholder="🔍 ค้นหา เลขออเดอร์ / ชื่อ / เบอร์ — search" oninput="posHistSearch(this.value)">
-    <!-- Umweg, wenn der Druckauftrag aus der App nicht beim Drucker ankommt -->
-    <button class="printalt hidden btn btn-ghost press" onclick="posPrintOpenTab()"
-      style="width:100%;min-height:46px;margin-top:10px;font-size:14.5px">
-      📄 เปิดใบเสร็จล่าสุดในเบราว์เซอร์ / open the last receipt in the browser</button>
     <div id="hist-list" style="margin-top:14px"></div>
   </div>
 </section>
@@ -2609,6 +2605,7 @@ function posCreatePending(b){
     cart={lines:[]}; saveCart(); clearDraft();
     $('done-title').textContent='ส่งให้ออฟฟิศแล้ว ⏳';
     $('done-receipt-btn').classList.add('hidden');
+    $('done-alt-btn').classList.add('hidden');
     $('done-no').textContent='รอยืนยันโซน';
     $('done-sub').textContent='ออฟฟิศตรวจจังหวัด/โซนแล้วจะออกเลขออเดอร์ให้ · ดูสถานะได้ที่ "ยอดขายของฉัน"';
     posGo('done');
@@ -2939,6 +2936,7 @@ function posDone(){
   if(lastOrder&&lastOrder.paid) sub+=' · รับเงินแล้ว '+fmtB(lastOrder.paid);
   if(lastOrder&&lastOrder.change>0) sub+=' · เงินทอน '+fmtB(lastOrder.change);
   $('done-receipt-btn').classList.toggle('hidden', !(lastOrder&&lastOrder.o));
+  $('done-alt-btn').classList.toggle('hidden', !(lastOrder&&lastOrder.o));
   $('done-sub').textContent=sub;
   cart={lines:[]}; saveCart();
   ['cart-gift','cart-freeminus','cart-packs','cart-extra','cart-discount','cart-delivery','cart-extra-label','ck-cust','ck-phone','ck-contact-name','ck-addr','ck-province','ck-round','ck-reqdate','tax-name','tax-tin','tax-addr','tax-phone'].forEach(function(i){ var el=$(i); if(el) el.value=''; });
@@ -3076,8 +3074,12 @@ function posPrintHtml(bodyHTML, fileName){
      baut Android ein ZWEITES Mal auf, und dieser zweite Aufbau haengt oder
      bricht ab, wenn er dafuer erst wieder ins Netz muss — Vorschau schoen,
      Ausdruck leer. Thai kommt mit den Systemschriften des Tablets. */
-  _posPrintFrame('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+t+'</title>'
-    +'<style>'+RECEIPT_CSS+'</style></head><body>'+bodyHTML+'</body></html>', t);
+  _posPrintFrame(posReceiptDocHtml(bodyHTML, t), t);
+}
+function posReceiptDocHtml(bodyHTML, t){
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(t||'KP-receipt')+'</title>'
+    +'<meta name="viewport" content="width=device-width,initial-scale=1">'
+    +'<style>'+RECEIPT_CSS+'</style></head><body>'+bodyHTML+'</body></html>';
 }
 var _posPrintUrl='', _posLastDoc='';
 function _posPrintFrame(docHTML, t){
@@ -3159,6 +3161,17 @@ function posPrintOpenTab(){
     try{ _posPrintUrl=URL.createObjectURL(new Blob([_posLastDoc],{type:'text/html'})); }catch(e){}
   }
   if(!_posPrintUrl){ toast('ยังไม่มีใบเสร็จ / no receipt yet'); return; }
+  _posOpenUrlTab();
+}
+/* denselben Beleg als eigene Seite oeffnen — ohne dass vorher gedruckt wurde */
+function posOpenDocTab(docHTML){
+  _posLastDoc=docHTML;
+  if(_posPrintUrl){ try{ URL.revokeObjectURL(_posPrintUrl); }catch(e){} _posPrintUrl=''; }
+  try{ _posPrintUrl=URL.createObjectURL(new Blob([docHTML],{type:'text/html'})); }
+  catch(e){ toast('เปิดไม่ได้ / could not open'); return; }
+  _posOpenUrlTab();
+}
+function _posOpenUrlTab(){
   var w=null;
   try{ w=window.open(_posPrintUrl,'_blank'); }catch(e){}
   if(!w){   // Popup geblockt → ueber einen echten Link, den tippt der Browser selbst an
@@ -3377,21 +3390,30 @@ function posHistRender(){
       +'</div>'
       +'<div style="font-size:12.5px;color:var(--text2);margin-top:3px">'+when+(sub.length?' · '+sub.join(' · '):'')+'</div>'
       +(r.id
-        ? '<button class="btn btn-ghost press" style="width:100%;min-height:48px;margin-top:10px" onclick="posHistPrint(\''+esc(r.id)+'\')">🖨 พิมพ์ใบเสร็จซ้ำ / reprint receipt</button>'
+        ? '<div style="display:flex;gap:8px;margin-top:10px">'
+            +'<button class="btn btn-ghost press" style="flex:2;min-height:48px" onclick="posHistPrint(\''+esc(r.id)+'\')">🖨 พิมพ์ใบเสร็จซ้ำ<span class="sub-en">reprint</span></button>'
+            /* Zweiter Weg, falls der Druckauftrag aus der App nicht beim Drucker
+               ankommt: Beleg als eigene Seite im Browser, dort ⋮ → พิมพ์. */
+            +'<button class="btn btn-ghost press" style="flex:1;min-height:48px" onclick="posHistPrint(\''+esc(r.id)+'\',1)" title="เปิดในเบราว์เซอร์ / open in the browser">📄 เบราว์เซอร์<span class="sub-en">browser</span></button>'
+          +'</div>'
         : '<div style="font-size:12.5px;color:#7C3AED;margin-top:8px">ออฟฟิศยังไม่ออกเลข — พิมพ์ใบเสร็จได้หลังจากนั้น / receipt once the office issues the number</div>')
     +'</div>';
   }).join('')+older;
 }
 /* Nachdruck: die Bestellung frisch holen, damit spaeter gebuchte Zahlungen
    mit drauf stehen — und nicht das, was beim Verkauf im Speicher lag. */
-function posHistPrint(id){
+function posHistPrint(id, asTab){
   if(!id) return;
   toast('⏳ กำลังดึงใบเสร็จ / fetching receipt…');
   PDB.ref('orders/'+safeId(id)).once('value', function(s){
     var o=s.val();
     if(!o){ toast('⚠️ ไม่พบออเดอร์นี้ / order not found', 4000); chime(false); return; }
     if(!o.id) o.id=id;
-    try{ posPrintHtml(receiptFromOrder(o), 'KP-receipt-'+id); }
+    try{
+      var body=receiptFromOrder(o), t='KP-receipt-'+id;
+      if(asTab) posOpenDocTab(posReceiptDocHtml(body, t));
+      else posPrintHtml(body, t);
+    }
     catch(e){ console.error(e); toast('⚠️ สร้างใบเสร็จไม่สำเร็จ / could not build the receipt', 4000); chime(false); }
   }, function(){ toast('⚠️ ดึงข้อมูลไม่สำเร็จ — เช็คอินเทอร์เน็ต / could not load', 4000); chime(false); });
 }
