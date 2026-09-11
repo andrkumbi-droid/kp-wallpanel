@@ -70,13 +70,17 @@ const KPCAT = {
   // echten Posteingang gescheitert (gemeldet wurde 'paste', angekommen war nichts).
   _way: null,   // der Weg, der beim ersten Schub geklappt hat — danach direkt der
   async attachAny(files) {
+    const names = files.map(f => f.name);
     const all = ['input', 'paste', 'drop', 'iso'];
     const order = this._way ? [this._way].concat(all.filter(w => w !== this._way)) : all;
     for (const way of order) {
       const started = (way === 'iso') ? this.attach(files) : await this.attachViaPage(files, way);
       if (!started) continue;
-      const n = await this.waitAttached(files.length, 5000);
-      if (n) { this._way = way; return { how: way, n }; }
+      const n = await this.waitAttached(names, 8000);
+      if (n >= names.length) { this._way = way; return { how: way, n, names }; }
+      // Teilweise angekommen: NICHT den nächsten Weg probieren, sonst hängen
+      // dieselben Fotos doppelt im Feld (genau das ist am 11.09. passiert).
+      if (n > 0) return { how: way, n, names, partial: true };
     }
     return null;
   },
@@ -113,24 +117,17 @@ const KPCAT = {
     } catch (e) { return null; }
   },
 
-  // Warten, bis die Vorschaubildchen im Composer stehen — vorher zu senden
-  // schickt eine leere Nachricht.
-  async waitAttached(want, ms) {
-    const limit = ms || 20000, t0 = Date.now();
+  // Warten, bis die angehängten Dateien im Feld stehen — vorher zu senden
+  // schickt eine leere Nachricht. Gezählt wird über die Dateinamen.
+  async waitAttached(names, ms) {
+    const want = names.length, limit = ms || 20000, t0 = Date.now();
+    let n = 0;
     while (Date.now() - t0 < limit) {
-      if (kpAttachmentCount() > 0) {
-        // noch kurz nachladen lassen, bis die Zahl steht
-        let n = kpAttachmentCount(), stable = 0;
-        while (Date.now() - t0 < limit && stable < 3) {
-          await this.sleep(400);
-          const m = kpAttachmentCount();
-          if (m === n) stable++; else { n = m; stable = 0; }
-        }
-        return n;
-      }
+      n = kpAttachmentCount(names);
+      if (n >= want) return n;
       await this.sleep(300);
     }
-    return 0;
+    return n;   // 0 = gar nichts, dazwischen = nur ein Teil
   },
 
   // Senden: erst der Knopf (sprachunabhängig über aria-label), sonst Enter.
@@ -146,11 +143,11 @@ const KPCAT = {
     return 'enter';
   },
 
-  // Gesendet = die Vorschauen sind wieder weg.
-  async waitSent(ms) {
+  // Gesendet = die Dateizeilen sind wieder weg.
+  async waitSent(names, ms) {
     const limit = ms || 25000, t0 = Date.now();
     while (Date.now() - t0 < limit) {
-      if (kpAttachmentCount() === 0) return true;
+      if (kpAttachmentCount(names) === 0) return true;
       await this.sleep(400);
     }
     return false;
@@ -196,11 +193,15 @@ const KPCAT = {
         const got = await this.attachAny(files);
         if (!got) { say('⚠ ใส่รูปไม่สำเร็จ / Bilder nicht übernommen (input·paste·drop)'); return { ok: false, reason: 'attach_failed', sent, missing }; }
         const how = got.how, n = got.n;
+        if (got.partial) {
+          say('⚠ ใส่รูปได้แค่ ' + n + '/' + files.length + ' (' + how + ') — ลบรูปในช่องแล้วเริ่มใหม่ / Feld leeren und neu starten');
+          return { ok: false, reason: 'attach_partial', how, n, sent, missing };
+        }
 
         if (dry) { say('🧪 ทดสอบ: ' + n + ' รูปอยู่ในช่องแล้ว (' + how + ') — ยังไม่ได้ส่ง / nichts gesendet'); return { ok: true, dry: true, attached: n, how, missing }; }
 
         this.send();
-        if (!await this.waitSent()) { say('⚠ ชุดที่ ' + (b + 1) + ' ส่งไม่ออก — กดส่งเองแล้วเริ่มใหม่ / von Hand senden'); return { ok: false, reason: 'send_failed', sent, missing }; }
+        if (!await this.waitSent(got.names)) { say('⚠ ชุดที่ ' + (b + 1) + ' ส่งไม่ออก — กดส่งเองแล้วเริ่มใหม่ / von Hand senden'); return { ok: false, reason: 'send_failed', sent, missing }; }
         sent += n; msgs++;
         say('✅ ส่งแล้ว ' + sent + '/' + items.length + ' (' + msgs + ' ข้อความ)');
         if (b < batches - 1) await this.sleep(this.GAP_MS);

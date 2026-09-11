@@ -65,15 +65,33 @@ function kpComposerArea() {
   for (let i = 0; i < 10 && el.parentElement; i++) {
     el = el.parentElement;
     if (el.tagName === 'FORM') break;
-    if (Array.from(el.querySelectorAll('[aria-label]'))
-      .some(n => KP_SEND_RE.test((n.getAttribute('aria-label') || '').trim()))) break;
+    if (Array.from(el.querySelectorAll('[aria-label],[role="button"],button'))
+      .some(n => KP_SEND_RE.test((n.getAttribute('aria-label') || n.innerText || '').trim()))) break;
   }
   return el || box.parentElement;
 }
 
-// Wie viele Anhänge liegen gerade im Feld? Vorschauen sind blob:-Bilder bzw.
-// Kacheln mit einem Entfernen-Knopf.
-function kpAttachmentCount() {
+// Wie viele der gerade angehängten Dateien liegen im Feld?
+//
+// Am echten Posteingang gemessen (11.09.): die Business Suite zeigt Anhänge als
+// ZEILEN MIT DATEINAMEN ("KP049.jpg" + ✕), nicht als Bildvorschauen. Die erste
+// Fassung suchte nach blob:-Bildern, fand nie etwas, meldete „nicht angekommen"
+// und probierte den nächsten Weg — am Ende hingen dieselben zehn Fotos dreimal
+// im Feld. Deshalb wird jetzt nach den NAMEN gesucht, die wir selbst vergeben
+// haben (KP049.jpg …): sprachunabhängig, unabhängig vom Markup und eindeutig.
+function kpAttachmentCount(names) {
+  if (names && names.length) {
+    const area = kpComposerArea();
+    let txt = '';
+    try { txt = (area && area.innerText) || ''; } catch (e) { /* egal */ }
+    let hit = names.filter(n => txt.indexOf(n) >= 0).length;
+    if (!hit) {                       // Zeilen sitzen ausserhalb des Antwortkastens
+      try { txt = document.body.innerText || ''; } catch (e) { txt = ''; }
+      hit = names.filter(n => txt.indexOf(n) >= 0).length;
+    }
+    return hit;
+  }
+  // Ohne Namen (Fixture, Sonderfälle): die alten Merkmale
   const area = kpComposerArea();
   if (!area) return 0;
   const fx = area.querySelectorAll('[data-kp="attachment"]');
