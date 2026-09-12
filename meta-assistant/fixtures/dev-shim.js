@@ -76,6 +76,13 @@ window.chrome.runtime.sendMessage = function (msg, cb) {
   if (msg && msg.type === 'fetchJson') {
     // Erst den echten Katalog versuchen; solange die App ihn noch nie
     // veröffentlicht hat, fällt der Test auf die Beispieldatei zurück (gleiche Form).
+    // Mit localStorage.kpSampleCatalog='1' IMMER die Beispieldatei nehmen — nötig,
+    // solange die veröffentlichte Liste ein neues Feld noch nicht enthält.
+    if (localStorage.kpSampleCatalog === '1') {
+      fetch('chat-catalog.sample.json').then(r => r.json())
+        .then(x => cb({ data: x })).catch(e => cb({ error: String(e) }));
+      return;
+    }
     fetch(msg.url).then(r => r.json()).catch(() => null).then(d => {
       if (d && d.items && d.items.length) return cb({ data: d });
       return fetch('chat-catalog.sample.json').then(r => r.json())

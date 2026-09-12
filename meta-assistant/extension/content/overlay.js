@@ -5,6 +5,12 @@
 // Voreinstellung ist alles; fragt ein Kunde nur nach hellen Hölzern, tickt das
 // Büro die anderen aus und schickt drei statt neunundzwanzig.
 //
+// Darüber die Gruppenknöpfe: Material (WPC/PVC) und Rillenbild (3 ลอนลึก,
+// หน้าเรียบ, …). Ein Klick wählt genau diese Gruppe — der häufigste Fall im
+// Posteingang ist "ich will nur PVC" oder "nur 5 Rillen". Beschriftung und
+// Zuordnung kommen aus pub/chatCatalog (die App kennt QT_PROFILES), hier steht
+// keine Produktkenntnis im Code.
+//
 // Übersetzung, Antwortvorschläge und Stil-Lernen sind draussen (Wunsch des
 // Büros). Der Code liegt weiter im Repo (overlay-assistant.js.off & Co.) und
 // lässt sich über die content_scripts im Manifest wieder einschalten.
@@ -12,6 +18,8 @@
 const KPUI = {
   root: null,
   items: [],
+  profiles: {},  // Rillenbild-Beschriftungen aus pub/chatCatalog
+  chips: [],     // Gruppenknöpfe: {label, sub, test}
   sel: null,     // Set der angetickten Codes
 
   init() {
@@ -31,6 +39,7 @@ const KPUI = {
             <button id="kp-none" class="kp-link">ไม่เลือก / keine</button>
             <span id="kp-cat-count"></span>
           </div>
+          <div class="kp-filters" id="kp-filters"></div>
           <div class="kp-grid" id="kp-grid"></div>
           <div class="kp-hint" id="kp-cat-info"></div>
         </div>
@@ -52,8 +61,10 @@ const KPUI = {
     try { d = await KPCAT.catalog(); }
     catch (e) { info.textContent = '⚠ โหลดรายการสินค้าไม่ได้ / Katalog nicht erreichbar (' + e.message + ')'; return; }
     this.items = d.items;
+    this.profiles = d.profiles || {};
     this.sel = new Set(this.items.map(i => i.code));
     this.renderGrid();
+    this.renderFilters();
     this.renderCount();
     this.loadThumbs();
   },
@@ -75,6 +86,63 @@ const KPUI = {
         else { this.sel.add(c); t.classList.add('on'); }
         this.renderCount();
       };
+    });
+  },
+
+  // Gruppenknöpfe. Erst „alle", dann je Material, dann je Rillenbild in der
+  // Reihenfolge, in der die Produkte kommen (= Katalogreihenfolge der App).
+  // Nur Gruppen, die wirklich Produkte haben — ein Knopf, der nichts schickt,
+  // wäre schlimmer als keiner.
+  renderFilters() {
+    const bar = this.root.querySelector('#kp-filters');
+    if (!bar) return;
+    const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const mats = [], profs = [];
+    this.items.forEach(i => {
+      const m = (i.mat || '').toUpperCase();
+      if (m && mats.indexOf(m) < 0) mats.push(m);
+      if (i.profile && profs.indexOf(i.profile) < 0) profs.push(i.profile);
+    });
+    const chips = [{ label: 'ทั้งหมด / alle', sub: '', test: () => true }];
+    if (mats.length > 1) mats.forEach(m => chips.push({
+      label: (m === 'PVC' ? '🔲 ' : '🪵 ') + m, sub: '',
+      test: i => (i.mat || '').toUpperCase() === m
+    }));
+    profs.forEach(k => {
+      const d = this.profiles[k] || {};
+      chips.push({ label: d.label || k, sub: d.en || '', test: i => i.profile === k });
+    });
+    this.chips = chips.map(c => Object.assign(c, { codes: this.items.filter(c.test).map(i => i.code) }))
+                      .filter(c => c.codes.length);
+    bar.innerHTML = this.chips.map((c, n) =>
+      '<button type="button" class="kp-chip" data-n="' + n + '" title="' + esc(c.sub || c.label) + '">'
+      + esc(c.label) + '<span class="kp-chip-n">' + c.codes.length + '</span></button>').join('');
+    bar.querySelectorAll('.kp-chip').forEach(b => {
+      b.onclick = () => this.pickGroup(+b.dataset.n);
+    });
+    this.syncChips();
+  },
+
+  // Ein Gruppenknopf ERSETZT die Auswahl (nicht dazu), weil der Kunde genau
+  // diese eine Gruppe sehen will. Nachträgliches Ab- und Anticken einzelner
+  // Bildchen bleibt möglich — der Knopf verliert dann seine Markierung.
+  pickGroup(n) {
+    const c = this.chips[n];
+    if (!c) return;
+    this.sel = new Set(c.codes);
+    this.root.querySelectorAll('.kp-tile').forEach(t => t.classList.toggle('on', this.sel.has(t.dataset.code)));
+    const grid = this.root.querySelector('#kp-grid');
+    if (grid) grid.scrollTop = 0;
+    this.renderCount();
+  },
+
+  // Markiert den Knopf, dessen Gruppe genau der Auswahl entspricht.
+  syncChips() {
+    const n = this.sel ? this.sel.size : 0;
+    this.root.querySelectorAll('.kp-chip').forEach(b => {
+      const c = this.chips[+b.dataset.n];
+      const same = !!c && c.codes.length === n && c.codes.every(x => this.sel.has(x));
+      b.classList.toggle('on', same);
     });
   },
 
@@ -108,6 +176,7 @@ const KPUI = {
     const btn = this.root.querySelector('#kp-sendall');
     btn.textContent = '📦 ส่งรูปสินค้า ' + n + ' รูป / senden';
     btn.disabled = !n;
+    this.syncChips();
   },
 
   async sendAllPhotos() {
