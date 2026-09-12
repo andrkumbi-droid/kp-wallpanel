@@ -2348,9 +2348,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         <span style="color:var(--blue)">Delivery / ค่าจัดส่ง</span>
         <div style="display:flex;align-items:center;gap:4px">
           <span style="color:var(--blue)">+</span>
-          <input type="number" id="of-delivery" placeholder="0" min="0" oninput="ofCalc()" style="width:90px;padding:4px 8px;border:1px solid var(--blue-l);border-radius:var(--rs);font-size:13px;text-align:right;color:var(--blue)">
+          <input type="number" id="of-delivery" placeholder="0" min="0" oninput="ofShipEdit()" style="width:90px;padding:4px 8px;border:1px solid var(--blue-l);border-radius:var(--rs);font-size:13px;text-align:right;color:var(--blue)">
           <span style="color:var(--blue)">฿</span>
         </div>
+      </div>
+      <div class="sumrow" id="of-shiphint" style="justify-content:flex-end;margin-top:-2px">
+        <span style="font-size:10px;color:var(--text2)">Auto: &lt;25 แผ่น → 400 ฿ · ฟรี ≥25 / free ≥25 panels · <a href="#" onclick="ofShipReset();return false" style="color:var(--blue)">reset</a></span>
       </div>
       <div class="sumrow" id="of-sexrow" style="display:none"><span style="color:var(--green)" id="of-sexlbl">Extra / เพิ่มเติม</span><span id="of-sex" style="color:var(--green)">—</span></div>
       <div class="sumrow sumtot"><span>Grand total / รวมทั้งหมด</span><span id="of-st">0 ฿</span></div>
@@ -11694,6 +11697,12 @@ function ofLogout(){
   ofLoginRender();
 }
 
+// Lieferkosten: Vorschlag aus der Paneelmenge, bis jemand selbst etwas eintippt.
+// Danach bleibt die getippte Zahl stehen, bis "reset" gedrueckt wird — dieselbe
+// Regel wie in Change-order und im POS.
+var _ofShipManual=false;
+function ofShipEdit(){ _ofShipManual=true; ofCalc(); }
+function ofShipReset(){ _ofShipManual=false; ofCalc(); }
 function ofCalc(){
   let pq=0,pp=0,ep=0;
   document.querySelectorAll('#of-panels .pline').forEach(l=>{const i=l.querySelectorAll('input');pp+=(parseFloat(i[2].value)||0)*(parseInt(i[1].value)||0);pq+=parseInt(i[1].value)||0;});
@@ -11744,6 +11753,15 @@ function ofCalc(){
     const sgvEl=document.getElementById('of-sgv');
     if(sgvEl) sgvEl.textContent=freeGift>0?freeGift.toLocaleString()+' pcs (ฟรี)':'';
     const discount=parseInt(document.getElementById('of-discount')?document.getElementById('of-discount').value:0)||0;
+    // Lieferkosten vorschlagen: unter 25 Paneelen 400 ฿, ab 25 frei. Der Vorschlag
+    // wird nur gesetzt, solange niemand selbst im Feld war (ofShipEdit) — eine
+    // getippte Zahl gewinnt immer, auch die 0. Beim Verkauf im Laden faellt der
+    // Vorschlag weg: der Kunde traegt die Ware selbst hinaus.
+    (function(){
+      var el=document.getElementById('of-delivery'); if(!el || _ofShipManual) return;
+      var vor = (_ofInstoreMode || pq>=25) ? '' : 400;
+      if(String(el.value||'') !== String(vor)) el.value = vor;
+    })();
     const delivery=parseInt(document.getElementById('of-delivery')?document.getElementById('of-delivery').value:0)||0;
     // What the customer is already saving through the line prices themselves.
     // Shown, not subtracted: it is inside `grand` already.
@@ -13024,6 +13042,7 @@ function posPendFill(key){
   var t=p.totals||{};
   set('of-clip-packs',t.packs||''); set('of-free-clips',t.gift||''); set('of-free-minus',t.freeMinus||'');
   set('of-discount',t.discount||''); set('of-delivery',t.delivery||'');
+  _ofShipManual = !!t.delivery;   // uebernommener Betrag zaehlt als gesetzt
   set('of-extra-label',t.extraLabel||''); set('of-extra-price',t.extra||'');
   var note=document.getElementById('of-reorder-note');
   if(note){
@@ -13610,6 +13629,7 @@ function ofReorder(id){
   // These belonged to that delivery, not to this one.
   ['of-deliveround','of-reqdate','of-reqnote','of-paste','of-free-clips','of-free-minus',
    'of-clip-packs','of-extra-label','of-extra-price','of-discount','of-delivery'].forEach(function(k){ set(k,''); });
+  _ofShipManual=false;   // neues Formular -> der Vorschlag greift wieder
   var d=document.getElementById('of-date'); if(d) d.value=kpTodayStr();
   // Same zone → and with it the next free number of that zone. An in-store-locked
   // account keeps its own zone, which is the whole point of that lock.
