@@ -3511,6 +3511,24 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <button type="button" class="btn btng" style="margin-top:14px" onclick="saveEM()"><i class="ti ti-check"></i> Save / บันทึก</button>
 </div></div>
 
+<!-- Zahlungsart nachfragen, bevor eine Zahlung aus der Nachhak-Liste gebucht wird.
+     Ohne das buchte ofPaidAmt() den vollen Betrag still als "cash" (Zeile ~13481)
+     und die Karte verschwand aus der Liste, bevor jemand 💵/🏦 gedrueckt hatte —
+     das Geld stand dann in der falschen Spalte. -->
+<div class="modal-overlay" id="chasem-modal"><div class="modal" style="max-width:420px">
+  <div class="mhdr"><span class="mtit">💰 เงินมาทางไหน? / How did the money come in?</span></div>
+  <div style="font-size:13px;color:var(--text2);margin-bottom:4px" id="chasem-sub">—</div>
+  <div style="font-size:22px;font-weight:800;margin-bottom:14px" id="chasem-amt">—</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <button type="button" onclick="chaseMethodPicked('cash')"
+      style="padding:18px 10px;border-radius:var(--r);border:2px solid #16a34a;background:#dcfce7;color:#166534;font-size:16px;font-weight:800;cursor:pointer">💵<br>เงินสด<br><span style="font-size:12px;font-weight:600">Cash</span></button>
+    <button type="button" onclick="chaseMethodPicked('online')"
+      style="padding:18px 10px;border-radius:var(--r);border:2px solid #1d4ed8;background:#dbeafe;color:#1e40af;font-size:16px;font-weight:800;cursor:pointer">🏦<br>โอน<br><span style="font-size:12px;font-weight:600">Online</span></button>
+  </div>
+  <button type="button" onclick="chaseMethodCancel()"
+    style="width:100%;margin-top:12px;padding:10px;border-radius:var(--rs);border:1px solid var(--border);background:var(--bg);color:var(--text2);font-size:13px;font-weight:700;cursor:pointer">ยกเลิก / cancel</button>
+</div></div>
+
 <div class="modal-overlay" id="change-modal"><div class="modal">
   <div class="mhdr"><span class="mtit">🔄 Change order / แก้ออเดอร์ <span id="co-id"></span></span><button type="button" class="mclose" onclick="closeCO()"><i class="ti ti-x"></i></button></div>
   <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Adjust qty, set 0 to remove, or add new lines. Warehouse must confirm. / ปรับจำนวน ใส่ 0 เพื่อลบ หรือเพิ่มรายการใหม่ — คลังต้องยืนยัน</div>
@@ -29480,11 +29498,55 @@ function chasePaidToggle(id, checked){
   try{ auditAdd({type:'payment', area:'chase', orderId:id, method:'paid-clear',
         note:'↩︎ ยกเลิกจ่ายจากตามเงิน / unmarked paid from the chase list', by:chaseBy()}); }catch(e){}
 }
+// Ein Betrag allein sagt nicht, WOHER das Geld kam. Steht die Zahlungsart noch
+// nicht fest, wird sie jetzt gefragt, bevor irgendetwas gebucht wird — vorher
+// riet ofPaidAmt() "cash", die Karte verschwand aus der Liste, und der Kollege
+// hatte keine Gelegenheit mehr, 🏦 zu druecken (gemeldet am 12.09.2026).
+var _chasePend=null;
 function chasePaidAmt(id, val){
-  ofPaidAmt(id, val);
   var amt=parseFloat(val)||0;
+  var o=(orders||[]).find(function(x){return x.id===id;});
+  var m=_chaseMth[id]||(o&&(o.payMethod||o.payMethodPartial))||'';
+  if(amt>0 && m!=='cash' && m!=='online'){ chaseAskMethod(id, amt); return; }
+  chasePaidAmtDo(id, amt);
+}
+function chasePaidAmtDo(id, amt){
+  ofPaidAmt(id, amt);
   try{ auditAdd({type:'payment', area:'chase', orderId:id, method:'paid-amount',
         note:'฿ '+amt.toLocaleString('en-US')+' ใส่จากตามเงิน / amount set from the chase list', by:chaseBy()}); }catch(e){}
+}
+function chaseAskMethod(id, amt){
+  var o=(orders||[]).find(function(x){return x.id===id;}) || {};
+  var total=0; try{ total=ofOrderTotalNum(o); }catch(e){}
+  _chasePend={id:id, amt:amt, voll:(total>0 && amt>=total)};
+  var sub=document.getElementById('chasem-sub'), am=document.getElementById('chasem-amt');
+  if(sub) sub.textContent=id+((o.customer&&o.customer!=='—')?(' · '+o.customer):'')
+                          +(_chasePend.voll?'  ·  จ่ายครบ / paid in full':'  ·  บางส่วน / part payment');
+  if(am) am.textContent=amt.toLocaleString('en-US')+' ฿';
+  var el=document.getElementById('chasem-modal'); if(el) el.classList.add('open');
+}
+function chaseMethodCancel(){
+  _chasePend=null;
+  var el=document.getElementById('chasem-modal'); if(el) el.classList.remove('open');
+  try{ chaseRenderPanel(); }catch(e){}   // getippte Zahl zurueck auf den gespeicherten Stand
+}
+function chaseMethodPicked(m){
+  var p=_chasePend; _chasePend=null;
+  var el=document.getElementById('chasem-modal'); if(el) el.classList.remove('open');
+  if(!p) return;
+  _chaseMth[p.id]=m;
+  var o=(orders||[]).find(function(x){return x.id===p.id;});
+  if(p.voll){
+    // Voller Betrag: derselbe Weg wie der ✓-Knopf — mit Rueckfrage, sauberer
+    // Buchung (Methode, Kasse/Konto, Datum, wer) und Eintrag im Kassenmonitor.
+    chaseDone(p.id);
+    try{ chaseRenderPanel(); }catch(e){}
+    return;
+  }
+  // Teilzahlung: Methode festhalten, damit ofPaidAmt nicht wieder raet.
+  if(o){ o.payMethodPartial=m; }
+  chasePaidAmtDo(p.id, p.amt);
+  try{ chaseRenderPanel(); }catch(e){}
 }
 function chaseSlipUpload(input, id){
   var n=(input&&input.files)?input.files.length:0;
