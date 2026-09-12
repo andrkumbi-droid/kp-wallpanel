@@ -3472,6 +3472,11 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div><label class="fl">💰 Deposit / มัดจำ (฿)</label><input type="number" id="em-deposit" min="0" placeholder="0"></div>
     <div><label class="fl" style="color:var(--red)">🏷️ Discount / ส่วนลด (฿)</label><input type="number" id="em-discount" min="0" placeholder="0" oninput="emCalc()" style="border-color:var(--red)"></div>
   </div>
+  <label class="fl">➕ Extra / เพิ่มเติม <span style="font-size:11px;color:var(--text2)">(ตัดแผ่น, งานพิเศษ …)</span></label>
+  <div style="display:grid;grid-template-columns:1fr 110px;gap:8px">
+    <input type="text" id="em-extra-label" placeholder="e.g. ตัดแผ่น / cutting, งานพิเศษ" oninput="emCalc()">
+    <input type="number" id="em-extra-price" min="0" placeholder="0" oninput="emCalc()">
+  </div>
   <label class="fl">Pack status / สถานะแพ็ค</label><input type="text" id="em-packstatus">
   <label class="fl">Date / วันที่</label><input type="date" lang="en-GB" id="em-date">
   <label class="fl">Status</label>
@@ -3507,6 +3512,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <div class="stit" style="font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 4px">Delivery / ค่าจัดส่ง (฿)</div>
   <input type="number" id="co-delivery" min="0" placeholder="0" oninput="coShipEdit()">
   <div style="font-size:10px;color:var(--text2);margin-top:2px">Auto: &lt;25 panels → 400 ฿ · free ≥25 / ฟรี ≥25 แผ่น · <a href="#" onclick="coShipReset();return false" style="color:var(--blue)">reset</a></div>
+
+  <div class="stit" style="font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 4px">➕ Extra / เพิ่มเติม</div>
+  <div style="display:grid;grid-template-columns:1fr 110px;gap:8px">
+    <input type="text" id="co-extra-label" placeholder="e.g. ตัดแผ่น / cutting, งานพิเศษ" oninput="coCalc()">
+    <input type="number" id="co-extra-price" min="0" placeholder="0" oninput="coCalc()">
+  </div>
 
   <div class="stit" style="font-size:12px;font-weight:700;color:var(--red);margin:14px 0 4px">🏷️ Discount / ส่วนลด (฿)</div>
   <input type="number" id="co-discount" min="0" placeholder="0" oninput="coCalc()" style="border-color:var(--red)">
@@ -20259,6 +20270,9 @@ function openEM(idOrBtn){
   // Existing discount → prefill the discount field (stored as a negative line item)
   var _exDisc=(o.lineItems||[]).filter(function(li){return li.type==='discount';}).reduce(function(a,li){return a-(parseFloat(li.amount)||0);},0);
   document.getElementById('em-discount').value=_exDisc>0?_exDisc:'';
+  var _emEx=kpExtraOf(o);
+  var _emExL=document.getElementById('em-extra-label'); if(_emExL) _emExL.value=_emEx.label;
+  var _emExP=document.getElementById('em-extra-price'); if(_emExP) _emExP.value=_emEx.amount>0?_emEx.amount:'';
   // Populate editable product lines from the order's products
   var emWrap=document.getElementById('em-lines'); if(emWrap){ emWrap.innerHTML='';
     var EMPROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
@@ -20284,7 +20298,8 @@ function emCalc(){
     var i=l.querySelectorAll('input'); var price=parseFloat(i[1].value)||0, qty=parseInt(i[2].value)||0; sum+=price*qty;
   });
   var o=orders.find(function(x){return x.id===editId;}), other=0;
-  if(o&&o.lineItems) o.lineItems.forEach(function(li){ if(li.type==='delivery'||li.type==='clips'||li.type==='extra') other+=parseFloat(li.amount)||0; });
+  if(o&&o.lineItems) o.lineItems.forEach(function(li){ if(li.type==='delivery'||li.type==='clips') other+=parseFloat(li.amount)||0; });
+  other+=parseFloat((document.getElementById('em-extra-price')||{}).value)||0;
   var disc=parseFloat((document.getElementById('em-discount')||{}).value)||0;
   var el=document.getElementById('em-total'); if(el) el.textContent='Total / รวม: '+(sum+other-disc).toLocaleString('en-US')+' ฿';
 }
@@ -20320,10 +20335,12 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   });
   var emFreeGift=0;
   (o.lineItems||[]).forEach(function(li){
-    if(li.type==='delivery'||li.type==='clips'||li.type==='free-gift-clips'||li.type==='extra'){ emItems.push(li); if(li.type==='free-gift-clips') emFreeGift+=parseInt(li.qty)||0; }
+    if(li.type==='delivery'||li.type==='clips'||li.type==='free-gift-clips'){ emItems.push(li); if(li.type==='free-gift-clips') emFreeGift+=parseInt(li.qty)||0; }
   });
   if(emTq>0) emItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)',qty:emTq*10,unitPrice:0,amount:0});
   // Discount from the edit field (replaces any previous discount line) → lowers total
+  var emExtra=kpExtraLine('em-extra-label','em-extra-price');
+  if(emExtra) emItems.push(emExtra);
   var emDisc=parseFloat((document.getElementById('em-discount')||{}).value)||0;
   if(emDisc>0) emItems.push({type:'discount',code:'Discount / ส่วนลด',qty:1,unitPrice:-emDisc,amount:-emDisc});
   o.lineItems=emItems;
@@ -20336,6 +20353,28 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   // keep the recorded revenue in sync so Sales/Pay reflect the discounted amount.
   if(o.status==='delivered'){ var _nt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0; var _r=revOrders.find(function(x){return x.id===o.id;}); if(_r && _r.amt!==_nt){ _r.amt=_nt; try{ syncRevOrders(); }catch(e){} } }
   try{ deductOrderStock(o); }catch(e){}if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}try{sheetsUpdateMaster(o);}catch(e){console.error('Master update failed (non-blocking):',e);}try{ if(o.status!==old) auditStatus(o.id,old,o.status,o.editedBy,(o.status==='cancelled'?_cancelWorkNote(o):'')); else auditAdd({type:'edit',orderId:o.id,by:o.editedBy}); }catch(e){}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
+
+/* Extra-Zeilen einer Bestellung zusammenfassen. Es koennen mehrere sein (aus
+   dem Verkauf, aus einer Reklamation); fuer die beiden Masken wird daraus EIN
+   Feld: Summe + die erste Beschriftung. Wer speichert, schreibt genau diese
+   eine Zeile zurueck — vorher wurden die alten Zeilen unveraendert mitgeschleppt
+   und waren aus dem Buero gar nicht zu aendern. */
+function kpExtraOf(o){
+  var sum=0, label='';
+  ((o&&o.lineItems)||[]).forEach(function(li){
+    if(li.type!=='extra') return;
+    sum+=parseFloat(li.amount)||0;
+    if(!label && li.code) label=String(li.code);
+  });
+  if(label.indexOf('Extra')===0) label='';   // der Platzhaltertext ist keine Beschriftung
+  return {amount:sum, label:label};
+}
+function kpExtraLine(labelEl, priceEl){
+  var price=parseFloat((document.getElementById(priceEl)||{}).value)||0;
+  if(!(price>0)) return null;
+  var label=((document.getElementById(labelEl)||{}).value||'').trim();
+  return {type:'extra', code:label||'Extra / เพิ่มเติม', qty:1, unitPrice:price, amount:price};
+}
 
 // CHANGE ORDER (customer adds/removes items; warehouse confirms)
 var coId=null;
@@ -20387,6 +20426,9 @@ function openCO(btn){
   });
   if(!wrap.children.length) coAddLine();
   var dEl=document.getElementById('co-discount'); if(dEl) dEl.value=disc>0?disc:'';
+  var _ex=kpExtraOf(o);
+  var exL=document.getElementById('co-extra-label'); if(exL) exL.value=_ex.label;
+  var exP=document.getElementById('co-extra-price'); if(exP) exP.value=_ex.amount>0?_ex.amount:'';
   document.getElementById('co-clip-packs').value=clipPacks||'';
   document.getElementById('co-free-clips').value=giftClips||'';
   // Delivery: keep a custom fee as manual; auto-track it when it matches the rule.
@@ -20458,8 +20500,7 @@ function coCalc(){
   // Discount comes from its own field (replaces any earlier discount line);
   // extra lines have no field and are carried over unchanged.
   var disc=Math.max(0, parseFloat((document.getElementById('co-discount')||{}).value)||0);
-  var o=orders.find(function(x){return x.id===coId;}),extra=0;
-  if(o&&o.lineItems)o.lineItems.forEach(function(li){if(li.type==='extra')extra+=parseFloat(li.amount)||0;});
+  var extra=parseFloat((document.getElementById('co-extra-price')||{}).value)||0;
   var el=document.getElementById('co-total');
   if(el)el.innerHTML='New total / รวมใหม่: '+(sum+ship+extra-disc).toLocaleString()+' ฿'
     +(disc>0?' <span style="font-weight:600;color:var(--red)">(−'+disc.toLocaleString()+' ฿ ส่วนลด)</span>':'');
@@ -20509,11 +20550,10 @@ function submitCO(){
   // Delivery: recomputed from the (auto-suggested/editable) field.
   var deliv=parseFloat((document.getElementById('co-delivery')||{}).value)||0;
   if(deliv>0)newItems.push({type:'delivery',code:'Delivery / ค่าจัดส่ง',qty:1,unitPrice:deliv,amount:deliv});
-  // Extra lines are carried over unchanged (no field for them); the discount comes
-  // from its own field and REPLACES any earlier discount line (same as Edit order).
-  (o.lineItems||[]).forEach(function(li){
-    if(li.type==='extra')newItems.push(li);
-  });
+  // Extra und Rabatt kommen beide aus ihren eigenen Feldern und ERSETZEN die
+  // frueheren Zeilen (gleich wie in der Bestellmaske).
+  var coExtra=kpExtraLine('co-extra-label','co-extra-price');
+  if(coExtra) newItems.push(coExtra);
   var coDisc=Math.max(0, parseFloat((document.getElementById('co-discount')||{}).value)||0);
   if(coDisc>0)newItems.push({type:'discount',code:'Discount / ส่วนลด',qty:1,unitPrice:-coDisc,amount:-coDisc});
   // diff panels + edges only
@@ -20530,7 +20570,12 @@ function submitCO(){
   var oldDeliv=sumBy(o.lineItems,function(li){return li.type==='delivery';},function(li){return parseFloat(li.amount)||0;});
   var oldTotalNum=sumBy(o.lineItems,function(){return true;},function(li){return parseFloat(li.amount)||0;});
   var newTotalNum=sumBy(newItems,function(){return true;},function(li){return parseFloat(li.amount)||0;});
-  var otherChange=(clipPacks!==oldClipPacks)||(freeGift!==oldGift)||(deliv!==oldDeliv)||(Math.round(newTotalNum)!==Math.round(oldTotalNum));
+  // Wird NUR die Beschriftung des Extras umgeschrieben, bleibt die Summe gleich —
+  // ohne diesen Vergleich haette die Maske "keine Aenderung" gemeldet.
+  var _oldEx=kpExtraOf(o), _newExLabel=((document.getElementById('co-extra-label')||{}).value||'').trim();
+  var extraChanged=(Math.round(_oldEx.amount)!==Math.round(coExtra?coExtra.amount:0))
+                   || (_newExLabel!==_oldEx.label);
+  var otherChange=(clipPacks!==oldClipPacks)||(freeGift!==oldGift)||(deliv!==oldDeliv)||extraChanged||(Math.round(newTotalNum)!==Math.round(oldTotalNum));
   if(!diff.length&&!otherChange){alert('No changes / ไม่มีการเปลี่ยนแปลง');return;}
   // Did the GOODS change? Only then does the warehouse have to re-pack and confirm.
   // A price / discount / delivery-fee correction is money only — it is applied
