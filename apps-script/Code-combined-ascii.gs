@@ -20,10 +20,10 @@
 var KP_ZONES = ['Bangkok','Northern','Northeastern','Eastern','Southern','Instore'];
 
 // EN (line 1) / TH (line 2) headers \u2014 order matches KP_COLS in order-sync.gs.
-// 38 columns A\u2013AL. Detail piece columns (Panels A..T-Trim) are hidden by build.
+// 38 columns A\u2013AL. Detail piece columns (Panels A..H-Profile) are hidden by build.
 var KP_HEADERS = [
   'Order No\n\u0e40\u0e25\u0e02\u0e17\u0e35\u0e48\u0e2d\u0e2d\u0e40\u0e14\u0e2d\u0e23\u0e4c','Date\n\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48','Status\n\u0e2a\u0e16\u0e32\u0e19\u0e30','Paid?\n\u0e0a\u0e33\u0e23\u0e30\u0e40\u0e07\u0e34\u0e19','Priority\n\u0e2a\u0e33\u0e04\u0e31\u0e0d','Products\n\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32',
-  'Panels A\n\u0e41\u0e1c\u0e48\u0e19 A','Panels B\n\u0e41\u0e1c\u0e48\u0e19 B','L-Corner\n\u0e21\u0e38\u0e21 L','U-Trim\n\u0e04\u0e34\u0e49\u0e27 U','T-Trim\n\u0e04\u0e34\u0e49\u0e27 T',
+  'Panels A\n\u0e41\u0e1c\u0e48\u0e19 A','Panels B\n\u0e41\u0e1c\u0e48\u0e19 B','L-Corner\n\u0e21\u0e38\u0e21 L','U-Trim\n\u0e04\u0e34\u0e49\u0e27 U','H-Profile\n\u0e04\u0e34\u0e49\u0e27 H',
   'Extra Clips\n\u0e04\u0e25\u0e34\u0e1b\u0e40\u0e1e\u0e34\u0e48\u0e21','Free Clips\n\u0e04\u0e25\u0e34\u0e1b\u0e1f\u0e23\u0e35','Extra \u0e3f\n\u0e40\u0e1e\u0e34\u0e48\u0e21\u0e40\u0e15\u0e34\u0e21 (\u0e3f)','Shipping\n\u0e04\u0e48\u0e32\u0e2a\u0e48\u0e07','Discount\n\u0e2a\u0e48\u0e27\u0e19\u0e25\u0e14',
   'Total\n\u0e22\u0e2d\u0e14\u0e23\u0e27\u0e21','Paid amount\n\u0e0a\u0e33\u0e23\u0e30\u0e41\u0e25\u0e49\u0e27','Outstanding\n\u0e04\u0e49\u0e32\u0e07\u0e0a\u0e33\u0e23\u0e30','Pay method\n\u0e27\u0e34\u0e18\u0e35\u0e0a\u0e33\u0e23\u0e30',
   'Paid on\n\u0e0a\u0e33\u0e23\u0e30\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48','Payment by\n\u0e23\u0e31\u0e1a\u0e40\u0e07\u0e34\u0e19\u0e42\u0e14\u0e22','Receipt No\n\u0e40\u0e25\u0e02\u0e43\u0e1a\u0e40\u0e2a\u0e23\u0e47\u0e08','Customer\n\u0e0a\u0e37\u0e48\u0e2d\u0e25\u0e39\u0e01\u0e04\u0e49\u0e32',
@@ -34,7 +34,7 @@ var KP_HEADERS = [
 
 var KP_SUM_HEADERS = [
   'Month / \u0e40\u0e14\u0e37\u0e2d\u0e19','Orders / \u0e2d\u0e2d\u0e40\u0e14\u0e2d\u0e23\u0e4c','Revenue / \u0e23\u0e32\u0e22\u0e44\u0e14\u0e49','Paid / \u0e0a\u0e33\u0e23\u0e30\u0e41\u0e25\u0e49\u0e27','Outstanding / \u0e04\u0e49\u0e32\u0e07\u0e0a\u0e33\u0e23\u0e30',
-  'Panels A / \u0e41\u0e1c\u0e48\u0e19 A','Panels B / \u0e41\u0e1c\u0e48\u0e19 B','L-Corner / \u0e21\u0e38\u0e21 L','U-Trim / \u0e04\u0e34\u0e49\u0e27 U','T-Trim / \u0e04\u0e34\u0e49\u0e27 T',
+  'Panels A / \u0e41\u0e1c\u0e48\u0e19 A','Panels B / \u0e41\u0e1c\u0e48\u0e19 B','L-Corner / \u0e21\u0e38\u0e21 L','U-Trim / \u0e04\u0e34\u0e49\u0e27 U','H-Profile / \u0e04\u0e34\u0e49\u0e27 H',
   'Extra Clips / \u0e04\u0e25\u0e34\u0e1b\u0e40\u0e1e\u0e34\u0e48\u0e21','Cancelled / \u0e22\u0e01\u0e40\u0e25\u0e34\u0e01'];
 
 // Firebase season root (bump to v3/... when a new season starts).
@@ -147,7 +147,7 @@ function kpBuildZone_(ss, name) {
   sh.getRange('Q1:Q1000').setBorder(null, true, null, true, null, null,
     '#ca8a04', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
 
-  // hide detail piece columns (Panels A..T-Trim = cols 7\u201311)
+  // hide detail piece columns (Panels A..H-Profile = cols 7\u201311)
   sh.hideColumns(7, 5);
 
   // row colour rules: grey = Cancelled, green = Delivered & fully paid, red = open balance
@@ -204,7 +204,7 @@ function kpBuildSummary_(ss) {
   put('G3', sumNC('$H'));                             // Panels B
   put('H3', sumNC('$I'));                             // L-Corner
   put('I3', sumNC('$J'));                             // U-Trim
-  put('J3', sumNC('$K'));                             // T-Trim
+  put('J3', sumNC('$K'));                             // H-Profile
   put('K3', sumNC('$L'));                             // Extra Clips
   put('L3', Z.map(function(z){
       return "COUNTIFS('"+z+"'!$B:$B,\">=\"&$A3,'"+z+"'!$B:$B,\"<\"&EDATE($A3,1),'"+z+"'!$C:$C,\"Cancelled\")";
@@ -449,7 +449,7 @@ function kpCatBlock_(sh, hr, dS, dE, LI) {
     ['K-PVC (panels)',          q('K-PVC'),               b('K-PVC')],
     ['>> Total panels',         '=B'+rKP+'+B'+rKPVC,      '=C'+rKP+'+C'+rKPVC],
     ['L-Corner',                q('L'),                   b('L')],
-    ['T-Trim',                  q('T'),                   b('T')],
+    ['H-Profile',                  q('T'),                   b('T')],
     ['U-Trim',                  q('U'),                   b('U')],
     ['>> Total L + T + U',      '=B'+rL+'+B'+rT+'+B'+rU,  '=C'+rL+'+C'+rT+'+C'+rU],
     ['Clips sold (packs)',      q('Clip sold'),           b('Clip sold')],

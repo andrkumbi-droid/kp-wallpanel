@@ -20,10 +20,10 @@
 var KP_ZONES = ['Bangkok','Northern','Northeastern','Eastern','Southern','Instore'];
 
 // EN (line 1) / TH (line 2) headers — order matches KP_COLS in order-sync.gs.
-// 38 columns A–AL. Detail piece columns (Panels A..T-Trim) are hidden by build.
+// 38 columns A–AL. Detail piece columns (Panels A..H-Profile) are hidden by build.
 var KP_HEADERS = [
   'Order No\nเลขที่ออเดอร์','Date\nวันที่','Status\nสถานะ','Paid?\nชำระเงิน','Priority\nสำคัญ','Products\nสินค้า',
-  'Panels A\nแผ่น A','Panels B\nแผ่น B','L-Corner\nมุม L','U-Trim\nคิ้ว U','T-Trim\nคิ้ว T',
+  'Panels A\nแผ่น A','Panels B\nแผ่น B','L-Corner\nมุม L','U-Trim\nคิ้ว U','H-Profile\nคิ้ว H',
   'Extra Clips\nคลิปเพิ่ม','Free Clips\nคลิปฟรี','Extra ฿\nเพิ่มเติม (฿)','Shipping\nค่าส่ง','Discount\nส่วนลด',
   'Total\nยอดรวม','Paid amount\nชำระแล้ว','Outstanding\nค้างชำระ','Pay method\nวิธีชำระ',
   'Paid on\nชำระวันที่','Payment by\nรับเงินโดย','Receipt No\nเลขใบเสร็จ','Customer\nชื่อลูกค้า',
@@ -34,7 +34,7 @@ var KP_HEADERS = [
 
 var KP_SUM_HEADERS = [
   'Month / เดือน','Orders / ออเดอร์','Revenue / รายได้','Paid / ชำระแล้ว','Outstanding / ค้างชำระ',
-  'Panels A / แผ่น A','Panels B / แผ่น B','L-Corner / มุม L','U-Trim / คิ้ว U','T-Trim / คิ้ว T',
+  'Panels A / แผ่น A','Panels B / แผ่น B','L-Corner / มุม L','U-Trim / คิ้ว U','H-Profile / คิ้ว H',
   'Extra Clips / คลิปเพิ่ม','Cancelled / ยกเลิก'];
 
 // Firebase season root (bump to v3/... when a new season starts).
@@ -146,7 +146,7 @@ function kpBuildZone_(ss, name) {
   sh.getRange('Q1:Q1000').setBorder(null, true, null, true, null, null,
     '#ca8a04', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
 
-  // hide detail piece columns (Panels A..T-Trim = cols 7–11)
+  // hide detail piece columns (Panels A..H-Profile = cols 7–11)
   sh.hideColumns(7, 5);
 
   // row colour rules: grey = Cancelled, green = Delivered & fully paid, red = open balance
@@ -203,7 +203,7 @@ function kpBuildSummary_(ss) {
   put('G3', sumNC('$H'));                             // Panels B
   put('H3', sumNC('$I'));                             // L-Corner
   put('I3', sumNC('$J'));                             // U-Trim
-  put('J3', sumNC('$K'));                             // T-Trim
+  put('J3', sumNC('$K'));                             // H-Profile
   put('K3', sumNC('$L'));                             // Extra Clips
   put('L3', Z.map(function(z){
       return "COUNTIFS('"+z+"'!$B:$B,\">=\"&$A3,'"+z+"'!$B:$B,\"<\"&EDATE($A3,1),'"+z+"'!$C:$C,\"Cancelled\")";
@@ -448,7 +448,7 @@ function kpCatBlock_(sh, hr, dS, dE, LI) {
     ['K-PVC (panels)',          q('K-PVC'),               b('K-PVC')],
     ['>> Total panels',         '=B'+rKP+'+B'+rKPVC,      '=C'+rKP+'+C'+rKPVC],
     ['L-Corner',                q('L'),                   b('L')],
-    ['T-Trim',                  q('T'),                   b('T')],
+    ['H-Profile',                  q('T'),                   b('T')],
     ['U-Trim',                  q('U'),                   b('U')],
     ['>> Total L + T + U',      '=B'+rL+'+B'+rT+'+B'+rU,  '=C'+rL+'+C'+rT+'+C'+rU],
     ['Clips sold (packs)',      q('Clip sold'),           b('Clip sold')],
