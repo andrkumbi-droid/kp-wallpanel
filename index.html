@@ -1181,19 +1181,40 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
           window._kpHelpSeen=snap.val();
           try{ if(window.kpHelpUpdate) window.kpHelpUpdate(snap.val()); }catch(e){}
         });
+      };
+      // ── bills: 30 MB, und fast alles davon sind fotografierte Belege ──────────
+      // Gemessen am 12.09.2026: von 37 MB Startlast entfallen 30 auf diesen einen
+      // Knoten. Geladen hat ihn bisher JEDES Geraet bei JEDEM Seitenaufruf — auch
+      // das Lager-Tablet, das Fahrerhandy und die Kasse, die nie eine Rechnung
+      // sehen. Bei ~20 Geraeten und mehreren Neuladungen am Tag waren das die
+      // 8 GB taeglich, an denen das kostenlose Kontingent (10 GB im MONAT)
+      // zerbrochen ist.
+      // Jetzt holt ihn nur noch, wer ihn oeffnet: Rechnungen, Essen, Finanzen,
+      // Gewinn, Bericht, Wiederherstellen — und die Selbstkosten-Rechnung, die
+      // deshalb zusaetzlich wartet, bis die Daten wirklich da sind
+      // (kpBillsReady), statt einen halben Monat zu buchen.
+      var _billsOn=false;
+      window.kpBillsListener = function(){
+        if(_billsOn) return;
+        _billsOn = true;
         db.ref('bills').on('value', function(snap) {
           bills = snap.val() ? Object.values(snap.val()).sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}) : [];
+          window.kpBillsReady = true;
           try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
           try{ if(document.getElementById('ofv-food')&&document.getElementById('ofv-food').classList.contains('active')) foodListRender(); }catch(e){}
+          try{ if(document.getElementById('ofv-fin')&&document.getElementById('ofv-fin').classList.contains('active')) finSub(_finSub); }catch(e){}
+          try{ if(document.getElementById('ofv-profit')&&document.getElementById('ofv-profit').classList.contains('active')) pfRender(); }catch(e){}
           try{ advUpdateBadge(); }catch(e){}
-        });
-        // What a driver paid for us out of his own pocket and still needs a receipt for.
-        db.ref('advPending').on('value', function(snap) {
-          advPending = snap.val() ? Object.values(snap.val()) : [];
-          try{ advUpdateBadge(); }catch(e){}
-          try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
         });
       };
+      // What a driver paid for us out of his own pocket and still needs a receipt for.
+      // Winzig und steuert das Zaehlerzeichen am Rechnungen-Tab — laeuft deshalb
+      // fuer alle mit, nicht erst beim Oeffnen.
+      db.ref('advPending').on('value', function(snap) {
+        advPending = snap.val() ? Object.values(snap.val()) : [];
+        try{ advUpdateBadge(); }catch(e){}
+        try{ if(document.getElementById('ofv-bills')&&document.getElementById('ofv-bills').classList.contains('active')) billsRender(); }catch(e){}
+      });
       // Tour-ID registry (T001…): running numbers incl. ended/deleted ones.
       db.ref('tourReg').on('value', function(snap) {
         tourReg = snap.val() || {};
@@ -39710,6 +39731,8 @@ function costsRender(){
 }
 
 function billsRender(){
+  try{ if(window.kpBillsListener) window.kpBillsListener(); }catch(e){}   // Belege erst hier holen (30 MB)
+
   try{ if(window.kpHeavyListeners) window.kpHeavyListeners(); }catch(e){}   // this view needs the heavy node
   try{ if(!document.getElementById('bills-e-section')) billsEntryRender(); }catch(e){}
   try{ advBannerRender(); advUpdateBadge(); }catch(e){}
@@ -39739,7 +39762,11 @@ function billsRender(){
   var filtered = bills.filter(function(b){ return billsMKey(b.date)===selMon; })
                       .sort(function(a,b){ return (b.ts||0)-(a.ts||0) || (b.date||'').localeCompare(a.date||''); });
   if(filtered.length===0){
-    listEl.innerHTML='<div class="empty" style="padding:18px"><i class="ti ti-receipt-off" style="font-size:30px;display:block;margin-bottom:6px"></i>No receipts this month / ไม่มีใบเสร็จ</div>';
+    // Die Belege kommen erst beim Oeffnen des Tabs (30 MB, ~15 s). Ohne diesen
+    // Hinweis stuende hier "keine Belege", und das liest sich wie "alles weg".
+    listEl.innerHTML = (window.kpBillsReady === true)
+      ? '<div class="empty" style="padding:18px"><i class="ti ti-receipt-off" style="font-size:30px;display:block;margin-bottom:6px"></i>No receipts this month / ไม่มีใบเสร็จ</div>'
+      : '<div class="empty" style="padding:18px"><i class="ti ti-loader-2" style="font-size:30px;display:block;margin-bottom:6px"></i>⏳ กำลังโหลดใบเสร็จ… / Belege werden geladen…<div style="font-size:11px;margin-top:4px">ครั้งแรกใช้เวลาสักครู่ / takes a moment the first time</div></div>';
     return;
   }
   function secLbl(s){ return s?billSecLabel(s).split(' / ')[0]:''; }
@@ -40304,6 +40331,8 @@ function _billReportMk(){
 function billsRestoreOpen(){ billsRestoreRender(); document.getElementById('bill-restore-modal').classList.add('open'); }
 function billsRestoreClose(){ document.getElementById('bill-restore-modal').classList.remove('open'); }
 function billsRestoreScan(){
+  try{ if(window.kpBillsListener) window.kpBillsListener(); }catch(e){}   // Belege erst hier holen (30 MB)
+
   var B=(typeof bills!=='undefined'?bills:[]);
   var stat=function(rows){
     var months={}; rows.forEach(function(b){ months[billsMKey(b.date)]=1; });
@@ -40380,6 +40409,8 @@ function billsReportOpen(){ _billReportMode='bills'; billsReportRender(); docume
 function finCostReportOpen(){ _billReportMode='all'; billsReportRender(); document.getElementById('bill-report-modal').classList.add('open'); }
 function billsReportClose(){ document.getElementById('bill-report-modal').classList.remove('open'); }
 function billsReportRender(){
+  try{ if(window.kpBillsListener) window.kpBillsListener(); }catch(e){}   // Belege erst hier holen (30 MB)
+
   var el=document.getElementById('bill-report-body'); if(!el) return;
   var mk=_billReportMk(), data=billsCostData(mk,_billReportOpts());
   var txt={text:'var(--text)',muted:'var(--text2)',track:'var(--bg2)'};
@@ -40486,6 +40517,8 @@ function _foodStamp(act,detail){
 function _foodLog(b){ return b && b.log ? (Array.isArray(b.log)?b.log:Object.values(b.log)) : []; }
 function _foodMayEdit(b){ var me=_foodMe(); return (b.by||'')===(me.name||'') || !!me.billsAccess; }
 function foodRender(){
+  try{ if(window.kpBillsListener) window.kpBillsListener(); }catch(e){}   // Belege erst hier holen (30 MB)
+
   if(!document.getElementById('food-e-amount')) foodEntryRender();
   foodFillCats(); foodListRender();
 }
@@ -40579,6 +40612,8 @@ function foodSubmit(){
   });
 }
 function foodListRender(){
+  try{ if(window.kpBillsListener) window.kpBillsListener(); }catch(e){}   // Belege erst hier holen (30 MB)
+
   try{ if(window.kpHeavyListeners) window.kpHeavyListeners(); }catch(e){}   // this view needs the heavy node
   var el=document.getElementById('food-list'); if(!el) return;
   var mk=_nowMonthKey();
@@ -42621,8 +42656,10 @@ function ovhAuto(versuch){
   if(!me2 || !me2.acctAccess) return;
   // Erst rechnen, wenn wirklich alles da ist — halb geladene Daten ergäben
   // einen zu kleinen Monat, und der stünde dann als Wahrheit in der Liste.
+  try{ if(window.kpBillsListener) window.kpBillsListener(); }catch(e){}   // Belege anfordern …
   var bereit = (orders||[]).length>0 && typeof pfExpenses==='function'
-            && typeof billsCostData==='function' && typeof pgCalc==='function';
+            && typeof billsCostData==='function' && typeof pgCalc==='function'
+            && window.kpBillsReady === true;   // … und erst rechnen, wenn sie da sind
   if(!bereit){
     if((versuch||1)<3) setTimeout(function(){ ovhAuto((versuch||1)+1); }, 30000);
     return;
@@ -42867,6 +42904,8 @@ function pfKidDetail(blk,c){
 
 /* ── the page ─────────────────────────────────────────────────────────────── */
 function pfRender(){
+  try{ if(window.kpBillsListener) window.kpBillsListener(); }catch(e){}   // Belege erst hier holen (30 MB)
+
   var el=document.getElementById('pf-body'); if(!el) return;
   pfMonthFill();
   var mk=_pfMK(), ml=kpMLabel(mk);
@@ -43573,6 +43612,8 @@ function finCostSet(key, v){
    ein Tabwechsel nicht jedes Mal zurueckspringt. */
 var _finSub = 'pay';
 function finSub(which){
+  try{ if(window.kpBillsListener) window.kpBillsListener(); }catch(e){}   // Belege erst hier holen (30 MB)
+
   _finSub = (which==='inv') ? 'inv' : 'pay';
   var pay=document.getElementById('finsub-pay'), inv=document.getElementById('finsub-inv');
   if(pay) pay.style.display = _finSub==='pay' ? '' : 'none';
