@@ -46,11 +46,26 @@ senden. Kommt das eine Foto an, stimmt alles.
 
 ## Updates verteilen / อัปเดต
 
-- Drive-Ordner aktualisiert sich von selbst → jeder Rechner: `chrome://extensions`
-  → auf der Kachel **⟳** klicken (oder Chrome neu starten).
-- **Besser auf Dauer:** die Erweiterung einmal als **„unlisted" in den Chrome Web
-  Store** stellen (einmalig 5 USD Entwicklergebühr, ein paar Tage Prüfung). Dann
-  installiert jeder sie über einen Link und **Chrome aktualisiert von selbst**.
+**Doppelklick auf `KP-Update.bat`, danach F5 im Posteingang.** Die Datei liegt in
+`meta-assistant/tools/` und wird **einmal** verteilt (Desktop des Kollegen); sie
+holt die aktuellen Dateien direkt aus dem Repo und legt sie in den Ordner, aus dem
+Chrome die Erweiterung wirklich lädt — den liest sie aus Chromes eigener
+Aufzeichnung, geraten wird nichts. Kein ZIP mehr, kein Anhang, keine Rückfrage.
+
+Warum meist **kein ⟳** nötig ist: bei einer entpackten Erweiterung liest Chrome die
+Content-Skripte (`overlay.js`, `catalog-send.js`, `overlay.css`) bei **jedem
+Seitenaufbau** frisch von der Platte. Ein ⟳ auf der Kachel in `chrome://extensions`
+braucht es nur, wenn sich die `manifest.json` wirklich ändert (neue Datei, neue
+Rechte) oder der Service Worker im Hintergrund.
+
+Gar kein Update nötig ist bei **Produkten, Fotos, Preisen, Ausverkauft und neuen
+Rillen-Gruppen** — die kommen über Firebase und GitHub Pages und sind nach einem
+F5 da.
+
+**Auf Dauer noch bequemer:** die Erweiterung einmal als **„unlisted" in den Chrome
+Web Store** stellen (einmalig 5 USD, ein paar Tage Prüfung). Dann installiert jeder
+sie über einen Link und **Chrome aktualisiert von selbst** — und die Meldung
+„Erweiterungen im Entwicklermodus deaktivieren" bei jedem Chrome-Start ist weg.
 
 ## Wenn etwas klemmt / ถ้ามีปัญหา
 
