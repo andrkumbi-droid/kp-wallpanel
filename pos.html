@@ -345,6 +345,25 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
 .pcard .body .row:last-child{ min-height:19px; }
 .stock-chip{ font-size:12px; font-weight:600; color:var(--green); }
 .stock-chip.low{ color:#B45309; }
+/* Zubehoer-Kacheln (L / T / U / Clips): dieselbe Karte wie ein Paneel, nur
+   traegt sie statt eines Fotos den Buchstaben des Profils. */
+.acard .ph{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+  background:linear-gradient(158deg,#F7F2E5,#E9E2D1); }
+.acard .ph .ic{ font-size:46px; font-weight:800; line-height:1; color:var(--gold-deep); letter-spacing:1px; }
+.acard .ph .sub{ font-size:11.5px; font-weight:700; color:var(--text2); letter-spacing:.3px; }
+.acard .code{ font-size:14.5px; }
+.acard .nm{ white-space:normal; }
+.accpick .ahead{ font-size:12px; font-weight:800; color:var(--text2); letter-spacing:.05em;
+  text-transform:uppercase; margin:16px 0 7px; }
+.accpick .ahead:first-child{ margin-top:0; }
+.accpick .grid button{ position:relative; }
+.accpick .grid button small.stk{ color:var(--green); font-weight:700; }
+.accpick .grid button small.out{ color:var(--red); font-weight:700; }
+.accpick .grid button .q{ position:absolute; top:-8px; right:-8px; min-width:24px; height:24px; line-height:24px;
+  border-radius:12px; background:var(--gold-deep); color:#fff; font-size:12.5px; font-weight:800; }
+.accpick .chosen{ margin-top:16px; border-top:1px solid var(--border); padding-top:10px; }
+.accpick .add-btn{ border:1.5px solid var(--gold2); background:var(--gold-deep); color:#fff; }
+.accpick .add-btn:disabled{ opacity:.45; }
 
 /* ═══════════════ CALC SHEET ═══════════════ */
 .sheet{
@@ -1096,6 +1115,18 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
   </div>
 </div>
 
+<!-- Zubehoer einzeln verkaufen: Kanten, Profile, Clips ohne Paneel -->
+<div class="accpick" id="accshop-sheet">
+  <div class="card">
+    <h4 id="accshop-title">—</h4>
+    <div id="accshop-body"></div>
+    <div class="foot">
+      <button class="cancel-btn press" onclick="accShopClose()">ยกเลิก / cancel</button>
+      <button class="add-btn press" id="accshop-add" onclick="accShopAdd()">🛒 เพิ่มลงตะกร้า</button>
+    </div>
+  </div>
+</div>
+
 <!-- customer lookup: type a phone number, see what that customer bought before -->
 <section id="scr-cust" class="sheet">
   <div class="sheet-top">
@@ -1163,7 +1194,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
    payFeed, orderPhotos, auditLog, pushQueue) so office/warehouse/kiosk
    pick everything up without changes. Season-scoped via PDB (v2/).
    ═══════════════════════════════════════════════════════════════════════ */
-var POS_BUILD='pos-1.4.0';
+var POS_BUILD='pos-1.5.0';
 document.getElementById('pos-ver').textContent=POS_BUILD;
 try{ document.getElementById('hist-ver').textContent=POS_BUILD; }catch(e){}
 var KP_DEV_ID='pos'+Math.random().toString(36).slice(2,9)+Date.now().toString(36);
@@ -1291,13 +1322,19 @@ function todayStr(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMo
 function nowHM(){ var d=new Date(); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
 function mk(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
 function safeId(id){ return String(id||'').replace(/[^a-zA-Z0-9]/g,'_'); }
+/* L7 = L07 = L007 ist DASSELBE Profil — padStart allein hat das nicht gefaltet:
+   eine schon dreistellige Zahl blieb dreistellig, also traf 'L07' aus dem
+   Verkauf nie den Lagerposten 'L007'. Folge: stockOf() zeigte bei L-Kanten
+   keinen Bestand, und deductStock() fand keinen Schlüssel und buchte still
+   gar nichts ab. Erst parseInt, dann auffüllen — dieselbe Regel wie
+   ofNormCode in index.html. */
 function normCode(c){
   c=String(c||'').toUpperCase().replace(/\s+/g,'').replace(/[_\.]/g,'-');
-  var m;
-  if(m=c.match(/^K-?P[A-Z]*-?(\d+)$/)){ if(/PVC/.test(c)) return 'K-PVC-'+String(m[1]).padStart(2,'0'); }
-  if(m=c.match(/^KP-?(\d+)$/)) return 'KP'+String(m[1]).padStart(3,'0');
-  if(m=c.match(/^L-P-?(\d+)$/)) return 'L-P-'+String(m[1]).padStart(2,'0');
-  if(m=c.match(/^([LTU])-?(\d+)$/)) return m[1]+String(m[2]).padStart(2,'0');
+  var m, pad=function(n,w){ n=String(parseInt(n,10)); return n.length>=w?n:('0000'+n).slice(-w); };
+  if(m=c.match(/^K-?P[A-Z]*-?(\d+)$/)){ if(/PVC/.test(c)) return 'K-PVC-'+pad(m[1],2); }
+  if(m=c.match(/^KP-?(\d+)$/)) return 'KP'+pad(m[1],3);
+  if(m=c.match(/^L-P-?(\d+)$/)) return 'L-P-'+pad(m[1],2);
+  if(m=c.match(/^([LTU])-?(\d+)$/)) return m[1]+pad(m[2],2);
   return c;
 }
 function toast(msg,ms){ var t=$('toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(t._t); t._t=setTimeout(function(){ t.classList.remove('on'); }, ms||2600); }
@@ -1601,6 +1638,11 @@ document.addEventListener('keydown', function(ev){
     else if(ev.key==='Escape'){ numPadClose(); ev.preventDefault(); }
     return;
   }
+  var ash=$('accshop-sheet');
+  if(ash && ash.classList.contains('on')){
+    if(ev.key==='Escape'){ accShopClose(); ev.preventDefault(); }
+    return;
+  }
   var ap=$('accpick-sheet');
   if(ap && ap.classList.contains('on')){
     if(ev.key==='Escape'){ accPickClose(); ev.preventDefault(); }
@@ -1695,6 +1737,7 @@ function buildFilters(){
     +'<button class="fchip'+(_filter==='ALL'?' on':'')+'" onclick="posFilter(\'ALL\')">ทั้งหมด</button>'
     +'<button class="fchip'+(_filter==='WPC'?' on':'')+'" onclick="posFilter(\'WPC\')">WPC</button>'
     +'<button class="fchip'+(_filter==='PVC'?' on':'')+'" onclick="posFilter(\'PVC\')">PVC</button>'
+    +'<button class="fchip'+(_filter==='ACC'?' on':'')+'" onclick="posFilter(\'ACC\')">🔧 อุปกรณ์</button>'
     +widths.map(function(w){ return '<button class="fchip'+(_filter==='w'+w?' on':'')+'" onclick="posFilter(\'w'+w+'\')">'+w+' ซม.</button>'; }).join('');
   $('filters').innerHTML=html;
 }
@@ -1702,7 +1745,7 @@ function posFilter(f){ _filter=f; buildFilters(); renderGrid(); }
 function stockOf(code){ var st=stockMap[normCode(code)]; return st ? (parseInt(st.qty)||0) : null; }
 function renderGrid(){
   var g=$('pgrid'); if(!g) return;
-  var list=products.filter(function(p){ return p.w>0 && (p.mat==='WPC'||p.mat==='PVC'); });
+  var list=(_filter==='ACC') ? [] : products.filter(function(p){ return p.w>0 && (p.mat==='WPC'||p.mat==='PVC'); });
   // sold out WITHOUT a restock date → hidden entirely; WITH a date it stays,
   // so the customer sees when it is coming back.
   list=list.filter(function(p){ return !soldOut[p.code] || restockTxt(p.code); });
@@ -1720,6 +1763,8 @@ function renderGrid(){
     if(ma!==mb) return ma-mb;
     return String(a.code).localeCompare(String(b.code));
   });
+  // Zubehoer-Kacheln haengen hinten dran; unter 🔧 อุปกรณ์ stehen sie allein.
+  var accHtml=(_filter==='ALL'||_filter==='ACC') ? accCards() : '';
   g.innerHTML=list.map(function(p){
     var so=!!soldOut[p.code];
     var st=stockOf(p.code);
@@ -1735,9 +1780,147 @@ function renderGrid(){
       +'<div class="row"><span class="price num">'+fmt(p.price)+' <small>฿/แผ่น</small></span><span class="w">'+p.w+' ซม.</span></div>'
       +'<div class="row" style="margin-top:2px">'+stHtml+'<span></span></div>'
       +'</div></button>';
-  }).join('') || '<div style="grid-column:1/-1;text-align:center;color:var(--text2);padding:40px">ไม่พบสินค้า</div>';
+  }).join('')+accHtml || '<div style="grid-column:1/-1;text-align:center;color:var(--text2);padding:40px">ไม่พบสินค้า</div>';
   var n=cart.lines.filter(function(l){return l.type==='panel';}).reduce(function(a,l){return a+l.qty;},0);
   var cb=$('cart-badge'); cb.textContent=cart.lines.length; cb.classList.toggle('hidden', !cart.lines.length);
+}
+
+/* ═══════════════ ZUBEHÖR EINZELN: L / T / U / Clips ═══════════════
+   Ein Kunde, der nur zehn L-Kanten oder zwei Packungen Clips holt, musste
+   bisher über ein Paneel gehen, das er gar nicht kauft — der Rechner hängt
+   immer an einem Paneel. Diese vier Kacheln stehen am Ende des Rasters (und
+   allein unter dem Filter 🔧 อุปกรณ์) und führen direkt in den Warenkorb.
+   Die Codes kommen aus demselben accProducts wie im Rechner: was das Büro im
+   Katalog anlegt (T15, U15 …), steht hier von selbst drin.
+   Clips werden als Warenkorbzeile mit type 'clips' gebucht — dieselbe Art,
+   die die Bestellmaske und das Packfeld schreiben, und anders als das
+   แพ็ค-Feld im Korb kommt ein Verkauf NUR aus Clips damit durch die Kasse
+   (Kasse und Angebot verlangen mindestens eine Zeile). */
+var ACC_FAMS=[
+  {id:'L', ic:'L', title:'ฉากจบมุม L-Corner', en:'ปิดมุม / edge closing', type:'lcorner',
+   groups:[{fam:'L',head:'WPC'},{fam:'LP',head:'PVC'}]},
+  {id:'T', ic:'T', title:'ตัว T ต่อแผ่น', en:'ต่อกลาง / T-profile joint', type:'ttrim',
+   groups:[{fam:'T',head:''}]},
+  {id:'U', ic:'U', title:'ตัว U ปิดขอบ', en:'ปิดปลาย / U-profile end cap', type:'utrim',
+   groups:[{fam:'U',head:''}]},
+  {id:'CLIP', ic:'🔩', title:'คลิปแพ็ค Clip Pack', en:'คลิปล็อค / clip pack', type:'clips', clip:true}
+];
+function accFamCodes(f){
+  if(f.clip) return [];
+  var out=[];
+  f.groups.forEach(function(g){ out=out.concat(famCodes(g.fam)); });
+  return out;
+}
+/* Bei einer Suche soll "T09" die T-Kachel finden statt sie wegzufiltern. */
+function accCardMatch(f,q){
+  if(!q) return true;
+  var qu=q.toUpperCase();
+  if(String(f.title).indexOf(q)>=0 || f.id.indexOf(qu)===0) return true;
+  if(f.clip) return 'CLIP'.indexOf(qu)>=0 || 'คลิป'.indexOf(q)>=0;
+  return accFamCodes(f).some(function(c){ return c.toUpperCase().indexOf(qu)>=0; });
+}
+function accCards(){
+  var q=_q.trim();
+  return ACC_FAMS.filter(function(f){ return accCardMatch(f,q); }).map(function(f){
+    var codes=accFamCodes(f);
+    var price=f.clip ? CLIP_PACK_PRICE : Math.min.apply(null, codes.map(accPrice).concat([EDGE_PRICE]));
+    var unit=f.clip ? '฿/แพ็ค' : '฿/เส้น';
+    var sub=f.clip ? 'คลิปล็อค' : codes.length+' รหัส';
+    var wtxt=f.clip ? '' : '2.9 ม.';
+    return '<button class="pcard acard" onclick="accShopOpen(\'' + f.id + '\')">'
+      +'<div class="ph"><div class="ic">'+f.ic+'</div><div class="sub">'+esc(sub)+'</div></div>'
+      +'<div class="body">'
+      +'<div class="code">'+esc(f.title)+'</div>'
+      +'<div class="nm">'+esc(f.en)+'</div>'
+      +'<div class="row"><span class="price num">'+fmt(price)+' <small>'+unit+'</small></span><span class="w">'+wtxt+'</span></div>'
+      +'<div class="row" style="margin-top:2px"><span class="stock-chip">แตะเพื่อเลือก</span><span></span></div>'
+      +'</div></button>';
+  }).join('');
+}
+var _accShop=null;   // {f:ACC_FAMS-Eintrag, sel:{code:menge}}
+function accShopOpen(id){
+  var f=ACC_FAMS.filter(function(x){ return x.id===id; })[0]; if(!f) return;
+  _accShop={f:f, sel:{}};
+  if(f.clip) _accShop.sel.CLIP=1;
+  $('accshop-title').textContent=f.title;
+  accShopRender();
+  $('accshop-sheet').classList.add('on');
+}
+function accShopClose(){ $('accshop-sheet').classList.remove('on'); _accShop=null; }
+/* Tippen auf einen Code zählt hoch — am Tresen schneller als jedes Feld.
+   Zurück geht es über die Zeile darunter (− / Zahl / +). */
+function accShopTap(c){ if(!_accShop) return; _accShop.sel[c]=(_accShop.sel[c]||0)+1; accShopRender(); }
+function accShopStep(c,d){
+  if(!_accShop) return;
+  var q=(_accShop.sel[c]||0)+d;
+  if(q<=0) delete _accShop.sel[c]; else _accShop.sel[c]=q;
+  accShopRender();
+}
+function accShopQty(c,v){
+  if(!_accShop) return;
+  var q=parseInt(v,10)||0;
+  if(q<=0) delete _accShop.sel[c]; else _accShop.sel[c]=q;
+  accShopRender();
+}
+function accShopStepper(c){
+  var q=_accShop.sel[c]||0;
+  return '<div class="st"><button class="press" onclick="accShopStep(\'' + c + '\',-1)">−</button>'
+    +'<input type="number" inputmode="numeric" min="0" value="'+q+'" onchange="accShopQty(\'' + c + '\',this.value)">'
+    +'<button class="press" onclick="accShopStep(\'' + c + '\',1)">+</button></div>';
+}
+function accShopRender(){
+  if(!_accShop) return;
+  var f=_accShop.f, h='';
+  if(f.clip){
+    h='<div class="acc-row"><div class="t"><b>'+esc(f.title)+'</b><small>'+fmt(CLIP_PACK_PRICE)+' ฿/แพ็ค</small></div>'
+      +accShopStepper('CLIP')+'</div>';
+  } else {
+    f.groups.forEach(function(g){
+      var codes=famCodes(g.fam);
+      if(!codes.length) return;
+      if(g.head) h+='<div class="ahead">'+esc(g.head)+'</div>';
+      h+='<div class="grid">'+codes.map(function(c){
+        var st=stockOf(c), sel=_accShop.sel[c]||0;
+        return '<button class="press'+(sel?' on':'')+'" onclick="accShopTap(\'' + c + '\')">'+esc(c)
+          +'<small>'+fmt(accPrice(c))+' ฿</small>'
+          +(st==null ? '' : '<small class="'+(st>0?'stk':'out')+'">'+(st>0?'คงเหลือ '+fmt(st):'หมด')+'</small>')
+          +(sel ? '<span class="q">'+sel+'</span>' : '')
+          +'</button>';
+      }).join('')+'</div>';
+    });
+    var chosen=Object.keys(_accShop.sel).filter(function(c){ return _accShop.sel[c]>0; });
+    if(chosen.length){
+      h+='<div class="chosen">'+chosen.map(function(c){
+        return '<div class="acc-row"><div class="t"><b>'+esc(c)+'</b><small>'+fmt(accPrice(c))+' ฿/เส้น</small></div>'
+          +accShopStepper(c)+'</div>';
+      }).join('')+'</div>';
+    }
+  }
+  $('accshop-body').innerHTML=h;
+  var tot=0, n=0;
+  Object.keys(_accShop.sel).forEach(function(c){
+    var q=_accShop.sel[c]||0; if(q<=0) return;
+    n+=q; tot+=q*(f.clip?CLIP_PACK_PRICE:accPrice(c));
+  });
+  var b=$('accshop-add');
+  b.textContent = n ? ('🛒 เพิ่มลงตะกร้า · '+fmtB(tot)) : '🛒 เพิ่มลงตะกร้า';
+  b.disabled = !n;
+}
+function accShopAdd(){
+  if(!_accShop) return;
+  var f=_accShop.f, n=0;
+  Object.keys(_accShop.sel).forEach(function(c){
+    var q=parseInt(_accShop.sel[c],10)||0; if(q<=0) return;
+    n+=q;
+    if(f.clip) cartAddLine({code:'CLIP', name:'คลิปแพ็ค / Clip Pack', qty:q,
+                            price:CLIP_PACK_PRICE, listPrice:CLIP_PACK_PRICE, type:'clips', grade:'A'});
+    else { var pr=accPrice(c);
+           cartAddLine({code:c, name:f.title, qty:q, price:pr, listPrice:pr, type:f.type, grade:'A'}); }
+  });
+  if(!n){ toast('ใส่จำนวนก่อน / enter quantity'); return; }
+  saveCart(); accShopClose(); renderGrid();
+  toast('✅ เพิ่มลงตะกร้าแล้ว · '+n+(f.clip?' แพ็ค':' เส้น'));
+  chime();
 }
 
 /* ═══════════════ CALCULATOR ═══════════════ */
@@ -1970,7 +2153,7 @@ function posQuoteCopy(){
   var t=cartTotals();
   var L=['━━━','KP Wallpanel – ใบเสนอราคา','━━━'];
   cart.lines.forEach(function(l){
-    var sp=lineShowPrice(l), unit=l.type==='panel'?'แผ่น':'เส้น';
+    var sp=lineShowPrice(l), unit=lineUnit(l);
     L.push(l.code+(l.name?' ('+l.name+')':'')+(l.grade==='B'?' (B)':''));
     L.push('   '+l.qty+' '+unit+' × '+fmt(sp)+'฿ = '+fmt(sp*l.qty)+'฿ ('+fmt(sp)+'฿/'+unit+')');
   });
@@ -2035,13 +2218,15 @@ function lineDel(i){ cart.lines.splice(i,1); saveCart(); renderCart(); renderGri
 /* A price typed BELOW list (grade A) is shown to the customer as full list
    price + a discount line — looks better and books identically. Grade B keeps
    its own (defect) price and never counts as discount. */
+/* Paneele in แผ่น, Profile in เส้น, Clips in แพ็ค. */
+function lineUnit(l){ return l.type==='panel' ? 'แผ่น' : (l.type==='clips' ? 'แพ็ค' : 'เส้น'); }
 function lineShowPrice(l){ return (l.grade!=='B' && l.listPrice>l.price) ? l.listPrice : l.price; }
 /* where the discount comes from — "KP009 ลด 29 ฿/แผ่น · ส่วนลดเพิ่ม 100 ฿" */
 function discDesc(lines, t){
   var parts=[];
   (lines||[]).forEach(function(l){
     var sp=lineShowPrice(l);
-    if(sp>l.price) parts.push(l.code+' ลด '+fmt(sp-l.price)+' ฿/'+(l.type==='panel'?'แผ่น':'เส้น'));
+    if(sp>l.price) parts.push(l.code+' ลด '+fmt(sp-l.price)+' ฿/'+lineUnit(l));
   });
   if(t && t.discTyped>0) parts.push('ส่วนลดเพิ่ม '+fmt(t.discTyped)+' ฿');
   return parts.join(' · ');
