@@ -1472,7 +1472,7 @@ setTimeout(function(){
 }, 12000);
 function attach(){
   PDB.ref('staffList').on('value', function(s){
-    var v=s.val()||{}; staffList=Object.keys(v).map(function(k){ return v[k]; }).filter(Boolean);
+    var v=s.val()||{}; staffList=Object.keys(v).map(function(k){ return v[k]; }).filter(Boolean); try{ kpNameThReset(); }catch(e){}
     renderStaff(); restoreSession();
   });
   PDB.ref('soldOut').on('value', function(s){ soldOut=s.val()||{}; renderGrid(); });
@@ -1597,6 +1597,65 @@ function posAllowed(s){
   if(!s||s.active===false) return false;
   return !!s.posAccess || s.officeAccess!==false;
 }
+/* ── ชื่อไทย: derselbe Mensch, zwei Schreibweisen ──────────────────────────
+   In der App stehen die Namen lateinisch (Go, Aoo, Oum, Chan) — am Telefon,
+   auf dem Hof und im Lieferschein heissen sie โก้, อู๋, อูม, ชาญ. Wer den
+   Fahrer anruft, braucht die thailändische Schreibweise; wer die Liste pflegt,
+   die lateinische.
+
+   Der lateinische Name bleibt der SCHLÜSSEL: Touren, Payroll, Sheet-Spiegel
+   und Tourverlauf hängen an genau dieser Zeichenfolge. Die thailändische
+   Schreibweise kommt nur ZUR ANZEIGE dazu — nie in eine gespeicherte Zeile,
+   nie in einen Vergleich.
+
+   Woher die Schreibweise kommt, in dieser Reihenfolge:
+   1. staffList[].nameTh, falls das Büro das Feld pflegt,
+   2. dem Personalnamen selbst: steht dort schon "Go - โก้" oder "BO - โบ้",
+      wird der thailändische Teil abgespalten und dem lateinischen zugeordnet —
+      damit bekommt eine ALTE Tour, auf der nur "Go" steht, den Namen von
+      heute mit, ohne dass irgendwo Daten geändert werden,
+   3. der festen Liste unten, damit die vier Fahrer auch dann stimmen, wenn
+      jemand den Personalnamen wieder zurückschreibt.
+   Ein Name, in dem schon Thai steht, wird nie ein zweites Mal ergänzt. */
+var KP_NAME_TH={ 'GO':'โก้', 'AOO':'อู๋', 'OUM':'อูม', 'CHAN':'ชาญ' };
+var _kpNameMap=null, _kpNameMapN=-1;
+function kpNameThReset(){ _kpNameMap=null; _kpNameMapN=-1; }
+function _kpStaffAll(){ try{ return ((typeof staffList!=="undefined"?staffList:[])); }catch(e){ return []; } }
+function _kpNameMapBuild(){
+  var m={}, list=_kpStaffAll();
+  Object.keys(KP_NAME_TH).forEach(function(k){ m[k]=KP_NAME_TH[k]; });
+  list.forEach(function(s){
+    var nm=String((s&&s.name)||'').trim(); if(!nm) return;
+    var th=(s&&s.nameTh) ? String(s.nameTh).trim()
+         : (nm.match(/[฀-๿]+(?:[฀-๿\s]*[฀-๿])?/g)||[]).join(' ').trim();
+    if(!th) return;
+    // der lateinische Rest des Namens, ohne Bindestrich/Punkt/Plus dazwischen
+    var lat=nm.replace(/[฀-๿]+/g,' ').replace(/[-–—·+]/g,' ').replace(/\s+/g,' ').trim();
+    if(!lat) return;
+    var keys=[lat, lat.split(' ')[0]];
+    keys.forEach(function(k){ k=String(k||'').toUpperCase(); if(k) m[k]=th; });
+  });
+  _kpNameMap=m; _kpNameMapN=list.length;
+}
+function kpNameTh(n){
+  var s=String(n==null?'':n).trim();
+  if(!s) return '';
+  if(/[฀-๿]/.test(s)) return '';   // steht schon auf Thai
+  if(!_kpNameMap || _kpNameMapN!==_kpStaffAll().length) _kpNameMapBuild();
+  // gleiche Schreibung wie beim Bauen der Liste: "Aoo + Waen" und "Aoo Waen"
+  // sind derselbe Schlüssel. Nur ein VOLLER Treffer zählt — bei "Go + Chan"
+  // waere die Schreibweise eines der beiden schlicht falsch.
+  var key=s.toUpperCase().replace(/[-–—·+]/g,' ').replace(/\s+/g,' ').trim();
+  return _kpNameMap[key]||'';
+}
+/* 'Go' → 'Go · โก้' — und unverändert zurück, wenn es keine Schreibweise gibt */
+function kpName(n){
+  var s=String(n==null?'':n), th=kpNameTh(s);
+  return th ? (s+' · '+th) : s;
+}
+/* Für enge Stellen (Chips, Karten): ' (โก้)' oder nichts */
+function kpNameTag(n){ var th=kpNameTh(n); return th ? (' ('+th+')') : ''; }
+
 function renderStaff(){
   // One anonymous door: everyone uses the same Login button, the PIN itself
   // says who it is. The name is tracked in the background (audit, order,
@@ -1707,7 +1766,7 @@ function _posLogoutDo(){
   posGo('login');
 }
 function enterShop(){
-  var sn=$('seller-name'); if(sn) sn.textContent=me?me.name:'—';
+  var sn=$('seller-name'); if(sn) sn.textContent=me?kpName(me.name):'—';
   restoreCart(); restoreDraft();
   buildFilters(); renderGrid(); posGo('shop');
   try{ navigator.wakeLock && navigator.wakeLock.request('screen').catch(function(){}); }catch(e){}
