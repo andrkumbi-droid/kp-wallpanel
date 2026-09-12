@@ -23351,6 +23351,39 @@ function kpKeepAwake(){
 document.addEventListener('visibilitychange', function(){
   if(document.visibilityState==='visible' && !_kpWake) kpKeepAwake();
 });
+// ── Verbindung zur Datenbank nach dem Aufwachen ──────────────────────────────
+// iOS legt eine Seite im Hintergrund schlafen und kappt dabei still die
+// Verbindung zur Datenbank. Beim Zurueckkommen sieht die App aus wie immer —
+// die Daten von vorhin stehen ja noch da —, aber jede NEUE Abfrage wartet
+// endlos. So sah es aus, als "laden die Slip-Bilder nicht" (12.09.2026).
+// Deshalb: den Verbindungsstand mitschreiben und beim Zurueckkommen einmal
+// nachfassen, wenn er wirklich weg ist. goOffline/goOnline baut den Draht neu
+// auf; die Listener haengen danach von selbst wieder dran.
+var _kpConnSince = 0;
+function kpWatchConnection(){
+  if(!window.fbRootDb || window._kpConnWatch) return;
+  window._kpConnWatch = true;
+  try{
+    window.fbRootDb.ref('.info/connected').on('value', function(s){
+      var on = s.val() === true;
+      if(window._kpDbConn !== on){ window._kpDbConn = on; _kpConnSince = Date.now(); }
+    });
+  }catch(e){}
+}
+function kpNudgeConnection(){
+  if(window._kpDbConn !== false) return;                       // Draht steht
+  if(_kpConnSince && Date.now() - _kpConnSince < 4000) return; // kurzer Aussetzer: in Ruhe lassen
+  try{
+    firebase.database().goOffline();
+    setTimeout(function(){ try{ firebase.database().goOnline(); }catch(e){} }, 150);
+  }catch(e){}
+}
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState !== 'visible') return;
+  kpWatchConnection();
+  setTimeout(kpNudgeConnection, 1200);   // dem SDK erst selbst eine Chance geben
+});
+try{ setTimeout(kpWatchConnection, 4000); }catch(e){}
 // The TV reported wake:idle — asked for once at startup, refused, never asked again.
 // Some browsers only hand a wake lock to a page that has been interacted with, and a
 // lock is dropped whenever the page is hidden. So: ask again every half minute, and
@@ -24183,19 +24216,43 @@ function ofSlipReviewButtons(o){
     +'<button type="button" onclick="ofSetSlipReview(\''+oid+'\',\'flag\')" style="font-size:12px;font-weight:700;padding:6px 12px;border-radius:var(--rs);cursor:pointer;border:1.5px solid #dc2626;background:'+(flagOn?'#dc2626':'transparent')+';color:'+(flagOn?'#fff':'#dc2626')+'">🚩 Problem / มีปัญหา</button>'
     +meta;
 }
+// Am Telefon blieb hier "Loading slip…" stehen (12.09.2026, iPhone). Nicht das
+// Bild war schuld: .once() hatte weder ein Zeitlimit noch einen Fehlerzweig.
+// Legt iOS die Seite im Hintergrund schlafen, stirbt die Verbindung zur
+// Datenbank still — die Anfrage wartet dann ewig und der Bildschirm sagt nichts.
+// Jetzt: 12 Sekunden warten, danach ein Knopf zum erneuten Versuch.
+function ofSlipRetryHTML(orderId, txt){
+  var oid=String(orderId).replace(/['\\]/g,'');
+  return '<div style="font-size:12px;color:#b45309;background:#fef3c7;border-radius:8px;padding:6px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+    +'<span>'+txt+'</span>'
+    +'<button type="button" onclick="ofLoadSlipPhotos(\''+oid+'\')" style="font-size:11px;font-weight:700;padding:4px 10px;border-radius:6px;border:1px solid #f59e0b;background:#fff;color:#b45309;cursor:pointer">↻ ลองใหม่ / retry</button>'
+    +'</div>';
+}
 function ofLoadSlipPhotos(orderId){
   var sid=safeOrderId(orderId), el=document.getElementById('slrev_ph_'+sid); if(!el) return;
   if(!window.fbDB){ el.innerHTML='<span style="font-size:12px;color:var(--text2)">—</span>'; return; }
-  window.fbDB.ref('orderPhotos/slip/'+sid).once('value', function(snap){
+  el.innerHTML='<span style="font-size:12px;color:var(--text2)">Loading slip… / กำลังโหลด</span>';
+  var fertig=false;
+  var zeit=setTimeout(function(){
+    if(fertig) return; fertig=true;
+    el.innerHTML=ofSlipRetryHTML(orderId, (window._kpDbConn===false)
+      ? '⚠ ไม่มีการเชื่อมต่อ / no connection'
+      : '⚠ โหลดสลิปไม่สำเร็จ / slip did not load');
+  }, 12000);
+  window.fbDB.ref('orderPhotos/slip/'+sid).once('value').then(function(snap){
+    if(fertig) return;
+    fertig=true; clearTimeout(zeit);
     var data=snap.val()||{}, keys=Object.keys(data);
     if(!keys.length){ el.innerHTML='<div style="font-size:12px;font-weight:700;color:#dc2626;background:#fee2e2;border-radius:8px;padding:6px 10px">⚠ ไม่มีสลิป / No slip — driver marked online but attached none!</div>'; return; }
     el.innerHTML=keys.map(function(k){
       var p=data[k]||{};
       var tag=p.slip?('<div style="position:absolute;top:4px;left:4px;background:'+kpSlipColor(p.slip.status)+';color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px">'+kpSlipShort(p.slip)+'</div>'):'';
-      // Show the whole slip large & uncropped so the amount / QR is readable inline.
-      // Tap still opens the full-screen lightbox (now above this panel).
       return '<div style="position:relative;flex:1 1 240px;max-width:100%"><img src="'+p.data+'" onclick="openPhotoLightbox(this.src)" style="width:100%;max-height:440px;object-fit:contain;background:var(--bg2);border-radius:8px;cursor:zoom-in;border:1px solid var(--border)">'+tag+'<div style="position:absolute;bottom:4px;right:6px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;font-weight:600;padding:1px 6px;border-radius:6px;pointer-events:none">🔍 tap / แตะ</div></div>';
     }).join('');
+  }).catch(function(e){
+    if(fertig) return;
+    fertig=true; clearTimeout(zeit);
+    el.innerHTML=ofSlipRetryHTML(orderId, '⚠ '+((e&&e.message)||'Fehler / error'));
   });
 }
 function ofSetSlipReview(orderId, status){
