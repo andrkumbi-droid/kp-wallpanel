@@ -19,6 +19,20 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <script>
+// ── DEMO ODER ECHT ────────────────────────────────────────────────────────
+// Standard ist DEMO: kein initializeApp, kein Login bei Firebase, kein einziges
+// Byte zur echten Datenbank. Die Seite läuft auf einem erfundenen Datensatz
+// (siehe demoSeed unten) und kann gefahrlos zerpflückt werden. Erst
+// ?source=live (gemerkt je Gerät, ?source=demo dreht zurück) hängt sie an die
+// echten Knoten — und selbst dann schreibt sie nichts, bis "เปิดใช้จริง" gedrückt ist.
+var DEMO=true;
+try{
+  var _srcQ=(location.search.match(/[?&]source=(live|demo)/)||[])[1];
+  if(_srcQ) localStorage.setItem('kp-tour-source', _srcQ);
+  DEMO = localStorage.getItem('kp-tour-source')!=='live';
+}catch(e){}
+var DB, W, LIVE=false, tdAuthReady;
+if(!DEMO){
 firebase.initializeApp({
   apiKey: "AIzaSyBhUzwMR28dvulez9q6AZ4gZS80Y9VK0qQ",
   authDomain: "kp-wallpanel.firebaseapp.com",
@@ -70,6 +84,20 @@ var tdAppCheckReady = new Promise(function(resolve){
 var SEASON='v2';
 var _rootDb = firebase.database();
 var DB = { ref:function(p){ return _rootDb.ref(SEASON+'/'+(p==null?'':p)); } };
+// ── VORSCHAU ODER SCHARF ──────────────────────────────────────────────────
+// Diese Seite hängt an derselben Datenbank wie das Büro. Solange sie gebaut und
+// ausprobiert wird, darf ein Klick hier keine echte Tour anfassen: Lesen läuft
+// immer live (DB.ref), Schreiben läuft über W.ref — und das ist stumm, bis die
+// Seite je Gerät bewusst scharf geschaltet wird (localStorage kp-tour-live).
+var LIVE=false; try{ LIVE=localStorage.getItem('kp-tour-live')==='1'; }catch(e){}
+var _mute=(function(){
+  var ok=function(){ return Promise.resolve(); };
+  var m={ set:ok, update:ok, remove:ok, push:function(){ return m; },
+          transaction:function(fn, done){ if(done) try{ done(null,false,null); }catch(e){} return ok(); },
+          then:function(f){ return ok().then(f); }, catch:ok };
+  return m;
+})();
+var W = { ref:function(p){ return LIVE ? DB.ref(p) : _mute; } };
 function _tdAcRetry(){
   try{
     if(window._tdAcOn && !sessionStorage.getItem('kpAcRetry')){
@@ -93,6 +121,14 @@ function _tdSignIn(attempt){
     });
 }
 var tdAuthReady = tdAppCheckReady.then(function(){ return _tdSignIn(1); });
+} else {
+  // DEMO: Attrappen mit denselben Methoden, damit kein Aufruf ins Leere greift.
+  // Lesen liefert nichts (die Daten kommen aus demoSeed), Schreiben verpufft.
+  var _off=function(){ return _off_; }, _off_={ on:_off, once:_off, off:_off, set:_off, update:_off, remove:_off, push:_off,
+    transaction:function(fn,done){ if(done) try{ done(null,false,null); }catch(e){} return _off_; },
+    limitToLast:_off, then:function(f){ return Promise.resolve().then(f); }, catch:function(){ return _off_; } };
+  DB={ ref:_off }; W={ ref:_off }; tdAuthReady=Promise.resolve(false);
+}
 </script>
 
 <style>
@@ -295,6 +331,17 @@ input,select,textarea{ font-family:inherit; color:var(--plat); }
   display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600;
 }
 .iconbtn{ border:1px solid var(--line); background:var(--s2); border-radius:9px; padding:6px 9px; font-size:13px; color:var(--plat2); }
+
+/* ── Vorschau / scharf ──────────────────────────────────────────── */
+#livebar:empty{ display:none; }
+.livebar{ max-width:1500px; margin:12px auto 0; padding:0 18px; }
+.livebar > div{
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:10px 14px; border-radius:var(--rs); font-size:12.5px;
+  background:var(--amber-dim); border:1px solid var(--amber-line); color:var(--amber);
+}
+.livebar b{ font-weight:600; }
+.livedot{ width:7px; height:7px; border-radius:50%; background:var(--jade); box-shadow:0 0 0 3px var(--jade-dim); }
 
 /* ── Kennzahlen ─────────────────────────────────────────────────── */
 #kpi{ max-width:1500px; margin:0 auto; padding:16px 18px 6px; display:grid; gap:10px;
@@ -512,6 +559,9 @@ main{ max-width:1500px; margin:0 auto; padding:10px 18px 64px; }
       <button class="iconbtn" onclick="logout()" title="ออกจากระบบ / log out">⏻</button>
     </div>
   </div></header>
+
+  <!-- Steht so lange über allem, wie die Seite nichts speichert. -->
+  <div id="livebar"></div>
 
   <div id="kpi"></div>
 
@@ -755,8 +805,12 @@ function noKey(rawId){ return tourKey(rawId); }
 // Eine Nummer in EINER Transaktion beanspruchen. _max zählt nie herunter.
 function noClaim(rawId, day, floor, cb){
   var key=noKey(rawId);
+  // DEMO: Nummern werden lokal vergeben, nach derselben Regel (nie unter dem
+  // höchsten schon vergebenen Stand). Vorschau auf echten Daten prägt keine.
+  if(DEMO){ cb(floor+1); return; }
+  if(!LIVE){ cb(0); return; }
   try{
-    DB.ref('tourNo/'+day).transaction(function(cur){
+    W.ref('tourNo/'+day).transaction(function(cur){
       cur=cur||{};
       if((parseInt(cur[key])||0)>0) return;             // schon beansprucht → behalten
       var mx=parseInt(cur._max)||0;
@@ -778,7 +832,7 @@ function noSeed(rawId, tid){
   if(!day || !num || _noSeeded[day+'/'+key]===num) return;
   _noSeeded[day+'/'+key]=num;
   try{
-    DB.ref('tourNo/'+day).transaction(function(cur){
+    W.ref('tourNo/'+day).transaction(function(cur){
       cur=cur||{};
       if((parseInt(cur[key])||0)>0) return;             // vorhandener Anspruch gewinnt
       cur[key]=num; cur._max=Math.max(parseInt(cur._max)||0, num);
@@ -813,7 +867,7 @@ function regUpsert(t){
     paid:!!old.paid, payVoid:!!old.payVoid, paidBy:old.paidBy||'', paidAt:old.paidAt||0,
     ts:old.ts||Date.now() };
   tourReg[t.tid]=rec;
-  try{ DB.ref('tourReg/'+t.tid).set(rec); }catch(e){}
+  try{ W.ref('tourReg/'+t.tid).set(rec); }catch(e){}
   noSeed(t.id, t.tid);
 }
 function stampOrders(t){
@@ -830,8 +884,8 @@ function setTid(rawId, tid, dayIso){
   if(t){
     t.tid=tid; if(hasDay) t.tourDay=dayIso;
     stampOrders(t); regUpsert(t);
-    try{ DB.ref('activeTours/'+rawId+'/tid').set(tid);
-         if(hasDay) DB.ref('activeTours/'+rawId+'/tourDay').set(dayIso); }catch(e){}
+    try{ W.ref('activeTours/'+rawId+'/tid').set(tid);
+         if(hasDay) W.ref('activeTours/'+rawId+'/tourDay').set(dayIso); }catch(e){}
   }
   noSeed(rawId, tid);
 }
@@ -893,7 +947,96 @@ function boot(){
   // (Ladefotos) und darf nicht im Dauerabo hängen.
   DB.ref('tourHistory').once('value', function(s){ tourHistory=s.val()||{}; });
 }
-tdAuthReady.then(boot);
+/* ═══ 3b · DEMO-DATENSATZ ═════════════════════════════════════════════════
+   Alles erfunden — Kunden, Adressen, Nummern, Beträge. Fest verwürfelt (eigener
+   Zufall mit festem Startwert), damit die Seite bei jedem Öffnen gleich aussieht
+   und man einen Fehler zweimal hintereinander sehen kann. Die Feldnamen sind
+   dieselben wie in der echten Datenbank; wer hier etwas umbenennt, bricht die
+   Seite auch für echte Daten. PIN für alle Demo-Konten: 1234.                */
+function demoSeed(){
+  var seed=20260915; var rnd=function(){ seed=(seed*1664525+1013904223)%4294967296; return seed/4294967296; };
+  var pick=function(a){ return a[Math.floor(rnd()*a.length)]; };
+  var ri=function(a,b){ return a+Math.floor(rnd()*(b-a+1)); };
+  var day=function(off){ var d=new Date(); d.setDate(d.getDate()+off); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+  var baht=function(v){ return v.toLocaleString('en-US')+' ฿'; };
+
+  staffList=[
+    { id:'s1', name:'Demo Office', pin:'1234', role:'Office', officeAccess:true, active:true },
+    { id:'s2', name:'Demo Boss',   pin:'1234', role:'Boss',   officeAccess:true, active:true },
+    { id:'d1', name:'Go - โก้',    pin:'1234', role:'Driver', isDriver:true, driverId:'d1', phone:'081-000-0001', officeAccess:false },
+    { id:'d2', name:'Aoo อู๋',     pin:'1234', role:'Driver', isDriver:true, driverId:'d2', phone:'081-000-0002', officeAccess:false },
+    { id:'d3', name:'Oum - อูม',   pin:'1234', role:'Driver', isDriver:true, driverId:'d3', phone:'081-000-0003', officeAccess:false },
+    { id:'d4', name:'Jai',         pin:'1234', role:'Driver', isDriver:true, driverId:'d4', phone:'081-000-0004', officeAccess:false, nameTh:'ใจ' },
+    { id:'d5', name:'Bo',          pin:'1234', role:'Driver', isDriver:true, driverId:'d5', phone:'081-000-0005', officeAccess:false, nameTh:'โบ้' },
+    { id:'d6', name:'Lalamove',    pin:'1234', role:'Driver', isDriver:true, driverId:'d6', officeAccess:false }
+  ];
+  rebuildDrivers();
+
+  var zones=[ ['Bangkok',1,['บางนา','ลาดพร้าว','บางแค','มีนบุรี','สายไหม']],
+              ['Northern',2,['อ.เมือง จ.เชียงใหม่','อ.แม่ริม จ.เชียงใหม่','อ.เมือง จ.ลำปาง','อ.เมือง จ.พิษณุโลก']],
+              ['Northeastern',3,['อ.เมือง จ.ขอนแก่น','อ.เมือง จ.อุดรธานี','อ.เมือง จ.นครราชสีมา','อ.ปากช่อง จ.นครราชสีมา']],
+              ['Eastern',4,['อ.ศรีราชา จ.ชลบุรี','อ.เมือง จ.ระยอง','อ.เมือง จ.ปราจีนบุรี']],
+              ['Southern',5,['อ.หัวหิน จ.ประจวบฯ','อ.เมือง จ.สุราษฎร์ธานี','เกาะสมุย','อ.หาดใหญ่ จ.สงขลา']] ];
+  var first=['คุณสมชาย','คุณนภา','คุณวิชัย','คุณอรทัย','คุณธนา','คุณปิยะ','คุณสุดา','คุณกิตติ','ร้านบ้านสวย','หจก.ทรัพย์เจริญ','คุณมานะ','คุณลัดดา'];
+  var codes=['KP009','KP036','KP041','KP054','L07','KP012'];
+  var stat=['ready','ready','ready','ready','packing','new'];
+  orders=[]; var counters={};
+  zones.forEach(function(z){
+    var cnt=ri(6,9);
+    for(var i=0;i<cnt;i++){
+      counters[z[1]]=(counters[z[1]]||200)+ri(1,4);
+      var id=(z[0]==='Bangkok'?'#':z[1]+'-')+counters[z[1]];
+      var qty=ri(20,320), unit=pick([189,199,219,239]), amt=qty*unit;
+      var ctn=Math.ceil(qty/12), bun=rnd()<.4?ri(1,3):0;
+      var o={ id:id, customer:pick(first), phone:'08'+ri(1,9)+'-'+ri(100,999)+'-'+ri(1000,9999),
+        address:ri(1,299)+'/'+ri(1,20)+' '+pick(z[2]), zone:z[0], status:pick(stat),
+        date:day(-ri(0,9)), total:baht(amt), ctn:ctn, bundle:bun, panels:qty,
+        lineItems:[{type:'panel', code:pick(codes), qty:qty, price:unit, amount:amt}] };
+      if(rnd()<.3) o.reqNote='ต้องการรับ '+fmtD(day(ri(1,5)));
+      if(rnd()<.2) o.notes='โทรก่อนส่ง / call before delivery';
+      if(rnd()<.25){ o.paidAmount=Math.round(amt*.5); o.paidOnline=o.paidAmount; o.payMethod='online'; o.payDate=day(-ri(3,8)); }
+      orders.push(o);
+    }
+  });
+
+  // Drei laufende Touren mit gemischtem Stand — eine unterwegs, eine noch im Hof,
+  // eine ohne Fahrer. Die Stopps kommen aus dem Pool heraus, damit nichts doppelt ist.
+  var mk=function(tid, drv, n, driving, pay){
+    var list=orders.filter(function(o){ return !o.tourNo && o.status!=='new'; }).slice(0,n);
+    var t={ id:'t'+tid.replace('-',''), tid:tid, driverId:drv?drv.id:'', driverName:drv?drv.name:TOUR_NODRIVER_LABEL,
+            orders:list.map(function(o){return o.id;}), status:{}, checks:{}, created:'07:'+ri(10,55),
+            driverPay:pay, driverAdvance:0, tourDay:day(0) };
+    if(driving){ t.driving=true; t.departedAt='08:'+ri(10,50); t.departedDate=day(0); }
+    list.forEach(function(o,i){
+      o.tourNo=tid; if(drv) o.deliveredBy=drv.name;
+      if(driving && i<Math.floor(n*.6)){
+        t.status[o.id]='delivered'; o.status='delivered';
+        var amt=orderTotal(o), cash=rnd()<.6;
+        o.paidAmount=amt; if(cash){ o.paidCash=amt; o.payMethod='cash'; } else { o.paidOnline=amt; o.payMethod='online'; }
+        o.payDate=day(0); o.tourPay={cash:cash?amt:0, online:cash?0:amt};
+      } else { t.status[o.id]='loaded'; o.status='loaded'; }
+    });
+    if(driving && n>3){ var last=list[n-1]; t.status[last.id]='delivered'; last.status='delivered'; delete last.paidAmount; delete last.paidCash; delete last.paidOnline; delete last.payMethod; }
+    return t;
+  };
+  var D=function(id){ return drivers.find(function(d){return d.id===id;}); };
+  activeTours=[ mk(tidDayStr()+'-1', D('d1'), 6, true, 1800),
+                mk(tidDayStr()+'-2', D('d2'), 4, false, 1500),
+                mk(tidDayStr()+'-3', null, 3, false, 0) ];
+  activeTours[0].adj=[{oid:'', sign:1, amt:200, note:'ค่าทางด่วน / toll'}];
+
+  // Zwei beendete, noch nicht ausgezahlte Touren im Register.
+  tourReg={};
+  [[-1,'d3',2200],[-2,'d4',1650]].forEach(function(r,i){
+    var d=D(r[1]), k=tidDayStr(new Date(Date.now()+r[0]*86400000))+'-1';
+    tourReg[k]={ id:k, tourId:'hist'+i, driverId:d.id, driverName:d.name, state:'ended', driverPay:r[2], payBase:r[2], adjTotal:0,
+                 paid:false, payVoid:false, orderCount:ri(4,8), createdDate:day(r[0]), departedDate:day(r[0]), orders:[] };
+  });
+  activeTours.forEach(function(t){ regUpsert(t); });
+}
+function demoBoot(){ demoSeed(); _ready=true; loginRender(); restoreSession(); render(); }
+
+if(DEMO) demoBoot(); else tdAuthReady.then(boot);
 
 /* ═══ 4 · LOGIN ═══════════════════════════════════════════════════════════ */
 var pinEntry='', pinTarget=null;
@@ -916,6 +1059,7 @@ function pickStaff(id){
   pinTarget=s; pinEntry='';
   $('pin-name').textContent=s.name;
   $('pin-err').textContent='';
+  if(DEMO){ $('pin-err').style.color='var(--plat3)'; $('pin-err').textContent='ทดลอง / demo · PIN 1234'; }
   $('login-step1').style.display='none';
   $('login-step2').style.display='block';
   padRender(); dotsRender();
@@ -1031,7 +1175,7 @@ document.addEventListener('focusout', function(){
 function render(){
   if(!me || !$('scr-app').classList.contains('on')) return;
   if(typingNow()){ _holdRender=true; return; }
-  navRender(); kpiRender();
+  liveRender(); navRender(); kpiRender();
   ['plan','tours','money'].forEach(function(v){ $('v-'+v).classList.toggle('on', view===v); });
   if(view==='plan') planRender();
   if(view==='tours') toursRender();
@@ -1383,14 +1527,14 @@ function forFb(t){
 }
 function pushTour(t){
   if(!t||!t.id) return;
-  try{ DB.ref('activeTours/'+t.id).set(forFb(t)); }catch(e){ console.error('pushTour', e); }
+  try{ W.ref('activeTours/'+t.id).set(forFb(t)); }catch(e){ console.error('pushTour', e); }
 }
 function pushOrder(o){
   if(!o||!o.id) return;
-  try{ DB.ref('orders/'+ordKey(o.id)).set(JSON.parse(JSON.stringify(o))); }catch(e){ console.error('pushOrder', e); }
+  try{ W.ref('orders/'+ordKey(o.id)).set(JSON.parse(JSON.stringify(o))); }catch(e){ console.error('pushOrder', e); }
 }
 function audit(type, subject, detail){
-  try{ DB.ref('auditLog').push({ type:type, orderId:subject, by:(me?me.name:'Tour'),
+  try{ W.ref('auditLog').push({ type:type, orderId:subject, by:(me?me.name:'Tour'),
         detail:detail, ts:Date.now(), date:todayStr(), time:hhmm(), src:'tour.html' }); }catch(e){}
 }
 
@@ -1503,7 +1647,7 @@ function removeAsk(tid, btn){
     if(o && ['ready','loaded'].indexOf(o.status)>=0){ o.status='ready'; pushOrder(o); }
     if(!t.orders.length){
       activeTours=activeTours.filter(function(x){ return x.id!==tid; });
-      try{ DB.ref('activeTours/'+tid).remove(); }catch(e){}
+      try{ W.ref('activeTours/'+tid).remove(); }catch(e){}
     } else pushTour(t);
     audit('tour','🚚 '+(t.driverName||''), 'เอาออก / removed '+oid);
     render();
@@ -1562,6 +1706,36 @@ function payCashAsk(tid){
     audit('tour','🚚 '+(t.driverName||''), 'จ่ายเงินสด / paid cash '+n(amt)+' ฿');
     render();
   });
+}
+
+/* ═══ 10b · VORSCHAU / SCHARF ═════════════════════════════════════════════
+   Solange die Seite nicht scharf ist, sieht sie alles und speichert nichts —
+   ein Klick auf "ส่งแล้ว" ändert dann nur das Bild bis zum nächsten Live-Update.
+   Scharf schalten ist eine bewusste Entscheidung je Gerät, mit Rückfrage. */
+function liveRender(){
+  var el=$('livebar'); if(!el) return;
+  el.innerHTML = DEMO
+    ? '<div class="livebar"><div>'
+      +'<span>🧪</span><b>ข้อมูลทดลอง / demo data</b>'
+      +'<span>ไม่ได้เชื่อมกับฐานข้อมูลจริง — ทุกอย่างในหน้านี้เป็นตัวเลขสมมติ · not connected to the real database, every number here is made up</span>'
+      +'</div></div>'
+    : LIVE
+    ? ''
+    : '<div class="livebar"><div>'
+      +'<span>👁</span><b>โหมดดู / preview</b>'
+      +'<span>ไม่บันทึกอะไรลงฐานข้อมูล · nothing you click is saved — the office app is untouched</span>'
+      +(readOnly()?'':'<button class="btn btn-amber" style="margin-left:auto" onclick="liveAsk()">เปิดใช้จริง / go live</button>')
+      +'</div></div>';
+  var b=$('live-chip');
+  if(b){ b.style.display=LIVE?'':'none'; }
+}
+function liveAsk(){
+  ask('เปิดใช้จริง? / go live?',
+      'ทุกอย่างที่กดจะบันทึกจริงและแอปออฟฟิศเห็นทันที / every click will be saved for real, the office app sees it at once',
+      function(){ LIVE=true; try{ localStorage.setItem('kp-tour-live','1'); }catch(e){} audit('tour','🔓 tour.html','scharf geschaltet / went live'); render(); });
+}
+function liveOff(){
+  LIVE=false; try{ localStorage.removeItem('kp-tour-live'); }catch(e){} render();
 }
 
 /* ═══ 11 · FARBWELT ═══════════════════════════════════════════════════════
