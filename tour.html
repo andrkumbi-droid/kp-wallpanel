@@ -1,0 +1,1485 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#080D1A">
+<title>KP Wallpanel · ทัวร์ / Dispatch</title>
+<link rel="icon" href="kp-icon-app.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@200;300;400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- ═══════════════ FIREBASE — dasselbe Projekt wie index.html / pos.html ══════════
+     Dieselben Knoten unter v2/: orders · activeTours · drivers · staffList ·
+     tourReg · tourNo · tourPayouts. Die Seite ist eine zweite Tür in dieselben
+     Daten, keine Kopie davon.                                                   -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script>
+firebase.initializeApp({
+  apiKey: "AIzaSyBhUzwMR28dvulez9q6AZ4gZS80Y9VK0qQ",
+  authDomain: "kp-wallpanel.firebaseapp.com",
+  databaseURL: "https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "kp-wallpanel",
+  storageBucket: "kp-wallpanel.firebasestorage.app",
+  messagingSenderId: "794246593779",
+  appId: "1:794246593779:web:703fc0a4ba89ba58734b86"
+});
+// ── APP CHECK — Regeln wortgleich zu pos.html (dort ausführlich begründet):
+//    · erst aktivieren, wenn <body> existiert
+//    · reCAPTCHA vorher anpingen — nicht erreichbar ⇒ überspringen
+//    · localhost nur mit REGISTRIERTEM Debug-Token (?acdebug=…), sonst hängt die
+//      RTDB-Verbindung ewig
+//    · Geräte-Notaus localStorage 'kpAcOff' (GETEILT mit index.html/pos.html)
+var APPCHECK_SITE_KEY = '6LebwYgtAAAAAB9LWZ91x3eZfllT9mPsV3Y8Vfpv';
+function acReachable(){
+  return new Promise(function(res){
+    var to=setTimeout(function(){ res(false); }, 5000);
+    fetch('https://www.google.com/recaptcha/api.js',{mode:'no-cors'})
+      .then(function(){ clearTimeout(to); res(true); })
+      .catch(function(){ clearTimeout(to); res(false); });
+  });
+}
+var tdAppCheckReady = new Promise(function(resolve){
+  var _acOff=false; try{ _acOff=localStorage.getItem('kpAcOff')==='1'; }catch(e){}
+  if(_acOff){ console.warn('[TOUR] App Check auf diesem Gerät aus (kpAcOff)'); resolve(false); return; }
+  if(!APPCHECK_SITE_KEY || !firebase.appCheck){ resolve(false); return; }
+  function go(){
+    try{
+      if(/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || location.protocol==='file:'){
+        var _acQ=(location.search.match(/[?&]acdebug=([^&]+)/)||[])[1];
+        if(_acQ){ try{ localStorage.setItem('kpAcDebugToken', decodeURIComponent(_acQ)); }catch(e){} }
+        var _acSaved=''; try{ _acSaved=localStorage.getItem('kpAcDebugToken')||''; }catch(e){}
+        if(!_acSaved){ console.warn('[TOUR] localhost ohne registrierten Debug-Token — App Check übersprungen'); resolve(false); return; }
+        self.FIREBASE_APPCHECK_DEBUG_TOKEN=_acSaved;
+      }
+      firebase.appCheck().activate(APPCHECK_SITE_KEY, true);
+      window._tdAcOn=true; resolve(true);
+    }catch(e){ console.error('[TOUR] App Check activate failed:', e&&e.message); resolve(false); }
+  }
+  function whenBody(fn){ if(document.body) fn(); else setTimeout(function w(){ document.body?fn():setTimeout(w,5); },0); }
+  acReachable().then(function(ok){
+    if(!ok){ console.warn('[TOUR] reCAPTCHA nicht erreichbar — App Check übersprungen'); resolve(false); return; }
+    whenBody(go);
+  });
+});
+// SEASON ROOT — muss zu index.html passen (v2/).
+var SEASON='v2';
+var _rootDb = firebase.database();
+var DB = { ref:function(p){ return _rootDb.ref(SEASON+'/'+(p==null?'':p)); } };
+function _tdAcRetry(){
+  try{
+    if(window._tdAcOn && !sessionStorage.getItem('kpAcRetry')){
+      sessionStorage.setItem('kpAcRetry','1');
+      localStorage.setItem('kpAcOff','1');
+      setTimeout(function(){ location.reload(); }, 400);
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+function _tdSignIn(attempt){
+  return firebase.auth().signInAnonymously()
+    .then(function(){ window._tdAuthOk=true; return true; })
+    .catch(function(e){
+      console.error('[TOUR] anonymous sign-in failed (try '+attempt+'):', e&&e.code, e&&e.message);
+      window._tdAuthOk=false;
+      if(_tdAcRetry()) return false;
+      var wait=Math.min(30000, 2000*Math.pow(2, Math.min(attempt-1,4)));
+      return new Promise(function(res){ setTimeout(function(){ res(_tdSignIn(attempt+1)); }, wait); });
+    });
+}
+var tdAuthReady = tdAppCheckReady.then(function(){ return _tdSignIn(1); });
+</script>
+
+<style>
+/* ═══════════════════════ MIDNIGHT & PLATIN ═══════════════════════
+   Ein Leitstand, kein Formular. Tiefes Nachtblau als Grund, Platin für
+   Schrift, Eisblau als einziger Akzent. Zahlen stehen gross und dünn,
+   Beschriftungen klein und gesperrt — das Auge liest zuerst die Zahl.
+   Status hat feste Farben und nur diese vier:
+     Eis   = ausgewählt / aktiv      Jade = erledigt, bezahlt
+     Bernstein = wartet, offen       Koralle = Problem, unbezahlt        */
+:root{
+  --ink:#070B16; --ink2:#0D1425; --ink3:#141D33; --ink4:#1C2740;
+  --line:rgba(255,255,255,.085); --line2:rgba(255,255,255,.16);
+  --plat:#EAEFF9; --plat2:#97A4BF; --plat3:#61708F;
+  --ice:#7CB0FF; --ice2:#B9D4FF; --ice-dim:rgba(124,176,255,.14);
+  --jade:#3DDC97; --jade-dim:rgba(61,220,151,.13);
+  --amber:#F5C451; --amber-dim:rgba(245,196,81,.13);
+  --coral:#FF7A85; --coral-dim:rgba(255,122,133,.13);
+  --violet:#B18CFF;
+  --r:18px; --rs:12px; --rx:999px;
+  --shadow:0 18px 50px rgba(0,0,0,.45);
+}
+*{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body{ margin:0; padding:0; }
+body{
+  font-family:'Prompt','Leelawadee UI','Segoe UI',system-ui,sans-serif;
+  background:var(--ink); color:var(--plat);
+  font-size:15px; line-height:1.5; min-height:100dvh;
+  background-image:
+    radial-gradient(1100px 620px at 78% -12%, rgba(124,176,255,.10), transparent 62%),
+    radial-gradient(900px 560px at 8% 104%, rgba(177,140,255,.07), transparent 60%);
+  background-attachment:fixed;
+  padding-bottom:env(safe-area-inset-bottom);
+}
+button{ font-family:inherit; cursor:pointer; color:inherit; }
+input,select,textarea{ font-family:inherit; color:var(--plat); }
+.num{ font-variant-numeric:tabular-nums; }
+::-webkit-scrollbar{ width:10px; height:10px; }
+::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.12); border-radius:99px; }
+::-webkit-scrollbar-track{ background:transparent; }
+
+/* ── Grundbausteine ─────────────────────────────────────────────── */
+/* Ein Bildschirm ist sichtbar, wenn er .on trägt — sonst nicht. Das !important
+   steht da, weil eine ID-Regel weiter unten (#scr-login{display:flex}) diese
+   Klassenregel sonst schlägt und der Login hinter der App stehen bleibt. */
+.scr{ display:none !important; } .scr.on{ display:block !important; }
+.lbl{ font-size:10px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--plat3); }
+.dim{ font-size:12px; color:var(--plat2); }
+.dim2{ font-size:11.5px; color:var(--plat3); }
+.card{
+  background:linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.018));
+  border:1px solid var(--line); border-radius:var(--r);
+}
+.hair{ height:1px; background:var(--line); border:0; margin:0; }
+.big{ font-weight:200; letter-spacing:-.02em; font-variant-numeric:tabular-nums; line-height:1.05; }
+
+/* ── Login ──────────────────────────────────────────────────────── */
+#scr-login.on{ display:flex !important; align-items:center; justify-content:center; }
+#scr-login{ min-height:100dvh; padding:26px 18px; }
+.loginbox{ width:100%; max-width:430px; }
+.brand{ text-align:center; margin-bottom:30px; }
+.brand .mark{
+  width:60px; height:60px; margin:0 auto 16px; border-radius:17px;
+  background:linear-gradient(145deg, var(--ice), #4d7fd6);
+  display:flex; align-items:center; justify-content:center;
+  font-weight:600; font-size:21px; color:#06101F; letter-spacing:-.02em;
+  box-shadow:0 14px 34px rgba(124,176,255,.28);
+}
+.brand h1{ margin:0; font-size:25px; font-weight:300; letter-spacing:.015em; }
+.brand p{ margin:5px 0 0; font-size:12px; letter-spacing:.24em; text-transform:uppercase; color:var(--plat3); }
+.stafflist{ display:grid; gap:9px; max-height:54vh; overflow-y:auto; padding:2px; }
+.staffbtn{
+  display:flex; align-items:center; gap:13px; width:100%; text-align:left;
+  padding:13px 15px; border-radius:var(--rs); border:1px solid var(--line);
+  background:rgba(255,255,255,.035); font-size:15px;
+}
+.staffbtn:hover{ border-color:var(--line2); background:rgba(255,255,255,.06); }
+.staffbtn .av{
+  width:38px; height:38px; border-radius:50%; flex-shrink:0;
+  background:var(--ice-dim); color:var(--ice2);
+  display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600;
+}
+.pinwrap{ text-align:center; }
+.dots{ display:flex; gap:13px; justify-content:center; margin:20px 0 22px; min-height:16px; }
+.dots i{ width:13px; height:13px; border-radius:50%; border:1px solid var(--ice); background:transparent; transition:background .15s, transform .15s; }
+.dots i.f{ background:var(--ice); transform:scale(1.12); }
+.pad{ display:grid; grid-template-columns:repeat(3,1fr); gap:11px; }
+.pad button{
+  padding:17px 0; font-size:21px; font-weight:300; border-radius:var(--rs);
+  border:1px solid var(--line); background:rgba(255,255,255,.04);
+}
+.pad button:active{ background:var(--ice-dim); transform:scale(.95); }
+.pad button.ghost{ border-color:transparent; background:transparent; color:var(--plat2); font-size:17px; }
+.err{ color:var(--coral); min-height:19px; font-size:13px; margin-top:12px; }
+.linkbtn{ background:none; border:none; color:var(--plat3); font-size:13.5px; padding:11px; margin-top:6px; }
+
+/* ── Kopfleiste ─────────────────────────────────────────────────── */
+#bar{
+  position:sticky; top:0; z-index:40;
+  background:rgba(7,11,22,.82); backdrop-filter:blur(16px);
+  border-bottom:1px solid var(--line);
+}
+.barin{ max-width:1500px; margin:0 auto; padding:11px 18px; display:flex; align-items:center; gap:14px; }
+.logo{ display:flex; align-items:center; gap:10px; flex-shrink:0; }
+.logo .m{
+  width:31px; height:31px; border-radius:9px; background:linear-gradient(145deg, var(--ice), #4d7fd6);
+  display:flex; align-items:center; justify-content:center; color:#06101F; font-size:12px; font-weight:600;
+}
+.logo b{ font-weight:400; font-size:15px; letter-spacing:.01em; }
+.logo span{ font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; color:var(--plat3); display:block; margin-top:-2px; }
+.nav{ display:flex; gap:4px; margin-left:auto; overflow-x:auto; scrollbar-width:none; }
+.nav::-webkit-scrollbar{ display:none; }
+.nav button{
+  flex-shrink:0; padding:8px 15px; border-radius:var(--rx); border:1px solid transparent;
+  background:transparent; color:var(--plat2); font-size:13px; font-weight:500; white-space:nowrap;
+  display:flex; align-items:center; gap:7px;
+}
+.nav button:hover{ color:var(--plat); background:rgba(255,255,255,.05); }
+.nav button.on{ background:var(--ice-dim); border-color:rgba(124,176,255,.3); color:var(--ice2); }
+.nav .n{ font-size:11px; font-weight:600; opacity:.85; font-variant-numeric:tabular-nums; }
+.who{ display:flex; align-items:center; gap:9px; flex-shrink:0; }
+.who .av{
+  width:30px; height:30px; border-radius:50%; background:var(--ice-dim); color:var(--ice2);
+  display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600;
+}
+.iconbtn{ border:1px solid var(--line); background:rgba(255,255,255,.04); border-radius:9px; padding:6px 9px; font-size:13px; color:var(--plat2); }
+
+/* ── Kennzahlen ─────────────────────────────────────────────────── */
+#kpi{ max-width:1500px; margin:0 auto; padding:16px 18px 6px; display:grid; gap:10px;
+      grid-template-columns:repeat(auto-fit, minmax(152px,1fr)); }
+.kpi{ padding:13px 15px; border-radius:var(--rs); text-align:left;
+      background:linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.016));
+      border:1px solid var(--line); position:relative; overflow:hidden; }
+.kpi::after{ content:''; position:absolute; left:0; top:0; bottom:0; width:2px; background:var(--accent,var(--ice)); opacity:.75; }
+.kpi .v{ font-size:25px; margin-top:4px; }
+.kpi .s{ font-size:11px; color:var(--plat3); margin-top:2px; }
+
+main{ max-width:1500px; margin:0 auto; padding:10px 18px 64px; }
+.view{ display:none; } .view.on{ display:block; }
+
+/* ── Werkzeugleiste / Chips ─────────────────────────────────────── */
+.tools{ display:flex; gap:7px; flex-wrap:wrap; align-items:center; margin:14px 0 12px; }
+.chip{
+  padding:6px 13px; border-radius:var(--rx); border:1px solid var(--line);
+  background:rgba(255,255,255,.035); color:var(--plat2); font-size:12.5px; font-weight:500;
+  display:inline-flex; align-items:center; gap:7px; white-space:nowrap;
+}
+.chip:hover{ border-color:var(--line2); color:var(--plat); }
+.chip.on{ background:var(--ice-dim); border-color:rgba(124,176,255,.35); color:var(--ice2); }
+.chip b{ font-weight:600; font-variant-numeric:tabular-nums; }
+.chip .d{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.search{
+  flex:1 1 210px; min-width:170px; padding:7px 14px; border-radius:var(--rx);
+  border:1px solid var(--line); background:rgba(255,255,255,.035); font-size:13px; outline:none;
+}
+.search:focus{ border-color:rgba(124,176,255,.45); background:rgba(124,176,255,.06); }
+.search::placeholder{ color:var(--plat3); }
+
+/* ── Plan: Pool + Dock ──────────────────────────────────────────── */
+#plan-grid{ display:grid; gap:16px; align-items:start; }
+.zone{ border-radius:var(--r); border:1px solid var(--line); overflow:hidden;
+       background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.012)); margin-bottom:14px; }
+.zone-h{ padding:14px 16px 11px; display:flex; align-items:flex-start; gap:12px; }
+.zone-h .nm{ font-size:15px; font-weight:500; letter-spacing:.01em; }
+.meter{ height:3px; background:rgba(255,255,255,.07); margin:0 16px; border-radius:99px; overflow:hidden; }
+.meter i{ display:block; height:100%; border-radius:99px; transition:width .35s; }
+.zone-m{ padding:7px 16px 11px; display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+.ord{ display:flex; gap:13px; padding:12px 16px; border-top:1px solid var(--line); cursor:pointer; align-items:flex-start; }
+.ord:hover{ background:rgba(255,255,255,.035); }
+.ord.on{ background:rgba(124,176,255,.10); box-shadow:inset 2px 0 0 var(--ice); }
+.ord .hd{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ord .id{ font-size:13.5px; font-weight:500; letter-spacing:.01em; }
+.ord .cu{ font-size:13px; margin-top:3px; color:var(--plat); }
+.ord .amt{ font-size:15px; font-weight:300; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.ord .rt{ display:flex; flex-direction:column; align-items:flex-end; gap:8px; flex-shrink:0; }
+.tick{ width:25px; height:25px; border-radius:50%; border:1px solid var(--line2); color:var(--plat3);
+       display:flex; align-items:center; justify-content:center; font-size:13px; }
+.ord.on .tick{ background:var(--ice); border-color:var(--ice); color:#06101F; }
+.tag{ font-size:10px; font-weight:500; letter-spacing:.04em; padding:2px 8px; border-radius:var(--rx); white-space:nowrap; }
+.t-ice{ background:var(--ice-dim); color:var(--ice2); }
+.t-jade{ background:var(--jade-dim); color:var(--jade); }
+.t-amber{ background:var(--amber-dim); color:var(--amber); }
+.t-coral{ background:var(--coral-dim); color:var(--coral); }
+.t-mute{ background:rgba(255,255,255,.06); color:var(--plat2); }
+
+#dock{ position:sticky; top:74px; }
+.dockin{ border-radius:var(--r); border:1px solid var(--line2);
+         background:linear-gradient(180deg, rgba(124,176,255,.09), rgba(255,255,255,.02)); padding:16px; }
+.dock-h{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px; }
+.dock-h .t{ font-size:14px; font-weight:500; }
+.sums{ display:grid; grid-template-columns:repeat(2,1fr); gap:1px; background:var(--line);
+       border:1px solid var(--line); border-radius:var(--rs); overflow:hidden; margin-bottom:13px; }
+.sums > div{ background:var(--ink2); padding:11px 12px; }
+.sums .v{ font-size:20px; margin-top:3px; }
+.picked{ max-height:230px; overflow-y:auto; margin-bottom:13px; display:grid; gap:6px; }
+.prow{ display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:10px;
+       background:rgba(255,255,255,.04); border:1px solid var(--line); }
+.zdot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.xbtn{ border:none; background:none; color:var(--coral); font-size:15px; padding:2px 4px; flex-shrink:0; }
+.drvgrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(92px,1fr)); gap:7px; margin-bottom:13px; }
+.drv{ display:flex; flex-direction:column; align-items:center; gap:4px; padding:11px 5px;
+      border-radius:var(--rs); border:1px solid var(--line); background:rgba(255,255,255,.035); }
+.drv:hover{ border-color:var(--line2); }
+.drv.on{ border-color:var(--ice); background:var(--ice-dim); }
+.drv.busy{ border-style:dashed; }
+.drv .av{ width:31px; height:31px; border-radius:50%; background:rgba(255,255,255,.07);
+          display:flex; align-items:center; justify-content:center; font-size:11.5px; font-weight:600; color:var(--plat2); }
+.drv.on .av{ background:var(--ice); color:#06101F; }
+.drv .nm{ font-size:11.5px; font-weight:500; text-align:center; line-height:1.25; }
+.drv .st{ font-size:9.5px; color:var(--plat3); text-align:center; line-height:1.2; }
+.toggle{ display:flex; align-items:center; gap:9px; font-size:12.5px; color:var(--plat2); margin-bottom:13px; }
+.toggle input{ width:15px; height:15px; accent-color:var(--ice); }
+.go{ width:100%; padding:14px; border-radius:var(--rs); border:none; font-size:14px; font-weight:500;
+     background:linear-gradient(135deg, var(--ice), #5a8ee0); color:#06101F; letter-spacing:.01em; }
+.go:disabled{ background:rgba(255,255,255,.06); color:var(--plat3); cursor:not-allowed; }
+.warn{ font-size:12.5px; color:var(--amber); background:var(--amber-dim); border-radius:10px; padding:9px 12px; margin-bottom:12px; }
+
+/* ── Tours ──────────────────────────────────────────────────────── */
+#tour-list{ display:grid; gap:14px; }
+.tour{ border-radius:var(--r); border:1px solid var(--line); overflow:hidden;
+       background:linear-gradient(180deg, rgba(255,255,255,.042), rgba(255,255,255,.014)); }
+.tour.run{ border-color:rgba(61,220,151,.3); }
+.tour-h{ padding:15px 17px; display:flex; align-items:center; gap:11px; flex-wrap:wrap; cursor:pointer; }
+.tid{ font-size:11px; font-weight:500; letter-spacing:.06em; padding:3px 9px; border-radius:var(--rx);
+      background:rgba(177,140,255,.14); color:var(--violet); white-space:nowrap; }
+.tour-h .nm{ font-size:16px; font-weight:400; flex:1 1 130px; min-width:0; letter-spacing:.01em; }
+.ring{ width:40px; height:40px; flex-shrink:0; position:relative; }
+.ring svg{ transform:rotate(-90deg); }
+.ring span{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+            font-size:10.5px; font-weight:500; font-variant-numeric:tabular-nums; }
+.tour-m{ padding:0 17px 14px; display:flex; gap:9px; flex-wrap:wrap; align-items:center; }
+.stat{ display:flex; flex-direction:column; gap:1px; padding:8px 13px; border-radius:10px;
+       background:rgba(255,255,255,.04); border:1px solid var(--line); min-width:96px; }
+.stat .v{ font-size:16px; font-weight:300; font-variant-numeric:tabular-nums; }
+.stops{ border-top:1px solid var(--line); }
+.stop{ display:flex; gap:12px; padding:12px 17px; border-bottom:1px solid var(--line); }
+.stop.done{ opacity:.5; }
+.stop .sn{ width:22px; height:22px; border-radius:50%; flex-shrink:0; margin-top:2px;
+           background:rgba(255,255,255,.06); color:var(--plat3);
+           display:flex; align-items:center; justify-content:center; font-size:10.5px; font-variant-numeric:tabular-nums; }
+.acts{ display:flex; gap:6px; flex-wrap:wrap; margin-top:9px; }
+.btn{ padding:6px 12px; border-radius:9px; border:1px solid var(--line); background:rgba(255,255,255,.04);
+      color:var(--plat2); font-size:12px; font-weight:500; white-space:nowrap; }
+.btn:hover{ border-color:var(--line2); color:var(--plat); }
+.btn-ice{ background:var(--ice-dim); border-color:rgba(124,176,255,.3); color:var(--ice2); }
+.btn-jade{ background:var(--jade-dim); border-color:rgba(61,220,151,.3); color:var(--jade); }
+.btn-amber{ background:var(--amber-dim); border-color:rgba(245,196,81,.32); color:var(--amber); }
+.btn-coral{ background:var(--coral-dim); border-color:rgba(255,122,133,.3); color:var(--coral); }
+.btn-solid{ background:linear-gradient(135deg, var(--ice), #5a8ee0); border-color:transparent; color:#06101F; }
+.tour-f{ padding:12px 17px; border-top:1px solid var(--line); display:flex; gap:6px; flex-wrap:wrap; }
+
+/* ── Money ──────────────────────────────────────────────────────── */
+.mrow{ border-radius:var(--r); border:1px solid var(--line); padding:15px 17px; margin-bottom:12px;
+       background:linear-gradient(180deg, rgba(255,255,255,.042), rgba(255,255,255,.014)); }
+.mgrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:1px; background:var(--line);
+        border:1px solid var(--line); border-radius:var(--rs); overflow:hidden; margin:12px 0; }
+.mgrid > div{ background:var(--ink2); padding:11px 13px; }
+.mgrid .v{ font-size:19px; margin-top:3px; }
+.money-in{ width:120px; padding:7px 11px; border-radius:9px; border:1px solid var(--line);
+           background:rgba(255,255,255,.05); font-size:15px; font-weight:300; text-align:right; outline:none;
+           font-variant-numeric:tabular-nums; }
+.money-in:focus{ border-color:rgba(124,176,255,.5); }
+
+/* ── Leerzustand / Ladezustand ──────────────────────────────────── */
+.empty{ padding:46px 20px; text-align:center; color:var(--plat3); font-size:13.5px;
+        border:1px dashed var(--line2); border-radius:var(--r); }
+.sect{ display:flex; align-items:center; gap:12px; margin:22px 0 13px; }
+.sect .hair{ flex:1; }
+
+/* ── Dialoge ────────────────────────────────────────────────────── */
+.sheet{ position:fixed; inset:0; z-index:80; background:rgba(3,6,14,.74); backdrop-filter:blur(7px);
+        display:none; align-items:center; justify-content:center; padding:20px; }
+.sheet.on{ display:flex; }
+.sheetcard{ width:100%; max-width:430px; border-radius:var(--r); border:1px solid var(--line2);
+            background:var(--ink2); box-shadow:var(--shadow); padding:22px; max-height:88vh; overflow-y:auto; }
+.sheetcard h3{ margin:0 0 5px; font-size:17px; font-weight:400; }
+.dayrow{ display:flex; gap:7px; margin:14px 0 11px; flex-wrap:wrap; }
+.dateinput{ width:100%; padding:12px 14px; border-radius:var(--rs); border:1px solid var(--line);
+            background:rgba(255,255,255,.05); font-size:15px; outline:none; color-scheme:dark; }
+.preview{ margin:13px 0 17px; padding:12px 14px; border-radius:var(--rs);
+          background:rgba(177,140,255,.10); border:1px solid rgba(177,140,255,.22); font-size:13px; }
+
+@media (min-width:1080px){
+  #plan-grid{ grid-template-columns:minmax(0,1fr) 360px; }
+  .sums{ grid-template-columns:repeat(4,1fr); }
+  .mgrid{ grid-template-columns:repeat(4,1fr); }
+}
+@media (max-width:640px){
+  /* Am Handy passt die Navigation nicht neben das Logo — sie bekommt eine eigene
+     Zeile, sonst steht "เงิน / Money" ausserhalb des Bildes. */
+  .barin{ padding:9px 13px; gap:9px; flex-wrap:wrap; }
+  .nav{ order:3; width:100%; margin-left:0; padding-top:2px; }
+  .who{ margin-left:auto; }
+  #kpi{ padding:12px 13px 4px; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); }
+  main{ padding:8px 13px 60px; }
+  .logo span{ display:none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ LOGIN ═══════════════ -->
+<div class="scr on" id="scr-login">
+  <div class="loginbox">
+    <div class="brand">
+      <div class="mark">KP</div>
+      <h1>ทัวร์ &amp; จัดส่ง</h1>
+      <p>Dispatch</p>
+    </div>
+    <div id="login-step1">
+      <div class="lbl" style="margin-bottom:11px">เลือกชื่อ / who are you</div>
+      <div class="stafflist" id="stafflist"><div class="empty" style="padding:30px">กำลังโหลด / loading…</div></div>
+    </div>
+    <div id="login-step2" style="display:none">
+      <div class="pinwrap">
+        <div class="lbl">รหัส PIN</div>
+        <div style="font-size:19px;font-weight:300;margin-top:6px" id="pin-name">—</div>
+        <div class="dots" id="dots"></div>
+      </div>
+      <div class="pad" id="pad"></div>
+      <div class="err" id="pin-err"></div>
+      <button class="linkbtn" onclick="pinClose()">← เปลี่ยนชื่อ / back</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ APP ═══════════════ -->
+<div class="scr" id="scr-app">
+  <header id="bar"><div class="barin">
+    <div class="logo">
+      <div class="m">KP</div>
+      <div><b>ทัวร์</b><span>Dispatch</span></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="who">
+      <div class="av" id="me-av">—</div>
+      <button class="iconbtn" onclick="logout()" title="ออกจากระบบ / log out">⏻</button>
+    </div>
+  </div></header>
+
+  <div id="kpi"></div>
+
+  <main>
+    <section class="view on" id="v-plan"></section>
+    <section class="view" id="v-tours"></section>
+    <section class="view" id="v-money"></section>
+  </main>
+</div>
+
+<!-- Tag der Ausfahrt — die Tour-Nummer hängt an diesem Tag, nicht daran,
+     wann das Büro sie zufällig gebaut hat. -->
+<div class="sheet" id="sheet-day"><div class="sheetcard">
+  <h3>วันออกทัวร์ / Tour day</h3>
+  <div class="dim">รหัสทัวร์จะอยู่ในวันนี้ / the tour ID belongs to this day</div>
+  <div class="dayrow">
+    <button class="chip" onclick="dayPick(0)">วันนี้ / today</button>
+    <button class="chip" onclick="dayPick(1)">พรุ่งนี้ / tomorrow</button>
+    <button class="chip" onclick="dayPick(2)">+2</button>
+  </div>
+  <input type="date" class="dateinput" id="day-date" onchange="dayPreview()">
+  <div class="preview" id="day-prev"></div>
+  <div style="display:flex;gap:9px">
+    <button class="btn" style="flex:1;padding:12px" onclick="sheetClose('sheet-day')">ยกเลิก / cancel</button>
+    <button class="go" style="flex:2" onclick="dayConfirm()" id="day-go">ส่ง / send</button>
+  </div>
+</div></div>
+
+<!-- Ja/Nein statt confirm(): der Browser-Dialog sieht auf dem Tablet fremd aus
+     und blockiert die Seite. -->
+<div class="sheet" id="sheet-ask"><div class="sheetcard" style="max-width:380px">
+  <h3 id="ask-t">—</h3>
+  <div class="dim" id="ask-b" style="margin-bottom:18px"></div>
+  <div style="display:flex;gap:9px">
+    <button class="btn" style="flex:1;padding:12px" onclick="askNo()">ไม่ / no</button>
+    <button class="go" style="flex:1" onclick="askYes()">ตกลง / yes</button>
+  </div>
+</div></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════════
+   KP WALLPANEL · TOUR / DISPATCH
+   Eigenständige Seite neben index.html — gleiche Datenbank, gleiche Knoten,
+   eigenes Gesicht. Die App bleibt unangetastet; beides kann parallel laufen,
+   weil beide auf denselben Feldern arbeiten und per Firebase live zusehen.
+
+   Aufbau der Datei:
+     1  Zustand + Firebase-Abos
+     2  Übernommene Rechenwege aus index.html (Geld, Tour-Nummern)  ← wortgleich
+     3  Login
+     4  Rahmen (Navigation, Kennzahlen)
+     5  PLAN   — Touren bauen
+     6  TOURS  — laufende Touren, Stopps
+     7  MONEY  — Kasse gegen Lohn
+     8  Schreibwege in die Datenbank
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ═══ 1 · ZUSTAND ═════════════════════════════════════════════════════════ */
+var staffList=[], orders=[], activeTours=[], drivers=[], tourReg={}, tourHistory={}, shippers=[];
+var me=null, view='plan';
+var SESSION_MS=4*60*60*1000;                 // 4 h, wie im Büro-Login der App
+var sel=[], selDriver=null, forceNew=false;
+var fZone='', fStat='', q='', openTour={}, fDrv='';
+var msg='', _tourSnap={}, _ready=false;
+var TOUR_NODRIVER='__NODRIVER__', TOUR_NODRIVER_LABEL='⏳ ยังไม่กำหนดคนขับ / no driver yet';
+var TRUCK=100000;                            // ฿ je Zone, ab dem sich eine Fahrt lohnt
+var ZC={ 'Bangkok':'#7CB0FF','Northern':'#B18CFF','Northeastern':'#F5C451',
+         'Eastern':'#4ECDC4','Southern':'#FF8FB1','Instore':'#3DDC97','Unknown':'#61708F' };
+var ST={ ready:{l:'พร้อม / ready',c:'t-jade'}, packing:{l:'กำลังแพ็ค / packing',c:'t-amber'},
+         new:{l:'ใหม่ / new',c:'t-ice'} };
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function n(v){ return (Number(v)||0).toLocaleString('en-US'); }
+function zc(z){ return ZC[z]||'#61708F'; }
+function initials(s){ return String(s||'?').trim().split(/\s+/).map(function(w){return w[0];}).join('').toUpperCase().slice(0,2); }
+function todayStr(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function fmtD(d){ if(!d) return '—'; var t=new Date(d+'T00:00:00'); if(isNaN(t)) return d;
+  return String(t.getDate()).padStart(2,'0')+'/'+String(t.getMonth()+1).padStart(2,'0')+'/'+t.getFullYear(); }
+function hhmm(){ var d=new Date(); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function ordKey(id){ return String(id||'').replace(/[^a-zA-Z0-9]/g,'_'); }
+function tourKey(id){ return String(id||'').replace(/[.#$/\[\]]/g,'_'); }   // Firebase verbietet . # $ / [ ]
+function readOnly(){ return !!(me && (me.logisticsMode || me.shopMode)); }
+
+/* ── Fahrernamen auf Thai ──────────────────────────────────────────────────
+   In der App stehen die Namen lateinisch (Go, Aoo, Oum), am Telefon und auf dem
+   Hof heissen die Leute โก้, อู๋, อูม. Wer anruft, braucht die thailändische
+   Schreibweise — also stehen beide da. Übernommen aus index.html.            */
+var NAME_TH={ 'GO':'โก้','AOO':'อู๋','OUM':'อูม','CHAN':'ชาญ' };
+var _nameMap=null, _nameMapN=-1;
+function nameMapBuild(){
+  var m={}; Object.keys(NAME_TH).forEach(function(k){ m[k]=NAME_TH[k]; });
+  staffList.forEach(function(s){
+    var nm=String((s&&s.name)||'').trim(); if(!nm) return;
+    var th=(s&&s.nameTh)?String(s.nameTh).trim()
+         :(nm.match(/[฀-๿]+(?:[฀-๿\s]*[฀-๿])?/g)||[]).join(' ').trim();
+    if(!th) return;
+    var lat=nm.replace(/[฀-๿]+/g,' ').replace(/[-–—·+]/g,' ').replace(/\s+/g,' ').trim();
+    if(!lat) return;
+    [lat, lat.split(' ')[0]].forEach(function(k){ k=String(k||'').toUpperCase(); if(k) m[k]=th; });
+  });
+  _nameMap=m; _nameMapN=staffList.length;
+}
+function nameTh(v){
+  var s=String(v==null?'':v).trim();
+  if(!s || /[฀-๿]/.test(s)) return '';        // steht schon auf Thai
+  if(!_nameMap || _nameMapN!==staffList.length) nameMapBuild();
+  // Nur ein VOLLER Treffer zählt: bei "Go + Chan" wäre eine der beiden
+  // Schreibweisen schlicht falsch.
+  return _nameMap[s.toUpperCase().replace(/[-–—·+]/g,' ').replace(/\s+/g,' ').trim()]||'';
+}
+function kpName(v){ var s=String(v==null?'':v), th=nameTh(s); return th?(s+' · '+th):s; }
+
+/* Fahrer werden AUS staffList abgeleitet, nicht aus dem drivers-Knoten — der
+   ist nur ein Rest und hat längst nicht alle. Gleiche Regel wie in index.html:
+   isDriver und nicht away. */
+function rebuildDrivers(){
+  drivers = staffList.filter(function(s){ return s.isDriver && !s.away; })
+    .map(function(s){ return { id:s.driverId||s.id, name:s.name, phone:s.phone||'', vehicle:s.vehicle||'' }; });
+}
+
+/* ═══ 2 · ÜBERNOMMENE RECHENWEGE ══════════════════════════════════════════
+   Wortgleich aus index.html. Geldbeträge und Tour-Nummern dürfen NICHT zweimal
+   erfunden werden — eine zweite Formel, die um 1 ฿ abweicht, ist ein Fehler,
+   den niemand findet. Wer hier etwas ändert, ändert es auch in index.html.   */
+
+// Ganze Baht: alle Trennzeichen raus, damit "17.873 ฿" 17873 ergibt und nicht 17.
+function orderTotal(o){ return parseInt(String((o&&o.total)||'').replace(/[^0-9]/g,''),10)||0; }
+
+// Was auf EINER Order insgesamt bezahlt ist, aufgeteilt in Bar/Überweisung.
+function payCO(o){
+  var pc=parseFloat(o&&o.paidCash)||0, po=parseFloat(o&&o.paidOnline)||0;
+  if(pc>0||po>0){
+    // paidCash/paidOnline ist die Momentaufnahme EINER Zahlung. Wird später
+    // aufgestockt, steigt paidAmount, die Aufteilung bleibt stehen — der Rest
+    // muss dazugerechnet werden, sonst verschwindet Geld.
+    var amt=(o&&o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):0;
+    var rest=Math.round((amt-(pc+po))*100)/100;
+    if(rest>0){
+      var m=(o.payMethod||o.payMethodPartial||'');
+      if(m==='online') po+=rest;
+      else if(m==='cash') pc+=rest;
+      else return {cash:pc, online:po, unknown:rest};   // nie eine Banknote erfinden
+    }
+    return {cash:pc, online:po, unknown:0};
+  }
+  var a=(o&&o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):((o&&o.payMethod)?orderTotal(o):0);
+  if(a>0){
+    var mm=(o.payMethod||o.payMethodPartial||'');
+    if(mm==='online') return {cash:0, online:a, unknown:0};
+    if(mm==='cash')   return {cash:a, online:0, unknown:0};
+    return {cash:0, online:0, unknown:a};              // bezahlt, aber Weg unbekannt
+  }
+  return {cash:0, online:0, unknown:0};
+}
+
+// Was der Fahrer auf DIESER Fahrt kassiert hat — nicht, was die Order je gezahlt hat.
+function tourPayCO(t, o){
+  var full=payCO(o||{});
+  if(!t||!o) return full;
+  // Die Liefermaske schreibt seit 09/2026 auf, was an diesem Stopp kassiert wurde.
+  // Das ist eine Auskunft und schlägt jede Datumsheuristik.
+  var tp=o.tourPay;
+  if(tp && ((parseFloat(tp.cash)||0)>0 || (parseFloat(tp.online)||0)>0)){
+    var tc=parseFloat(tp.cash)||0, to=parseFloat(tp.online)||0;
+    var all=(o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):(tc+to);
+    return {cash:tc, online:to, unknown:0, pre:Math.max(0, Math.round((all-tc-to)*100)/100)};
+  }
+  var dep=t.departedDate||'', pd=String(o.payDate||'');
+  var snap=(parseFloat(o.paidCash)||0)+(parseFloat(o.paidOnline)||0);
+  var tot=(o.paidAmount!=null&&o.paidAmount!=='')?(parseFloat(o.paidAmount)||0):0;
+  var later=Math.max(0, Math.round((tot-snap)*100)/100);
+  // Ein Zahlungsdatum VOR der Abfahrt ist der einzige Beleg dafür, dass das Geld
+  // nicht auf dieser Fahrt kassiert wurde. Ohne diesen Beleg gehört es zur Fahrt.
+  if(!(dep && pd && pd<dep)) return full;
+  if(later>0 && snap>0){
+    var m=(o.payMethod||o.payMethodPartial||''), r={cash:0, online:0, unknown:0, pre:snap};
+    if(m==='online') r.online=later; else if(m==='cash') r.cash=later; else r.unknown=later;
+    return r;
+  }
+  return {cash:0, online:0, unknown:0, pre:(full.cash+full.online+(full.unknown||0))};
+}
+
+// Zuschläge/Abzüge auf einer Tour.
+function adjArr(t){ var a=(t&&t.adj); return Array.isArray(a)?a:(a&&typeof a==='object'?Object.keys(a).map(function(k){return a[k];}):[]); }
+function adjSign(e){ var s=parseInt(e&&e.sign,10); return (s===-1||s===1)?s:0; }
+function adjVal(e){ return adjSign(e)*Math.abs(parseFloat(e&&e.amt)||0); }
+function adjTotal(t){ return adjArr(t).reduce(function(a,e){ return a+adjVal(e); },0); }
+// Was am Ende der Fahrt übergeben wird: verdient − Vorschuss ± Zuschläge.
+function netPay(t){ return Math.max(0,(parseFloat(t.driverPay)||0)-(parseFloat(t.driverAdvance)||0)+adjTotal(t)); }
+
+// Der Status eines Stopps: ein am ORDER-Datensatz abgeschlossener Zustand gewinnt,
+// sonst steht er in der Tour.
+function stopStatus(t, id){
+  var raw=((t&&t.status)||{})[id]||'loaded';
+  if(raw==='delivered'||raw==='cancelled'||raw==='shipped') return raw;
+  var o=orders.find(function(x){return x.id===id;});
+  return (o&&o.status)||raw;
+}
+
+// ── Tour-Nummern (260915-1). Wortgleich übernommen, weil eine zweite Nummer
+//    für dieselbe Tour praktisch nicht mehr einzufangen ist. ──────────────
+function tidOk(v){ return typeof v==='string' && /^\d{6}-\d+$/.test(v); }
+function tidDayStr(d){ d=d||new Date(); return String(d.getFullYear()%100).padStart(2,'0')+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0'); }
+function tidDay(v){ return tidOk(v)?v.split('-')[0]:''; }
+function tidSeq(v){ return tidOk(v)?(parseInt(v.split('-')[1])||0):0; }
+function tidSortKey(v){ return tidOk(v)?(parseInt(tidDay(v))*100000+tidSeq(v)):0; }
+function tourDayOf(t){
+  var d=t&&t.tourDay;
+  if(d && /^\d{4}-\d{2}-\d{2}$/.test(d)){ var dt=new Date(d+'T00:00:00'); if(!isNaN(dt)) return tidDayStr(dt); }
+  return tidDayStr();
+}
+// Höchste auf DIESEM Tag schon vergebene Nummer — der Boden für die nächste,
+// damit eine verlorene Zählung nie dieselbe Nummer zweimal ausgibt.
+function maxSeqOfDay(day){
+  var mx=0, chk=function(v){ if(tidDay(v)===day){ var s=tidSeq(v); if(s>mx) mx=s; } };
+  Object.keys(tourReg||{}).forEach(chk);
+  activeTours.forEach(function(t){ chk(t&&t.tid); });
+  Object.keys(tourHistory||{}).forEach(function(dk){
+    var recs=tourHistory[dk]||{};
+    Object.keys(recs).forEach(function(k){ chk((recs[k]||{}).tid); });
+  });
+  return mx;
+}
+var _noPending={}, _noSeeded={};
+function noKey(rawId){ return tourKey(rawId); }
+// Eine Nummer in EINER Transaktion beanspruchen. _max zählt nie herunter.
+function noClaim(rawId, day, floor, cb){
+  var key=noKey(rawId);
+  try{
+    DB.ref('tourNo/'+day).transaction(function(cur){
+      cur=cur||{};
+      if((parseInt(cur[key])||0)>0) return;             // schon beansprucht → behalten
+      var mx=parseInt(cur._max)||0;
+      for(var k in cur){ if(k!=='_max'){ var v=parseInt(cur[k])||0; if(v>mx) mx=v; } }
+      if(floor>mx) mx=floor;
+      cur._max=mx+1; cur[key]=mx+1;
+      return cur;
+    }, function(err, committed, snap){
+      var v=0; try{ v=parseInt(((snap&&snap.val())||{})[key])||0; }catch(e){}
+      if(v>0){ cb(v); return; }
+      try{ DB.ref('tourNo/'+day+'/'+key).once('value',
+        function(s){ cb(parseInt(s.val())||0); }, function(){ cb(0); }); }catch(e2){ cb(0); }
+    }, false);   // applyLocally=false — nichts optimistisch schreiben
+  }catch(e){ cb(0); }
+}
+function noSeed(rawId, tid){
+  if(!rawId || !tidOk(tid)) return;
+  var day=tidDay(tid), num=tidSeq(tid), key=noKey(rawId);
+  if(!day || !num || _noSeeded[day+'/'+key]===num) return;
+  _noSeeded[day+'/'+key]=num;
+  try{
+    DB.ref('tourNo/'+day).transaction(function(cur){
+      cur=cur||{};
+      if((parseInt(cur[key])||0)>0) return;             // vorhandener Anspruch gewinnt
+      cur[key]=num; cur._max=Math.max(parseInt(cur._max)||0, num);
+      return cur;
+    }, null, false);
+  }catch(e){}
+}
+function regFindByTourId(tourId){
+  if(!tourId) return null;
+  var hit=null, hitPaid=false;
+  Object.keys(tourReg||{}).forEach(function(k){
+    if(!tidOk(k) || (tourReg[k]||{}).tourId!==tourId) return;
+    var paid=!!(tourReg[k]||{}).paid;
+    if(!hit || (paid&&!hitPaid) || (paid===hitPaid && tidSortKey(k)<tidSortKey(hit))){ hit=k; hitPaid=paid; }
+  });
+  return hit;
+}
+function regUpsert(t){
+  if(!t||!tidOk(t.tid)) return;
+  var old=(tourReg||{})[t.tid]||{};
+  var rec={ id:t.tid, tourId:t.id||'', driverId:t.driverId||'', driverName:t.driverName||'',
+    createdDate:(/^\d{4}-\d{2}-\d{2}$/.test(t.tourDay||'')?t.tourDay:(old.createdDate||todayStr())),
+    createdAt:old.createdAt||t.created||hhmm(),
+    departedDate:t.departedDate||old.departedDate||'', departedAt:t.departedAt||old.departedAt||'',
+    backDate:t.backDate||old.backDate||'', backAt:t.backAt||old.backAt||'',
+    endedDate:old.endedDate||'', endedAt:old.endedAt||'',
+    state:(old.state==='deleted'?'deleted':(old.state==='ended'?'ended':'active')),
+    orders:(t.orders||[]).slice(), orderCount:(t.orders||[]).length,
+    // driverPay im Register = was wirklich ausgezahlt werden muss (Basis ± Zuschläge).
+    driverPay:Math.max(0,(parseFloat(t.driverPay)||0)+adjTotal(t)),
+    payBase:parseFloat(t.driverPay)||0, adjTotal:adjTotal(t),
+    paid:!!old.paid, payVoid:!!old.payVoid, paidBy:old.paidBy||'', paidAt:old.paidAt||0,
+    ts:old.ts||Date.now() };
+  tourReg[t.tid]=rec;
+  try{ DB.ref('tourReg/'+t.tid).set(rec); }catch(e){}
+  noSeed(t.id, t.tid);
+}
+function stampOrders(t){
+  if(!t||!tidOk(t.tid)) return;
+  (t.orders||[]).forEach(function(id){
+    var o=orders.find(function(x){return x.id===id;});
+    if(o && o.tourNo!==t.tid){ o.tourNo=t.tid; pushOrder(o); }
+  });
+}
+function setTid(rawId, tid, dayIso){
+  if(!tidOk(tid)||!rawId) return;
+  var t=activeTours.find(function(x){ return x&&x.id===rawId; });
+  var hasDay=!!(dayIso && /^\d{4}-\d{2}-\d{2}$/.test(dayIso));
+  if(t){
+    t.tid=tid; if(hasDay) t.tourDay=dayIso;
+    stampOrders(t); regUpsert(t);
+    try{ DB.ref('activeTours/'+rawId+'/tid').set(tid);
+         if(hasDay) DB.ref('activeTours/'+rawId+'/tourDay').set(dayIso); }catch(e){}
+  }
+  noSeed(rawId, tid);
+}
+function allocNo(t){
+  if(!t||!t.id || tidOk(t.tid)){ if(t&&tidOk(t.tid)) noSeed(t.id,t.tid); return; }
+  if(_noPending[t.id]) return;
+  var ex=regFindByTourId(t.id);            // schon registriert → übernehmen, nicht neu prägen
+  if(ex){ setTid(t.id, ex); return; }
+  _noPending[t.id]=1;
+  var dayIso=(t.tourDay && /^\d{4}-\d{2}-\d{2}$/.test(t.tourDay))?t.tourDay:'';
+  var day=tourDayOf(t), floor=maxSeqOfDay(day);
+  noClaim(t.id, day, floor, function(num){
+    delete _noPending[t.id];
+    if(!(num>0)) return;                   // lieber keine Nummer als eine erfundene
+    setTid(t.id, day+'-'+num, dayIso);
+    setTimeout(render, 0);
+  });
+}
+
+/* ═══ 3 · FIREBASE-ABOS ═══════════════════════════════════════════════════ */
+function boot(){
+  DB.ref('staffList').on('value', function(s){
+    staffList=s.val()?Object.values(s.val()):[];
+    _nameMap=null;                              // Schreibweisen neu einlesen
+    rebuildDrivers();
+    if(me){ var f=staffList.find(function(x){return x.id===me.id;}); if(f) me=f; }
+    loginRender(); restoreSession(); render();
+  });
+  DB.ref('orders').on('value', function(s){
+    orders=s.val()?Object.values(s.val()):[];
+    _ready=true; render();
+  });
+  DB.ref('activeTours').on('value', function(s){
+    var raw=s.val()?Object.values(s.val()):[];
+    // Was die Datenbank WIRKLICH hält, je Tour — damit ein Schreibvorgang nur
+    // die eigenen Änderungen schickt und nicht fremde überbügelt.
+    _tourSnap={}; raw.forEach(function(t){ if(t&&t.id) _tourSnap[t.id]=JSON.parse(JSON.stringify(t)); });
+    activeTours=raw.filter(function(t){ return t&&t.orders&&t.orders.length>0; });
+    // status/checks stehen unter bereinigten Schlüsseln (tourKey) — die echten
+    // Order-Nummern stehen in t.orders, daraus werden sie zurückgebaut.
+    activeTours.forEach(function(t){
+      var st=t.status||{}, ck=t.checks||{}, ns={}, nc={};
+      (t.orders||[]).forEach(function(id){
+        var k=tourKey(id);
+        if(st[k]!==undefined) ns[id]=st[k]; else if(st[id]!==undefined) ns[id]=st[id];
+        if(ck[k]!==undefined) nc[id]=ck[k]; else if(ck[id]!==undefined) nc[id]=ck[id];
+      });
+      t.status=ns; t.checks=nc;
+    });
+    activeTours.forEach(allocNo);
+    render();
+  });
+  // Der drivers-Knoten wird nur noch als Anstoss benutzt — die Liste selbst
+  // kommt aus staffList (siehe rebuildDrivers).
+  DB.ref('drivers').on('value', function(){ rebuildDrivers(); render(); });
+  DB.ref('tourReg').on('value', function(s){ tourReg=s.val()||{}; render(); });
+  DB.ref('shippers').on('value', function(s){ shippers=s.val()?Object.values(s.val()):[]; });
+  // tourHistory nur EINMAL und nur für die Nummernvergabe — der Knoten ist fett
+  // (Ladefotos) und darf nicht im Dauerabo hängen.
+  DB.ref('tourHistory').once('value', function(s){ tourHistory=s.val()||{}; });
+}
+tdAuthReady.then(boot);
+
+/* ═══ 4 · LOGIN ═══════════════════════════════════════════════════════════ */
+var pinEntry='', pinTarget=null;
+function allowed(s){ return !!s && s.active!==false && s.officeAccess!==false; }
+function loginRender(){
+  var el=$('stafflist'); if(!el) return;
+  var list=staffList.filter(allowed);
+  el.innerHTML = list.length===0
+    ? '<div class="empty" style="padding:30px">ยังไม่มีพนักงาน / no office staff</div>'
+    : list.map(function(s){
+        return '<button class="staffbtn" onclick="pickStaff(\''+esc(s.id)+'\')">'
+          +'<span class="av">'+esc(initials(s.name))+'</span>'
+          +'<span style="flex:1;min-width:0"><span style="display:block">'+esc(s.name)+'</span>'
+          +'<span class="dim2">'+esc(s.role||'Office')+'</span></span>'
+          +'<span style="color:var(--plat3)">→</span></button>';
+      }).join('');
+}
+function pickStaff(id){
+  var s=staffList.find(function(x){return x.id===id;}); if(!s) return;
+  pinTarget=s; pinEntry='';
+  $('pin-name').textContent=s.name;
+  $('pin-err').textContent='';
+  $('login-step1').style.display='none';
+  $('login-step2').style.display='block';
+  padRender(); dotsRender();
+}
+function pinClose(){ pinTarget=null; pinEntry=''; $('login-step1').style.display=''; $('login-step2').style.display='none'; }
+function padRender(){
+  $('pad').innerHTML=['1','2','3','4','5','6','7','8','9']
+    .map(function(k){ return '<button onclick="pinKey(\''+k+'\')">'+k+'</button>'; }).join('')
+    +'<button class="ghost" onclick="pinDel()">⌫</button>'
+    +'<button onclick="pinKey(\'0\')">0</button>'
+    +'<button class="ghost" onclick="pinOk()">✓</button>';
+}
+function dotsRender(){
+  var d=''; for(var i=0;i<Math.max(4,pinEntry.length);i++) d+='<i class="'+(i<pinEntry.length?'f':'')+'"></i>';
+  $('dots').innerHTML=d;
+}
+function pinKey(k){ if(pinEntry.length>=8) return; pinEntry+=k; dotsRender(); if(pinEntry.length>=4) pinOk(true); }
+function pinDel(){ pinEntry=pinEntry.slice(0,-1); dotsRender(); $('pin-err').textContent=''; }
+function pinOk(auto){
+  if(!pinTarget) return;
+  if(String(pinTarget.pin||'')!==pinEntry){
+    if(auto) return;                                    // beim Tippen nicht meckern
+    $('pin-err').textContent='PIN ไม่ถูกต้อง / wrong PIN'; pinEntry=''; dotsRender(); return;
+  }
+  me=pinTarget;
+  try{ localStorage.setItem('kp-tour-session', JSON.stringify({id:me.id, ts:Date.now()})); }catch(e){}
+  enter();
+}
+function restoreSession(){
+  if(me) return;
+  try{
+    var raw=localStorage.getItem('kp-tour-session'); if(!raw) return;
+    var s=JSON.parse(raw);
+    if(!s || (Date.now()-s.ts)>SESSION_MS){ localStorage.removeItem('kp-tour-session'); return; }
+    var st=staffList.find(function(x){return x.id===s.id;});
+    if(st && allowed(st)){ me=st; enter(); }
+  }catch(e){}
+}
+function enter(){
+  $('scr-login').classList.remove('on');
+  $('scr-app').classList.add('on');
+  $('me-av').textContent=initials(me.name);
+  $('me-av').title=me.name;
+  render();
+}
+function logout(){
+  ask('ออกจากระบบ? / log out?','', function(){
+    try{ localStorage.removeItem('kp-tour-session'); }catch(e){}
+    me=null; $('scr-app').classList.remove('on'); $('scr-login').classList.add('on'); pinClose();
+  });
+}
+document.addEventListener('keydown', function(e){
+  var sd=$('sheet-day'), sa=$('sheet-ask');
+  if(sa && sa.classList.contains('on')){ if(e.key==='Enter') askYes(); else if(e.key==='Escape') askNo(); return; }
+  if(sd && sd.classList.contains('on')){ if(e.key==='Escape') sheetClose('sheet-day'); return; }
+  if(!$('scr-login').classList.contains('on') || !pinTarget) return;
+  if(/^[0-9]$/.test(e.key)){ pinKey(e.key); e.preventDefault(); }
+  else if(e.key==='Backspace'){ pinDel(); e.preventDefault(); }
+  else if(e.key==='Enter'){ pinOk(); e.preventDefault(); }
+  else if(e.key==='Escape'){ pinClose(); }
+});
+
+/* ═══ 5 · MENGEN & AUSWAHL ════════════════════════════════════════════════ */
+function met(o){
+  var p=(o.lineItems||[]).filter(function(i){return i.type==='panel';})
+        .reduce(function(a,i){ return a+(parseInt(i.qty)||0); },0);
+  if(!p) p=parseInt(o.panels)||0;
+  return { panels:p, ctn:parseInt(o.ctn)||0, bun:parseInt(o.bundle)||0, baht:orderTotal(o) };
+}
+function sum(list){
+  return list.reduce(function(a,o){ var m=met(o);
+    a.n++; a.panels+=m.panels; a.ctn+=m.ctn; a.bun+=m.bun; a.baht+=m.baht; return a;
+  },{n:0,panels:0,ctn:0,bun:0,baht:0});
+}
+// Alles, was auf eine Tour könnte und auf keiner steht.
+function pool(){
+  var used={};
+  activeTours.forEach(function(t){ (t.orders||[]).forEach(function(id){ used[id]=1; }); });
+  return orders.filter(function(o){ return ST[o.status] && !used[o.id]; });
+}
+function tourMoney(t){
+  var m={cash:0,online:0,unknown:0};
+  (t.orders||[]).forEach(function(id){
+    if(((t.status||{})[id]||'')!=='delivered') return;
+    var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+    var c=tourPayCO(t,o); m.cash+=c.cash; m.online+=c.online; m.unknown+=(c.unknown||0);
+  });
+  return m;
+}
+function prog(t){
+  var done=0, open=0;
+  (t.orders||[]).forEach(function(id){
+    var s=stopStatus(t,id);
+    if(s==='delivered'||s==='shipped') done++; else if(s!=='cancelled') open++;
+  });
+  var tot=(t.orders||[]).length;
+  return { done:done, open:open, total:tot, pct:tot?Math.round(done/tot*100):0 };
+}
+
+/* ═══ 6 · RAHMEN ══════════════════════════════════════════════════════════ */
+function go(v){ view=v; render(); window.scrollTo({top:0,behavior:'smooth'}); }
+/* Live-Daten kommen jederzeit herein und würden mitten im Tippen das Feld unter
+   dem Finger neu bauen. Solange jemand in einem Feld steht, wird nicht gezeichnet
+   — sobald er es verlässt, holt der Nachzügler alles nach. */
+var _holdRender=false;
+function typingNow(){
+  var a=document.activeElement;
+  return !!(a && (a.tagName==='INPUT'||a.tagName==='TEXTAREA') && a.id!=='day-date');
+}
+document.addEventListener('focusout', function(){
+  setTimeout(function(){ if(_holdRender && !typingNow()){ _holdRender=false; render(); } }, 60);
+}, true);
+function render(){
+  if(!me || !$('scr-app').classList.contains('on')) return;
+  if(typingNow()){ _holdRender=true; return; }
+  navRender(); kpiRender();
+  ['plan','tours','money'].forEach(function(v){ $('v-'+v).classList.toggle('on', view===v); });
+  if(view==='plan') planRender();
+  if(view==='tours') toursRender();
+  if(view==='money') moneyRender();
+}
+function navRender(){
+  var defs=[['plan','◈','แผน / Plan', pool().length],
+            ['tours','◈','ทัวร์ / Tours', activeTours.length],
+            ['money','◈','เงิน / Money', 0]];
+  $('nav').innerHTML=defs.map(function(d){
+    return '<button class="'+(view===d[0]?'on':'')+'" onclick="go(\''+d[0]+'\')">'+d[2]
+      +(d[3]?'<span class="n">'+d[3]+'</span>':'')+'</button>';
+  }).join('');
+}
+function kpiCard(lbl,val,sub,col){
+  return '<div class="kpi" style="--accent:'+col+'"><div class="lbl">'+lbl+'</div>'
+    +'<div class="big v">'+val+'</div><div class="s">'+(sub||'')+'</div></div>';
+}
+function kpiRender(){
+  var p=pool(), rdy=sum(p.filter(function(o){return o.status==='ready';}));
+  var cash=0, open=0, running=0;
+  activeTours.forEach(function(t){ cash+=tourMoney(t).cash; open+=prog(t).open; if(t.driving) running++; });
+  var owe=0;
+  Object.keys(tourReg||{}).forEach(function(k){
+    var r=tourReg[k]||{};
+    if(tidOk(k) && r.state==='ended' && !r.paid && !r.payVoid) owe+=Number(r.driverPay)||0;
+  });
+  $('kpi').innerHTML=
+     kpiCard('รอจัด / to plan', n(p.length), n(rdy.baht)+' ฿ พร้อมส่ง / ready', 'var(--amber)')
+    +kpiCard('ทัวร์ / tours', n(activeTours.length), running+' กำลังวิ่ง / on the road', 'var(--ice)')
+    +kpiCard('ค้างส่ง / open stops', n(open), 'ยังไม่ถึงลูกค้า / not delivered', 'var(--violet)')
+    +kpiCard('เงินสดบนรถ / cash out', n(cash), 'ยังไม่เข้าออฟฟิศ / not in yet', 'var(--jade)')
+    +kpiCard('ค้างจ่ายคนขับ / unpaid', n(owe), 'ทัวร์ที่จบแล้ว / ended tours', owe>0?'var(--coral)':'var(--plat3)');
+}
+
+/* ═══ 7 · PLAN ════════════════════════════════════════════════════════════ */
+function setZone(z){ fZone=(fZone===z?'':z); planRender(); }
+function setStat(s){ fStat=(fStat===s?'':s); planRender(); }
+function setQ(v){ q=v; poolRender(); }
+function planFilt(list){
+  var s=(q||'').trim().toLowerCase();
+  return list.filter(function(o){
+    if(fZone && (o.zone||'Unknown')!==fZone) return false;
+    if(fStat && o.status!==fStat) return false;
+    if(s && [o.id,o.customer,o.phone,o.address,o.zone].join(' ').toLowerCase().indexOf(s)<0) return false;
+    return true;
+  });
+}
+function pick(el){
+  var id=el.getAttribute('data-oid'), i=sel.indexOf(id);
+  if(i>=0) sel.splice(i,1); else sel.push(id);
+  msg=''; poolRender(); dockRender();
+}
+function pickZone(z){
+  var list=planFilt(pool()).filter(function(o){ return (o.zone||'Unknown')===z; });
+  var all=list.length>0 && list.every(function(o){ return sel.indexOf(o.id)>=0; });
+  list.forEach(function(o){
+    var i=sel.indexOf(o.id);
+    if(all){ if(i>=0) sel.splice(i,1); } else if(i<0) sel.push(o.id);
+  });
+  poolRender(); dockRender();
+}
+function clearSel(){ sel=[]; poolRender(); dockRender(); }
+function pickDrv(el){ var id=el.getAttribute('data-did'); selDriver=(selDriver===id?null:id); msg=''; dockRender(); }
+function toggleNew(cb){ forceNew=!!cb.checked; dockRender(); }
+
+function planRender(){
+  $('v-plan').innerHTML=
+     '<div id="pool-tools"></div>'
+    +'<div id="plan-grid"><div id="pool"></div><div id="dock"></div></div>';
+  poolRender(); dockRender();
+}
+function poolRender(){
+  var p=pool(), shown=planFilt(p);
+  var byZ={}; p.forEach(function(o){ var z=o.zone||'Unknown'; (byZ[z]=byZ[z]||[]).push(o); });
+  var rdy=function(z){ return sum(byZ[z].filter(function(o){return o.status==='ready';})).baht; };
+  var zk=Object.keys(byZ).sort(function(a,b){ return rdy(b)-rdy(a); });
+
+  var tools=$('pool-tools');
+  if(tools) tools.innerHTML='<div class="tools">'
+    +'<button class="chip '+(!fZone?'on':'')+'" onclick="setZone(\'\')">ทั้งหมด / all <b>'+p.length+'</b></button>'
+    +zk.map(function(z){
+        return '<button class="chip '+(fZone===z?'on':'')+'" onclick="setZone(\''+esc(z)+'\')">'
+          +'<span class="d" style="background:'+zc(z)+'"></span>'+esc(z)+' <b>'+byZ[z].length+'</b></button>';
+      }).join('')
+    +'</div><div class="tools">'
+    +['ready','packing','new'].map(function(s){
+        var c=p.filter(function(o){return o.status===s;}).length;
+        return '<button class="chip '+(fStat===s?'on':'')+'" onclick="setStat(\''+s+'\')">'+ST[s].l+' <b>'+c+'</b></button>';
+      }).join('')
+    +'<input class="search" value="'+esc(q)+'" oninput="setQ(this.value)" placeholder="ค้นหา / search order, customer, phone…">'
+    +'</div>';
+
+  var byZs={}; shown.forEach(function(o){ var z=o.zone||'Unknown'; (byZs[z]=byZs[z]||[]).push(o); });
+  var rank={ready:0,packing:1,new:2};
+  var html=zk.filter(function(z){ return byZs[z]; }).map(function(z){
+    var list=byZs[z].slice().sort(function(a,b){
+      return (rank[a.status]-rank[b.status]) || String(a.date||'').localeCompare(String(b.date||''));
+    });
+    var sA=sum(list), sR=sum(list.filter(function(o){return o.status==='ready';}));
+    var pct=Math.min(100, Math.round(sR.baht/TRUCK*100)), full=sR.baht>=TRUCK;
+    var nSel=list.filter(function(o){ return sel.indexOf(o.id)>=0; }).length;
+    return '<div class="zone">'
+      +'<div class="zone-h">'
+        +'<div style="flex:1;min-width:0">'
+          +'<div class="nm" style="color:'+zc(z)+'">'+esc(z)+'</div>'
+          +'<div class="dim2">'+list.length+' orders'+(sA.ctn?' · 📦 '+sA.ctn:'')+(sA.bun?' · 🧶 '+sA.bun:'')+' · '+n(sA.baht)+' ฿</div>'
+        +'</div>'
+        +'<button class="chip" onclick="pickZone(\''+esc(z)+'\')">'+(nSel===list.length?'เอาออก / clear':'ทั้งโซน / all')+'</button>'
+      +'</div>'
+      +'<div class="meter"><i style="width:'+pct+'%;background:'+(full?'var(--amber)':zc(z))+'"></i></div>'
+      +'<div class="zone-m"><span class="dim2">'+(full?'เต็มคันแล้ว / truck-worthy':'พร้อม / ready')+'</span>'
+        +'<span class="dim2" style="color:'+(full?'var(--amber)':'var(--plat2)')+'">'+n(sR.baht)+' / '+n(TRUCK)+' ฿</span></div>'
+      +list.map(ordRow).join('')
+    +'</div>';
+  }).join('');
+
+  $('pool').innerHTML = html || '<div class="empty">'+(p.length?'ไม่ตรงกับตัวกรอง / nothing matches the filter':'ไม่มีออเดอร์รอจัด / nothing waiting')+'</div>';
+}
+function ordRow(o){
+  var m=met(o), st=ST[o.status]||{l:o.status,c:'t-mute'};
+  var on=sel.indexOf(o.id)>=0;
+  var bits=[];
+  if(m.ctn) bits.push('📦 '+m.ctn);
+  if(m.bun) bits.push('🧶 '+m.bun);
+  if(m.panels) bits.push(n(m.panels)+' pcs');
+  var note=[(o.reqNote||'').trim(),(o.notes||'').trim()].filter(Boolean).join(' · ');
+  return '<div class="ord'+(on?' on':'')+'" data-oid="'+esc(o.id)+'" onclick="pick(this)">'
+    +'<div style="flex:1;min-width:0">'
+      +'<div class="hd"><span class="id">'+esc(o.id)+'</span>'
+        +'<span class="tag '+st.c+'">'+st.l+'</span>'
+        +(o.date?'<span class="dim2">'+fmtD(o.date).slice(0,5)+'</span>':'')+'</div>'
+      +'<div class="cu">'+esc(o.customer||'—')+'</div>'
+      +(o.address&&o.address!=='—'?'<div class="dim2">'+esc(o.address)+'</div>':'')
+      +(bits.length?'<div class="dim2" style="margin-top:3px">'+bits.join(' · ')+'</div>':'')
+      +(note?'<div class="dim2" style="color:var(--amber);margin-top:3px">'+esc(note)+'</div>':'')
+    +'</div>'
+    +'<div class="rt"><div class="amt">'+n(m.baht)+'</div><div class="tick">'+(on?'✓':'+')+'</div></div>'
+  +'</div>';
+}
+function dockRender(){
+  var el=$('dock'); if(!el) return;
+  var list=sel.map(function(id){ return orders.find(function(x){return x.id===id;}); }).filter(Boolean);
+  var s=sum(list);
+  var box=function(l,v,c){ return '<div><div class="lbl">'+l+'</div><div class="big v"'+(c?' style="color:'+c+'"':'')+'>'+v+'</div></div>'; };
+  var et=selDriver?activeTours.find(function(t){ return t.driverId===selDriver; }):null;
+  var lbl=(!forceNew&&et&&!et.driving)?'เพิ่มในทัวร์ / add to tour'
+        :(forceNew&&et)?'ส่งทัวร์ใหม่ / send NEW tour':'ส่งให้คนขับ / send to driver';
+
+  var drvBtn=function(id,av,nm,st,cls){
+    return '<button class="drv'+(selDriver===id?' on':'')+(cls?' '+cls:'')+'" data-did="'+esc(id)+'" onclick="pickDrv(this)">'
+      +'<span class="av">'+av+'</span><span class="nm">'+esc(nm)+'</span>'
+      +(st?'<span class="st">'+st+'</span>':'')+'</button>';
+  };
+  var drvHTML=drvBtn(TOUR_NODRIVER,'⏳','ยังไม่กำหนด','no driver yet')
+    +drivers.map(function(d){
+      var ht=activeTours.find(function(t){ return t.driverId===d.id; });
+      var th=nameTh(d.name);
+      var st=ht?(ht.driving?'กำลังส่ง / driving':'กำลังโหลด / loading'):(th||'');
+      return drvBtn(d.id, esc(initials(d.name)), d.name, st, ht?'busy':'');
+    }).join('');
+
+  el.innerHTML='<div class="dockin">'
+    +'<div class="dock-h"><span class="t">ใบจัดของ / Load list</span>'
+      +(list.length?'<button class="chip" onclick="clearSel()">ล้าง / clear</button>':'')+'</div>'
+    +(list.length===0
+      ? '<div class="empty" style="padding:26px 12px;border-style:dashed">แตะออเดอร์เพื่อใส่ในทัวร์<br><span class="dim2">tap an order to load it</span></div>'
+      : '<div class="sums">'+box('ออเดอร์ / Orders', s.n)+box('ลัง / CTN', s.ctn, 'var(--jade)')
+          +box('มัด / Bundle', s.bun||'—', 'var(--amber)')+box('รวม / Total', n(s.baht), 'var(--ice2)')+'</div>'
+        +'<div class="picked">'+list.map(function(o){ var m=met(o);
+            return '<div class="prow"><span class="zdot" style="background:'+zc(o.zone||'Unknown')+'"></span>'
+              +'<span style="flex:1;min-width:0"><span style="display:block;font-size:12.5px">'+esc(o.id)+' · '+esc(o.customer||'—')+'</span>'
+              +'<span class="dim2">'+esc(o.zone||'—')+(m.ctn?' · 📦 '+m.ctn:'')+' · '+n(m.baht)+' ฿</span></span>'
+              +'<button class="xbtn" data-oid="'+esc(o.id)+'" onclick="event.stopPropagation();pick(this)">✕</button></div>';
+          }).join('')+'</div>')
+    +'<div class="lbl" style="margin-bottom:9px">คนขับ / Driver</div>'
+    +'<div class="drvgrid">'+drvHTML+'</div>'
+    +'<label class="toggle"><input type="checkbox" '+(forceNew?'checked':'')+' onchange="toggleNew(this)"> แยกเป็นทัวร์ใหม่ / separate new tour</label>'
+    +(msg?'<div class="warn">'+esc(msg)+'</div>':'')
+    +'<button class="go" onclick="sendAsk()"'+((list.length&&selDriver&&!readOnly())?'':' disabled')+'>'+lbl+(list.length?' · '+list.length:'')+'</button>'
+  +'</div>';
+}
+
+/* ═══ 8 · TOURS ═══════════════════════════════════════════════════════════ */
+function toggleTour(id){ openTour[id]=!openTour[id]; toursRender(); }
+function setDrvFilt(v){ fDrv=(fDrv===v?'':v); toursRender(); }
+function allOpen(on){ activeTours.forEach(function(t){ openTour[t.id]=!!on; }); toursRender(); }
+function ring(pct){
+  var r=17, c=2*Math.PI*r, off=c*(1-pct/100);
+  return '<div class="ring"><svg width="40" height="40">'
+    +'<circle cx="20" cy="20" r="'+r+'" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="3"/>'
+    +'<circle cx="20" cy="20" r="'+r+'" fill="none" stroke="'+(pct>=100?'var(--jade)':'var(--ice)')+'" stroke-width="3" '
+    +'stroke-linecap="round" stroke-dasharray="'+c.toFixed(1)+'" stroke-dashoffset="'+off.toFixed(1)+'"/>'
+    +'</svg><span>'+pct+'</span></div>';
+}
+function toursRender(){
+  var el=$('v-tours');
+  if(!activeTours.length){ el.innerHTML='<div class="empty">ยังไม่มีทัวร์ / no active tours</div>'; return; }
+  var names=[]; activeTours.forEach(function(t){ var nm=t.driverName||'—'; if(names.indexOf(nm)<0) names.push(nm); });
+  if(fDrv && names.indexOf(fDrv)<0) fDrv='';
+  var show=fDrv?activeTours.filter(function(t){ return (t.driverName||'—')===fDrv; }):activeTours;
+  var everyOpen=show.length>0 && show.every(function(t){ return openTour[t.id]; });
+  el.innerHTML='<div class="tools">'
+    +'<button class="chip '+(!fDrv?'on':'')+'" onclick="setDrvFilt(\'\')">ทั้งหมด / all <b>'+activeTours.length+'</b></button>'
+    +names.map(function(nm){
+        var c=activeTours.filter(function(t){ return (t.driverName||'—')===nm; });
+        var dv=c.some(function(t){ return t.driving; });
+        return '<button class="chip '+(fDrv===nm?'on':'')+'" onclick="setDrvFilt(\''+esc(nm).replace(/'/g,'')+'\')">'
+          +(dv?'<span class="d" style="background:var(--jade)"></span>':'')+esc(kpName(nm))+' <b>'+c.length+'</b></button>';
+      }).join('')
+    +'<button class="chip" style="margin-left:auto" onclick="allOpen('+(everyOpen?'false':'true')+')">'
+      +(everyOpen?'ย่อทั้งหมด / collapse':'กางทั้งหมด / expand')+'</button>'
+    +'</div><div id="tour-list">'+show.map(tourCard).join('')+'</div>';
+}
+function tourCard(t){
+  var p=prog(t), m=tourMoney(t), open=!!openTour[t.id], ro=readOnly();
+  var s=sum((t.orders||[]).map(function(id){ return orders.find(function(x){return x.id===id;}); }).filter(Boolean));
+  var when=(!t.driving && !t.departedAt)
+    ? (ro?'<span class="tag t-mute">ยังไม่ออก / not out</span>'
+        :'<button class="btn btn-amber" onclick="event.stopPropagation();departAsk(\''+esc(t.id)+'\')">ออกรถ / Departed</button>')
+    : '<span class="tag '+(t.driving?'t-jade':'t-mute')+'">'
+      +(t.driving?'กำลังส่ง / driving':'กลับแล้ว / back')
+      +(t.departedAt?' · '+esc(t.departedAt):'')+'</span>';
+  var stat=function(l,v,c){ return '<div class="stat"><div class="lbl">'+l+'</div><div class="v"'+(c?' style="color:'+c+'"':'')+'>'+v+'</div></div>'; };
+
+  return '<div class="tour'+(t.driving?' run':'')+'">'
+    +'<div class="tour-h" onclick="toggleTour(\''+esc(t.id)+'\')">'
+      +ring(p.pct)
+      +'<div style="flex:1;min-width:0">'
+        +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+          +(tidOk(t.tid)?'<span class="tid">'+esc(t.tid)+'</span>':'')
+          +'<span class="nm">'+esc(kpName(t.driverName)||'—')+'</span></div>'
+        +'<div class="dim2" style="margin-top:3px">'+p.total+' stops'
+          +(s.ctn?' · 📦 '+s.ctn:'')+(s.bun?' · 🧶 '+s.bun:'')+' · '+n(s.baht)+' ฿</div>'
+      +'</div>'
+      +'<span class="tag '+(p.open?'t-amber':'t-jade')+'">'+(p.open?p.open+' ค้าง / open':'ครบ / done')+'</span>'
+      +'<span style="color:var(--plat3);font-size:12px">'+(open?'▾':'▸')+'</span>'
+    +'</div>'
+    +'<div class="tour-m">'+when
+      +stat('เงินสด / cash', n(m.cash), 'var(--jade)')
+      +stat('โอน / online', n(m.online), 'var(--ice2)')
+      +(m.unknown?stat('ไม่ทราบ / unknown', n(m.unknown), 'var(--amber)'):'')
+    +'</div>'
+    +(open?'<div class="stops">'+(t.orders||[]).map(function(id,i){ return stopRow(t,id,i,ro); }).join('')+'</div>'
+      +'<div class="tour-f">'
+        +(ro?'':'<button class="btn btn-ice" onclick="addAsk(\''+esc(t.id)+'\')">เพิ่มออเดอร์ / add order</button>')
+        +'<button class="btn" onclick="go(\'money\')">เงิน / money</button>'
+      +'</div>'
+    :'')
+  +'</div>';
+}
+function stopRow(t,id,i,ro){
+  var o=orders.find(function(x){return x.id===id;})||{id:id,customer:'—'};
+  var st=stopStatus(t,id), m=met(o);
+  var meta={ delivered:{l:'ส่งแล้ว / delivered',c:'t-jade'},
+             shipped:{l:'ส่งขนส่ง / at shipper',c:'t-ice'},
+             cancelled:{l:'ยกเลิก / cancelled',c:'t-coral'} }[st]
+           ||{l:'กำลังไป / on route',c:'t-mute'};
+  var co=tourPayCO(t,o), pay=[];
+  if(co.cash)    pay.push('<span style="color:var(--jade)">เงินสด '+n(co.cash)+'</span>');
+  if(co.online)  pay.push('<span style="color:var(--ice2)">โอน '+n(co.online)+'</span>');
+  if(co.unknown) pay.push('<span style="color:var(--amber)">ไม่ทราบ '+n(co.unknown)+'</span>');
+  if(st==='delivered' && !pay.length) pay.push('<span style="color:var(--coral)">ยังไม่จ่าย / unpaid</span>');
+  var done=(st==='delivered'||st==='shipped'||st==='cancelled');
+  return '<div class="stop'+(done?' done':'')+'">'
+    +'<span class="sn">'+(i+1)+'</span>'
+    +'<div style="flex:1;min-width:0">'
+      +'<div class="hd" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+        +'<span class="id" style="font-size:13px">'+esc(o.id)+'</span>'
+        +'<span class="tag '+meta.c+'">'+meta.l+'</span>'
+        +'<span style="margin-left:auto;font-size:14px;font-weight:300;font-variant-numeric:tabular-nums">'+n(m.baht)+'</span></div>'
+      +'<div style="font-size:12.5px;margin-top:2px">'+esc(o.customer||'—')+'</div>'
+      +(o.address&&o.address!=='—'?'<div class="dim2">'+esc(o.address)+'</div>':'')
+      +((m.ctn||m.bun)?'<div class="dim2">'+(m.ctn?'📦 '+m.ctn+' ':'')+(m.bun?'🧶 '+m.bun:'')+'</div>':'')
+      +(pay.length?'<div class="dim2" style="display:flex;gap:12px;margin-top:3px">'+pay.join('')+'</div>':'')
+      +(ro?'':'<div class="acts">'
+        +(done?'':'<button class="btn btn-jade" onclick="deliverAsk(\''+esc(t.id)+'\',this)" data-oid="'+esc(id)+'">ส่งแล้ว / delivered</button>'
+               +'<button class="btn btn-ice" onclick="shipAsk(\''+esc(t.id)+'\',this)" data-oid="'+esc(id)+'">ขนส่ง / shipper</button>')
+        +'<button class="btn btn-coral" onclick="removeAsk(\''+esc(t.id)+'\',this)" data-oid="'+esc(id)+'">เอาออก / remove</button>'
+      +'</div>')
+    +'</div></div>';
+}
+
+/* ═══ 9 · MONEY ═══════════════════════════════════════════════════════════ */
+function moneyRender(){
+  var el=$('v-money'), ro=readOnly();
+  var rows=activeTours.map(function(t){
+    var m=tourMoney(t), net=netPay(t);
+    var toOffice=Math.max(0, m.cash-net);
+    var paid=(t.payMethodTour==='cash')||((t.carFeeSlips||[]).length>0);
+    var box=function(l,v,c){ return '<div><div class="lbl">'+l+'</div><div class="big v"'+(c?' style="color:'+c+'"':'')+'>'+v+'</div></div>'; };
+    return '<div class="mrow">'
+      +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+        +(tidOk(t.tid)?'<span class="tid">'+esc(t.tid)+'</span>':'')
+        +'<span style="font-size:15px">'+esc(kpName(t.driverName)||'—')+'</span>'
+        +(paid?'<span class="tag t-jade">จ่ายแล้ว / paid</span>':'')
+        +'<span class="dim2" style="margin-left:auto">'+prog(t).total+' stops</span>'
+      +'</div>'
+      +'<div class="mgrid">'
+        +box('เงินสด / cash', n(m.cash), 'var(--jade)')
+        +box('โอน / online', n(m.online), 'var(--ice2)')
+        +box('ค่าทัวร์ / driver pay', n(net), 'var(--amber)')
+        +box('เข้าออฟฟิศ / to office', n(toOffice))
+      +'</div>'
+      +(ro?'':'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+        +'<span class="lbl">ค่าทัวร์ / pay</span>'
+        +'<input class="money-in num" type="number" inputmode="numeric" value="'+(parseFloat(t.driverPay)||0)+'" '
+          +'onkeydown="if(event.key===\'Enter\')this.blur()" onchange="setPay(\''+esc(t.id)+'\',this.value)">'
+        +'<span class="lbl">เบิกล่วงหน้า / advance</span>'
+        +'<input class="money-in num" type="number" inputmode="numeric" value="'+(parseFloat(t.driverAdvance)||0)+'" '
+          +'onkeydown="if(event.key===\'Enter\')this.blur()" onchange="setAdv(\''+esc(t.id)+'\',this.value)">'
+        +'<button class="btn '+(paid?'btn-jade':'btn-ice')+'" style="margin-left:auto" onclick="payCashAsk(\''+esc(t.id)+'\')">'
+          +(paid?'จ่ายแล้ว / paid':'จ่ายเงินสด / pay cash')+'</button>'
+      +'</div>')
+    +'</div>';
+  }).join('');
+
+  // Beendete Touren, die noch niemand ausgezahlt hat.
+  var owed=Object.keys(tourReg||{}).filter(function(k){
+      var r=tourReg[k]||{}; return tidOk(k) && r.state==='ended' && !r.paid && !r.payVoid && (Number(r.driverPay)||0)>0;
+    }).sort(function(a,b){ return tidSortKey(b)-tidSortKey(a); });
+
+  el.innerHTML=
+     '<div class="sect"><span class="lbl">ทัวร์ที่กำลังวิ่ง / running tours</span><hr class="hair"></div>'
+    +(rows||'<div class="empty">ยังไม่มีทัวร์ / no active tours</div>')
+    +'<div class="sect"><span class="lbl">ค้างจ่ายคนขับ / unpaid payouts</span><hr class="hair"></div>'
+    +(owed.length
+      ? '<div class="card" style="overflow:hidden">'+owed.map(function(k,i){
+          var r=tourReg[k]||{};
+          return '<div style="display:flex;align-items:center;gap:11px;padding:13px 16px'+(i?';border-top:1px solid var(--line)':'')+'">'
+            +'<span class="tid">'+esc(k)+'</span>'
+            +'<span style="flex:1;min-width:0">'+esc(r.driverName||'—')
+              +'<span class="dim2" style="display:block">'+(r.orderCount||0)+' stops · '+fmtD(r.departedDate||r.createdDate)+'</span></span>'
+            +'<span class="big" style="font-size:17px;color:var(--coral)">'+n(r.driverPay)+' ฿</span></div>';
+        }).join('')+'</div>'
+      : '<div class="empty" style="padding:26px">จ่ายครบแล้ว / nothing owed</div>')
+    +'<div class="dim2" style="margin-top:14px;text-align:center">การจ่ายจริง ทำในแอป (Payroll / Pay tab) · payouts are still booked in the app</div>';
+}
+
+/* ═══ 10 · SCHREIBEN ══════════════════════════════════════════════════════
+   Es wird immer nur das geschrieben, was sich auf DIESEM Gerät geändert hat —
+   nie der ganze Knoten. Ein .set() auf 'activeTours' würde die frisch gebaute
+   Tour eines anderen Rechners wegwischen.                                     */
+function forFb(t){
+  var out={}; for(var k in t){ if(k!=='status'&&k!=='checks'&&k!=='kmRoute') out[k]=t[k]; }
+  var s={}; if(t.status){ for(var a in t.status) s[tourKey(a)]=t.status[a]; }
+  var c={}; if(t.checks){ for(var b in t.checks) c[tourKey(b)]=t.checks[b]; }
+  out.status=s; out.checks=c; return out;
+}
+function pushTour(t){
+  if(!t||!t.id) return;
+  try{ DB.ref('activeTours/'+t.id).set(forFb(t)); }catch(e){ console.error('pushTour', e); }
+}
+function pushOrder(o){
+  if(!o||!o.id) return;
+  try{ DB.ref('orders/'+ordKey(o.id)).set(JSON.parse(JSON.stringify(o))); }catch(e){ console.error('pushOrder', e); }
+}
+function audit(type, subject, detail){
+  try{ DB.ref('auditLog').push({ type:type, orderId:subject, by:(me?me.name:'Tour'),
+        detail:detail, ts:Date.now(), date:todayStr(), time:hhmm(), src:'tour.html' }); }catch(e){}
+}
+
+/* ── Tour bauen ──────────────────────────────────────────────────────── */
+var _pendingDay=null;
+function sendAsk(){
+  if(readOnly()) return;
+  if(!selDriver){ msg='เลือกคนขับก่อน / pick a driver first'; dockRender(); return; }
+  if(!sel.length){ msg='ยังไม่ได้เลือกออเดอร์ / no orders picked'; dockRender(); return; }
+  msg='';
+  var d=$('day-date');
+  d.value=dayStr(new Date().getHours()>=17?1:0);        // nach 17:00 → morgen
+  d.min=monthMin();
+  dayPreview();
+  sheetOpen('sheet-day');
+}
+function dayStr(off){ var d=new Date(); d.setDate(d.getDate()+(off||0));
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function monthMin(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-01'; }
+function dayPick(off){ var el=$('day-date'); el.value=dayStr(off); dayPreview(); }
+function dayPreview(){
+  var v=$('day-date').value, out=$('day-prev');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ out.innerHTML='<span style="color:var(--coral)">เลือกวันที่ / pick a date</span>'; return; }
+  if(v<monthMin()){ out.innerHTML='<span style="color:var(--coral)">ย้อนหลังได้เฉพาะเดือนนี้ / only this month can be back-dated</span>'; return; }
+  var day=tidDayStr(new Date(v+'T00:00:00'));
+  var et=(!forceNew && selDriver)?activeTours.find(function(t){ return t.driverId===selDriver && !t.driving; }):null;
+  out.innerHTML = (et&&tidOk(et.tid))
+    ? 'เพิ่มเข้าทัวร์เดิม / added to existing tour <span class="tid">'+esc(et.tid)+'</span>'
+    : 'รหัสใหม่ / new ID <span class="tid">'+day+'-'+(maxSeqOfDay(day)+1)+'</span> <span class="dim2">('+fmtD(v)+')</span>';
+}
+function dayConfirm(){
+  var v=$('day-date').value;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(v) || v<monthMin()) return;
+  _pendingDay=v; sheetClose('sheet-day'); createTour(); _pendingDay=null;
+}
+function createTour(){
+  var noDrv=(selDriver===TOUR_NODRIVER);
+  var d=noDrv?{id:'',name:TOUR_NODRIVER_LABEL}:drivers.find(function(x){ return x.id===selDriver; });
+  if(!d){ msg='ไม่พบคนขับ / driver not found'; dockRender(); return; }
+  var et=(forceNew||noDrv)?null:activeTours.find(function(t){ return t.driverId===selDriver; });
+  var ids=sel.slice();
+
+  // Geplante New/Packing-Orders behalten ihren Packstatus — die Halle sieht sie
+  // weiter, und die Tourkarte zeigt den echten Zustand.
+  var status={};
+  ids.forEach(function(id){
+    var o=orders.find(function(x){return x.id===id;});
+    var keep=o&&(o.status==='new'||o.status==='packing');
+    status[id]=keep?o.status:'ready';
+    if(o && !keep && o.status!=='ready'){
+      o.status='ready';
+      o.statusLog=(o.statusLog||[]).concat([{status:'ready', by:(me?me.name:'Tour'), date:todayStr(), time:hhmm()}]);
+    }
+    if(o && !noDrv){ o.deliveredBy=d.name; }
+    if(o) pushOrder(o);
+  });
+
+  var t;
+  if(et && !et.driving){
+    t=et;
+    ids.forEach(function(id){ if(t.orders.indexOf(id)<0) t.orders.push(id); t.status[id]=status[id]; });
+    audit('tour','🚚 '+d.name, '+'+ids.length+' order'+(ids.length!==1?'s':'')+': '+ids.join(', '));
+  }else{
+    t={ id:'t'+Date.now(), driverId:noDrv?'':selDriver, driverName:d.name,
+        orders:ids.slice(), status:status, checks:{}, created:hhmm() };
+    if(_pendingDay) t.tourDay=_pendingDay;
+    activeTours.push(t);
+    audit('tour','🚚 '+d.name, 'ทัวร์ใหม่ / new tour · '+ids.length+' order'+(ids.length!==1?'s':'')+': '+ids.join(', '));
+  }
+  pushTour(t);
+  if(tidOk(t.tid)){ stampOrders(t); regUpsert(t); } else { allocNo(t); }
+
+  sel=[]; selDriver=null; forceNew=false;
+  view='tours'; openTour[t.id]=true;
+  render();
+}
+
+/* ── Stopps ──────────────────────────────────────────────────────────── */
+function deliverAsk(tid, btn){
+  var oid=btn.getAttribute('data-oid');
+  ask('ส่งแล้ว? / delivered?', oid, function(){ setStop(tid, oid, 'delivered'); });
+}
+function shipAsk(tid, btn){
+  var oid=btn.getAttribute('data-oid');
+  ask('ส่งให้ขนส่งแล้ว? / handed to the carrier?', oid, function(){ setStop(tid, oid, 'shipped'); });
+}
+function setStop(tid, oid, st){
+  var t=activeTours.find(function(x){ return x.id===tid; }); if(!t) return;
+  t.status[oid]=st;
+  var o=orders.find(function(x){ return x.id===oid; });
+  if(o){
+    o.status=st;
+    o.statusLog=(o.statusLog||[]).concat([{status:st, by:(me?me.name:'Tour'), date:todayStr(), time:hhmm()}]);
+    if(st==='delivered' && !o.deliveredDate){ o.deliveredDate=todayStr(); }
+    pushOrder(o);
+  }
+  pushTour(t);
+  audit('status', oid, st+' · '+(t.driverName||''));
+  render();
+}
+function removeAsk(tid, btn){
+  var oid=btn.getAttribute('data-oid');
+  ask('เอาออกจากทัวร์? / take off the tour?', oid+' — '+'ออเดอร์กลับไปรอจัด / the order goes back to the pool', function(){
+    var t=activeTours.find(function(x){ return x.id===tid; }); if(!t) return;
+    t.orders=(t.orders||[]).filter(function(x){ return x!==oid; });
+    delete t.status[oid];
+    var o=orders.find(function(x){ return x.id===oid; });
+    // Nur einen noch offenen Stopp zurücksetzen — ein bereits gelieferter behält
+    // seinen Zustand, sonst verschwindet Umsatz beim Aufräumen.
+    if(o && ['ready','loaded'].indexOf(o.status)>=0){ o.status='ready'; pushOrder(o); }
+    if(!t.orders.length){
+      activeTours=activeTours.filter(function(x){ return x.id!==tid; });
+      try{ DB.ref('activeTours/'+tid).remove(); }catch(e){}
+    } else pushTour(t);
+    audit('tour','🚚 '+(t.driverName||''), 'เอาออก / removed '+oid);
+    render();
+  });
+}
+function addAsk(tid){
+  // Zum Hinzufügen geht es in den Plan zurück: dort steht der ganze Pool mit
+  // Filtern und Summen. Der Fahrer ist schon vorgewählt, ein Tipp reicht.
+  var t=activeTours.find(function(x){ return x.id===tid; }); if(!t) return;
+  selDriver=t.driverId||TOUR_NODRIVER; forceNew=false; view='plan'; render();
+}
+
+/* ── Abfahrt ─────────────────────────────────────────────────────────── */
+function departAsk(tid){
+  var t=activeTours.find(function(x){ return x.id===tid; }); if(!t) return;
+  if(!t.driverId && t.driverName===TOUR_NODRIVER_LABEL){
+    ask('ยังไม่ได้เลือกคนขับ / no driver yet','เลือกคนขับก่อนออกรถ / pick a driver before it leaves', null);
+    return;
+  }
+  ask('ออกรถเลย? / leaving now?', (t.driverName||'')+' · '+hhmm(), function(){
+    t.driving=true; t.departedAt=hhmm(); t.departedDate=todayStr();
+    pushTour(t);
+    if(tidOk(t.tid)) regUpsert(t);
+    audit('tour','🚚 '+(t.driverName||''), 'ออกรถ / departed '+t.departedAt);
+    render();
+  });
+}
+
+/* ── Geld ────────────────────────────────────────────────────────────── */
+function setPay(tid, v){
+  var t=activeTours.find(function(x){ return x.id===tid; }); if(!t) return;
+  t.driverPay=Math.max(0, parseFloat(v)||0);
+  pushTour(t); if(tidOk(t.tid)) regUpsert(t);
+  audit('tour','🚚 '+(t.driverName||''), 'ค่าทัวร์ / tour pay '+n(t.driverPay)+' ฿');
+  render();
+}
+function setAdv(tid, v){
+  var t=activeTours.find(function(x){ return x.id===tid; }); if(!t) return;
+  t.driverAdvance=Math.max(0, parseFloat(v)||0);
+  pushTour(t); if(tidOk(t.tid)) regUpsert(t);
+  render();
+}
+function payCashAsk(tid){
+  var t=activeTours.find(function(x){ return x.id===tid; }); if(!t) return;
+  if(t.payMethodTour==='cash'){
+    ask('ยกเลิกการจ่ายเงินสด? / undo the cash payment?','', function(){
+      delete t.payMethodTour; delete t.paidByTour; delete t.paidAtTour; delete t.paidAmtTour;
+      pushTour(t); render();
+    });
+    return;
+  }
+  var amt=netPay(t);
+  ask('จ่ายค่าทัวร์เป็นเงินสด? / pay the tour in cash?', n(amt)+' ฿ → '+(t.driverName||''), function(){
+    t.payMethodTour='cash'; t.paidByTour=(me?me.name:''); t.paidAtTour=Date.now(); t.paidAmtTour=amt;
+    pushTour(t);
+    audit('tour','🚚 '+(t.driverName||''), 'จ่ายเงินสด / paid cash '+n(amt)+' ฿');
+    render();
+  });
+}
+
+/* ═══ 11 · DIALOGE ════════════════════════════════════════════════════════ */
+function sheetOpen(id){ $(id).classList.add('on'); }
+function sheetClose(id){ $(id).classList.remove('on'); }
+var _askFn=null;
+function ask(title, body, fn){
+  $('ask-t').textContent=title; $('ask-b').textContent=body||'';
+  _askFn=fn||null; sheetOpen('sheet-ask');
+}
+function askYes(){ var f=_askFn; _askFn=null; sheetClose('sheet-ask'); if(f) f(); }
+function askNo(){ _askFn=null; sheetClose('sheet-ask'); }
+</script>
+</body>
+</html>
