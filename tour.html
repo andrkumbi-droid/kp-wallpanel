@@ -390,6 +390,29 @@ main{ max-width:1500px; margin:0 auto; padding:10px 18px 64px; }
 .zamt span, .zctn span{ font-size:14px; color:var(--plat2); font-weight:400; }
 .zctn{ font-family:'Mitr',sans-serif; font-size:17px; margin-top:2px; font-variant-numeric:tabular-nums; }
 
+/* ── Vorplanung: Touren ohne Fahrer ─────────────────────────────── */
+.sect-h{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin:22px 0 12px; flex-wrap:wrap; }
+.sect-h .t{ font-family:'Mitr',sans-serif; font-size:19px; font-weight:600; }
+.sect-h .s{ font-size:13px; color:var(--plat2); }
+.plans{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; align-items:start; }
+.plan{ border-radius:var(--r); background:var(--ink2); box-shadow:var(--sh2); padding:14px; }
+.plan-h{ display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:8px; }
+.plan-h .cnt{ margin-left:auto; font-family:'Mitr',sans-serif; font-size:13px; color:var(--plat2); }
+.plan-s{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+.plan-s > div{ flex:1 1 80px; background:var(--ink); border-radius:12px; padding:8px 10px; text-align:center; }
+.plan-s .v{ font-family:'Mitr',sans-serif; font-size:19px; font-weight:600; color:var(--ice); font-variant-numeric:tabular-nums; }
+.plan .prow{ margin-bottom:6px; }
+.plan-f{ display:flex; gap:7px; flex-wrap:wrap; margin-top:10px; }
+.plan-new{ border:2px dashed var(--line2); background:transparent; box-shadow:none; display:flex; align-items:center; justify-content:center;
+           min-height:150px; color:var(--plat2); font-family:'Mitr',sans-serif; font-size:16px; cursor:pointer; border-radius:var(--r); }
+.plan-new:hover{ border-color:var(--ice); color:var(--ice); }
+/* Wähler im Dialog */
+.picklist{ max-height:52vh; overflow-y:auto; margin:10px 0; display:grid; gap:6px; }
+.picklist .ord{ margin-top:0; cursor:pointer; }
+.pick-f{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding-top:10px; border-top:1px solid var(--line); }
+.pick-f .sumline{ flex:1 1 160px; font-family:'Mitr',sans-serif; font-size:14px; color:var(--plat2); }
+.pick-f .sumline b{ color:var(--ice); font-weight:600; }
+
 @media (min-width:1080px){
   #plan-grid{ grid-template-columns:minmax(0,1fr) 360px; }
   .sums{ grid-template-columns:repeat(4,1fr); }
@@ -453,6 +476,19 @@ main{ max-width:1500px; margin:0 auto; padding:10px 18px 64px; }
     <section class="view on" id="v-home"></section>
   </main>
 </div>
+
+<!-- Orders für eine geplante Tour auswählen. Nur freie Orders (auf keiner
+     Tour), nach Zone filterbar, laufende Summe unten. Kein Fahrer hier. -->
+<div class="sheet" id="sheet-pick"><div class="sheetcard" style="max-width:560px">
+  <h3 id="pick-t">—</h3>
+  <div class="tools" id="pick-zones" style="margin:10px 0 0"></div>
+  <div class="picklist" id="pick-list"></div>
+  <div class="pick-f">
+    <div class="sumline" id="pick-sum"></div>
+    <button class="btn" onclick="sheetClose('sheet-pick')">ยกเลิก / cancel</button>
+    <button class="go" style="width:auto;padding:11px 20px" id="pick-go" onclick="pickConfirm()">—</button>
+  </div>
+</div></div>
 
 <!-- Ja/Nein statt confirm(): der Browser-Dialog sieht auf dem Tablet fremd aus
      und blockiert die Seite. -->
@@ -963,6 +999,7 @@ function logout(){
   });
 }
 document.addEventListener('keydown', function(e){
+  var sp=$('sheet-pick'); if(sp && sp.classList.contains('on')){ if(e.key==='Escape') sheetClose('sheet-pick'); return; }
   var sa=$('sheet-ask');
   if(sa && sa.classList.contains('on')){ if(e.key==='Enter') askYes(); else if(e.key==='Escape') askNo(); return; }
   if(!$('scr-login').classList.contains('on') || !pinTarget) return;
@@ -1024,7 +1061,7 @@ function render(){
   if(!me || !$('scr-app').classList.contains('on')) return;
   if(typingNow()){ _holdRender=true; return; }
   liveRender(); navRender();
-  var h=$('v-home'); if(h) h.innerHTML=boardHTML();
+  var h=$('v-home'); if(h) h.innerHTML=boardHTML()+planHTML();
 }
 function navRender(){ $('nav').innerHTML=''; }
 
@@ -1069,6 +1106,119 @@ function boardHTML(){
       +(pl?'<div class="dim2" style="margin-top:6px">'+pl+' อยู่ในทัวร์ที่ยังไม่มีคนขับ / on a tour without driver</div>':'')
     +'</div>';
   }).join('')+'</div>';
+}
+
+/* ═══ 8 · VORPLANUNG ══════════════════════════════════════════════════════
+   Funktion 2 (15.09.): Touren zusammenstellen, OHNE einen Fahrer zu wählen.
+   Das Büro baut morgens die Ladungen; wer fährt, entscheidet sich später —
+   in einem eigenen Bereich, der hier bewusst nicht vorkommt. Eine geplante Tour
+   ist eine echte Tour ohne Fahrer (driverId leer, Name TOUR_NODRIVER_LABEL), sie
+   bekommt ihre Nummer wie jede andere und zählt oben weiter zur Zonensumme.
+
+   Bedienung: "+ neue Planung" oder "เพิ่ม / add" auf einer Karte öffnet den
+   Wähler mit allen freien Orders; antippen, unten die Summe, bestätigen.
+   ✕ an einer Order legt sie zurück in den Pool; die leere Planung löscht sich. */
+function plannedTours(){ return activeTours.filter(function(t){ return !tourHasDriver(t); }); }
+function planHTML(){
+  var list=plannedTours().slice().sort(function(a,b){ return tidSortKey(a.tid)-tidSortKey(b.tid); });
+  return '<div class="sect-h"><span class="t">วางแผนทัวร์ / Pre-plan</span>'
+    +'<span class="s">ยังไม่ต้องเลือกคนขับ · no driver yet — '+list.length+' plan'+(list.length!==1?'s':'')+'</span></div>'
+    +'<div class="plans">'
+    +list.map(planCard).join('')
+    +(readOnly()?'':'<div class="plan-new" onclick="pickOpen(null)">＋ วางแผนทัวร์ใหม่ / new plan</div>')
+    +'</div>';
+}
+function planCard(t){
+  var os=(t.orders||[]).map(function(id){ return orders.find(function(x){return x.id===id;}); }).filter(Boolean);
+  var s=sum(os), ro=readOnly();
+  return '<div class="plan">'
+    +'<div class="plan-h">'+(tidOk(t.tid)?'<span class="tid">'+esc(t.tid)+'</span>':'<span class="tag t-mute">…</span>')
+      +'<span class="tag t-amber">⏳ ยังไม่มีคนขับ / no driver</span>'
+      +'<span class="cnt">'+os.length+' orders</span></div>'
+    +'<div class="plan-s"><div><div class="lbl">รวม / total</div><div class="v">'+n(s.baht)+'</div></div>'
+      +'<div><div class="lbl">📦 CTN</div><div class="v">'+n(s.ctn)+'</div></div>'
+      +(s.bun?'<div><div class="lbl">🧶 มัด</div><div class="v">'+n(s.bun)+'</div></div>':'')+'</div>'
+    +os.map(function(o){ var m=met(o);
+        return '<div class="prow"><span class="zdot" style="background:'+zc(o.zone||'Unknown')+'"></span>'
+          +'<span style="flex:1;min-width:0"><span style="display:block;font-size:13px"><b>'+esc(o.id)+'</b> · '+esc(o.customer||'—')+'</span>'
+          +'<span class="dim2">'+esc(o.zone||'—')+(m.ctn?' · 📦 '+m.ctn:'')+' · '+n(m.baht)+' ฿</span></span>'
+          +(ro?'':'<button class="xbtn" data-tid="'+esc(t.id)+'" data-oid="'+esc(o.id)+'" onclick="planRemove(this)">✕</button>')+'</div>';
+      }).join('')
+    +(ro?'':'<div class="plan-f">'
+      +'<button class="btn btn-ice" data-tid="'+esc(t.id)+'" onclick="pickOpen(this.getAttribute(\'data-tid\'))">➕ เพิ่มออเดอร์ / add</button>'
+      +'<button class="btn btn-coral" style="margin-left:auto" data-tid="'+esc(t.id)+'" onclick="planDelete(this)">ลบแผน / delete</button></div>')
+  +'</div>';
+}
+
+/* ── Wähler ── */
+var _pickFor=null, _pickSel=[], _pickZone='';
+function pickOpen(tid){ _pickFor=tid||null; _pickSel=[]; _pickZone=''; pickRender(); sheetOpen('sheet-pick'); }
+function pickZoneSet(z){ _pickZone=(_pickZone===z?'':z); pickRender(); }
+function pickToggle(el){ var id=el.getAttribute('data-oid'), i=_pickSel.indexOf(id); if(i>=0) _pickSel.splice(i,1); else _pickSel.push(id); pickRender(); }
+function pickRender(){
+  var free=pool(), byZ={};
+  free.forEach(function(o){ var z=o.zone||'Unknown'; (byZ[z]=byZ[z]||[]).push(o); });
+  var t=_pickFor?activeTours.find(function(x){return x.id===_pickFor;}):null;
+  $('pick-t').textContent=t?('เพิ่มเข้า / add to '+(tidOk(t.tid)?t.tid:'plan')):'วางแผนทัวร์ใหม่ / new plan';
+  var zk=ZONES.slice(); Object.keys(byZ).forEach(function(z){ if(zk.indexOf(z)<0) zk.push(z); });
+  $('pick-zones').innerHTML='<button class="chip '+(!_pickZone?'on':'')+'" onclick="pickZoneSet(\'\')">ทั้งหมด / all <b>'+free.length+'</b></button>'
+    +zk.filter(function(z){return byZ[z];}).map(function(z){
+        return '<button class="chip '+(_pickZone===z?'on':'')+'" data-z="'+esc(z)+'" onclick="pickZoneSet(this.getAttribute(\'data-z\'))"><span class="d" style="background:'+zc(z)+'"></span>'+esc(z)+' <b>'+byZ[z].length+'</b></button>';
+      }).join('');
+  var rank={ready:0,packing:1,new:2};
+  var show=free.filter(function(o){ return !_pickZone || (o.zone||'Unknown')===_pickZone; })
+    .sort(function(a,b){ return (rank[a.status]-rank[b.status]) || String(a.zone||'').localeCompare(String(b.zone||'')) || String(a.date||'').localeCompare(String(b.date||'')); });
+  $('pick-list').innerHTML=show.length?show.map(function(o){
+    var m=met(o), st=ST[o.status]||{l:o.status,c:'t-mute'}, on=_pickSel.indexOf(o.id)>=0;
+    return '<div class="ord'+(on?' on':'')+'" data-oid="'+esc(o.id)+'" onclick="pickToggle(this)">'
+      +'<div style="flex:1;min-width:0"><div class="hd"><span class="id">'+esc(o.id)+'</span><span class="tag '+st.c+'">'+st.l+'</span>'
+        +'<span class="dim2" style="color:'+zc(o.zone||'Unknown')+'">'+esc(o.zone||'—')+'</span></div>'
+      +'<div class="cu">'+esc(o.customer||'—')+'</div>'
+      +(o.address&&o.address!=='—'?'<div class="dim2">'+esc(o.address)+'</div>':'')
+      +'<div class="dim2" style="margin-top:3px">'+(m.ctn?'📦 '+m.ctn:'')+(m.bun?' · 🧶 '+m.bun:'')+(m.panels?' · '+n(m.panels)+' pcs':'')+'</div></div>'
+      +'<div class="rt"><div class="amt">'+n(m.baht)+'</div><div class="tick">'+(on?'✓':'+')+'</div></div></div>';
+  }).join(''):'<div class="empty" style="padding:26px">ไม่มีออเดอร์ว่าง / no free orders</div>';
+  var s=sum(_pickSel.map(function(id){ return free.find(function(o){return o.id===id;}); }).filter(Boolean));
+  $('pick-sum').innerHTML=_pickSel.length?('<b>'+s.n+'</b> orders · <b>'+n(s.ctn)+'</b> CTN'+(s.bun?' · <b>'+n(s.bun)+'</b> มัด':'')+' · <b>'+n(s.baht)+' ฿</b>'):'แตะเพื่อเลือก / tap to pick';
+  var g=$('pick-go'); g.textContent=(t?'เพิ่ม / add':'สร้างแผน / create plan')+(_pickSel.length?' · '+_pickSel.length:''); g.disabled=!_pickSel.length;
+}
+function pickConfirm(){
+  if(!_pickSel.length || readOnly()) return;
+  var ids=_pickSel.slice(), t=_pickFor?activeTours.find(function(x){return x.id===_pickFor;}):null;
+  if(!t){
+    t={ id:'t'+Date.now(), driverId:'', driverName:TOUR_NODRIVER_LABEL, orders:[], status:{}, checks:{}, created:hhmm(), tourDay:todayStr() };
+    activeTours.push(t);
+  }
+  ids.forEach(function(id){
+    var o=orders.find(function(x){return x.id===id;}); if(!o || t.orders.indexOf(id)>=0) return;
+    t.orders.push(id); t.status[id]=o.status;          // Packstatus bleibt, die Halle sieht ihn weiter
+  });
+  pushTour(t);
+  if(tidOk(t.tid)){ stampOrders(t); regUpsert(t); } else allocNo(t);
+  audit('tour','⏳ '+(t.tid||'plan'), (_pickFor?'+':'วางแผน / planned ')+ids.length+' order'+(ids.length!==1?'s':'')+': '+ids.join(', '));
+  sheetClose('sheet-pick'); _pickFor=null; _pickSel=[]; render();
+}
+function planRemove(btn){
+  var tid=btn.getAttribute('data-tid'), oid=btn.getAttribute('data-oid');
+  var t=activeTours.find(function(x){return x.id===tid;}); if(!t) return;
+  ask('เอาออกจากแผน? / take out of the plan?', oid, function(){
+    t.orders=(t.orders||[]).filter(function(x){return x!==oid;}); delete t.status[oid];
+    var o=orders.find(function(x){return x.id===oid;});
+    if(o && o.tourNo===t.tid){ delete o.tourNo; pushOrder(o); }
+    if(!t.orders.length){ activeTours=activeTours.filter(function(x){return x.id!==tid;}); W.ref('activeTours/'+tid).remove(); }
+    else { pushTour(t); if(tidOk(t.tid)) regUpsert(t); }
+    audit('tour','⏳ '+(t.tid||'plan'),'เอาออก / removed '+oid);
+    render();
+  });
+}
+function planDelete(btn){
+  var tid=btn.getAttribute('data-tid'), t=activeTours.find(function(x){return x.id===tid;}); if(!t) return;
+  ask('ลบแผนนี้? / delete this plan?', (t.orders||[]).length+' orders กลับไปรอจัด / go back to the pool', function(){
+    (t.orders||[]).forEach(function(id){ var o=orders.find(function(x){return x.id===id;}); if(o && o.tourNo===t.tid){ delete o.tourNo; pushOrder(o); } });
+    activeTours=activeTours.filter(function(x){return x.id!==tid;}); W.ref('activeTours/'+tid).remove();
+    audit('tour','⏳ '+(t.tid||'plan'),'ลบแผน / plan deleted');
+    render();
+  });
 }
 
 /* ═══ 10 · SCHREIBEN ══════════════════════════════════════════════════════
