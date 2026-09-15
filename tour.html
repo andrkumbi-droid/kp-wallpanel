@@ -413,6 +413,31 @@ main{ max-width:1500px; margin:0 auto; padding:10px 18px 64px; }
 .pick-f .sumline{ flex:1 1 160px; font-family:'Mitr',sans-serif; font-size:14px; color:var(--plat2); }
 .pick-f .sumline b{ color:var(--ice); font-weight:600; }
 
+/* ── Zonen-Karte + Pin-Check ────────────────────────────────────── */
+.sheetcard.wide{ max-width:1120px; padding:14px 14px 12px; }
+#map{ height:64vh; min-height:340px; border-radius:var(--rs); overflow:hidden; background:var(--ink3); }
+.map-h{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.map-h h3{ margin:0; flex:1 1 200px; }
+.legend{ display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--plat2); margin-top:8px; }
+.legend b{ font-weight:600; }
+.pin{ width:30px; height:30px; border-radius:50% 50% 50% 0; transform:rotate(-45deg); border:2.5px solid #fff;
+      box-shadow:0 2px 7px rgba(60,40,20,.35); display:flex; align-items:center; justify-content:center; }
+.pin span{ transform:rotate(45deg); color:#fff; font-family:'Mitr',sans-serif; font-size:11.5px; font-weight:600; line-height:1; }
+.pin.approx{ opacity:.55; }
+.leaflet-tooltip.tip{ white-space:normal; max-width:280px; border-radius:12px; border:none; box-shadow:var(--sh2); padding:9px 11px; font-family:'Sarabun',sans-serif; }
+.leaflet-popup-content-wrapper{ border-radius:14px; font-family:'Sarabun',sans-serif; }
+.leaflet-popup-content{ margin:11px 13px; font-size:13px; }
+.mapbtn{ border:none; border-radius:var(--rx); padding:6px 12px; font-family:'Mitr',sans-serif; font-size:12px; cursor:pointer; margin-top:6px; }
+.mapsel{ width:100%; margin-top:6px; padding:7px 10px; border-radius:10px; border:1px solid var(--line2); background:#fff; font-family:'Sarabun',sans-serif; font-size:13px; }
+/* Pin-Check */
+.geochips{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.geochip{ display:inline-flex; align-items:center; gap:5px; background:var(--ink); border-radius:var(--rx); padding:4px 11px; font-size:12px; white-space:nowrap; }
+.geochip b{ font-family:'Mitr',sans-serif; font-weight:600; }
+.georow{ padding:11px 12px; border-radius:var(--rs); background:var(--ink); margin-bottom:8px; font-size:13px; }
+.georow .hd{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.georow .acts{ margin-top:8px; }
+.geolist{ max-height:56vh; overflow-y:auto; }
+
 @media (min-width:1080px){
   #plan-grid{ grid-template-columns:minmax(0,1fr) 360px; }
   .sums{ grid-template-columns:repeat(4,1fr); }
@@ -490,6 +515,24 @@ main{ max-width:1500px; margin:0 auto; padding:10px 18px 64px; }
   </div>
 </div></div>
 
+<!-- Zonen-Karte: geplante Touren als nummerierte Pins in Planfarbe, freie Orders
+     gedämpft. Antippen → in einen Plan legen oder herausnehmen. -->
+<div class="sheet" id="sheet-map"><div class="sheetcard wide">
+  <div class="map-h"><h3 id="map-t">แผนที่โซน / Zone map</h3>
+    <button class="btn" onclick="mapClose()">ปิด / close</button></div>
+  <div id="map"></div>
+  <div class="legend" id="map-legend"></div>
+  <div class="dim2" id="map-missing" style="margin-top:6px"></div>
+</div></div>
+
+<!-- Pin-Check: jede offene Order, deren Position die App anzweifelt, mit dem
+     Grund — und den zwei Antworten, die das Büro geben kann. -->
+<div class="sheet" id="sheet-geo"><div class="sheetcard" style="max-width:720px">
+  <div class="map-h"><h3>ตรวจหมุด / Pin check</h3>
+    <button class="btn" onclick="sheetClose('sheet-geo')">ปิด / close</button></div>
+  <div id="geo-body"></div>
+</div></div>
+
 <!-- Ja/Nein statt confirm(): der Browser-Dialog sieht auf dem Tablet fremd aus
      und blockiert die Seite. -->
 <div class="sheet" id="sheet-ask"><div class="sheetcard" style="max-width:380px">
@@ -501,6 +544,8 @@ main{ max-width:1500px; margin:0 auto; padding:10px 18px 64px; }
   </div>
 </div></div>
 
+<!-- Positions-Logik, wortgleich aus index.html gezogen (siehe Kopf der Datei) -->
+<script src="tour-geo.js"></script>
 <script>
 /* ══════════════════════════════════════════════════════════════════════════
    KP WALLPANEL · TOUR / DISPATCH
@@ -830,6 +875,13 @@ function boot(){
   // kommt aus staffList (siehe rebuildDrivers).
   DB.ref('drivers').on('value', function(){ rebuildDrivers(); render(); });
   DB.ref('tourReg').on('value', function(s){ tourReg=s.val()||{}; render(); });
+  // Positionsdaten — dieselben Knoten wie die App (siehe tour-geo.js).
+  DB.ref('customerMeta').on('value', function(s){ customerMeta=s.val()||{}; render(); });
+  DB.ref('geoLearn').on('value', function(s){ geoLearn=s.val()||{}; });
+  DB.ref('shipperLoc').on('value', function(s){ shipperLoc=s.val()||{}; });
+  DB.ref('handoverLoc').on('value', function(s){ handoverLoc=s.val()||{}; });
+  DB.ref('addrFix').on('value', function(s){ addrFix=s.val()||{}; });
+  DB.ref('homeLoc').on('value', function(s){ var v=s.val(); homeLoc=(v&&typeof v.lat==='number'&&typeof v.lng==='number')?{lat:v.lat,lng:v.lng}:null; });
   DB.ref('shippers').on('value', function(s){ shippers=s.val()?Object.values(s.val()):[]; });
   // tourHistory nur EINMAL und nur für die Nummernvergabe — der Knoten ist fett
   // (Ladefotos) und darf nicht im Dauerabo hängen.
@@ -860,11 +912,11 @@ function demoSeed(){
   ];
   rebuildDrivers();
 
-  var zones=[ ['Bangkok',1,['บางนา','ลาดพร้าว','บางแค','มีนบุรี','สายไหม']],
+  var zones=[ ['Bangkok',1,['เขตบางนา กรุงเทพมหานคร','เขตลาดพร้าว กรุงเทพมหานคร','เขตบางแค กรุงเทพมหานคร','เขตมีนบุรี กรุงเทพมหานคร','เขตสายไหม กรุงเทพมหานคร']],
               ['Northern',2,['อ.เมือง จ.เชียงใหม่','อ.แม่ริม จ.เชียงใหม่','อ.เมือง จ.ลำปาง','อ.เมือง จ.พิษณุโลก']],
               ['Northeastern',3,['อ.เมือง จ.ขอนแก่น','อ.เมือง จ.อุดรธานี','อ.เมือง จ.นครราชสีมา','อ.ปากช่อง จ.นครราชสีมา']],
               ['Eastern',4,['อ.ศรีราชา จ.ชลบุรี','อ.เมือง จ.ระยอง','อ.เมือง จ.ปราจีนบุรี']],
-              ['Southern',5,['อ.หัวหิน จ.ประจวบฯ','อ.เมือง จ.สุราษฎร์ธานี','เกาะสมุย','อ.หาดใหญ่ จ.สงขลา']] ];
+              ['Southern',5,['อ.หัวหิน จ.ประจวบคีรีขันธ์','อ.เมือง จ.สุราษฎร์ธานี','อ.เกาะสมุย จ.สุราษฎร์ธานี','อ.หาดใหญ่ จ.สงขลา']] ];
   var first=['คุณสมชาย','คุณนภา','คุณวิชัย','คุณอรทัย','คุณธนา','คุณปิยะ','คุณสุดา','คุณกิตติ','ร้านบ้านสวย','หจก.ทรัพย์เจริญ','คุณมานะ','คุณลัดดา'];
   var codes=['KP009','KP036','KP041','KP054','L07','KP012'];
   var stat=['ready','ready','ready','ready','packing','new'];
@@ -886,6 +938,28 @@ function demoSeed(){
       orders.push(o);
     }
   });
+
+  // Positionen: der Laden, ein Depot, und gespeicherte Kunden-Pins für gut die
+  // Hälfte der Orders — nahe an dem, was die Adresse sagt. Zwei davon absichtlich
+  // falsch (einer am Laden, einer 400 km weg), damit der Pin-Check etwas findet.
+  homeLoc={lat:13.692,lng:100.748};
+  shipperLoc={ CT:{name:'CT', lat:13.655, lng:100.612} };
+  customerMeta={};
+  var PC={ 'กรุงเทพมหานคร':[13.75,100.52],'เชียงใหม่':[18.79,98.98],'ลำปาง':[18.29,99.49],'พิษณุโลก':[16.82,100.27],
+           'ขอนแก่น':[16.43,102.83],'อุดรธานี':[17.41,102.79],'นครราชสีมา':[14.97,102.10],
+           'ชลบุรี':[13.36,100.98],'ระยอง':[12.68,101.25],'ปราจีนบุรี':[14.05,101.37],
+           'ประจวบคีรีขันธ์':[12.57,99.96],'สุราษฎร์ธานี':[9.14,99.33],'สงขลา':[7.01,100.47] };
+  orders.forEach(function(o,i){
+    var wrong=(i===14||i===9);                                 // die zwei Absichtlich-Falschen immer (offene Orders, nicht die erste Tour)
+    if(!wrong && rnd()>.6) return;
+    var pv=Object.keys(PC).find(function(p){ return o.address.indexOf(p)>=0; }); if(!pv) return;
+    var c=PC[pv], lat=c[0]+(rnd()-.5)*0.08, lng=c[1]+(rnd()-.5)*0.08;
+    if(i===14){ lat=homeLoc.lat; lng=homeLoc.lng; }             // am Laden gedrückt
+    if(i===9){ lat=PC['เชียงใหม่'][0]; lng=PC['เชียงใหม่'][1]; }  // weit weg
+    customerMeta[normPhone(o.phone)]={ geo:{lat:lat,lng:lng,src:(rnd()<.5?'driver':'exif'),at:day(-ri(5,60))+'T09:00:00Z'} };
+  });
+  // Ein Kunde hat einen Maps-Link auf der Order statt eines Pins.
+  if(orders[5]) orders[5].location='https://www.google.com/maps/search/?api=1&query='+(PC['ขอนแก่น'][0]+0.01)+','+(PC['ขอนแก่น'][1]-0.02);
 
   // Drei laufende Touren mit gemischtem Stand — eine unterwegs, eine noch im Hof,
   // eine ohne Fahrer. Die Stopps kommen aus dem Pool heraus, damit nichts doppelt ist.
@@ -999,6 +1073,8 @@ function logout(){
   });
 }
 document.addEventListener('keydown', function(e){
+  var sm=$('sheet-map'); if(sm && sm.classList.contains('on')){ if(e.key==='Escape') mapClose(); return; }
+  var sg=$('sheet-geo'); if(sg && sg.classList.contains('on')){ if(e.key==='Escape') sheetClose('sheet-geo'); return; }
   var sp=$('sheet-pick'); if(sp && sp.classList.contains('on')){ if(e.key==='Escape') sheetClose('sheet-pick'); return; }
   var sa=$('sheet-ask');
   if(sa && sa.classList.contains('on')){ if(e.key==='Enter') askYes(); else if(e.key==='Escape') askNo(); return; }
@@ -1122,7 +1198,9 @@ function plannedTours(){ return activeTours.filter(function(t){ return !tourHasD
 function planHTML(){
   var list=plannedTours().slice().sort(function(a,b){ return tidSortKey(a.tid)-tidSortKey(b.tid); });
   return '<div class="sect-h"><span class="t">วางแผนทัวร์ / Pre-plan</span>'
-    +'<span class="s">ยังไม่ต้องเลือกคนขับ · no driver yet — '+list.length+' plan'+(list.length!==1?'s':'')+'</span></div>'
+    +'<span class="s">ยังไม่ต้องเลือกคนขับ · no driver yet — '+list.length+' plan'+(list.length!==1?'s':'')+'</span>'
+    +'<span style="display:flex;gap:7px;flex-wrap:wrap"><button class="chip" onclick="mapOpen(null)">🌐 แผนที่โซน / zone map</button>'
+    +'<button class="chip" onclick="geoOpen()">🎯 ตรวจหมุด / pin check</button></span></div>'
     +'<div class="plans">'
     +list.map(planCard).join('')
     +(readOnly()?'':'<div class="plan-new" onclick="pickOpen(null)">＋ วางแผนทัวร์ใหม่ / new plan</div>')
@@ -1146,6 +1224,7 @@ function planCard(t){
       }).join('')
     +(ro?'':'<div class="plan-f">'
       +'<button class="btn btn-ice" data-tid="'+esc(t.id)+'" onclick="pickOpen(this.getAttribute(\'data-tid\'))">➕ เพิ่มออเดอร์ / add</button>'
+      +'<button class="btn" data-tid="'+esc(t.id)+'" onclick="mapOpen(this.getAttribute(\'data-tid\'))">🌐 แผนที่ / map</button>'
       +'<button class="btn btn-coral" style="margin-left:auto" data-tid="'+esc(t.id)+'" onclick="planDelete(this)">ลบแผน / delete</button></div>')
   +'</div>';
 }
@@ -1218,6 +1297,261 @@ function planDelete(btn){
     activeTours=activeTours.filter(function(x){return x.id!==tid;}); W.ref('activeTours/'+tid).remove();
     audit('tour','⏳ '+(t.tid||'plan'),'ลบแผน / plan deleted');
     render();
+  });
+}
+
+/* ═══ 9 · ZONEN-KARTE ═════════════════════════════════════════════════════
+   Funktion 3 (15.09.): alle geplanten Touren und alle freien Orders auf einer
+   Karte. Jede Planung hat ihre Farbe, ihre Pins sind nummeriert in Ladefolge;
+   freie Orders stehen gedämpft daneben. Antippen → in einen Plan legen oder aus
+   ihm herausnehmen. Ein blasser Pin ist KEINE echte Position, sondern das, was
+   die Adresse hergibt (Tambon-/Amphoe-Mitte); ein roter Pin ist eine Position,
+   die die App anzweifelt (Grund im Kärtchen). Positionen kommen ausschliesslich
+   aus tour-geo.js — dieselben wie in der App.                                */
+var _map=null, _mapLayer=null, _mapFocus=null, _mapFit=false;
+var PLAN_COLORS=['#C4653A','#7A5AA8','#3A6FC4','#1F8A80','#C4567A','#B8801E'];
+function planColor(t){ var i=plannedTours().findIndex(function(x){ return x.id===t.id; }); return PLAN_COLORS[(i<0?0:i)%PLAN_COLORS.length]; }
+function mapOpen(tid){
+  _mapFocus=tid||null; _mapFit=false;
+  var t=_mapFocus?activeTours.find(function(x){return x.id===_mapFocus;}):null;
+  $('map-t').textContent=t?((tidOk(t.tid)?t.tid+' · ':'')+'แผนที่ / map'):'แผนที่โซน / Zone map';
+  sheetOpen('sheet-map');
+  loadLeaflet(function(){
+    setTimeout(function(){
+      if(!_map){
+        _map=L.map('map',{zoomControl:true});
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(_map);
+      }
+      mapRender();
+      setTimeout(function(){ try{ _map.invalidateSize(); }catch(e){} },80);
+    },60);
+  });
+  // Die Tambon-Tabelle macht aus "irgendwo in der Provinz" einen Punkt — beim
+  // ersten Mal laden, dann neu zeichnen.
+  try{ kpGeoLoad(function(ok){ if(ok && _map) mapRender(); }); }catch(e){}
+}
+function mapClose(){ sheetClose('sheet-map'); _mapFocus=null; }
+// Wo eine Order gezeichnet wird — Fassung von _tmapPos aus der App ohne den
+// Spediteur-Umweg (Vorplanung kennt noch keinen Shipper).
+function mapPos(o){
+  var a=kpAddrOf(o), pred=kpGeoPredict(o,a), c=orderLatLng(o);
+  if(c){
+    var res={lat:c.lat,lng:c.lng,approx:false,plevel:'pin'};
+    if(pred){
+      var km=kpKm(c.lat,c.lng,pred.lat,pred.lng); res.predKm=Math.round(km); res.pred=pred;
+      if(km>kpGeoLimit(pred)){
+        var g0=custGeoGet(o&&o.phone);
+        if(!(g0&&g0.ok)){ res.suspect=Math.round(km); res.why=kpGeoWhy(o,c.lat,c.lng,pred,a); }
+      }
+    }
+    return res;
+  }
+  return pred?{lat:pred.lat,lng:pred.lng,approx:true,plevel:pred.level,pred:pred}:null;
+}
+function lvlTxt(level){
+  return level==='tambon' ? 'กลางตำบล ±2 กม. / sub-district centre'
+       : level==='amphoe' ? 'กลางอำเภอ ±10 กม. / district centre'
+       : level==='zip'    ? 'จากรหัสไปรษณีย์ / postal code'
+       : 'ประมาณจากจังหวัด / province only';
+}
+function mapIcon(label,color,approx){
+  return L.divIcon({className:'',iconSize:[30,30],iconAnchor:[15,30],tooltipAnchor:[0,-28],popupAnchor:[0,-28],
+    html:'<div class="pin'+(approx?' approx':'')+'" style="background:'+color+'"><span>'+label+'</span></div>'});
+}
+function mapCard(o,p,ctx){
+  var m=met(o), plans=plannedTours(), ro=readOnly();
+  var h='<div style="min-width:190px"><div style="font-family:Mitr,sans-serif;font-size:14px">'+esc(o.id)+' · <span style="color:'+zc(o.zone||'Unknown')+'">'+esc(o.zone||'—')+'</span></div>'
+    +'<div>'+esc(o.customer||'—')+'</div><div class="dim2">'+esc(o.address||'')+'</div>'
+    +'<div class="dim2" style="margin-top:3px">'+(m.ctn?'📦 '+m.ctn+' · ':'')+n(m.baht)+' ฿</div>'
+    +(p.suspect?'<div style="color:var(--coral);font-weight:600;margin-top:3px">⚠️ '+esc(p.why?(p.why.th+' / '+p.why.en):('หมุดห่างจากที่อยู่ ~'+p.suspect+' กม. / pin ~'+p.suspect+' km from the address'))+'</div>':'')
+    +(p.approx?'<div style="color:var(--amber);margin-top:3px">◌ '+esc(lvlTxt(p.plevel))+'</div>':'');
+  if(ctx.plan){
+    h+='<div class="dim2" style="margin-top:3px">ในแผน / in plan <b>'+esc(ctx.plan.tid||'')+'</b> · stop '+ctx.seq+'</div>';
+    if(!ro) h+='<button class="mapbtn" style="background:var(--coral-dim);color:var(--coral)" data-tid="'+esc(ctx.plan.id)+'" data-oid="'+esc(o.id)+'" onclick="mapRemove(this)">✕ เอาออกจากแผน / remove</button>';
+  } else if(!ro){
+    var target=_mapFocus?activeTours.find(function(x){return x.id===_mapFocus;}):(plans.length===1?plans[0]:null);
+    if(target){
+      h+='<button class="mapbtn" style="background:'+planColor(target)+';color:#fff" data-tid="'+esc(target.id)+'" data-oid="'+esc(o.id)+'" onclick="mapAdd(this)">➕ เข้าแผน '+esc(target.tid||'')+' / add to plan</button>';
+    } else {
+      h+='<select class="mapsel" data-oid="'+esc(o.id)+'" onchange="mapAdd(this)"><option value="">➕ เข้าแผน… / add to plan…</option>'
+        +plans.map(function(t){ return '<option value="'+esc(t.id)+'">'+esc(t.tid||'plan')+' · '+(t.orders||[]).length+' orders</option>'; }).join('')
+        +'<option value="new">＋ แผนใหม่ / new plan</option></select>';
+    }
+  }
+  return h+'</div>';
+}
+function mapRender(){
+  if(!_map||!window.L) return;
+  if(_mapLayer){ try{ _map.removeLayer(_mapLayer); }catch(e){} }
+  _mapLayer=L.layerGroup().addTo(_map);
+  var seen={}, bounds=[], focusB=[], noPos=[], nSus=0, nFree=0, nPlan=0;
+  var place=function(o,label,color,ctx){
+    var p=mapPos(o); if(!p){ noPos.push(o); return; }
+    // Zweimal derselbe Punkt (gleiche Amphoe-Mitte, gleicher Kunde) → kleiner Ring,
+    // damit jeder Pin greifbar bleibt. Nur so weit, wie die Position unsicher ist.
+    var key=p.lat.toFixed(4)+','+p.lng.toFixed(4), k=seen[key]||0; seen[key]=k+1;
+    var lat=p.lat, lng=p.lng;
+    if(k>0){ var r=p.approx?(p.plevel==='tambon'?0.004:p.plevel==='amphoe'?0.012:0.03):0.0007, a=k*2.4; lat+=r*Math.cos(a); lng+=r*Math.sin(a); }
+    if(p.suspect){ nSus++; color='#C9463D'; }
+    var html=mapCard(o,p,ctx);
+    L.marker([lat,lng],{icon:mapIcon(label,color,p.approx),zIndexOffset:ctx.plan?1000:0})
+      .bindTooltip(html,{direction:'top',opacity:1,className:'tip'})
+      .bindPopup(html,{maxWidth:300}).addTo(_mapLayer);
+    bounds.push([lat,lng]); if(ctx.focus) focusB.push([lat,lng]);
+  };
+  plannedTours().forEach(function(t){
+    var col=planColor(t), pts=[];
+    (t.orders||[]).forEach(function(id,idx){
+      var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+      nPlan++; var before=bounds.length;
+      place(o,String(idx+1),col,{plan:t,seq:idx+1,focus:_mapFocus===t.id});
+      if(bounds.length>before) pts.push(bounds[bounds.length-1]);
+    });
+    if(pts.length>1) L.polyline(pts,{color:col,weight:2.5,opacity:.45,dashArray:'6 7'}).addTo(_mapLayer);
+  });
+  pool().forEach(function(o){ nFree++; place(o,'+','#9A8E7C',{free:true}); });
+  if(homeLoc && geoSane(homeLoc.lat,homeLoc.lng)){
+    L.marker([homeLoc.lat,homeLoc.lng],{zIndexOffset:2000,icon:L.divIcon({className:'',iconSize:[30,30],iconAnchor:[15,15],tooltipAnchor:[0,-16],
+      html:'<div style="width:30px;height:30px;border-radius:50%;background:#2B241C;border:2.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;font-size:15px">🏪</div>'})})
+      .bindTooltip('🏪 ร้าน/คลัง / shop',{direction:'top',opacity:1}).addTo(_mapLayer);
+    bounds.push([homeLoc.lat,homeLoc.lng]);
+  }
+  $('map-legend').innerHTML=
+     plannedTours().map(function(t){ return '<span><b style="color:'+planColor(t)+'">●</b> '+esc(t.tid||'plan')+' ('+(t.orders||[]).length+')</span>'; }).join('')
+    +'<span><b style="color:#9A8E7C">●</b> ว่าง / free ('+nFree+')</span>'
+    +(nSus?'<span><b style="color:#C9463D">●</b> หมุดอาจผิด / suspect ('+nSus+')</span>':'')
+    +'<span>จาง = จากที่อยู่ ไม่ใช่หมุดจริง / faded = from the address, not a real pin</span>'
+    +(kpGeoReady()?'':'<span>⏳ กำลังโหลดฐานตำบล / loading sub-district table…</span>');
+  $('map-missing').innerHTML=noPos.length?'🚫 ไม่มีตำแหน่ง / no position: '+noPos.map(function(o){return '<b>'+esc(o.id)+'</b>';}).join(', '):'';
+  if(!_mapFit){
+    _mapFit=true;
+    var b=focusB.length?focusB:bounds;
+    if(b.length){ try{ _map.fitBounds(b,{padding:[40,40],maxZoom:12}); }catch(e){} }
+    else { try{ _map.setView([13.75,100.5],6); }catch(e){} }
+  }
+}
+function mapAdd(el){
+  var oid=el.getAttribute('data-oid'), tid=el.getAttribute('data-tid')||el.value; if(!oid||!tid||readOnly()) return;
+  var o=orders.find(function(x){return x.id===oid;}); if(!o) return;
+  var t=(tid==='new')?null:activeTours.find(function(x){return x.id===tid;});
+  if(!t){ t={ id:'t'+Date.now(), driverId:'', driverName:TOUR_NODRIVER_LABEL, orders:[], status:{}, checks:{}, created:hhmm(), tourDay:todayStr() }; activeTours.push(t); }
+  if(t.orders.indexOf(oid)<0){ t.orders.push(oid); t.status[oid]=o.status; }
+  pushTour(t); if(tidOk(t.tid)){ stampOrders(t); regUpsert(t); } else allocNo(t);
+  audit('tour','⏳ '+(t.tid||'plan'),'จากแผนที่ / from map +'+oid);
+  try{ _map.closePopup(); }catch(e){} render(); mapRender();
+}
+function mapRemove(btn){
+  var tid=btn.getAttribute('data-tid'), oid=btn.getAttribute('data-oid');
+  var t=activeTours.find(function(x){return x.id===tid;}); if(!t||readOnly()) return;
+  t.orders=(t.orders||[]).filter(function(x){return x!==oid;}); delete t.status[oid];
+  var o=orders.find(function(x){return x.id===oid;}); if(o && o.tourNo===t.tid){ delete o.tourNo; pushOrder(o); }
+  if(!t.orders.length){ activeTours=activeTours.filter(function(x){return x.id!==tid;}); W.ref('activeTours/'+tid).remove(); }
+  else { pushTour(t); if(tidOk(t.tid)) regUpsert(t); }
+  audit('tour','⏳ '+(t.tid||'plan'),'จากแผนที่ / from map −'+oid);
+  try{ _map.closePopup(); }catch(e){} render(); mapRender();
+}
+
+/* ═══ 9b · PIN-CHECK ══════════════════════════════════════════════════════
+   Jede offene Order, deren Position die App anzweifelt, mit dem Grund — aus
+   denselben Regeln wie in der App (kpGeoWhy). Zwei Antworten: "der Pin ist
+   richtig" (still ab jetzt, und die App darf daraus lernen) und "Pin weg"
+   (zurück auf die Adresse). Das Verschieben eines Pins und das Korrigieren einer
+   Adresse bleiben vorerst in der App.                                        */
+var _geoFilter='', _geoQ='', _geoRows=[];
+function geoOpen(){
+  sheetOpen('sheet-geo');
+  $('geo-body').innerHTML='<div class="empty" style="padding:26px">⏳ กำลังโหลดฐานตำบล / loading the sub-district table…</div>';
+  kpGeoLoad(function(ok){
+    if(!ok){ $('geo-body').innerHTML='<div class="empty" style="padding:22px;color:var(--coral)">โหลด data/th-geo.json ไม่ได้ / could not load data/th-geo.json</div>'; return; }
+    geoRender();
+  });
+}
+function geoScan(){
+  var sum={pin:0,pinOk:0,learn:0,tambon:0,amphoe:0,zip:0,prov:0,none:0,bad:0}, rows=[];
+  orders.forEach(function(o){
+    if(!o||['new','packing','ready','loaded'].indexOf(o.status)<0) return;
+    var gi; try{ gi=orderGeoInfo(o); }catch(e){ return; }
+    if(gi.pin){ sum.pin++; if(gi.ok) sum.pinOk++; }
+    else if(gi.pred){ sum[gi.pred.src==='learn'?'learn':gi.pred.level==='tambon'?'tambon':gi.pred.level==='amphoe'?'amphoe':gi.pred.level==='zip'?'zip':'prov']++; }
+    else sum.none++;
+    if(gi.why){ rows.push({o:o,gi:gi,code:gi.why.code,hard:!!gi.why.hard}); if(gi.why.hard) sum.bad++; }
+    else if(!gi.pin && gi.pred && gi.pred.level==='prov') rows.push({o:o,gi:gi,code:'vague',hard:true});
+    else if(!gi.pin && !gi.pred) rows.push({o:o,gi:gi,code:'none',hard:true});
+  });
+  rows.sort(function(a,b){ if(a.hard!==b.hard) return a.hard?-1:1; return (b.gi.km||0)-(a.gi.km||0); });
+  _geoRows=rows; return sum;
+}
+function geoSetFilter(c){ _geoFilter=c; geoRender(); }
+function geoRender(){
+  var sum=geoScan(), ro=readOnly();
+  var chip=function(dot,col,l,v){ return '<span class="geochip"><span style="color:'+col+'">'+dot+'</span>'+l+' <b>'+v+'</b></span>'; };
+  var head='<div class="geochips">'
+    +chip('●','var(--jade)','หมุดจริง / real pin',sum.pin)
+    +chip('◐','var(--ice)','เรียนรู้แล้ว / learned',sum.learn)
+    +chip('◔','var(--violet)','กลางตำบล / sub-district',sum.tambon)
+    +chip('◔','var(--amber)','กลางอำเภอ / district',sum.amphoe+sum.zip)
+    +chip('◌','var(--plat3)','จังหวัดเท่านั้น / province only',sum.prov)
+    +chip('🚫','var(--coral)','ไม่มีตำแหน่ง / none',sum.none)+'</div>';
+  var byCode={}; _geoRows.forEach(function(r){ byCode[r.code]=(byCode[r.code]||0)+1; });
+  var codes=Object.keys(byCode).sort(function(a,b){ return byCode[b]-byCode[a]; });
+  var LBL=function(c){ return (typeof KP_WHY_LABEL!=='undefined'&&KP_WHY_LABEL[c])||(c==='none'?{th:'ไม่มีตำแหน่ง',en:'no position at all',fix:''}:{th:c,en:'',fix:''}); };
+  var tabs='<div class="tools" style="margin:0 0 10px"><button class="chip '+(!_geoFilter?'on':'')+'" onclick="geoSetFilter(\'\')">ทั้งหมด / all <b>'+_geoRows.length+'</b></button>'
+    +codes.map(function(c){ return '<button class="chip '+(_geoFilter===c?'on':'')+'" data-c="'+esc(c)+'" onclick="geoSetFilter(this.getAttribute(\'data-c\'))" title="'+esc(LBL(c).en)+'">'+esc(LBL(c).th)+' <b>'+byCode[c]+'</b></button>'; }).join('')
+    +'<input class="search" id="geo-q" value="'+esc(_geoQ)+'" oninput="_geoQ=this.value;geoRender();$(\'geo-q\').focus()" placeholder="ค้นหา / search order, ชื่อ, ที่อยู่, เบอร์"></div>';
+  var q=_geoQ.trim().toLowerCase();
+  var list=_geoRows.filter(function(r){ if(_geoFilter&&r.code!==_geoFilter) return false; if(!q) return true;
+    return (String(r.o.id)+' '+(r.o.customer||'')+' '+(r.o.address||'')+' '+(r.o.phone||'')).toLowerCase().indexOf(q)>=0; });
+  var body=list.slice(0,120).map(function(r){
+    var o=r.o, gi=r.gi, L=LBL(r.code), w=gi.why||{th:L.th,en:L.en}, a=gi.addr||{};
+    var where=a.tambon?('ต.'+a.tambon+' อ.'+a.amphoe+' จ.'+a.prov):a.amphoe?('อ.'+a.amphoe+' จ.'+a.prov):a.prov?('จ.'+a.prov):'—';
+    var src=gi.pin?geoPosSrc(o):null;
+    return '<div class="georow"><div class="hd"><span style="font-family:Mitr,sans-serif">'+esc(o.id)+'</span>'
+      +'<span class="dim2" style="flex:1;min-width:90px">'+esc(o.customer||'—')+'</span>'
+      +'<span class="tag '+(r.hard?'t-coral':'t-amber')+'">'+esc(L.th)+(gi.km!=null?' · '+gi.km+' กม.':'')+'</span></div>'
+      +'<div class="dim2" style="margin-top:3px">📍 '+esc(o.address||'—')+'</div>'
+      +'<div class="dim2">ที่อยู่อ่านได้ / reads as: <b style="color:var(--plat)">'+esc(where)+'</b>'+(gi.pred?' · '+esc(gi.pred.labelTh):'')+'</div>'
+      +(src?'<div class="dim2">ที่มาหมุด / pin from: '+esc(src.th)+' · '+esc(src.en)+'</div>':'')
+      +'<div class="dim2" style="color:var(--plat3)">'+esc(w.en||L.en)+(L.fix?' → '+esc(L.fix):'')+'</div>'
+      +(ro?'':'<div class="acts">'
+        +(gi.pin?'<button class="btn btn-jade" data-oid="'+esc(o.id)+'" onclick="geoAccept(this)">✓ หมุดถูกต้อง / pin is right</button>':'')
+        +(gi.pin?'<button class="btn btn-coral" data-oid="'+esc(o.id)+'" onclick="geoDrop(this)">🗑 ลบหมุด / drop pin</button>':'')
+        +(gi.pin?'<a class="btn" href="https://www.google.com/maps/search/?api=1&query='+gi.pin.lat+','+gi.pin.lng+'" target="_blank" style="text-decoration:none">🌐 map</a>':'')
+        +'</div>')
+      +'</div>';
+  }).join('') || '<div class="empty" style="padding:22px">✅ ไม่มีปัญหา / nothing to check</div>';
+  var more=list.length>120?'<div class="dim2" style="text-align:center;padding:6px">… อีก '+(list.length-120)+' / '+(list.length-120)+' more — use the search</div>':'';
+  $('geo-body').innerHTML=head+tabs+'<div class="geolist">'+body+more+'</div>';
+}
+// "Der Pin ist richtig, die Warnung nicht." Ein Stück Wissen: still ab jetzt,
+// und die App darf ab jetzt daraus lernen. Ein bestätigter Link wird zum Pin.
+function geoAccept(btn){
+  var oid=btn.getAttribute('data-oid'), o=orders.find(function(x){return x.id===oid;}); if(!o||readOnly()) return;
+  var k=normPhone(o.phone); if(!k){ ask('ไม่มีเบอร์ลูกค้า / no phone on this order','',null); return; }
+  var g=custGeoGet(o.phone);
+  if(!g){ var lp=orderLinkLatLng(o); if(!lp) return; g={lat:lp.lat,lng:lp.lng,src:'maplink',at:new Date().toISOString(),by:(me?me.name:'Tour')}; }
+  ask('✓ ยืนยันว่าหมุดนี้ถูกต้อง? / confirm this pin is right?','หยุดเตือน และให้แอปเรียนรู้จากหมุดนี้ / it stops warning and gets learned from', function(){
+    g.ok=true; g.okBy=(me?me.name:'Tour'); g.okAt=new Date().toISOString();
+    customerMeta[k]=customerMeta[k]||{}; customerMeta[k].geo=g;
+    W.ref('customerMeta/'+k+'/geo').set(g);
+    audit('edit',oid,'✓ ยืนยันหมุด GPS / GPS pin confirmed (tour.html pin check)');
+    geoRender(); if(_map) mapRender();
+  });
+}
+// "Pin weg." Die Karte fällt zurück auf die Adresse. Der Pin landet im Papierkorb
+// (pinTrash) wie in der App, ein Maps-Link auf der Order wird als falsch markiert.
+function geoDrop(btn){
+  var oid=btn.getAttribute('data-oid'), o=orders.find(function(x){return x.id===oid;}); if(!o||readOnly()) return;
+  var k=normPhone(o.phone), g=k?custGeoGet(o.phone):null, lp=orderLinkLatLng(o);
+  if(!g && !lp) return;
+  ask('🗑 ลบตำแหน่งของ '+(o.customer||oid)+'? / remove this position?','แผนที่จะใช้ตำแหน่งจากที่อยู่แทน / the map falls back to the address', function(){
+    if(g && k){
+      W.ref('pinTrash/'+k).set({geo:g,reason:'wrong',orders:[String(oid)],customer:o.customer||'',address:String(o.address||'').slice(0,160),by:(me?me.name:'Tour'),at:new Date().toISOString()});
+      if(customerMeta[k]) delete customerMeta[k].geo;
+      W.ref('customerMeta/'+k+'/geo').remove();
+    }
+    if(lp){ delete o._geo; if(geoLinkOf(o)) o.geoBadLink=geoLinkOf(o); pushOrder(o); }
+    audit('edit',oid,'🗑 ลบตำแหน่งผิด / wrong position removed (tour.html pin check)');
+    geoRender(); if(_map) mapRender();
   });
 }
 
