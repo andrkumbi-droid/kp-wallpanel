@@ -374,6 +374,19 @@ main{ max-width:1500px; margin:0 auto; padding:10px 18px 64px; }
 .dateinput{ width:100%; padding:13px 15px; border-radius:var(--rs); border:none; background:var(--ink); font-size:15px; outline:none; }
 .preview{ margin:13px 0 17px; padding:12px 14px; border-radius:var(--rs); background:var(--ice-soft); font-size:13.5px; }
 
+/* ── Zonen-Board: alle Zonen nebeneinander ──────────────────────── */
+.board{ display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,1fr); gap:14px;
+        overflow-x:auto; padding:4px 2px 18px; scroll-snap-type:x proximity; scrollbar-width:thin; }
+.col{ scroll-snap-align:start; border-radius:var(--r); background:var(--ink2); box-shadow:var(--sh2);
+      padding:14px; display:flex; flex-direction:column; gap:8px; min-height:220px; }
+.col-h{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:2px 2px 6px; }
+.col-h .nm{ font-family:'Mitr',sans-serif; font-size:18px; font-weight:600; }
+.col-h .cnt{ font-family:'Mitr',sans-serif; font-size:13px; color:var(--plat2); white-space:nowrap; }
+.col-s{ display:flex; justify-content:space-between; gap:8px; padding:0 2px 4px; font-size:12px; color:var(--plat2); }
+.col-s b{ font-family:'Mitr',sans-serif; font-weight:600; color:var(--ice); }
+.col .ord{ margin-top:0; cursor:default; }
+.col .empty{ padding:28px 10px; font-size:13px; margin-top:4px; }
+
 @media (min-width:1080px){
   #plan-grid{ grid-template-columns:minmax(0,1fr) 360px; }
   .sums{ grid-template-columns:repeat(4,1fr); }
@@ -872,7 +885,6 @@ function demoSeed(){
 }
 function demoBoot(){ demoSeed(); _ready=true; loginRender(); restoreSession(); render(); }
 
-if(DEMO) demoBoot(); else tdAuthReady.then(boot);
 
 /* ═══ 4 · LOGIN ═══════════════════════════════════════════════════════════ */
 var pinEntry='', pinTarget=null;
@@ -1009,10 +1021,60 @@ function render(){
   if(!me || !$('scr-app').classList.contains('on')) return;
   if(typingNow()){ _holdRender=true; return; }
   liveRender(); navRender();
-  var h=$('v-home'); if(h) h.innerHTML='<div class="empty" style="margin-top:40px">ยังไม่มีฟังก์ชัน / nothing here yet<br><span class="dim2">'
-    +orders.length+' orders · '+activeTours.length+' tours · '+drivers.length+' drivers loaded</span></div>';
+  var h=$('v-home'); if(h) h.innerHTML=boardHTML();
 }
 function navRender(){ $('nav').innerHTML=''; }
+
+/* ═══ 7 · ZONEN-BOARD ═════════════════════════════════════════════════════
+   Funktion 1 (15.09.): alle Zonen nebeneinander, je Zone eine Spalte mit den
+   Orders, die noch auf keine Tour gelegt sind. Die fuenf Zonen stehen immer da,
+   auch leer — das Buero soll auf einen Blick sehen, wo NICHTS wartet. Instore
+   und Unbekannt tauchen nur auf, wenn dort wirklich etwas liegt.
+   Am Handy scrollt das Board seitlich, Spalte fuer Spalte; am Rechner stehen
+   alle nebeneinander.                                                        */
+var ZONES=['Bangkok','Northern','Northeastern','Eastern','Southern'];
+function boardHTML(){
+  var p=pool(), byZ={};
+  p.forEach(function(o){ var z=o.zone||'Unknown'; (byZ[z]=byZ[z]||[]).push(o); });
+  var cols=ZONES.slice();
+  ['Instore','Unknown'].forEach(function(z){ if(byZ[z]) cols.push(z); });
+  Object.keys(byZ).forEach(function(z){ if(cols.indexOf(z)<0) cols.push(z); });
+  var rank={ready:0,packing:1,new:2};
+  return '<div class="board">'+cols.map(function(z){
+    var list=(byZ[z]||[]).slice().sort(function(a,b){
+      return (rank[a.status]-rank[b.status]) || String(a.date||'').localeCompare(String(b.date||''));
+    });
+    var s=sum(list);
+    return '<div class="col">'
+      +'<div class="col-h"><span class="nm" style="color:'+zc(z)+'">'+esc(z)+'</span>'
+        +'<span class="cnt">'+list.length+' orders</span></div>'
+      +(list.length
+        ? '<div class="col-s"><span>'+(s.ctn?'📦 '+s.ctn+' CTN':'')+(s.bun?' · 🧶 '+s.bun+' มัด':'')+(s.panels?' · '+n(s.panels)+' pcs':'')+'</span><b>'+n(s.baht)+' ฿</b></div>'
+          +list.map(ordRow).join('')
+        : '<div class="empty">ไม่มีออเดอร์รอ / nothing waiting</div>')
+    +'</div>';
+  }).join('')+'</div>';
+}
+function ordRow(o){
+  var m=met(o), st=ST[o.status]||{l:o.status,c:'t-mute'};
+  var bits=[];
+  if(m.ctn) bits.push('📦 '+m.ctn);
+  if(m.bun) bits.push('🧶 '+m.bun);
+  if(m.panels) bits.push(n(m.panels)+' pcs');
+  var note=[(o.reqNote||'').trim(),(o.notes||'').trim()].filter(Boolean).join(' · ');
+  return '<div class="ord">'
+    +'<div style="flex:1;min-width:0">'
+      +'<div class="hd"><span class="id">'+esc(o.id)+'</span>'
+        +'<span class="tag '+st.c+'">'+st.l+'</span>'
+        +(o.date?'<span class="dim2">'+fmtD(o.date).slice(0,5)+'</span>':'')+'</div>'
+      +'<div class="cu">'+esc(o.customer||'—')+'</div>'
+      +(o.address&&o.address!=='—'?'<div class="dim2">'+esc(o.address)+'</div>':'')
+      +(bits.length?'<div class="dim2" style="margin-top:3px">'+bits.join(' · ')+'</div>':'')
+      +(note?'<div class="dim2" style="color:var(--amber);margin-top:3px">'+esc(note)+'</div>':'')
+    +'</div>'
+    +'<div class="rt"><div class="amt">'+n(m.baht)+'</div></div>'
+  +'</div>';
+}
 
 /* ═══ 10 · SCHREIBEN ══════════════════════════════════════════════════════
    Es wird immer nur das geschrieben, was sich auf DIESEM Gerät geändert hat —
@@ -1077,6 +1139,9 @@ function ask(title, body, fn){
 }
 function askYes(){ var f=_askFn; _askFn=null; sheetClose('sheet-ask'); if(f) f(); }
 function askNo(){ _askFn=null; sheetClose('sheet-ask'); }
+/* ═══ START ═══ Ganz zuletzt, wenn alles darueber steht: eine gemerkte Sitzung
+   zeichnet sofort und braucht jede Konstante und jede Funktion der Datei. */
+if(DEMO) demoBoot(); else tdAuthReady.then(boot);
 </script>
 </body>
 </html>
