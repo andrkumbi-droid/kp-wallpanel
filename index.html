@@ -9201,7 +9201,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260915002;
+var KP_BUILD = 20260916001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -32516,6 +32516,14 @@ function calcViz() {
     <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Drag the pin to the exact spot / ลากหมุดไปยังตำแหน่งที่ถูกต้อง</div>
     <div id="geo-map" style="width:100%;height:340px;border-radius:var(--rs);overflow:hidden;background:var(--bg2);z-index:0"></div>
     <div id="geo-coords" style="font-size:11px;color:var(--text2);margin-top:6px;text-align:center"></div>
+    <!-- Der Kunde schickt einen neuen Maps-Link, der alte Pin steht noch: Link
+         hier einfügen, der Pin springt dorthin, dann Speichern. Kurze Links
+         (maps.app.goo.gl) löst der Resolver auf. -->
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <input type="text" id="geo-link" placeholder="วางลิงก์ Google Maps ที่ลูกค้าส่งมา / paste the customer's Maps link" onkeydown="if(event.key==='Enter'){event.preventDefault();geoFromLink();}" style="flex:1;min-width:0;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;background:var(--bg);color:var(--text)">
+      <button type="button" class="btn" onclick="geoFromLink()" style="margin:0;flex-shrink:0;width:auto;padding:8px 12px">📎 ใช้ลิงก์ / use link</button>
+    </div>
+    <div id="geo-link-msg" style="font-size:11.5px;margin-top:5px;min-height:16px;text-align:center"></div>
     <button type="button" class="btn" onclick="geoUseMyLocation()" style="margin-top:8px">🎯 Use my current location</button>
     <button type="button" class="btn btnp" onclick="saveGeoEditor()" style="margin-top:6px"><i class="ti ti-device-floppy"></i> Save pin / บันทึก</button>
   </div>
@@ -33169,6 +33177,10 @@ function geoUpdCoords(){ var el=document.getElementById('geo-coords'); if(el&&_g
 function openGeoEditor(key){
   _geoKey=key;
   var c=getCustomer(key)||{}; var g=c.geo||null;
+  // Der bisherige Pin bleibt als Vergleich stehen: nach "use link" sagt der
+  // Editor, wie weit der neue Punkt vom alten entfernt liegt.
+  _geoOld=(g&&geoSane(g.lat,g.lng))?{lat:g.lat,lng:g.lng}:null;
+  try{ var _li=document.getElementById('geo-link'); if(_li) _li.value=''; var _lm=document.getElementById('geo-link-msg'); if(_lm) _lm.textContent=''; }catch(e){}
   var t=document.getElementById('geo-modal-title'); if(t) t.textContent=(c.name||formatPhone(key));
   document.getElementById('geo-modal').classList.add('open');
   loadLeaflet(function(){
@@ -33192,6 +33204,50 @@ function geoUseMyLocation(){
   navigator.geolocation.getCurrentPosition(function(pos){
     if(_geoMap&&_geoMarker){ var ll=[pos.coords.latitude,pos.coords.longitude]; _geoMarker.setLatLng(ll); _geoMap.setView(ll,17); geoUpdCoords(); }
   }, function(){ alert('Could not get location'); }, {enableHighAccuracy:true,timeout:12000});
+}
+// ── 📎 Pin aus einem Maps-Link ────────────────────────────────────────────
+// Der gespeicherte Kunden-Pin gewinnt überall gegen einen auf die Order
+// geklebten Link (orderLatLng: erst custGeoGet, dann der Link). Schickt der
+// Kunde also einen NEUEN Link, weil die Baustelle drei Kilometer weiter liegt,
+// nützt es nichts, ihn in die Order zu setzen — der alte Pin würde den Fahrer
+// weiter zum alten Ort schicken. Der Link muss den Kunden-Pin selbst versetzen,
+// und das passiert hier: Koordinaten aus dem Link lesen (dieselben Muster wie
+// orderLinkLatLng), kurze maps.app.goo.gl-Links über den Resolver auflösen, den
+// Marker dorthin setzen. Gespeichert wird erst mit "Save pin".
+var _geoOld=null;
+function geoParseLinkText(s){
+  s=String(s||'').trim(); if(!s) return null;
+  var m = s.match(/[?&](?:q|query|destination)=(-?\d{1,3}\.\d+),\s*(-?\d{1,3}\.\d+)/i)
+       || s.match(/@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/)
+       || s.match(/!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/)
+       || s.match(/^\s*(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/);
+  if(!m) return null;
+  var la=parseFloat(m[1]), ln=parseFloat(m[2]);
+  return geoSane(la,ln)?{lat:la,lng:ln}:null;
+}
+function geoFromLink(){
+  var inp=document.getElementById('geo-link'), msg=document.getElementById('geo-link-msg');
+  var s=inp?String(inp.value||'').trim():'';
+  var say=function(t,col){ if(msg){ msg.textContent=t; msg.style.color=col||'var(--text2)'; } };
+  if(!s){ say('วางลิงก์ก่อน / paste a link first','#b45309'); return; }
+  // Aus einer LINE-Nachricht kommt der Link oft mit Text davor/dahinter — die
+  // erste URL herausziehen, der Rest ist Begleittext.
+  var u=(s.match(/https?:\/\/\S+/i)||[])[0]||s;
+  var apply=function(p, how){
+    if(!_geoMap||!_geoMarker){ say('แผนที่ยังไม่พร้อม / map not ready yet','#b45309'); return; }
+    var ll=[p.lat,p.lng]; _geoMarker.setLatLng(ll); _geoMap.setView(ll,17); geoUpdCoords();
+    var d=_geoOld?kpKm(_geoOld.lat,_geoOld.lng,p.lat,p.lng):null;
+    say('📍 '+how+(d!=null?' · ห่างจากหมุดเดิม '+(d<1?Math.round(d*1000)+' ม.':d.toFixed(1)+' กม.')+' / '+(d<1?Math.round(d*1000)+' m':d.toFixed(1)+' km')+' from the old pin':'')+' — กด Save pin เพื่อบันทึก / press Save pin to keep it','#16a34a');
+  };
+  var p=geoParseLinkText(u);
+  if(p){ apply(p,'จากลิงก์ / from the link'); return; }
+  if(!/^https?:\/\//i.test(u)){ say('ไม่พบพิกัดในข้อความ / no coordinates in this text','#b45309'); return; }
+  // Kurzlink (maps.app.goo.gl, goo.gl/maps): der Resolver folgt der Weiterleitung.
+  say('⏳ กำลังเปิดลิงก์สั้น / resolving the short link…');
+  resolveShortLink(u).then(function(r){
+    if(r){ apply(r,'จากลิงก์สั้น / from the short link'); return; }
+    say('เปิดลิงก์สั้นไม่ได้ — เปิดลิงก์ในเบราว์เซอร์แล้วคัดลอกลิงก์ยาว (มี @lat,lng) มาวางแทน / could not resolve — open the link in a browser and paste the long URL (with @lat,lng) instead','#dc2626');
+  });
 }
 function saveGeoEditor(){
   if(!_geoKey||!_geoMarker){ closeGeoEditor(); return; }
