@@ -9208,7 +9208,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260917002;
+var KP_BUILD = 20260917003;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -15694,6 +15694,10 @@ function archiveTour(t){
     // Deductions/extras with their reasons travel INTO the record — the Drivers tab
     // has to show them next to the orders long after the tour is closed.
     adj:tourAdjArr(t), adjTotal:tourAdjTotal(t),
+    // Wie der Fahrer eine Restschuld zurueckgegeben hat (bar / ueberwiesen) —
+    // muss ins Archiv, sonst liest die Abrechnung im Drivers-Tab spaeter wieder
+    // Bargeld, wo eine Ueberweisung war.
+    owedBack:t.owedBack||null,
     carPhotoN:(t.carPhotos||[]).length, carSlipN:(t.carFeeSlips||[]).length, lalaDriver:t.lalaDriver||'', plate:t.plate||'', driverPhone:t.driverPhone||'', carFee:parseFloat(t.carFee)||0, carFeeByCustomer:!!t.carFeeByCustomer,
     kmMode:!!t.kmMode, kmRate:kmRateOf(t), kmLog:kmLogOf(t), kmTotal:kmTotal(t), kmPay:kmPayAmount(t),
     // Without this the Drivers tab recomputes from the readings and a hand-entered
@@ -17925,7 +17929,14 @@ function tourSettleCalc(t){
   var km=null;
   try{ if(t&&t.kmMode) km={ total:kmTotal(t), rate:kmRateOf(t), pay:kmPayAmount(t),
                             byHand:!!kmManualOf(t), legs:kmLegs(t).length }; }catch(e){}
+  // Schuldet der Fahrer am Ende etwas, kann er es auf zwei Wegen zurückgeben:
+  // bar aus der Hand, oder per Überweisung aufs Firmenkonto. Der Unterschied
+  // steht nirgends im Geld — er entscheidet nur, ob das Büro am Abend Scheine
+  // zählt oder auf den Kontoauszug schaut. Ohne Vermerk zählte die Abrechnung
+  // stillschweigend Bargeld, das nie auf den Tisch kam (260912-1: 18.058 ฿).
+  var ob=(t&&t.owedBack&&typeof t.owedBack==='object')?t.owedBack:null;
   return { cash:cash, online:online, unknown:unknown, pay:pay, adv:adv, adj:adj, km:km,
+           owedBackHow:(ob&&ob.how)||'', owedBackBy:(ob&&ob.by)||'', owedBackDate:(ob&&ob.date)||'',
            due:due, alreadyPaid:!!st.paid, paidHow:st.how||'', paidAmt:rec,
            settled:settled, settledKnown:settledKnown, fromBag:fromBag, bagTaken:bagTaken, bag:bag,
            proposal:prop, payMissing:(pay<=0 && prop>0),
@@ -17990,6 +18001,7 @@ function tsetHistTour(rec){
                 : (rec.carSlipN>0 ? new Array(rec.carSlipN).join('.').split('.') : []),
     kmMode:!!rec.kmMode, kmRate:rec.kmRate, kmLog:rec.kmLog||[], kmManual:rec.kmManual||0,
     ctnCount:rec.ctnCount||0, ctnRate:rec.ctnRate||0,
+    owedBack:rec.owedBack||null,
     _hist:true
   };
 }
@@ -18059,6 +18071,9 @@ function ofTourSettle(tourId){
     + (s.owed>0
         ? row('=', '👤 คนขับต้องคืนร้าน / driver owes the shop', s.owed.toLocaleString()+' ฿', {big:true, col:'#b91c1c'})
         : row('=', (s.settled>0?'👤 ยังต้องจ่ายเพิ่ม / still to hand over to him':'👤 คนขับรับ / driver keeps'), s.driverGets.toLocaleString()+' ฿', {big:true, col:'#1d4ed8'}))
+    // Wie das Geld zurückkam. Zwei Knöpfe, keine Pflicht: unberührt bleibt es
+    // Bargeld, so wie die Abrechnung es immer gerechnet hat.
+    + (s.owed>0?tsetOwedBackBox(t, s):'')
     + (s.settled>0 && s.driverGets!==0?'<div style="font-size:11.5px;color:#b45309;background:#fef3c7;border-radius:var(--rs);padding:6px 8px;margin:6px 0 0 22px;font-weight:700">⚠️ ค่าทัวร์หรือรายการหักเปลี่ยนหลังจ่ายไปแล้ว<div style="font-weight:500">the pay or a deduction moved after the money had already gone out — this is the difference</div></div>':'')
     + (!s.settledKnown?'<div style="font-size:11.5px;color:#b45309;background:#fef3c7;border-radius:var(--rs);padding:6px 8px;margin:6px 0 0 22px;font-weight:700">⚠️ ไม่ได้บันทึกยอดที่จ่ายไป — ใบนี้ถือว่าเท่ากับค่าทัวร์ปัจจุบัน<div style="font-weight:500">the amount already paid was never recorded, so this sheet assumes it was the pay as it stands — check the slip</div></div>':'')
     // Second step: the bag, less what already left it, less what he still gets.
@@ -18068,13 +18083,27 @@ function ofTourSettle(tourId){
     + (s.bagTaken>0?row('−', '💵 เบิกจากถุงระหว่างทัวร์แล้ว / already taken out of this bag mid-tour', s.bagTaken.toLocaleString()+' ฿', {col:'#b45309'}):'')
     + (s.fromBag>0?row('−', '💵 ค่าทัวร์ที่หยิบจากกระเป๋านี้แล้ว / his pay, already taken out of this bag', s.fromBag.toLocaleString()+' ฿', {col:'#1d4ed8'}):'')
     + (s.owed>0
-        ? row('+', '👤 ที่คนขับต้องคืน / what he brings back', s.owed.toLocaleString()+' ฿', {col:'#b91c1c'})
+        ? row('+', (s.owedBackHow==='transfer'
+            ? '🏦 คนขับโอนเข้าบัญชีร้านแล้ว / he transferred it to the shop account'
+            : '👤 ที่คนขับต้องคืน / what he brings back'),
+          s.owed.toLocaleString()+' ฿', {col:(s.owedBackHow==='transfer'?'#1d4ed8':'#b91c1c')})
         : (s.driverGets>0||!s.settled)?row('−', (s.settled>0?'👤 ที่ยังต้องจ่ายเพิ่ม / still handed over now':'👤 คนขับรับ / driver keeps'), s.driverGets.toLocaleString()+' ฿', {col:'#1d4ed8'}):'')
     + (s.shopGets<0
         ? row('=', '🏪 ร้านต้องจ่ายเพิ่ม / shop has to add', Math.abs(s.shopGets).toLocaleString()+' ฿', {big:true, col:'#b91c1c'})
         : row('=', '🏪 ร้านรับ / shop receives', (s.shopGets+(s.owed||0)).toLocaleString()+' ฿', {big:true, col:'#166534'}))
+    // Kam die Rückgabe per Überweisung, ist die Gesamtsumme oben nicht das, was
+    // im Kassenkasten liegt. Also steht darunter, wieviel davon Schein ist und
+    // wieviel auf dem Konto — sonst sucht abends jemand 18.058 ฿ in bar.
+    + (s.owed>0 && s.owedBackHow==='transfer' && s.shopGets>=0
+        ? '<div style="font-size:11.5px;margin:4px 0 0 22px;font-weight:700">'
+          +'<span style="color:#166534">💵 เงินสด / in cash '+s.shopGets.toLocaleString()+' ฿</span>'
+          +'<span style="color:var(--text3)"> · </span>'
+          +'<span style="color:#1d4ed8">🏦 เข้าบัญชี / to the account '+s.owed.toLocaleString()+' ฿</span></div>'
+        : '')
     + (s.shopGets<0?'<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-top:4px">⚠️ เงินสดไม่พอจ่ายค่าทัวร์ — ร้านต้องจ่ายเพิ่ม '+Math.abs(s.shopGets).toLocaleString()+' ฿<div style="font-weight:500">the cash collected does not cover his pay — the shop has to add this</div></div>':'')
-    + (s.owed>0?'<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-top:4px">⚠️ คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสดในกระเป๋า<div style="font-weight:500">he brings this back on top of the cash in the bag — the deductions, the advance or a pay already handed over exceed what he earned</div></div>':'')
+    + (s.owed>0?(s.owedBackHow==='transfer'
+        ? '<div style="font-size:11.5px;color:#166534;font-weight:700;margin-top:4px">✅ คืนแล้วโดยโอนเข้าบัญชีร้าน — ไม่ต้องรับเป็นเงินสด'+(s.owedBackDate?' · '+esc(fmtD(s.owedBackDate)):'')+(s.owedBackBy?' · '+esc(s.owedBackBy):'')+'<div style="font-weight:500">returned by bank transfer, not as cash — check it against the account</div></div>'
+        : '<div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-top:4px">⚠️ คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสดในกระเป๋า<div style="font-weight:500">he brings this back on top of the cash in the bag — the deductions, the advance or a pay already handed over exceed what he earned</div></div>'):'')
     + (s.adv>0?'<div style="font-size:11px;color:var(--text2);margin-top:8px">🤝 เบิกก่อนออกทัวร์แล้ว '+s.adv.toLocaleString()+' ฿ — จ่ายไปแล้ว ไม่ต้องจ่ายซ้ำ / the advance was handed over before the tour, do not pay it again</div>':'');
   var html='<div id="tset-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)ofTourSettleClose()">'
     +'<div style="background:var(--bg);border-radius:14px;max-width:400px;width:100%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,0.4);max-height:92vh;overflow:auto">'
@@ -18091,6 +18120,45 @@ function ofTourSettle(tourId){
   var wrap=document.createElement('div'); wrap.innerHTML=html; document.body.appendChild(wrap.firstChild);
 }
 function ofTourSettleClose(){ var m=document.getElementById('tset-modal'); if(m) m.remove(); }
+/* ── 👤 Wie hat der Fahrer zurückgegeben? ──────────────────────────────────
+   Schuldet er am Ende etwas, gibt es zwei Wege: bar in die Kasse, oder per
+   Überweisung aufs Firmenkonto. Am Geld ändert das nichts — an der Abendkasse
+   alles: im einen Fall zählt das Büro Scheine, im anderen schaut es auf den
+   Kontoauszug. Unberührt bleibt es Bargeld, so wie bisher gerechnet wurde.
+   Für eine beendete Tour (Drivers-Tab) wird nur angezeigt, was vermerkt ist —
+   der Datensatz im Archiv wird von hier nicht mehr angefasst.                */
+function tsetOwedBackBox(t, s){
+  var ro=!!window.ofReadOnly, hist=!!(t&&t._hist);
+  var cur=s.owedBackHow||'cash';
+  var b=function(how, label, col){
+    var on=(cur===how);
+    return '<button type="button" onclick="ofTourOwedBack(\''+String(t.id).replace(/['"\\]/g,'')+'\',\''+how+'\')" '
+      +'style="flex:1;padding:7px 8px;border:1.5px solid '+(on?col:'var(--border)')+';border-radius:var(--rs);'
+      +'background:'+(on?col:'var(--bg2)')+';color:'+(on?'#fff':'var(--text2)')+';font-size:12px;font-weight:700;cursor:pointer">'
+      +label+'</button>';
+  };
+  if(ro||hist){
+    return '<div style="font-size:11.5px;color:var(--text2);margin:4px 0 0 22px;font-weight:600">'
+      +(cur==='transfer'?'🏦 คืนโดยโอนเข้าบัญชี / returned by transfer':'💵 คืนเป็นเงินสด / returned in cash')+'</div>';
+  }
+  return '<div style="margin:6px 0 0 22px">'
+    +'<div style="font-size:11px;color:var(--text2);margin-bottom:4px;font-weight:600">คนขับคืนอย่างไร / how did he return it?</div>'
+    +'<div style="display:flex;gap:6px">'+b('cash','💵 เงินสด / cash','#166534')+b('transfer','🏦 โอนเข้าบัญชี / transfer','#1d4ed8')+'</div></div>';
+}
+function ofTourOwedBack(tourId, how){
+  if(window.ofReadOnly) return;
+  var t=(activeTours||[]).find(function(x){ return x.id===tourId; });
+  if(!t){ alert('ทัวร์นี้ไม่ได้เปิดอยู่แล้ว / this tour is no longer open'); return; }
+  var who=(typeof ofWho==='function')?ofWho():'Office';
+  if(how==='cash') delete t.owedBack;            // Bargeld ist der Normalfall, kein Vermerk nötig
+  else t.owedBack={ how:'transfer', by:who, at:Date.now(), date:kpTodayStr() };
+  try{ syncTours(); }catch(e){}
+  try{ auditTour('pay','🚚 '+(t.driverName||''), (how==='transfer'
+        ? '🏦 คนขับโอนคืนเข้าบัญชี / driver returned what he owed by transfer'
+        : '💵 คนขับคืนเป็นเงินสด / driver returned what he owed in cash')); }catch(e){}
+  try{ ofTourSettleClose(); ofTourSettle(tourId); }catch(e){}
+  try{ ofRenderTour(); }catch(e){}
+}
 // One A4 page: the same figures, room for two signatures.
 function ofTourSettlePrint(tourId){
   var t=tsetFind(tourId);
@@ -18283,7 +18351,9 @@ function ofTourSettlePrint(tourId){
       +(s.bagTaken>0?'<div class="ct"><span class="op">−</span><span class="lb">💵 เบิกจากถุงระหว่างทัวร์แล้ว / already taken out of this bag mid-tour</span><b>'+money(s.bagTaken)+'</b></div>':'')
       +(s.fromBag>0?'<div class="ct"><span class="op">−</span><span class="lb">💵 ค่าทัวร์ที่หยิบจากกระเป๋านี้แล้ว / his pay, already taken out of this bag</span><b>'+money(s.fromBag)+'</b></div>':'')
       +(s.owed>0
-        ? '<div class="ct"><span class="op">+</span><span class="lb">👤 ที่คนขับต้องคืน / what he brings back</span><b>'+money(s.owed)+'</b></div>'
+        ? '<div class="ct"><span class="op">+</span><span class="lb">'+(s.owedBackHow==='transfer'
+            ? '🏦 คนขับโอนเข้าบัญชีร้านแล้ว / he transferred it to the shop account'
+            : '👤 ที่คนขับต้องคืน / what he brings back')+'</span><b>'+money(s.owed)+'</b></div>'
         : (s.driverGets>0||!s.settled)
           ? '<div class="ct"><span class="op">−</span><span class="lb">👤 '+(s.settled>0?'ที่ยังต้องจ่ายเพิ่ม / still handed over now':'คนขับรับ / driver keeps')+'</span><b>'+money(s.driverGets)+'</b></div>' : '')
       // If the bag does not cover his pay the result is negative, and saying "shop
@@ -18291,12 +18361,18 @@ function ofTourSettlePrint(tourId){
       +(s.shopGets<0
         ? '<div class="ct tot neg"><span class="op">=</span><span class="lb">🏪 ร้านต้องจ่ายเพิ่ม / shop has to add</span><b>'+money(-s.shopGets)+'</b></div>'
         : '<div class="ct tot"><span class="op">=</span><span class="lb">🏪 ร้านรับ / shop receives</span><b>'+money(s.shopGets+(s.owed||0))+'</b></div>')
+      // Auf Papier genauso: bei einer Überweisung liegt die Gesamtsumme nicht
+      // in der Kasse, also steht darunter, wieviel Schein ist und wieviel Konto.
+      +(s.owed>0&&s.owedBackHow==='transfer'&&s.shopGets>=0
+        ? '<div class="ct"><span class="op"></span><span class="lb">💵 เงินสด / in cash '+money(s.shopGets)+' · 🏦 เข้าบัญชี / to the account '+money(s.owed)+'</span><b></b></div>' : '')
     +'</div>'
     +(s.payMissing?'<div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:8px">⚠️ ยังไม่ได้ใส่ค่าทัวร์ (การ์ดเสนอ '+money(s.proposal)+') — ใบนี้ปิดยอดที่ 0 / the tour pay was never entered, this sheet settles it at zero</div>':'')
     // Same condition as the window, so the paper cannot carry a warning the office
     // never saw — and the wording no longer names a cause it cannot know: he also
     // owes money back when a pay already handed over turned out to be too high.
-    +(s.owed>0?'<div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:8px">⚠️ คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสด / he brings this back on top of the cash</div>':'')
+    +(s.owed>0?(s.owedBackHow==='transfer'
+        ? '<div style="font-size:11px;color:#166534;font-weight:700;margin-top:8px">✅ คืนแล้วโดยโอนเข้าบัญชีร้าน ไม่ใช่เงินสด'+(s.owedBackDate?' · '+fmtD(s.owedBackDate):'')+(s.owedBackBy?' · '+String(s.owedBackBy).replace(/</g,'&lt;'):'')+' / returned by bank transfer, not as cash</div>'
+        : '<div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:8px">⚠️ คนขับต้องคืนเงินส่วนนี้เพิ่มจากเงินสด / he brings this back on top of the cash</div>'):'')
     +(s.settled>0&&s.driverGets!==0?'<div style="font-size:11px;color:#b45309;font-weight:700;margin-top:6px">⚠️ ค่าทัวร์หรือรายการหักเปลี่ยนหลังจ่ายไปแล้ว / the pay or a deduction moved after the money had already gone out — the line above is the difference</div>':'')
     +(s.adv?'<div style="font-size:11px;color:#555;margin-top:8px">🤝 เบิกก่อนออกทัวร์ '+money(s.adv)+' จ่ายไปแล้วก่อนออกรถ / the advance was already handed over before departure</div>':'')
     +'<div class="sig"><div>ลงชื่อคนขับ / driver</div><div>ลงชื่อออฟฟิศ / office</div></div>'
