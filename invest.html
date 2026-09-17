@@ -427,7 +427,12 @@ function oops(){ say('Speichern fehlgeschlagen — Verbindung?',3600); }
 /* ═══════════════════════════════════════════════════════════════════════════
    2 · ZUSTAND
    ═══════════════════════════════════════════════════════════════════════════ */
-var staffList=[], ACC={}, CTS={}, LED={}, CFG={}, me=null, role='view', view='over';
+var staffList=[], ACC={}, CTS={}, LED={}, CFG={}, me=null, role='view', boss=false, view='over';
+/* Nur dieser eine KP-Datensatz oeffnet die Seite ueber den KP-PIN. Frueher
+   reichte das Buchhaltungsrecht — das haben aber auch Pim und Nicky, und die
+   haben mit Alex' Geld nichts zu tun. Alle weiteren Zugaenge laufen ueber
+   invest/access. */
+var OWNER_STAFF='st1779766154832';   // André
 var DEF={ rate:10, months:2, soloAlex:70 };   // 10 % auf zwei Monate; allein → 70/30
 function cfg(k){ return (CFG && CFG[k]!=null && CFG[k]!=='') ? +CFG[k] : DEF[k]; }
 function canEdit(){ return role==='owner'; }
@@ -758,7 +763,7 @@ function renderAcct(){
    7 · ANSICHT · EINSTELLUNGEN
    ═══════════════════════════════════════════════════════════════════════════ */
 function renderSet(){
-  if(!canEdit()){ $('v-set').innerHTML='<div class="empty">Nur André kann hier etwas ändern.</div>'; return; }
+  if(!boss){ $('v-set').innerHTML='<div class="empty">Nur André kann hier etwas ändern.</div>'; return; }
   var h='';
   h+='<div class="sec"><h2>Standardwerte</h2><div class="line"></div></div>';
   h+='<div class="card"><div class="frow">'
@@ -1038,9 +1043,9 @@ function pad(d){
 }
 function findPin(p){
   var k=Object.keys(ACC).find(function(k){ return String((ACC[k]||{}).pin||'')===p; });
-  if(k) return { name:ACC[k].name||'Zugang', role:ACC[k].role==='owner'?'owner':'view', id:'acc:'+k };
-  var s=staffList.find(function(x){ return x && x.active!==false && x.acctAccess && String(x.pin||'')===p; });
-  if(s) return { name:s.name||'André', role:'owner', id:'kp:'+s.id };
+  if(k) return { name:ACC[k].name||'Zugang', role:ACC[k].role==='owner'?'owner':'view', boss:false, id:'acc:'+k };
+  var s=staffList.find(function(x){ return x && x.id===OWNER_STAFF && x.active!==false && String(x.pin||'')===p; });
+  if(s) return { name:s.name||'André', role:'owner', boss:true, id:'kp:'+s.id };
   return null;
 }
 function tryPin(){
@@ -1052,7 +1057,7 @@ function tryPin(){
     var c=$('pad'); if(c){ c.classList.remove('shake'); void c.offsetWidth; c.classList.add('shake'); }
     return;
   }
-  me=f; role=f.role; $('pin-err').textContent='';
+  me=f; role=f.role; boss=!!f.boss; $('pin-err').textContent='';
   try{ localStorage.setItem('kp-invest-session', JSON.stringify({id:f.id, ts:Date.now()})); }catch(e){}
   open_();
 }
@@ -1060,7 +1065,12 @@ function open_(){
   $('gate').style.display='none';
   $('app').style.display='';
   $('who').innerHTML='<b>'+esc(me?me.name:'')+'</b> · '+(role==='owner'?'Vollzugriff':'nur lesen');
-  if(role!=='owner'){ var t=$('tabs').querySelector('[data-v="set"]'); if(t) t.style.display='none'; }
+  /* Die Einstellungen gehoeren mir allein — dort haengen die Zugaenge selbst
+     dran. Auch ein zweiter Vollzugriff sieht den Reiter nicht. */
+  if(!boss){
+    var t=$('tabs').querySelector('[data-v="set"]'); if(t) t.style.display='none';
+    if(view==='set'){ view='over'; }
+  }
   render();
 }
 $('bye').addEventListener('click', function(){
@@ -1095,10 +1105,10 @@ function resume(){
     if(!s || (Date.now()-s.ts)>=4*3600*1000) return;       // 4 Stunden, wie im POS
     if(s.id.indexOf('acc:')===0){
       var a=ACC[s.id.slice(4)];
-      if(a){ me={name:a.name||'Zugang'}; role=a.role==='owner'?'owner':'view'; open_(); }
+      if(a){ me={name:a.name||'Zugang'}; role=a.role==='owner'?'owner':'view'; boss=false; open_(); }
     }else{
-      var st=staffList.find(function(x){ return x && x.id===s.id.slice(3) && x.acctAccess && x.active!==false; });
-      if(st){ me={name:st.name||'André'}; role='owner'; open_(); }
+      var st=staffList.find(function(x){ return x && x.id===OWNER_STAFF && x.id===s.id.slice(3) && x.active!==false; });
+      if(st){ me={name:st.name||'André'}; role='owner'; boss=true; open_(); }
     }
   }catch(e){}
 }
