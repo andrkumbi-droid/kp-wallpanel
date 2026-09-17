@@ -344,6 +344,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--edge);
     </h1>
     <span class="spacer"></span>
     <span class="who" id="who"></span>
+    <button type="button" class="ghost" id="pinbtn" style="display:none">PIN ändern</button>
     <button type="button" class="ghost" id="bye">Abmelden</button>
   </header>
 
@@ -956,6 +957,7 @@ function saveCfg(){
 function addAcc(){
   var n=prompt('Name:','Alex'); if(!n) return;
   var p=prompt('PIN (4–8 Ziffern):',''); if(!p||!/^\d{4,8}$/.test(p)){ say('PIN muss 4–8 Ziffern haben.'); return; }
+  if(Object.keys(ACC).some(function(k){ return String((ACC[k]||{}).pin||'')===p; })){ say('Dieser PIN ist schon vergeben.'); return; }
   var r=confirm('Darf er auch ÄNDERN?\n\nOK = Vollzugriff · Abbrechen = nur lesen') ? 'owner':'view';
   IDB.ref('access/'+uid()).set({ name:n.trim(), pin:p, role:r })
     .then(function(){ say('Zugang angelegt.'); }).catch(oops);
@@ -1047,7 +1049,7 @@ function pad(d){
 }
 function findPin(p){
   var k=Object.keys(ACC).find(function(k){ return String((ACC[k]||{}).pin||'')===p; });
-  if(k) return { name:ACC[k].name||'Zugang', role:ACC[k].role==='owner'?'owner':'view', boss:false, id:'acc:'+k };
+  if(k) return { name:ACC[k].name||'Zugang', role:ACC[k].role==='owner'?'owner':'view', boss:false, acc:k, id:'acc:'+k };
   var s=staffList.find(function(x){ return x && x.id===OWNER_STAFF && x.active!==false && String(x.pin||'')===p; });
   if(s) return { name:s.name||'André', role:'owner', boss:true, id:'kp:'+s.id };
   return null;
@@ -1069,6 +1071,10 @@ function open_(){
   $('gate').style.display='none';
   $('app').style.display='';
   $('who').innerHTML='<b>'+esc(me?me.name:'')+'</b> · '+(role==='owner'?'Vollzugriff':'nur lesen');
+  /* Den PIN darf nur aendern, wer mit einem Zugang von hier drin ist. Wer mit
+     dem KP-PIN kommt, wuerde sonst seinen Login fuer die ganze KP-App aendern —
+     das gehoert in die App, nicht hierher. */
+  $('pinbtn').style.display = (me && me.acc) ? '' : 'none';
   /* Die Einstellungen gehoeren mir allein — dort haengen die Zugaenge selbst
      dran. Auch ein zweiter Vollzugriff sieht den Reiter nicht. */
   if(!boss){
@@ -1077,6 +1083,37 @@ function open_(){
   }
   render();
 }
+/* ── Eigenen PIN aendern ─────────────────────────────────────────────────── */
+function openPin(){
+  if(!me || !me.acc) return;
+  showM('<h3>PIN ändern</h3>'
+   + '<div class="hint">Gilt sofort für diesen Zugang. Merk ihn dir gut — zurücksetzen kann ihn nur André.</div>'
+   + '<div class="frow one"><div><label>Aktueller PIN</label>'
+   +   '<input class="n" id="p-old" type="password" inputmode="numeric" autocomplete="off"></div></div>'
+   + '<div class="frow"><div><label>Neuer PIN</label>'
+   +   '<input class="n" id="p-new" type="password" inputmode="numeric" autocomplete="off" placeholder="4–8 Ziffern"></div>'
+   +   '<div><label>Wiederholen</label>'
+   +   '<input class="n" id="p-new2" type="password" inputmode="numeric" autocomplete="off"></div></div>'
+   + '<div class="mact"><button class="cancel" onclick="closeM()">Abbrechen</button>'
+   +   '<button class="save" onclick="savePin()">Ändern</button></div>');
+  setTimeout(function(){ var e=$('p-old'); if(e) e.focus(); }, 60);
+}
+function savePin(){
+  if(!me || !me.acc) return;
+  var a=ACC[me.acc]||{};
+  var o=$('p-old').value.trim(), n=$('p-new').value.trim(), n2=$('p-new2').value.trim();
+  if(String(a.pin||'')!==o){ say('Aktueller PIN stimmt nicht.'); return; }
+  if(!/^\d{4,8}$/.test(n)){ say('Neuer PIN: 4 bis 8 Ziffern.'); return; }
+  if(n!==n2){ say('Die beiden neuen PINs sind nicht gleich.'); return; }
+  // Zwei Zugaenge mit demselben PIN waeren eine Tuer, die zwei Schloesser oeffnet —
+  // wer zuerst in der Liste steht, gewinnt. Also vorher abfangen.
+  var clash=Object.keys(ACC).some(function(k){ return k!==me.acc && String((ACC[k]||{}).pin||'')===n; });
+  if(clash){ say('Dieser PIN ist schon vergeben.'); return; }
+  IDB.ref('access/'+me.acc+'/pin').set(n).then(function(){ say('PIN geändert.'); }).catch(oops);
+  closeM();
+}
+$('pinbtn').addEventListener('click', openPin);
+
 $('bye').addEventListener('click', function(){
   try{ localStorage.removeItem('kp-invest-session'); }catch(e){}
   location.reload();
@@ -1109,7 +1146,7 @@ function resume(){
     if(!s || (Date.now()-s.ts)>=4*3600*1000) return;       // 4 Stunden, wie im POS
     if(s.id.indexOf('acc:')===0){
       var a=ACC[s.id.slice(4)];
-      if(a){ me={name:a.name||'Zugang'}; role=a.role==='owner'?'owner':'view'; boss=false; open_(); }
+      if(a){ me={name:a.name||'Zugang', acc:s.id.slice(4)}; role=a.role==='owner'?'owner':'view'; boss=false; open_(); }
     }else{
       var st=staffList.find(function(x){ return x && x.id===OWNER_STAFF && x.id===s.id.slice(3) && x.active!==false; });
       if(st){ me={name:st.name||'André'}; role='owner'; boss=true; open_(); }
