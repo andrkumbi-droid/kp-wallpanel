@@ -980,6 +980,13 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     window.fbDB = db;
     window.fbRootDb = _rootDb;   // true DB root (no season prefix) — for public website mirror at pub/
     try{ window.fbStorage = firebase.storage(); }catch(e){}
+    // Der Bucket nimmt aus dem Browser keine Uploads an (CORS, seit Wochen).
+    // Die Storage-Bibliothek wiederholt einen gescheiterten Upload aber von sich
+    // aus bis zu ZEHN MINUTEN, bevor sie ablehnt — so lange stand "uploading…"
+    // auf dem Lohn-Slip, und der Kollege gab nach zwei Minuten auf: Slip weg.
+    // Jeder Storage-Versuch bekommt jetzt 12 Sekunden, danach greift der
+    // Rückfall in die Datenbank, den jede Upload-Stelle hat.
+    try{ if(window.fbStorage){ window.fbStorage.setMaxUploadRetryTime(12000); window.fbStorage.setMaxOperationRetryTime(12000); } }catch(e){}
     window.firebaseReady = true;
     // Expose the push helpers — the main app script (a separate scope) calls these
     // from ~10 places (new order, delivered, tour, slip alert, login token reg).
@@ -9201,7 +9208,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260916001;
+var KP_BUILD = 20260917001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -16445,12 +16452,11 @@ function tourPayoutAddSlip(input, poId){
         if(url){ p.slips=tourPayoutSlips(p).concat([url]); added++; }
         if(++done===files.length) finish();
       };
-      // Compressed first, then Storage — the database keeps a link, not a picture.
-      if(window.fbStorage){
-        window.fbStorage.ref('tourpay/'+poId+'_'+Date.now()+'.jpg').putString(dataUrl,'data_url')
-          .then(function(s){ return s.ref.getDownloadURL(); }).then(push)
-          .catch(function(){ push(dataUrl); });
-      } else push(dataUrl);
+      // Direkt in die Datenbank, wie jedes andere Foto der App. Der Umweg über
+      // Storage stand hier bis 17.09.2026 — der Bucket lehnt Browser-Uploads ab,
+      // und bis die Bibliothek das zugab, hing "uploading…" minutenlang; der
+      // Kollege ging weg, der Slip fehlte (po-1789619461323667, Jai, 2.729 ฿).
+      push(dataUrl);
     });
   });
   input.value='';
@@ -16664,10 +16670,8 @@ function tpayAddSlip(input){
     compressPhotoFile(f, function(dataUrl){
       var fin=function(url){ if(url) _tpaySlips.push(url); if(++done===files.length){ if(st) st.style.display='none'; tpayRender(); } };
       if(!dataUrl){ fin(''); return; }
-      if(window.fbStorage){
-        window.fbStorage.ref('tourpay/sel_'+Date.now()+'.jpg').putString(dataUrl,'data_url')
-          .then(function(s){ return s.ref.getDownloadURL(); }).then(fin).catch(function(){ fin(dataUrl); });
-      } else fin(dataUrl);
+      // Direkt in die Datenbank — kein Storage-Umweg mehr, siehe tourPayoutAddSlip.
+      fin(dataUrl);
     });
   });
   input.value='';
