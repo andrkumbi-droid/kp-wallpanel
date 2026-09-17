@@ -1,0 +1,1090 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Container Investments</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A0B0E'/%3E%3Cpath d='M6 11h20v12H6z' fill='none' stroke='%23E8B84B' stroke-width='2'/%3E%3Cpath d='M11 11v12M16 11v12M21 11v12' stroke='%233DD68C' stroke-width='2'/%3E%3C/svg%3E">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     CONTAINER INVESTMENTS  ·  André & Alex
+     ---------------------------------------------------------------------------
+     Eigene Seite, eigener Datenpfad (v2/invest/…). Das hier ist NICHT die
+     KP-App: keine Orders, keine Touren, kein Lager. Die Seite teilt sich nur
+     das Firebase-Projekt und den Login-Bausatz, weil das schon da ist und
+     funktioniert. Verlinkt ist sie nirgends — man kommt über die URL rein,
+     und dann nur mit PIN.
+
+     Sprache: Deutsch. Hier lesen nur André und Alex mit, nicht das Büro.
+     ═══════════════════════════════════════════════════════════════════════ -->
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script>
+firebase.initializeApp({
+  apiKey: "AIzaSyBhUzwMR28dvulez9q6AZ4gZS80Y9VK0qQ",
+  authDomain: "kp-wallpanel.firebaseapp.com",
+  databaseURL: "https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "kp-wallpanel",
+  storageBucket: "kp-wallpanel.firebasestorage.app",
+  messagingSenderId: "794246593779",
+  appId: "1:794246593779:web:703fc0a4ba89ba58734b86"
+});
+var APPCHECK_SITE_KEY = '6LebwYgtAAAAAB9LWZ91x3eZfllT9mPsV3Y8Vfpv';
+function acReachable(){
+  return new Promise(function(res){
+    var to=setTimeout(function(){ res(false); }, 5000);
+    fetch('https://www.google.com/recaptcha/api.js',{mode:'no-cors'})
+      .then(function(){ clearTimeout(to); res(true); })
+      .catch(function(){ clearTimeout(to); res(false); });
+  });
+}
+var iAppCheckReady = new Promise(function(resolve){
+  var _acOff=false; try{ _acOff=localStorage.getItem('kpAcOff')==='1'; }catch(e){}
+  if(_acOff){ resolve(false); return; }
+  if(!APPCHECK_SITE_KEY || !firebase.appCheck){ resolve(false); return; }
+  function go(){
+    try{
+      if(/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || location.protocol==='file:'){
+        var _q=(location.search.match(/[?&]acdebug=([^&]+)/)||[])[1];
+        if(_q){ try{ localStorage.setItem('kpAcDebugToken', decodeURIComponent(_q)); }catch(e){} }
+        var _saved=''; try{ _saved=localStorage.getItem('kpAcDebugToken')||''; }catch(e){}
+        if(!_saved){ resolve(false); return; }     // unregistrierter Token haengt die RTDB auf
+        self.FIREBASE_APPCHECK_DEBUG_TOKEN=_saved;
+      }
+      firebase.appCheck().activate(APPCHECK_SITE_KEY, true);
+      window._iAcOn=true; resolve(true);
+    }catch(e){ resolve(false); }
+  }
+  function whenBody(fn){ if(document.body) fn(); else setTimeout(function w(){ document.body?fn():setTimeout(w,5); },0); }
+  acReachable().then(function(ok){ ok ? whenBody(go) : resolve(false); });
+});
+var SEASON='v2';
+var _rootDb = firebase.database();
+var IDB = { ref:function(p){ return _rootDb.ref(SEASON+'/invest/'+(p==null?'':p)); },
+            raw:function(p){ return _rootDb.ref(SEASON+'/'+(p==null?'':p)); } };
+function _iAcRetry(){
+  try{
+    if(window._iAcOn && !sessionStorage.getItem('kpAcRetry')){
+      sessionStorage.setItem('kpAcRetry','1');
+      localStorage.setItem('kpAcOff','1');
+      setTimeout(function(){ location.reload(); }, 400);
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+function _iSignIn(attempt){
+  return firebase.auth().signInAnonymously()
+    .then(function(){ return true; })
+    .catch(function(){
+      if(_iAcRetry()) return false;
+      var wait=Math.min(30000, 2000*Math.pow(2, Math.min(attempt-1,4)));
+      return new Promise(function(res){ setTimeout(function(){ res(_iSignIn(attempt+1)); }, wait); });
+    });
+}
+var iAuthReady = iAppCheckReady.then(function(){ return _iSignIn(1); });
+</script>
+
+<style>
+/* ══════════════════════════════════════════════════════════════════════════
+   TRESOR
+   Fast schwarz, damit Zahlen leuchten. Zwei Signalfarben, mehr nicht:
+   Gold gehoert Alex, Mint gehoert Andre — ueberall, in jedem Balken, in
+   jeder Kachel. Wer wieviel hat, soll man sehen koennen, ohne zu lesen.
+   Zahlen laufen immer in Tabellenziffern, damit Spalten stehen.
+   Einthemig dunkel: ein Kontoauszug um Mitternacht.
+   ══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --bg:#0A0B0E; --panel:#121419; --panel2:#171A21; --panel3:#1D212A;
+  --edge:#242833; --edge2:#333948;
+  --ink:#EEF1F6; --ink2:#99A1B2; --ink3:#616978;
+  --alex:#E8B84B; --alexD:#8A6D1F;      /* Gold  = Alex   */
+  --andre:#3DD68C; --andreD:#1E7350;    /* Mint  = André  */
+  --blue:#5B9DFF; --red:#FF6B6B; --amber:#FFA23E;
+  --sys:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Thai","Leelawadee UI",sans-serif;
+  --num:ui-monospace,"SF Mono","Cascadia Mono",Consolas,"DejaVu Sans Mono",monospace;
+  --r:14px;
+}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;background:
+    radial-gradient(1100px 520px at 15% -10%, #16181F 0%, transparent 62%),
+    radial-gradient(900px 480px at 92% 0%, #131A18 0%, transparent 58%),
+    var(--bg);
+  background-attachment:fixed;
+  color:var(--ink);font-family:var(--sys);font-size:15px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+.n{font-family:var(--num);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.wrap{max-width:1180px;margin:0 auto;padding:0 16px 90px}
+button{font-family:inherit}
+
+/* ── PIN ─────────────────────────────────────────────────────────────────── */
+#gate{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:16px;padding:24px;
+  background:radial-gradient(760px 420px at 50% 18%, #17191F 0%, var(--bg) 70%)}
+#gate .logo{width:56px;height:56px;border-radius:16px;display:flex;align-items:center;
+  justify-content:center;background:linear-gradient(145deg,#1C1F27,#101218);
+  border:1px solid var(--edge2);box-shadow:0 10px 30px rgba(0,0,0,.6)}
+#gate .logo svg{width:30px;height:30px}
+#gate h1{font-size:19px;margin:6px 0 0;font-weight:750;letter-spacing:-.2px}
+#gate .sub{font-size:12.5px;color:var(--ink3);letter-spacing:.16em;text-transform:uppercase;font-weight:700}
+.dots{display:flex;gap:9px;height:14px;align-items:center;margin:4px 0 2px}
+.dot{width:10px;height:10px;border-radius:50%;background:transparent;border:1.6px solid var(--edge2);transition:.14s}
+.dot.on{background:var(--alex);border-color:var(--alex);box-shadow:0 0 12px rgba(232,184,75,.45)}
+.pad{display:grid;grid-template-columns:repeat(3,72px);gap:11px}
+.pad button{height:62px;border-radius:14px;border:1px solid var(--edge);background:var(--panel2);
+  color:var(--ink);font-size:21px;font-weight:650;cursor:pointer;font-family:var(--num);transition:.1s}
+.pad button:active{transform:scale(.94);background:var(--panel3)}
+.pad button.ok{background:linear-gradient(160deg,#2A6F51,#1B4E38);border-color:#2E7D5B;color:#D8FFEC}
+.pad button.del{color:var(--ink3);font-size:18px}
+#pin-err{font-size:13.5px;color:var(--red);min-height:36px;text-align:center;max-width:280px}
+.shake{animation:sh .34s}
+@keyframes sh{0%,100%{transform:translateX(0)}22%{transform:translateX(-8px)}55%{transform:translateX(7px)}80%{transform:translateX(-3px)}}
+
+/* ── Kopf ────────────────────────────────────────────────────────────────── */
+header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:20px 0 14px}
+header h1{font-size:19px;margin:0;font-weight:750;letter-spacing:-.3px;display:flex;align-items:center;gap:9px}
+header h1 svg{width:21px;height:21px;flex:none}
+.who{font-size:12px;color:var(--ink2);background:var(--panel2);border:1px solid var(--edge);
+  border-radius:20px;padding:5px 11px;font-weight:600}
+.who b{color:var(--ink)}
+.spacer{flex:1}
+.ghost{background:var(--panel2);border:1px solid var(--edge);color:var(--ink2);border-radius:10px;
+  padding:7px 12px;font-size:12.5px;font-weight:650;cursor:pointer;transition:.12s}
+.ghost:hover{border-color:var(--edge2);color:var(--ink)}
+
+/* ── Reiter ──────────────────────────────────────────────────────────────── */
+nav{display:flex;gap:4px;background:var(--panel);border:1px solid var(--edge);border-radius:12px;
+  padding:4px;margin-bottom:20px;overflow-x:auto;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{flex:1;min-width:104px;white-space:nowrap;border:0;background:transparent;color:var(--ink3);
+  font-size:13px;font-weight:650;padding:9px 12px;border-radius:9px;cursor:pointer;transition:.13s}
+nav button:hover{color:var(--ink2)}
+nav button.on{background:var(--panel3);color:var(--ink);box-shadow:0 1px 0 rgba(255,255,255,.05) inset}
+
+/* ── Kacheln ─────────────────────────────────────────────────────────────── */
+.tiles{display:grid;gap:12px;margin-bottom:14px}
+.g5{grid-template-columns:repeat(auto-fit,minmax(178px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(215px,1fr))}
+.tile{background:linear-gradient(165deg,var(--panel2),var(--panel));border:1px solid var(--edge);
+  border-radius:var(--r);padding:14px 15px;position:relative;overflow:hidden}
+.tile::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--edge2)}
+.tile.a::before{background:linear-gradient(180deg,var(--alex),var(--alexD))}
+.tile.n::before{background:linear-gradient(180deg,var(--andre),var(--andreD))}
+.tile .k{font-size:11.5px;color:var(--ink3);font-weight:650;text-transform:uppercase;letter-spacing:.06em}
+.tile .v{font-size:23px;font-weight:700;margin-top:6px;letter-spacing:-.6px}
+.tile .v small{font-size:13px;font-weight:600;color:var(--ink3);margin-left:3px;letter-spacing:0}
+.tile .s{font-size:11.5px;color:var(--ink3);margin-top:3px}
+.va{color:var(--alex)} .vn{color:var(--andre)} .vr{color:var(--red)} .vb{color:var(--blue)}
+
+/* ── Abschnitte ──────────────────────────────────────────────────────────── */
+.sec{margin:26px 0 12px;display:flex;align-items:center;gap:10px}
+.sec h2{font-size:13px;margin:0;font-weight:700;color:var(--ink2);text-transform:uppercase;letter-spacing:.09em}
+.sec .line{flex:1;height:1px;background:var(--edge)}
+.card{background:var(--panel);border:1px solid var(--edge);border-radius:var(--r);padding:16px}
+.muted{color:var(--ink3);font-size:13px}
+.empty{text-align:center;color:var(--ink3);padding:34px 14px;font-size:13.5px;
+  border:1px dashed var(--edge2);border-radius:var(--r)}
+
+/* ── Geld-Balken (wo liegt Alex' Geld) ───────────────────────────────────── */
+.stack{height:30px;border-radius:9px;overflow:hidden;display:flex;background:var(--panel3);
+  border:1px solid var(--edge);margin:12px 0 9px}
+.stack i{display:block;height:100%}
+.leg{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--ink2)}
+.leg span{display:flex;align-items:center;gap:6px}
+.leg b{width:9px;height:9px;border-radius:3px;display:inline-block}
+
+/* ── Container-Karten ────────────────────────────────────────────────────── */
+.cgrid{display:grid;gap:13px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
+.cc{background:linear-gradient(168deg,var(--panel2) 0%,var(--panel) 62%);border:1px solid var(--edge);
+  border-radius:16px;padding:15px 16px 14px;position:relative;transition:.15s}
+.cc:hover{border-color:var(--edge2)}
+.cc.done{opacity:.72}
+.cc.late{border-color:#5C2A2A;background:linear-gradient(168deg,#1D1517 0%,var(--panel) 62%)}
+.cc .top{display:flex;align-items:flex-start;gap:9px;margin-bottom:11px}
+.cc .nm{font-size:15.5px;font-weight:700;letter-spacing:-.2px}
+.cc .dt{font-size:11.5px;color:var(--ink3);margin-top:2px}
+.pill{font-size:10.5px;font-weight:750;padding:4px 9px;border-radius:20px;white-space:nowrap;
+  text-transform:uppercase;letter-spacing:.05em;border:1px solid transparent}
+.p-run{background:rgba(91,157,255,.12);color:var(--blue);border-color:rgba(91,157,255,.28)}
+.p-soon{background:rgba(255,162,62,.13);color:var(--amber);border-color:rgba(255,162,62,.3)}
+.p-late{background:rgba(255,107,107,.13);color:var(--red);border-color:rgba(255,107,107,.3)}
+.p-done{background:rgba(61,214,140,.12);color:var(--andre);border-color:rgba(61,214,140,.28)}
+.price{font-size:20px;font-weight:700;letter-spacing:-.5px}
+.price small{font-size:11.5px;color:var(--ink3);font-weight:600;margin-left:5px;letter-spacing:0}
+.split{height:7px;border-radius:5px;overflow:hidden;display:flex;background:var(--panel3);margin:11px 0 3px}
+.split i{height:100%}
+.splitlab{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3);margin-bottom:11px}
+.kv{display:grid;grid-template-columns:1fr auto auto;gap:3px 12px;font-size:12.5px;align-items:baseline}
+.kv .h{color:var(--ink3);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding-bottom:3px}
+.kv .l{color:var(--ink2)}
+.kv .x{text-align:right;font-weight:650}
+.prog{margin-top:12px}
+.prog .bar{height:5px;border-radius:4px;background:var(--panel3);overflow:hidden}
+.prog .bar i{display:block;height:100%;border-radius:4px;
+  background:linear-gradient(90deg,var(--andreD),var(--andre))}
+.prog .bar i.late{background:linear-gradient(90deg,#7A2B2B,var(--red))}
+.prog .t{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3);margin-top:5px}
+.acts{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
+.acts button{flex:1;min-width:64px;background:var(--panel3);border:1px solid var(--edge);color:var(--ink2);
+  border-radius:9px;padding:7px 8px;font-size:12px;font-weight:650;cursor:pointer;transition:.12s}
+.acts button:hover{border-color:var(--edge2);color:var(--ink)}
+.acts button.go{background:linear-gradient(160deg,#245C45,#183F30);border-color:#2C6E52;color:#CFF6E4}
+.acts button.dl{flex:0 0 40px;min-width:40px;color:var(--ink3)}
+.acts button.dl:hover{color:var(--red);border-color:#5C2A2A}
+
+/* ── Zeitstrahl ──────────────────────────────────────────────────────────── */
+.tl{display:flex;flex-direction:column;gap:2px}
+.tlr{display:grid;grid-template-columns:auto 1fr auto;gap:13px;align-items:center;
+  padding:11px 4px;border-bottom:1px solid var(--edge)}
+.tlr:last-child{border-bottom:0}
+.tlr .d{font-family:var(--num);font-size:12.5px;color:var(--ink2);min-width:74px;font-variant-numeric:tabular-nums}
+.tlr .d em{display:block;font-style:normal;font-size:10.5px;color:var(--ink3)}
+.tlr .nm{font-size:13.5px;font-weight:650}
+.tlr .mini{height:4px;border-radius:3px;background:var(--panel3);overflow:hidden;margin-top:5px;max-width:320px}
+.tlr .mini i{display:block;height:100%;background:linear-gradient(90deg,var(--andreD),var(--andre))}
+.tlr .mini i.late{background:var(--red)}
+.tlr .amt{text-align:right;font-family:var(--num);font-size:13px;font-weight:700}
+.tlr .amt em{display:block;font-style:normal;font-size:10.5px;font-weight:600;color:var(--ink3)}
+
+/* ── Tabelle (Konto) ─────────────────────────────────────────────────────── */
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font-size:10.5px;color:var(--ink3);text-transform:uppercase;letter-spacing:.07em;
+  font-weight:700;padding:0 10px 9px;border-bottom:1px solid var(--edge)}
+td{padding:11px 10px;border-bottom:1px solid var(--edge)}
+tr:last-child td{border-bottom:0}
+td.r,th.r{text-align:right}
+.tag{font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:6px;text-transform:uppercase;letter-spacing:.04em}
+.t-in{background:rgba(61,214,140,.12);color:var(--andre)}
+.t-out{background:rgba(255,107,107,.12);color:var(--red)}
+.t-inv{background:rgba(91,157,255,.12);color:var(--blue)}
+.t-pay{background:rgba(232,184,75,.12);color:var(--alex)}
+.xdel{background:none;border:0;color:var(--ink3);cursor:pointer;font-size:14px;padding:2px 6px;border-radius:6px}
+.xdel:hover{color:var(--red);background:rgba(255,107,107,.1)}
+
+/* ── Formular / Dialog ───────────────────────────────────────────────────── */
+.mask{position:fixed;inset:0;z-index:70;background:rgba(5,6,8,.78);backdrop-filter:blur(4px);
+  display:flex;align-items:flex-start;justify-content:center;padding:22px 14px;overflow:auto}
+.modal{width:100%;max-width:520px;background:var(--panel);border:1px solid var(--edge2);
+  border-radius:18px;padding:20px;box-shadow:0 30px 70px rgba(0,0,0,.65);margin:auto 0}
+.modal h3{margin:0 0 3px;font-size:17px;font-weight:720;letter-spacing:-.2px}
+.modal .hint{font-size:12px;color:var(--ink3);margin-bottom:16px}
+.frow{display:grid;gap:11px;grid-template-columns:1fr 1fr;margin-bottom:11px}
+.frow.one{grid-template-columns:1fr}
+label{display:block;font-size:11px;color:var(--ink3);font-weight:700;text-transform:uppercase;
+  letter-spacing:.06em;margin-bottom:5px}
+input,select{width:100%;background:var(--panel2);border:1px solid var(--edge);color:var(--ink);
+  border-radius:10px;padding:10px 11px;font-size:14px;font-family:var(--sys);transition:.12s}
+input.n{font-family:var(--num);font-variant-numeric:tabular-nums}
+input:focus,select:focus{outline:0;border-color:var(--alex);background:var(--panel3)}
+input::placeholder{color:var(--ink3)}
+.half{display:flex;gap:8px}
+.half button{flex:1;background:var(--panel2);border:1px solid var(--edge);color:var(--ink2);
+  border-radius:9px;padding:8px;font-size:12px;font-weight:650;cursor:pointer}
+.half button:hover{border-color:var(--edge2);color:var(--ink)}
+.pv{background:var(--panel2);border:1px solid var(--edge);border-radius:12px;padding:12px 13px;margin:14px 0 4px}
+.pv .r{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0}
+.pv .r b{font-family:var(--num);font-variant-numeric:tabular-nums}
+.pv .hd{font-size:10.5px;color:var(--ink3);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
+.mact{display:flex;gap:9px;margin-top:18px}
+.mact button{flex:1;border-radius:11px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;border:1px solid var(--edge)}
+.mact .save{background:linear-gradient(160deg,var(--alex),#C79A31);border-color:#D9A93F;color:#1A1405}
+.mact .cancel{background:var(--panel2);color:var(--ink2)}
+.warnbox{background:rgba(255,162,62,.08);border:1px solid rgba(255,162,62,.25);color:#F3C98E;
+  border-radius:11px;padding:11px 13px;font-size:12.5px;margin-bottom:14px}
+
+/* ── Fuss / Ton ──────────────────────────────────────────────────────────── */
+#status{position:fixed;left:50%;bottom:20px;transform:translateX(-50%) translateY(16px);z-index:80;
+  background:var(--panel3);border:1px solid var(--edge2);color:var(--ink);border-radius:11px;
+  padding:10px 16px;font-size:13px;font-weight:600;opacity:0;pointer-events:none;transition:.22s;
+  box-shadow:0 12px 34px rgba(0,0,0,.6)}
+#status.on{opacity:1;transform:translateX(-50%) translateY(0)}
+footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--edge);
+  font-size:11.5px;color:var(--ink3);display:flex;gap:12px;flex-wrap:wrap;justify-content:space-between}
+
+@media(max-width:560px){
+  .wrap{padding:0 12px 80px}
+  .cgrid{grid-template-columns:1fr}
+  .frow{grid-template-columns:1fr}
+  .tile .v{font-size:20px}
+  header h1{font-size:17px}
+  .tlr{grid-template-columns:auto 1fr;gap:10px}
+  .tlr .amt{grid-column:2;text-align:left;margin-top:2px}
+}
+</style>
+
+<div id="gate">
+  <div class="logo">
+    <svg viewBox="0 0 32 32" fill="none"><rect x="4" y="9" width="24" height="15" rx="2" stroke="#E8B84B" stroke-width="2"/><path d="M11 9v15M16 9v15M21 9v15" stroke="#3DD68C" stroke-width="2"/></svg>
+  </div>
+  <h1>Container Investments</h1>
+  <div class="sub">PIN eingeben</div>
+  <div class="dots" id="dots"></div>
+  <div class="pad" id="pad"></div>
+  <div id="pin-err"></div>
+</div>
+
+<div class="wrap" id="app" style="display:none">
+  <header>
+    <h1>
+      <svg viewBox="0 0 32 32" fill="none"><rect x="4" y="9" width="24" height="15" rx="2" stroke="#E8B84B" stroke-width="2"/><path d="M11 9v15M16 9v15M21 9v15" stroke="#3DD68C" stroke-width="2"/></svg>
+      Container&nbsp;Investments
+    </h1>
+    <span class="spacer"></span>
+    <span class="who" id="who"></span>
+    <button type="button" class="ghost" id="bye">Abmelden</button>
+  </header>
+
+  <nav id="tabs">
+    <button type="button" data-v="over" class="on">Übersicht</button>
+    <button type="button" data-v="cont">Container</button>
+    <button type="button" data-v="acct">Alex&nbsp;Konto</button>
+    <button type="button" data-v="set">Einstellungen</button>
+  </nav>
+
+  <div id="v-over"></div>
+  <div id="v-cont" style="display:none"></div>
+  <div id="v-acct" style="display:none"></div>
+  <div id="v-set"  style="display:none"></div>
+
+  <footer>
+    <span>Privat · André &amp; Alex · nicht Teil der KP-App</span>
+    <span id="foot"></span>
+  </footer>
+</div>
+
+<div id="mask"></div>
+<div id="status"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   1 · WERKZEUG
+   ═══════════════════════════════════════════════════════════════════════════ */
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+/* Zahlen kommen hier aus zwei Welten: aus dem deutschen Sheet (1.234,56) und
+   aus der Tastatur (1234.56). Beides muss gehen, ohne dass aus 1.234 eine
+   1,234 wird. Regel: das LETZTE Trennzeichen entscheidet, alles davor ist
+   Tausenderpunkt. */
+function num(v){
+  if(typeof v==='number') return isFinite(v)?v:0;
+  var s=String(v==null?'':v).replace(/[^\d.,\-]/g,'').trim();
+  if(!s) return 0;
+  var lc=s.lastIndexOf(','), ld=s.lastIndexOf('.');
+  if(lc>-1 && ld>-1){
+    if(lc>ld) s=s.replace(/\./g,'').replace(',','.');      // 1.234,56
+    else      s=s.replace(/,/g,'');                        // 1,234.56
+  } else if(lc>-1){
+    s=s.replace(/,/g,'.');                                 // 1234,56 → deutsches Komma
+  } else if(/^-?\d{1,3}(\.\d{3})+$/.test(s)){
+    s=s.replace(/\./g,'');                                 // 650.265 = 650265, nicht 650,265
+  }
+  var n=parseFloat(s);
+  return isFinite(n)?n:0;
+}
+var NF2=new Intl.NumberFormat('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2});
+var NF0=new Intl.NumberFormat('de-DE',{maximumFractionDigits:0});
+function B(v){ return '฿'+NF2.format(+v||0); }            // voll, mit Satang
+function B0(v){ return '฿'+NF0.format(Math.round(+v||0)); } // kompakt
+function pct(v){ return NF0.format(+v||0)+'%'; }
+
+/* Datum. Intern immer YYYY-MM-DD, weil <input type=date> nichts anderes mag.
+   Nie valueAsDate benutzen — das liest UTC und macht aus heute morgens
+   gestern. (Dieselbe Falle wie in der KP-App.) */
+function p2(n){ return (n<10?'0':'')+n; }
+function todayISO(){ var d=new Date(); return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate()); }
+function deDate(iso){ if(!iso) return '—'; var p=String(iso).split('-'); return p.length===3?(p[2]+'.'+p[1]+'.'+p[0]):iso; }
+function shortDate(iso){ if(!iso) return '—'; var p=String(iso).split('-'); return p.length===3?(p[2]+'.'+p[1]+'.'):iso; }
+function addM(iso,m){
+  if(!iso) return '';
+  var p=String(iso).split('-'); if(p.length!==3) return '';
+  var y=+p[0], mo=+p[1]-1, d=+p[2];
+  var want=((mo+m)%12+12)%12;
+  var dt=new Date(Date.UTC(y,mo+m,d));
+  if(dt.getUTCMonth()!==want) dt=new Date(Date.UTC(y,mo+m+1,0));   // 31.12 +2 → 28./29.02
+  return dt.toISOString().slice(0,10);
+}
+function dayNo(iso){ var p=String(iso||'').split('-'); if(p.length!==3) return null;
+  return Math.floor(Date.UTC(+p[0],+p[1]-1,+p[2])/86400000); }
+function daysTo(iso){ var a=dayNo(iso), b=dayNo(todayISO()); return (a==null||b==null)?null:(a-b); }
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+var _st;
+function say(t,ms){ var e=$('status'); e.textContent=t; e.classList.add('on');
+  clearTimeout(_st); _st=setTimeout(function(){ e.classList.remove('on'); }, ms||2200); }
+function oops(){ say('Speichern fehlgeschlagen — Verbindung?',3600); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2 · ZUSTAND
+   ═══════════════════════════════════════════════════════════════════════════ */
+var staffList=[], ACC={}, CTS={}, LED={}, CFG={}, me=null, role='view', view='over';
+var DEF={ rate:10, months:2, soloAlex:70 };   // 10 % auf zwei Monate; allein → 70/30
+function cfg(k){ return (CFG && CFG[k]!=null && CFG[k]!=='') ? +CFG[k] : DEF[k]; }
+function canEdit(){ return role==='owner'; }
+
+/* Container als sortierte Liste. Reihenfolge: das, was als naechstes faellig
+   ist, zuerst; Abgeschlossenes rutscht nach unten. */
+function list(){
+  return Object.keys(CTS).map(function(k){ var c=Object.assign({},CTS[k]); c.id=k; return c; })
+    .sort(function(a,b){
+      if(!!a.paid!==!!b.paid) return a.paid?1:-1;
+      var da=due(a)||'9999', db=due(b)||'9999';
+      return da<db?-1:da>db?1:0;
+    });
+}
+function ledger(){
+  return Object.keys(LED).map(function(k){ var l=Object.assign({},LED[k]); l.id=k; return l; })
+    .sort(function(a,b){ return (b.date||'')<(a.date||'')?-1:1; });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3 · DIE RECHNUNG
+   ---------------------------------------------------------------------------
+   Ein Container laeuft zwei Monate ab Ankunft im Lager. Danach gibt es 10 %
+   auf das eingesetzte Geld. Wer wieviel von diesen 10 % bekommt:
+
+     · beide drin  → jeder bekommt 10 % auf SEINEN eigenen Einsatz
+                     (= Gewinn im Verhaeltnis der Einsaetze)
+     · nur Alex    → Alex 7 %, André 3 % (also 70/30 des Gewinns)
+     · nur André   → alles André
+
+   Jede Karte darf das ueberschreiben (Feld "Gewinn an Alex %") — für Faelle,
+   die anders vereinbart waren.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function startDate(c){ return c.arrive || c.order || ''; }
+function due(c){ return c.due || addM(startDate(c), c.months!=null&&c.months!==''?+c.months:cfg('months')); }
+
+function calc(c){
+  var a=num(c.invA), n=num(c.invN);
+  var tot=a+n;
+  var rate=(c.rate!=null&&c.rate!=='')?num(c.rate):cfg('rate');
+  var profit=tot*rate/100;
+  var sA;                                        // Anteil Alex am GEWINN (0..1)
+  if(c.pctA!=null && c.pctA!=='') sA=num(c.pctA)/100;
+  else if(a>0 && n>0)             sA=a/tot;      // beide → nach Einsatz
+  else if(a>0)                    sA=cfg('soloAlex')/100;
+  else                            sA=0;
+  var pA=profit*sA, pN=profit-pA;
+  var d=due(c), left=daysTo(d);
+  var s=startDate(c), sn=dayNo(s), dn=dayNo(d), tn=dayNo(todayISO());
+  var prog = (sn!=null&&dn!=null&&dn>sn) ? Math.max(0,Math.min(1,(tn-sn)/(dn-sn))) : (c.paid?1:0);
+  return { invA:a, invN:n, tot:tot, rate:rate, profit:profit, shareA:sA,
+           pA:pA, pN:pN, outA:a+pA, outN:n+pN, due:d, left:left, prog:prog,
+           late: !c.paid && left!=null && left<0 };
+}
+
+/* Alex' Kasse. Ich verwalte sein Geld, also muss die Seite jederzeit sagen
+   koennen: wieviel liegt frei, wieviel steckt in Containern, wieviel hat er
+   schon verdient. Eingezahlt − ausgezahlt − alle Einsaetze + alles, was aus
+   fertigen Containern zurueckkam. */
+function totals(){
+  var t={ depo:0, wd:0, invA:0, invN:0, realA:0, realN:0, openA:0, openN:0,
+          outA:0, outN:0, price:0, cntOpen:0, cntDone:0 };
+  ledger().forEach(function(l){
+    if(l.type==='out') t.wd+=num(l.amount); else t.depo+=num(l.amount);
+  });
+  var back=0, spent=0;
+  list().forEach(function(c){
+    var k=calc(c);
+    t.price+=num(c.price);
+    spent+=k.invA;
+    if(c.paid){ t.cntDone++; t.realA+=k.pA; t.realN+=k.pN; back+=k.outA; }
+    else{ t.cntOpen++; t.invA+=k.invA; t.invN+=k.invN; t.openA+=k.pA; t.openN+=k.pN;
+          t.outA+=k.outA; t.outN+=k.outN; }
+  });
+  t.free = t.depo - t.wd - spent + back;
+  t.kapA = t.free + t.invA;              // Alex' Vermoegen im System
+  return t;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4 · ANSICHT · ÜBERSICHT
+   ═══════════════════════════════════════════════════════════════════════════ */
+function tile(cls,k,v,s){
+  return '<div class="tile '+(cls||'')+'"><div class="k">'+k+'</div><div class="v">'+v+'</div>'
+       + (s?'<div class="s">'+s+'</div>':'')+'</div>';
+}
+function renderOver(){
+  var t=totals(), L=list(), open=L.filter(function(c){ return !c.paid; });
+  var h='';
+
+  /* Alex zuerst — sein Geld verwalte ich, also ist das die Zahl, die zaehlt. */
+  h+='<div class="sec"><h2 style="color:var(--alex)">Alex</h2><div class="line"></div></div>';
+  h+='<div class="tiles g5">'
+    + tile('a','Eingezahlt', '<span class="va">'+B0(t.depo)+'</span>',
+            t.wd>0 ? ('davon '+B0(t.wd)+' zurück ausgezahlt') : 'in '+ledger().filter(function(l){return l.type!=='out';}).length+' Überweisungen')
+    + tile('a','In Containern', B0(t.invA), t.cntOpen+' laufend')
+    + tile('a','Frei verfügbar', '<span class="'+(t.free<0?'vr':'')+'">'+B0(t.free)+'</span>',
+            t.free<0 ? 'überzogen — mehr investiert als da' : 'nicht investiert')
+    + tile('a','Gewinn realisiert', '<span class="vn">+'+B0(t.realA)+'</span>', t.cntDone+' ausgezahlt')
+    + tile('a','Gewinn offen', '+'+B0(t.openA), 'wird noch fällig')
+    + '</div>';
+
+  /* Wo liegt das Geld gerade — ein Balken sagt das schneller als drei Zahlen. */
+  var base=Math.max(1, Math.max(0,t.free)+t.invA);
+  h+='<div class="card">'
+    + '<div class="stack">'
+    +   '<i style="width:'+(Math.max(0,t.free)/base*100)+'%;background:linear-gradient(180deg,#2E3441,#232833)"></i>'
+    +   '<i style="width:'+(t.invA/base*100)+'%;background:linear-gradient(180deg,var(--alex),var(--alexD))"></i>'
+    + '</div>'
+    + '<div class="leg">'
+    +   '<span><b style="background:#2E3441"></b>Frei '+B0(Math.max(0,t.free))+'</span>'
+    +   '<span><b style="background:var(--alex)"></b>Investiert '+B0(t.invA)+'</span>'
+    +   '<span style="margin-left:auto;color:var(--ink2)">Vermögen gesamt <b style="background:none;width:auto;font-weight:700;color:var(--ink)" class="n">'+B0(t.kapA)+'</b></span>'
+    + '</div></div>';
+
+  h+='<div class="sec"><h2 style="color:var(--andre)">André</h2><div class="line"></div></div>';
+  h+='<div class="tiles g3">'
+    + tile('n','In Containern', B0(t.invN), t.cntOpen+' laufend')
+    + tile('n','Gewinn realisiert', '<span class="vn">+'+B0(t.realN)+'</span>', t.cntDone+' abgeschlossen')
+    + tile('n','Gewinn offen', '+'+B0(t.openN), 'wird noch fällig')
+    + '</div>';
+
+  /* Wann kommt was zurueck. Das ist der eigentliche Grund für die Seite. */
+  h+='<div class="sec"><h2>Nächste Auszahlungen</h2><div class="line"></div>'
+    + '<span class="muted">'+open.length+' offen</span></div>';
+  if(!open.length){
+    h+='<div class="empty">Gerade läuft kein Container.</div>';
+  }else{
+    h+='<div class="card"><div class="tl">';
+    open.forEach(function(c){
+      var k=calc(c);
+      var lab = k.left==null ? 'Datum fehlt'
+              : k.left<0     ? Math.abs(k.left)+' Tage überfällig'
+              : k.left===0   ? 'heute fällig'
+              : 'in '+k.left+' Tagen';
+      h+='<div class="tlr">'
+        +  '<div class="d">'+deDate(k.due)+'<em>'+lab+'</em></div>'
+        +  '<div><div class="nm">'+esc(c.name||'Container')+'</div>'
+        +    '<div class="mini"><i class="'+(k.late?'late':'')+'" style="width:'+(k.prog*100).toFixed(1)+'%"></i></div></div>'
+        +  '<div class="amt"><span class="va">'+B0(k.outA)+'</span>'
+        +    '<em>André '+B0(k.outN)+'</em></div>'
+        + '</div>';
+    });
+    h+='</div></div>';
+  }
+
+  /* Summe unten drunter, damit man das Gesamtbild einmal sieht. */
+  h+='<div class="sec"><h2>Gesamt</h2><div class="line"></div></div>';
+  h+='<div class="tiles g3">'
+    + tile('','Container gesamt', NF0.format(L.length), t.cntOpen+' laufend · '+t.cntDone+' abgeschlossen')
+    + tile('','Kapital im Umlauf', B0(t.invA+t.invN), 'Alex '+B0(t.invA)+' · André '+B0(t.invN))
+    + tile('','Gewinn gesamt', '<span class="vn">+'+B0(t.realA+t.realN+t.openA+t.openN)+'</span>',
+            'realisiert '+B0(t.realA+t.realN)+' · offen '+B0(t.openA+t.openN))
+    + '</div>';
+
+  $('v-over').innerHTML=h;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5 · ANSICHT · CONTAINER
+   ═══════════════════════════════════════════════════════════════════════════ */
+function renderCont(){
+  var L=list(), h='';
+  h+='<div class="sec"><h2>Container</h2><div class="line"></div>'
+    + (canEdit()?'<button type="button" class="ghost" onclick="openC()">+ Neuer Container</button>':'')
+    + '</div>';
+  if(!L.length){
+    h+='<div class="empty">Noch nichts eingetragen.'
+      + (canEdit()?'<br><br><button type="button" class="ghost" onclick="openC()">Ersten Container anlegen</button>':'')
+      + '</div>';
+    $('v-cont').innerHTML=h; return;
+  }
+  h+='<div class="cgrid">';
+  L.forEach(function(c){
+    var k=calc(c);
+    var st = c.paid ? ['p-done','Ausgezahlt']
+           : k.late ? ['p-late','Überfällig']
+           : (k.left!=null && k.left<=14) ? ['p-soon','in '+k.left+' T.']
+           : ['p-run','Läuft'];
+    var wA = k.tot>0 ? (k.invA/k.tot*100) : 0;
+    h+='<div class="cc'+(c.paid?' done':'')+(k.late?' late':'')+'">'
+      + '<div class="top"><div style="flex:1">'
+      +   '<div class="nm">'+esc(c.name||'Container')+'</div>'
+      +   '<div class="dt">Ankunft '+deDate(startDate(c))+' → fällig '+deDate(k.due)+'</div>'
+      + '</div><span class="pill '+st[0]+'">'+st[1]+'</span></div>'
+
+      + '<div class="price">'+B0(c.price||k.tot)+'<small>Kaufpreis</small></div>'
+
+      + '<div class="split">'
+      +   '<i style="width:'+wA.toFixed(1)+'%;background:linear-gradient(90deg,var(--alexD),var(--alex))"></i>'
+      +   '<i style="width:'+(100-wA).toFixed(1)+'%;background:linear-gradient(90deg,var(--andre),var(--andreD))"></i>'
+      + '</div>'
+      + '<div class="splitlab"><span style="color:var(--alex)">Alex '+(wA?pct(wA):'—')+'</span>'
+      +   '<span style="color:var(--andre)">André '+((100-wA)?pct(100-wA):'—')+'</span></div>'
+
+      + '<div class="kv">'
+      +   '<div class="h"></div><div class="h" style="text-align:right;color:var(--alex)">Alex</div><div class="h" style="text-align:right;color:var(--andre)">André</div>'
+      +   '<div class="l">Einsatz</div><div class="x n">'+B0(k.invA)+'</div><div class="x n">'+B0(k.invN)+'</div>'
+      +   '<div class="l">Gewinn '+NF0.format(k.rate)+'%</div>'
+      +     '<div class="x n" style="color:var(--alex)">+'+B0(k.pA)+'</div>'
+      +     '<div class="x n" style="color:var(--andre)">+'+B0(k.pN)+'</div>'
+      +   '<div class="l" style="color:var(--ink);font-weight:650;padding-top:5px">Auszahlung</div>'
+      +     '<div class="x n" style="padding-top:5px;color:var(--alex)">'+B0(k.outA)+'</div>'
+      +     '<div class="x n" style="padding-top:5px;color:var(--andre)">'+B0(k.outN)+'</div>'
+      + '</div>';
+
+    if(!c.paid){
+      h+='<div class="prog"><div class="bar"><i class="'+(k.late?'late':'')+'" style="width:'+(k.prog*100).toFixed(1)+'%"></i></div>'
+        + '<div class="t"><span>'+shortDate(startDate(c))+'</span>'
+        +   '<span>'+(k.left==null?'':(k.left<0?Math.abs(k.left)+' Tage über':k.left+' Tage'))+'</span>'
+        +   '<span>'+shortDate(k.due)+'</span></div></div>';
+    }else if(c.paidDate){
+      h+='<div class="prog"><div class="t" style="margin-top:9px"><span>Ausgezahlt am '+deDate(c.paidDate)+'</span></div></div>';
+    }
+
+    if(canEdit()){
+      h+='<div class="acts">'
+        + '<button type="button" onclick="openC(\''+c.id+'\')">Bearbeiten</button>'
+        + (c.paid ? '<button type="button" onclick="unpay(\''+c.id+'\')">Zurücknehmen</button>'
+                  : '<button type="button" class="go" onclick="pay(\''+c.id+'\')">Ausgezahlt ✓</button>')
+        + '<button type="button" class="dl" title="Löschen" onclick="delC(\''+c.id+'\')">✕</button>'
+        + '</div>';
+    }
+    h+='</div>';
+  });
+  h+='</div>';
+  $('v-cont').innerHTML=h;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   6 · ANSICHT · ALEX KONTO
+   Ein Kontoauszug: Einzahlungen und Auszahlungen von Hand, die Container-
+   Bewegungen kommen automatisch dazu — sonst muesste man alles doppelt
+   pflegen und die Salden wuerden auseinanderlaufen.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function renderAcct(){
+  var t=totals(), h='';
+  h+='<div class="tiles g3">'
+    + tile('a','Eingezahlt', '<span class="va">'+B(t.depo)+'</span>')
+    + tile('a','An Alex ausgezahlt', t.wd?('−'+B(t.wd)):B(0))
+    + tile('a','Frei verfügbar', '<span class="'+(t.free<0?'vr':'')+'">'+B(t.free)+'</span>', 'Rest liegt in Containern')
+    + '</div>';
+
+  h+='<div class="sec"><h2>Überweisungen</h2><div class="line"></div>'
+    + (canEdit()?'<button type="button" class="ghost" onclick="openL()">+ Buchung</button>':'')+'</div>';
+
+  var LG=ledger();
+  if(!LG.length){
+    h+='<div class="empty">Keine Überweisungen eingetragen.</div>';
+  }else{
+    h+='<div class="card"><table><thead><tr><th>Datum</th><th>Art</th><th>Notiz</th>'
+      + '<th class="r">Betrag</th>'+(canEdit()?'<th></th>':'')+'</tr></thead><tbody>';
+    LG.forEach(function(l){
+      var out=l.type==='out';
+      h+='<tr><td class="n">'+deDate(l.date)+'</td>'
+        + '<td><span class="tag '+(out?'t-out':'t-in')+'">'+(out?'Auszahlung':'Einzahlung')+'</span></td>'
+        + '<td class="muted">'+esc(l.note||'')+'</td>'
+        + '<td class="r n" style="font-weight:700;color:'+(out?'var(--red)':'var(--andre)')+'">'
+        +   (out?'−':'+')+B(l.amount)+'</td>'
+        + (canEdit()?'<td class="r"><button class="xdel" onclick="delL(\''+l.id+'\')">✕</button></td>':'')
+        + '</tr>';
+    });
+    h+='</tbody></table></div>';
+  }
+
+  /* Der komplette Fluss, chronologisch, mit laufendem Saldo. Damit man sieht,
+     ob zu irgendeinem Zeitpunkt mehr investiert war als da war. */
+  var flow=[];
+  LG.forEach(function(l){
+    flow.push({ d:l.date, k:l.type==='out'?'out':'in', t:l.type==='out'?'Auszahlung an Alex':'Einzahlung von Alex',
+                v:(l.type==='out'?-1:1)*num(l.amount), note:l.note||'' });
+  });
+  list().forEach(function(c){
+    var k=calc(c);
+    if(k.invA>0) flow.push({ d:startDate(c)||c.order, k:'inv', t:'Einsatz · '+(c.name||'Container'), v:-k.invA, note:'' });
+    if(c.paid)   flow.push({ d:c.paidDate||k.due, k:'pay', t:'Rückzahlung · '+(c.name||'Container'),
+                             v:k.outA, note:'Einsatz '+B0(k.invA)+' + Gewinn '+B0(k.pA) });
+  });
+  flow.sort(function(a,b){ return (a.d||'')<(b.d||'')?-1:(a.d||'')>(b.d||'')?1:0; });
+
+  h+='<div class="sec"><h2>Kontoverlauf</h2><div class="line"></div>'
+    + '<span class="muted">Überweisungen + Container</span></div>';
+  if(!flow.length){
+    h+='<div class="empty">Noch keine Bewegungen.</div>';
+  }else{
+    var run=0;
+    h+='<div class="card"><table><thead><tr><th>Datum</th><th>Vorgang</th>'
+      + '<th class="r">Betrag</th><th class="r">Saldo frei</th></tr></thead><tbody>';
+    flow.forEach(function(f){
+      run+=f.v;
+      var cls={in:'t-in',out:'t-out',inv:'t-inv',pay:'t-pay'}[f.k];
+      h+='<tr><td class="n" style="white-space:nowrap">'+deDate(f.d)+'</td>'
+        + '<td><span class="tag '+cls+'">'+esc(f.t)+'</span>'
+        +   (f.note?'<div class="muted" style="margin-top:3px;font-size:11.5px">'+esc(f.note)+'</div>':'')+'</td>'
+        + '<td class="r n" style="color:'+(f.v<0?'var(--ink2)':'var(--andre)')+'">'+(f.v<0?'−':'+')+B0(Math.abs(f.v))+'</td>'
+        + '<td class="r n" style="font-weight:700;color:'+(run<-0.5?'var(--red)':'var(--ink)')+'">'+B0(run)+'</td></tr>';
+    });
+    h+='</tbody></table>'
+      + (run<-0.5 ? '<div class="muted" style="margin-top:10px;color:var(--amber)">Der Saldo rutscht ins Minus — dann war zeitweise mehr investiert, als von Alex da war. Prüf die Daten oder trag die fehlende Einzahlung nach.</div>' : '')
+      + '</div>';
+  }
+  $('v-acct').innerHTML=h;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   7 · ANSICHT · EINSTELLUNGEN
+   ═══════════════════════════════════════════════════════════════════════════ */
+function renderSet(){
+  if(!canEdit()){ $('v-set').innerHTML='<div class="empty">Nur André kann hier etwas ändern.</div>'; return; }
+  var h='';
+  h+='<div class="sec"><h2>Standardwerte</h2><div class="line"></div></div>';
+  h+='<div class="card"><div class="frow">'
+    + '<div><label>Rendite %</label><input class="n" id="s-rate" value="'+cfg('rate')+'"></div>'
+    + '<div><label>Laufzeit (Monate)</label><input class="n" id="s-mon" value="'+cfg('months')+'"></div>'
+    + '</div><div class="frow one">'
+    + '<div><label>Wenn Alex allein investiert: Anteil Alex am Gewinn %</label>'
+    +   '<input class="n" id="s-solo" value="'+cfg('soloAlex')+'"></div>'
+    + '</div>'
+    + '<div class="muted">70 % heißt: von 10 % Gesamtrendite bekommt Alex 7 %, du 3 %. '
+    +   'Gilt als Vorgabe für neue Container — jede Karte darf davon abweichen.</div>'
+    + '<div class="mact"><button class="save" onclick="saveCfg()">Speichern</button></div></div>';
+
+  h+='<div class="sec"><h2>Zugang für Alex</h2><div class="line"></div>'
+    + '<button type="button" class="ghost" onclick="addAcc()">+ PIN anlegen</button></div>';
+  var ak=Object.keys(ACC);
+  if(!ak.length){
+    h+='<div class="empty">Noch kein eigener Zugang.<br><span class="muted">Du selbst kommst über deinen KP-PIN rein (Buchhaltungsrecht).</span></div>';
+  }else{
+    h+='<div class="card"><table><thead><tr><th>Name</th><th>PIN</th><th>Recht</th><th></th></tr></thead><tbody>';
+    ak.forEach(function(k){ var a=ACC[k]||{};
+      h+='<tr><td>'+esc(a.name||'')+'</td><td class="n">'+esc(a.pin||'')+'</td>'
+        + '<td><span class="tag '+(a.role==='owner'?'t-pay':'t-inv')+'">'+(a.role==='owner'?'Vollzugriff':'Nur lesen')+'</span></td>'
+        + '<td class="r"><button class="xdel" onclick="delAcc(\''+k+'\')">✕</button></td></tr>';
+    });
+    h+='</tbody></table></div>';
+  }
+
+  h+='<div class="sec"><h2>Daten</h2><div class="line"></div></div>';
+  h+='<div class="card"><div class="half">'
+    + '<button type="button" onclick="expJson()">Als JSON sichern</button>'
+    + '<button type="button" onclick="seed()">Sheet-Daten importieren</button>'
+    + '</div><div class="muted" style="margin-top:10px">'
+    + '„Sheet-Daten importieren" trägt Container 1–4 und Alex’ zwei Einzahlungen aus dem '
+    + 'Google-Sheet ein. Läuft nur, solange hier noch nichts steht.</div></div>';
+  $('v-set').innerHTML=h;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8 · FORMULARE
+   ═══════════════════════════════════════════════════════════════════════════ */
+function closeM(){ $('mask').innerHTML=''; $('mask').style.display='none'; document.body.style.overflow=''; }
+function showM(html){
+  $('mask').innerHTML='<div class="mask" onclick="if(event.target===this)closeM()"><div class="modal">'+html+'</div></div>';
+  $('mask').style.display='';
+  document.body.style.overflow='hidden';
+}
+
+var editId=null;
+function openC(id){
+  if(!canEdit()) return;
+  editId=id||null;
+  var c=id?(CTS[id]||{}):{};
+  var nextNo='Container '+(Object.keys(CTS).length+1);
+  var h='<h3>'+(id?'Container bearbeiten':'Neuer Container')+'</h3>'
+   + '<div class="hint">Zwei Monate ab Ankunft im Lager, danach '+cfg('rate')+' % auf den Einsatz.</div>'
+   + '<div class="frow"><div><label>Name</label>'
+   +   '<input id="f-name" value="'+esc(c.name||nextNo)+'"></div>'
+   +   '<div><label>Kaufpreis ฿</label><input class="n" id="f-price" value="'+(c.price!=null?NF2.format(num(c.price)):'')+'" placeholder="450.000"></div></div>'
+   + '<div class="frow"><div><label>Bestelldatum</label><input type="date" id="f-order" value="'+esc(c.order||'')+'"></div>'
+   +   '<div><label>Ankunft Lager</label><input type="date" id="f-arr" value="'+esc(c.arrive||'')+'"></div></div>'
+   + '<div class="frow"><div><label style="color:var(--alex)">Einsatz Alex ฿</label>'
+   +   '<input class="n" id="f-ia" value="'+(c.invA!=null?NF2.format(num(c.invA)):'')+'"></div>'
+   +   '<div><label style="color:var(--andre)">Einsatz André ฿</label>'
+   +   '<input class="n" id="f-in" value="'+(c.invN!=null?NF2.format(num(c.invN)):'')+'"></div></div>'
+   + '<div class="half" style="margin:-4px 0 12px">'
+   +   '<button type="button" onclick="fillSplit(50)">50 / 50 aus Kaufpreis</button>'
+   +   '<button type="button" onclick="fillSplit(100)">Alex allein</button>'
+   +   '<button type="button" onclick="fillSplit(0)">André allein</button></div>'
+   + '<div class="frow"><div><label>Rendite %</label>'
+   +   '<input class="n" id="f-rate" value="'+(c.rate!=null&&c.rate!==''?c.rate:'')+'" placeholder="'+cfg('rate')+'"></div>'
+   +   '<div><label>Gewinn an Alex % <span style="text-transform:none;letter-spacing:0">(leer = automatisch)</span></label>'
+   +   '<input class="n" id="f-pa" value="'+(c.pctA!=null&&c.pctA!==''?c.pctA:'')+'" placeholder="auto"></div></div>'
+   + '<div class="frow"><div><label>Fällig am <span style="text-transform:none;letter-spacing:0">(leer = +'+cfg('months')+' Mon.)</span></label>'
+   +   '<input type="date" id="f-due" value="'+esc(c.due||'')+'"></div>'
+   +   '<div><label>Status</label><select id="f-paid">'
+   +     '<option value="">läuft</option><option value="1"'+(c.paid?' selected':'')+'>ausgezahlt</option></select></div></div>'
+   + '<div class="pv" id="f-pv"></div>'
+   + '<div class="mact"><button class="cancel" onclick="closeM()">Abbrechen</button>'
+   +   '<button class="save" onclick="saveC()">Speichern</button></div>';
+  showM(h);
+  ['f-price','f-ia','f-in','f-rate','f-pa','f-order','f-arr','f-due'].forEach(function(id){
+    var e=$(id); if(e) e.addEventListener('input', preview);
+  });
+  preview();
+}
+/* Die drei Knöpfe nehmen einem das Rechnen ab: Kaufpreis rein, Aufteilung
+   klicken, fertig. */
+function fillSplit(alexPct){
+  var p=num($('f-price').value);
+  if(!p){ say('Erst den Kaufpreis eintragen.'); return; }
+  $('f-ia').value=NF2.format(p*alexPct/100);
+  $('f-in').value=NF2.format(p*(100-alexPct)/100);
+  preview();
+}
+function preview(){
+  var c={ price:num($('f-price').value), invA:num($('f-ia').value), invN:num($('f-in').value),
+          rate:$('f-rate').value, pctA:$('f-pa').value,
+          order:$('f-order').value, arrive:$('f-arr').value, due:$('f-due').value };
+  var k=calc(c);
+  var mode = (k.invA>0&&k.invN>0) ? 'beide investiert → Gewinn nach Einsatz'
+           : k.invA>0 ? ('Alex allein → '+NF0.format(k.shareA*100)+' / '+NF0.format(100-k.shareA*100))
+           : k.invN>0 ? 'André allein' : '—';
+  if(c.pctA!=='' && c.pctA!=null) mode='von Hand: Alex '+NF0.format(num(c.pctA))+' %';
+  $('f-pv').innerHTML='<div class="hd">Vorschau · '+esc(mode)+'</div>'
+    + '<div class="r"><span>Fällig am</span><b>'+deDate(k.due)+'</b></div>'
+    + '<div class="r"><span>Gewinn gesamt ('+NF0.format(k.rate)+' %)</span><b>'+B(k.profit)+'</b></div>'
+    + '<div class="r"><span style="color:var(--alex)">Auszahlung Alex</span><b style="color:var(--alex)">'+B(k.outA)+'</b></div>'
+    + '<div class="r"><span style="color:var(--andre)">Auszahlung André</span><b style="color:var(--andre)">'+B(k.outN)+'</b></div>';
+}
+function saveC(){
+  var rec={
+    name:  $('f-name').value.trim() || 'Container',
+    price: num($('f-price').value),
+    order: $('f-order').value || '',
+    arrive:$('f-arr').value || '',
+    invA:  num($('f-ia').value),
+    invN:  num($('f-in').value),
+    rate:  $('f-rate').value===''?'':num($('f-rate').value),
+    pctA:  $('f-pa').value===''?'':num($('f-pa').value),
+    due:   $('f-due').value || '',
+    paid:  $('f-paid').value==='1'
+  };
+  if(!rec.arrive && !rec.order){ say('Ohne Datum kann ich nichts ausrechnen.'); return; }
+  if(rec.invA<=0 && rec.invN<=0){ say('Mindestens ein Einsatz muss drinstehen.'); return; }
+  var id=editId||uid();
+  var old=CTS[id]||{};
+  if(rec.paid) rec.paidDate = old.paidDate || due(rec) || todayISO();
+  rec.ts = old.ts || Date.now();
+  IDB.ref('containers/'+id).set(rec).then(function(){ say(editId?'Gespeichert.':'Container angelegt.'); })
+     .catch(oops);
+  closeM();
+}
+function pay(id){
+  var c=CTS[id]; if(!c) return;
+  var k=calc(c);
+  var d=prompt('Ausgezahlt am (TT.MM.JJJJ):', deDate(k.due===''?todayISO():k.due));
+  if(d==null) return;
+  var p=String(d).trim().split('.');
+  var iso = p.length===3 ? (p[2].padStart(4,'20')+'-'+p2(+p[1])+'-'+p2(+p[0])) : todayISO();
+  IDB.ref('containers/'+id).update({ paid:true, paidDate:iso })
+     .then(function(){ say('Als ausgezahlt vermerkt.'); }).catch(oops);
+}
+function unpay(id){
+  IDB.ref('containers/'+id).update({ paid:false, paidDate:null })
+     .then(function(){ say('Wieder als laufend gesetzt.'); }).catch(oops);
+}
+function delC(id){
+  var c=CTS[id]||{};
+  if(!confirm('„'+(c.name||'Container')+'" wirklich löschen?')) return;
+  IDB.ref('containers/'+id).remove().then(function(){ say('Gelöscht.'); }).catch(oops);
+}
+
+/* ── Buchung (Alex → André oder zurück) ──────────────────────────────────── */
+function openL(){
+  if(!canEdit()) return;
+  showM('<h3>Buchung</h3><div class="hint">Geld von Alex an dich – oder von dir zurück an Alex.</div>'
+   + '<div class="frow"><div><label>Datum</label><input type="date" id="l-date" value="'+todayISO()+'"></div>'
+   +   '<div><label>Art</label><select id="l-type">'
+   +     '<option value="in">Einzahlung von Alex</option>'
+   +     '<option value="out">Auszahlung an Alex</option></select></div></div>'
+   + '<div class="frow one"><div><label>Betrag ฿</label><input class="n" id="l-amt" placeholder="345.596,79"></div></div>'
+   + '<div class="frow one"><div><label>Notiz</label><input id="l-note" placeholder="optional"></div></div>'
+   + '<div class="mact"><button class="cancel" onclick="closeM()">Abbrechen</button>'
+   +   '<button class="save" onclick="saveL()">Speichern</button></div>');
+}
+function saveL(){
+  var a=num($('l-amt').value);
+  if(a<=0){ say('Betrag fehlt.'); return; }
+  IDB.ref('ledger/'+uid()).set({ date:$('l-date').value||todayISO(), type:$('l-type').value,
+    amount:a, note:$('l-note').value.trim(), ts:Date.now() })
+    .then(function(){ say('Gebucht.'); }).catch(oops);
+  closeM();
+}
+function delL(id){
+  if(!confirm('Buchung löschen?')) return;
+  IDB.ref('ledger/'+id).remove().then(function(){ say('Gelöscht.'); }).catch(oops);
+}
+
+/* ── Einstellungen ───────────────────────────────────────────────────────── */
+function saveCfg(){
+  IDB.ref('cfg').update({ rate:num($('s-rate').value), months:num($('s-mon').value),
+                          soloAlex:num($('s-solo').value) })
+    .then(function(){ say('Gespeichert.'); }).catch(oops);
+}
+function addAcc(){
+  var n=prompt('Name:','Alex'); if(!n) return;
+  var p=prompt('PIN (4–8 Ziffern):',''); if(!p||!/^\d{4,8}$/.test(p)){ say('PIN muss 4–8 Ziffern haben.'); return; }
+  var r=confirm('Darf er auch ÄNDERN?\n\nOK = Vollzugriff · Abbrechen = nur lesen') ? 'owner':'view';
+  IDB.ref('access/'+uid()).set({ name:n.trim(), pin:p, role:r })
+    .then(function(){ say('Zugang angelegt.'); }).catch(oops);
+}
+function delAcc(k){
+  if(!confirm('Zugang löschen?')) return;
+  IDB.ref('access/'+k).remove().catch(oops);
+}
+function expJson(){
+  var blob=new Blob([JSON.stringify({containers:CTS, ledger:LED, cfg:CFG},null,2)],{type:'application/json'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='container-investments-'+todayISO()+'.json';
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); },1500);
+}
+
+/* Einmaliger Import der Zahlen aus dem Google-Sheet, damit die Seite nicht
+   leer startet. Faellt aus, sobald irgendetwas drinsteht — zweimal
+   importieren gaebe doppelte Container. */
+function seed(){
+  if(Object.keys(CTS).length || Object.keys(LED).length){
+    say('Es stehen schon Daten drin — Import übersprungen.',3200); return;
+  }
+  if(!confirm('Container 1–4 und Alex’ zwei Einzahlungen aus dem Sheet eintragen?')) return;
+  var C=[
+    /* Fällig laut Sheet; Ankunft daraus zurückgerechnet (fällig − 2 Monate). */
+    {name:'Container 1', price:650265,   order:'2026-05-28', arrive:'2026-05-28', invA:325132.50, invN:325132.50},
+    {name:'Container 2', price:623840,   order:'2026-06-06', arrive:'2026-06-06', invA:623840,    invN:0},
+    /* Im Sheet steht bei Container 3 als Einsatz 205.124,05 — das ergibt zusammen
+       mehr als den Kaufpreis. Die Auszahlungsspalte dort rechnet mit 410.048, also
+       mit der halben Summe: 205.024,00. Ich nehme die. */
+    {name:'Container 3', price:410048,   order:'2026-06-22', arrive:'2026-08-11', invA:205024, invN:205024},
+    {name:'Container 4', price:675859.80,order:'2026-07-20', arrive:'2026-09-03', invA:337929.90, invN:337929.90}
+  ];
+  var up={};
+  C.forEach(function(c,i){
+    var d=addM(c.arrive, DEF.months);
+    c.rate=''; c.pctA=''; c.due='';
+    c.paid = dayNo(d) < dayNo(todayISO());
+    if(c.paid) c.paidDate=d;
+    c.ts=Date.now()+i;
+    up['containers/seed'+(i+1)]=c;
+  });
+  up['ledger/seed1']={ date:'2026-05-05', type:'in', amount:345596.79, note:'Startkapital Alex', ts:Date.now() };
+  up['ledger/seed2']={ date:'2026-05-08', type:'in', amount:610000,    note:'Startkapital Alex', ts:Date.now()+1 };
+  IDB.ref().update(up).then(function(){ say('Sheet-Daten übernommen.'); }).catch(oops);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   9 · MALEN / REITER
+   ═══════════════════════════════════════════════════════════════════════════ */
+function render(){
+  if($('app').style.display==='none') return;
+  try{ renderOver(); }catch(e){}
+  try{ renderCont(); }catch(e){}
+  try{ renderAcct(); }catch(e){}
+  try{ renderSet();  }catch(e){}
+  var t=totals();
+  $('foot').textContent=Object.keys(CTS).length+' Container · '+B0(t.invA+t.invN)+' im Umlauf';
+}
+$('tabs').addEventListener('click', function(e){
+  var v=e.target && e.target.getAttribute && e.target.getAttribute('data-v');
+  if(!v) return;
+  view=v;
+  Array.prototype.forEach.call($('tabs').children, function(b){
+    b.classList.toggle('on', b.getAttribute('data-v')===v); });
+  ['over','cont','acct','set'].forEach(function(k){ $('v-'+k).style.display = k===v?'':'none'; });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   10 · PIN
+   ---------------------------------------------------------------------------
+   Zwei Türen: mein KP-PIN (Buchhaltungsrecht — dieselbe Person, die auch die
+   Einkaufspreise sehen darf) und die eigenen PINs unter invest/access, damit
+   Alex reinschauen kann, ohne irgendwo sonst im System zu stehen.
+   ═══════════════════════════════════════════════════════════════════════════ */
+var PIN_MAX=8, pin='';
+function dots(){
+  var n=Math.max(4, pin.length);
+  $('dots').innerHTML=Array.from({length:n},function(_,i){
+    return '<div class="dot'+(i<pin.length?' on':'')+'"></div>'; }).join('');
+}
+function pad(d){
+  if(d==='<'){ pin=pin.slice(0,-1); dots(); return; }
+  if(d==='✓'){ if(pin.length>=4) tryPin(); return; }
+  if(pin.length>=PIN_MAX) return;
+  pin+=d; dots();
+}
+function findPin(p){
+  var k=Object.keys(ACC).find(function(k){ return String((ACC[k]||{}).pin||'')===p; });
+  if(k) return { name:ACC[k].name||'Zugang', role:ACC[k].role==='owner'?'owner':'view', id:'acc:'+k };
+  var s=staffList.find(function(x){ return x && x.active!==false && x.acctAccess && String(x.pin||'')===p; });
+  if(s) return { name:s.name||'André', role:'owner', id:'kp:'+s.id };
+  return null;
+}
+function tryPin(){
+  var f=findPin(pin);
+  if(!f){
+    $('pin-err').textContent = (!staffList.length && !Object.keys(ACC).length)
+      ? 'Noch am Laden …' : 'PIN stimmt nicht.';
+    pin=''; dots();
+    var c=$('pad'); if(c){ c.classList.remove('shake'); void c.offsetWidth; c.classList.add('shake'); }
+    return;
+  }
+  me=f; role=f.role; $('pin-err').textContent='';
+  try{ localStorage.setItem('kp-invest-session', JSON.stringify({id:f.id, ts:Date.now()})); }catch(e){}
+  open_();
+}
+function open_(){
+  $('gate').style.display='none';
+  $('app').style.display='';
+  $('who').innerHTML='<b>'+esc(me?me.name:'')+'</b> · '+(role==='owner'?'Vollzugriff':'nur lesen');
+  if(role!=='owner'){ var t=$('tabs').querySelector('[data-v="set"]'); if(t) t.style.display='none'; }
+  render();
+}
+$('bye').addEventListener('click', function(){
+  try{ localStorage.removeItem('kp-invest-session'); }catch(e){}
+  location.reload();
+});
+$('pad').innerHTML=['1','2','3','4','5','6','7','8','9','<','0','✓']
+  .map(function(k){
+    var cls = k==='<' ? ' class="del"' : k==='✓' ? ' class="ok"' : '';
+    return '<button type="button" data-k="'+k+'"'+cls+'>'+(k==='<'?'⌫':k)+'</button>';
+  }).join('');
+$('pad').addEventListener('click', function(e){
+  var k=e.target && e.target.getAttribute && e.target.getAttribute('data-k');
+  if(k) pad(k);
+});
+document.addEventListener('keydown', function(e){
+  if($('gate').style.display!=='none'){
+    if(/^[0-9]$/.test(e.key)) pad(e.key);
+    else if(e.key==='Backspace'){ pad('<'); e.preventDefault(); }
+    else if(e.key==='Enter') pad('✓');
+  }else if(e.key==='Escape'){ closeM(); }
+});
+dots();
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   11 · LIVE
+   ═══════════════════════════════════════════════════════════════════════════ */
+function resume(){
+  if(me) return;
+  try{
+    var s=JSON.parse(localStorage.getItem('kp-invest-session')||'null');
+    if(!s || (Date.now()-s.ts)>=4*3600*1000) return;       // 4 Stunden, wie im POS
+    if(s.id.indexOf('acc:')===0){
+      var a=ACC[s.id.slice(4)];
+      if(a){ me={name:a.name||'Zugang'}; role=a.role==='owner'?'owner':'view'; open_(); }
+    }else{
+      var st=staffList.find(function(x){ return x && x.id===s.id.slice(3) && x.acctAccess && x.active!==false; });
+      if(st){ me={name:st.name||'André'}; role='owner'; open_(); }
+    }
+  }catch(e){}
+}
+function sub(){
+  IDB.ref('containers').on('value', function(s){ CTS=s.val()||{}; render(); });
+  IDB.ref('ledger').on('value',     function(s){ LED=s.val()||{}; render(); });
+  IDB.ref('cfg').on('value',        function(s){ CFG=s.val()||{}; render(); });
+  IDB.ref('access').on('value',     function(s){ ACC=s.val()||{}; resume(); if(me) render(); });
+  IDB.raw('staffList').on('value',  function(s){
+    var v=s.val()||[];
+    staffList = Array.isArray(v) ? v : Object.keys(v).map(function(k){ return v[k]; });
+    staffList = staffList.filter(Boolean);
+    resume();
+  });
+}
+iAuthReady.then(function(){ sub(); }).catch(function(){
+  $('pin-err').textContent='Keine Verbindung zur Datenbank.';
+});
+</script>
