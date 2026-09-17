@@ -9208,7 +9208,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260917003;
+var KP_BUILD = 20260917004;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -17855,7 +17855,14 @@ function tourAdjTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+to
 //         receipt, and the receipt is filed in Bills by whoever does the books.
 // Both are handed over at the end of the tour, so the settlement counts both.
 function tourAdjIsCost(e){ return String((e&&e.kind)||'')==='cost'; }
-function tourAdjPayTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+(tourAdjIsCost(e)?0:tourAdjVal(e)); },0); }
+// Was der Fahrer an dieser Tour VERDIENT hat — die Zahl, die in die Lohnliste
+// geht. Weder ausgelegtes Geld (⛽, kommt bar zurück und liegt in Bills) noch
+// Geld, das er unterwegs aus der Tourkasse genommen hat (💵), sind Lohnänderungen:
+// beides ist eine Auszahlung, genau wie der Vorschuss, den diese Zahl auch nicht
+// abzieht. Solange die 💵-Zeilen hier mitzählten, fraß eine Entnahme den ganzen
+// Lohn auf — Tour 260912-1: 32.200 verdient, −40.716 entnommen, gebucht wurden 0 ฿,
+// und in der Fahrerliste stand „💸−40.258" neben „💰32.200".
+function tourAdjPayTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+((tourAdjIsCost(e)||tourAdjIsBag(e))?0:tourAdjVal(e)); },0); }
 function tourAdjCostTotal(t){ return tourAdjArr(t).reduce(function(a,e){ return a+(tourAdjIsCost(e)?tourAdjVal(e):0); },0); }
 // ── taken out of the tour cash bag ────────────────────────────────────────
 // A deduction can be money the driver already TOOK out of the collected cash
@@ -18718,7 +18725,7 @@ function tourEndPaySummary(t){
   var payT=tourAdjPayTotal(t), costT=tourAdjCostTotal(t);
   var lines=function(f){ return tourAdjArr(t).filter(function(e){ return tourAdjSign(e)!==0 && f(e); }); };
   if(payT!==0){
-    lines(function(e){ return !tourAdjIsCost(e); }).forEach(function(e){
+    lines(function(e){ return !tourAdjIsCost(e) && !tourAdjIsBag(e); }).forEach(function(e){
       s+='\n  '+tourAdjFmt(tourAdjVal(e))+' · '+(e.oid||'')+(e.note?' · '+e.note:'');
     });
     s+='\n  = '+Math.max(0,tp+payT).toLocaleString()+' ฿ → payroll';
@@ -18824,7 +18831,7 @@ function endTourPayroll(t){
     date: tourPayDate(t), ts:Date.now(),
     note:'Tour'+(t.created?' '+t.created:'')
       +(_adjT!==0?' · '+_base.toLocaleString()+' '+(_adjT<0?'−':'+')+' '+Math.abs(_adjT).toLocaleString()+' ('
-        +tourAdjArr(t).filter(function(e){return tourAdjSign(e)!==0 && !tourAdjIsCost(e);})
+        +tourAdjArr(t).filter(function(e){return tourAdjSign(e)!==0 && !tourAdjIsCost(e) && !tourAdjIsBag(e);})
           .map(function(e){ return (e.oid||'')+' '+tourAdjFmt(tourAdjVal(e))+(e.note?' '+e.note:''); }).join('; ')+')':'')
       +(_costT!==0?' · ไม่รวมสำรองจ่าย / excl. '+Math.abs(_costT).toLocaleString()+' ฿ laid out (filed in Bills)':'')
       +(adv>0?' (incl. advance '+adv.toLocaleString()+' paid at start, '+tourNetPay(t).toLocaleString()+' at end)':''), by:(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Office', photoUrl:'' };
@@ -19134,6 +19141,9 @@ function ofDriversRender(){
             // the wage, ⛽ only moved cash and lives in Bills.
             +(tourAdjPayTotal(t)!==0?' · <b style="color:'+(tourAdjPayTotal(t)<0?'#b91c1c':'#166534')+'">💸'+tourAdjFmt(tourAdjPayTotal(t))+'</b>':'')
             +(tourAdjCostTotal(t)!==0?' · <b style="color:#9a3412">⛽'+tourAdjFmt(tourAdjCostTotal(t))+'</b>':'')
+            // Aus der Tourkasse entnommen — kein Lohnabzug, sondern Bargeld,
+            // das bei der Abrechnung gegengerechnet wird.
+            +(tourAdjBagTotal(t)>0?' · <b style="color:#b45309" title="เบิกจากถุงระหว่างทัวร์ / taken out of the tour cash bag — settled at the end, not a pay cut">👜−'+tourAdjBagTotal(t).toLocaleString()+' ฿</b>':'')
             +(t.kmMode?' · 🛣️'+kmFmt(kmTotal(t))+'กม.':'')+' ▾</span>'
         +'</div>'
         +'<div id="'+otid+'" style="display:none;padding:0 11px 9px">'+timeHTML+infoHTML+payHTML+photoHTML+uploadHTML+printHTML+payEditHTML+adjHTML+((t.kmMode||kmLogOf(t).length)?kmSummaryHTML(t):'')+ordersHtml+'</div>'
