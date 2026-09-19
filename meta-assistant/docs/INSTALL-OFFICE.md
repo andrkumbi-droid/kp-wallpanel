@@ -5,10 +5,20 @@ Es arbeiten 4–6 Leute im Posteingang — jeder Rechner braucht die Erweiterung
 
 ## Was sie macht / ทำอะไร
 
-Im Chat der Business Suite steht rechts das Feld **KP Sortiment** mit einem Knopf:
+Im Chat der Business Suite **und im LINE Official Account Manager** (chat.line.biz)
+steht rechts das Feld **KP Sortiment** mit einem Knopf:
 **📦 ส่งรูปสินค้าทั้งหมด**. Ein Klick schickt alle Produkte, die gerade wirklich
-lieferbar sind, als Fotos — automatisch in 10er-Schüben, weil Meta nur 10 Bilder
-pro Nachricht nimmt.
+lieferbar sind, als Fotos — automatisch in 10er-Schüben, weil beide Seiten nur
+10 Bilder pro Nachricht nehmen.
+
+> **Neu seit 19.09.2026: LINE.** Dieselbe Erweiterung, dieselbe Bedienung, dieselbe
+> Produktliste. Auf LINE ist der Versand deutlich schneller (ein paar Sekunden
+> statt einer Minute) und LINE zeigt vor dem Absenden noch einen eigenen Dialog
+> mit allen Bildern — der wird automatisch bestätigt.
+>
+> **Dieses Update braucht einmalig das ⟳ auf `chrome://extensions`**, weil sich die
+> `manifest.json` geändert hat. Sonst greift LINE nicht. Danach reicht wieder F5.
+> / ต้องกด ⟳ ที่ `chrome://extensions` หนึ่งครั้ง
 
 - **Kein Bilderordner mehr.** Die Liste kommt aus der KP-App (`pub/chatCatalog`):
   was einen Lagersatz hat und nicht ausverkauft ist.
@@ -27,7 +37,7 @@ pro Nachricht nimmt.
 4. **„Entpackte Erweiterung laden"** → den Ordner `extension` auswählen
 5. Fertig. **Keine weitere Einrichtung** — kein Konto, kein Passwort, kein Token.
    Die Erweiterung liest nur die öffentliche Produktliste.
-6. **War business.facebook.com schon offen: einmal F5 drücken.** Eine Seite, die
+6. **War business.facebook.com oder chat.line.biz schon offen: einmal F5 drücken.** Eine Seite, die
    vor der Installation geladen wurde, hat das Panel noch nicht.
 
 ### Auswahl: was rausgeht, steht im Panel
