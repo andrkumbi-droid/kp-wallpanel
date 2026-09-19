@@ -89,8 +89,19 @@ sie über einen Link und **Chrome aktualisiert von selbst** — und die Meldung
 | `⚠ โหลดรายการสินค้าไม่ได้` | `pub/chatCatalog` fehlt — die KP-App (Office-Tab) einmal öffnen |
 | `⚠ ยังไม่มีรูป: KP0xx` | Diese Produkte haben kein Foto im Repo |
 
-Die ganze DOM-Kenntnis steckt in `extension/content/selectors.js` — ändert Meta
-etwas, wird **nur diese Datei** angefasst.
+Nur bei LINE / เฉพาะ LINE:
+
+| Meldung | Bedeutung |
+|---|---|
+| `⚠ เปิดแชทก่อน / erst einen Chat öffnen` | Kein Chat offen — erst eine Unterhaltung anklicken |
+| `… fehlgeschlagen: no_dialog` | LINE hat den Bestätigungsdialog nicht gezeigt → `line-selectors.js` nachziehen |
+| `… fehlgeschlagen: LINE nahm nur 7/10` | LINE hat Bilder verworfen; **nichts wurde gesendet**, Auswahl prüfen und neu starten |
+| `… fehlgeschlagen: Sorry, you can only send up to 10…` | Sollte nie kommen (wir schicken höchstens 10) — LINE hat sein Limit geändert |
+| `⚠ N ชุดยังไม่เห็นในแชท` | Gesendet, aber im Verlauf nicht wiedergefunden. **Nicht nochmal senden** — erst im Chat nachsehen |
+
+Die ganze DOM-Kenntnis steckt in `extension/content/selectors.js` (Meta) bzw.
+`extension/content/line-selectors.js` (LINE) — ändert eine der beiden Seiten
+etwas, wird **nur die jeweilige Datei** angefasst.
 
 ## Abgeschaltet: Übersetzer und Stil-Lernen
 
