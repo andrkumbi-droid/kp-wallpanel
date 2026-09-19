@@ -97,6 +97,8 @@ Nur bei LINE / เฉพาะ LINE:
 | `… fehlgeschlagen: no_dialog` | LINE hat den Bestätigungsdialog nicht gezeigt → `line-selectors.js` nachziehen |
 | `… fehlgeschlagen: LINE nahm nur 7/10` | LINE hat Bilder verworfen; **nichts wurde gesendet**, Auswahl prüfen und neu starten |
 | `… fehlgeschlagen: Sorry, you can only send up to 10…` | Sollte nie kommen (wir schicken höchstens 10) — LINE hat sein Limit geändert |
+| `⏸ LINE จำกัดการส่งชั่วคราว รอ 20 วิ…` | **Normal.** LINE bremst, wenn kurz hintereinander viel rausgeht. Die Erweiterung wartet von selbst und versucht es zweimal erneut. Nichts anklicken, nur warten |
+| `… fehlgeschlagen: You've reached your short-term messaging limit` | Die Sperre hielt auch nach zwei Versuchen an. **Ein paar Minuten warten**, dann neu starten. Was schon rausging, steht in der Meldung davor — nicht doppelt schicken |
 | `⚠ N ชุดยังไม่เห็นในแชท` | Gesendet, aber im Verlauf nicht wiedergefunden. **Nicht nochmal senden** — erst im Chat nachsehen |
 
 Die ganze DOM-Kenntnis steckt in `extension/content/selectors.js` (Meta) bzw.

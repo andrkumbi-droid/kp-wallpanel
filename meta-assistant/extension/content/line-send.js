@@ -129,6 +129,14 @@ const KPCAT = {
     return { ok: true, n };
   },
 
+  // Ist die Absage eine Drosselung (abwarten hilft) oder ein Sachfehler
+  // (abwarten hilft nicht)? Die einzige bekannte Sachabsage ist das Datei-Limit,
+  // und die nennt Dateien — danach wird unterschieden, nicht nach der Sprache.
+  throttled(r) {
+    if (!r || r.reason !== 'refused') return false;
+    return !/file|ไฟล์/i.test(r.text || '');
+  },
+
   // ── Der eigentliche Lauf ──────────────────────────────────────────────────
   async sendAll(opts) {
     const dry = !!(opts && opts.dryRun);
@@ -180,7 +188,21 @@ const KPCAT = {
           return { ok: true, dry: true, attached: n, missing };
         }
 
-        const r = await this.sendBatch(files);
+        let r = await this.sendBatch(files);
+
+        // LINE drosselt: „You've reached your short-term messaging limit."
+        // Bei 50 Kunden am Tag zu je drei Nachrichten trifft das das Büro
+        // regelmäßig. Ein Wiederholen ist hier GEFAHRLOS, weil eine Absage
+        // heißt, dass der Bestätigungsdialog nie kam — es ging also nichts
+        // raus, es kann auch nichts doppelt ankommen. (Nach einem Klick auf
+        // Senden wird dagegen NIE wiederholt, siehe sendBatch.)
+        for (let a = 1; a <= 2 && !r.ok && this.throttled(r); a++) {
+          const wait = a * 20;
+          say('⏸ LINE จำกัดการส่งชั่วคราว รอ ' + wait + ' วิ… / LINE bremst, warte ' + wait + ' s');
+          await this.sleep(wait * 1000);
+          r = await this.sendBatch(files);
+        }
+
         if (!r.ok) {
           const why = r.reason === 'refused' ? r.text
                     : r.reason === 'count_mismatch' ? ('LINE nahm nur ' + r.n + '/' + r.want)
