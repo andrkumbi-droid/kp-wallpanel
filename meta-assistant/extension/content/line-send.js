@@ -72,7 +72,7 @@ const KPCAT = {
     const input = kpLineFileInput();
     if (!input) return { ok: false, reason: 'no_input' };
 
-    const before = kpLineMediaCount();
+    const before = kpLineSentMedia();
     const dt = new DataTransfer();
     files.forEach(f => dt.items.add(f));
     try {
@@ -113,10 +113,17 @@ const KPCAT = {
     await this.waitFor(() => !kpLineSendDialog(), 30000);
     input.value = '';
 
-    const arrived = await this.waitFor(() => kpLineMediaCount() >= before + n, 45000, 250);
+    // Warten, bis eine NEUE ausgehende Bildnachricht mit der erwarteten Bildzahl
+    // im Verlauf steht — das ist der harte Beweis.
+    const arrived = await this.waitFor(() => {
+      const now = kpLineSentMedia();
+      for (const [id, c] of now) if (!before.has(id) && c >= n) return id;
+      return null;
+    }, 45000, 250);
     if (!arrived) {
       // Der Verlauf hinkt manchmal hinterher oder das Fenster ist weggescrollt.
-      // Gesendet wurde trotzdem — also melden, nicht wiederholen.
+      // Gesendet wurde trotzdem — also melden, NICHT wiederholen: ein zweiter
+      // Anlauf hängt dieselben Fotos ein zweites Mal in den Chat.
       return { ok: true, n, unverified: true };
     }
     return { ok: true, n };

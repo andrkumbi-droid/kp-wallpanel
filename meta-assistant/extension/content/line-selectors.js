@@ -62,9 +62,27 @@ function kpLineDialogButton(m, kind) {
   return m.querySelector('.modal-footer ' + sel) || m.querySelector(sel);
 }
 
-// Bildnachrichten im offenen Verlauf — der Beweis, dass etwas rausging.
-function kpLineMediaCount() {
-  return document.querySelectorAll('#chat-message-layout .chat-media-link').length;
+// Der Beweis, dass ein Schub rausging.
+//
+// LINE bündelt einen Schub zu EINER Nachricht mit eigener `data-id`, in der die
+// einzelnen Bilder als `.chat-media-link` liegen. Zurück kommt id → Anzahl, nur
+// für ausgehende Nachrichten (`.chat-reverse`).
+//
+// Warum nicht einfach alle `.chat-media-link` zählen: LINE rendert beim Scrollen
+// ältere Nachrichten nach, dann springt so ein Zähler ohne Zutun nach oben
+// (gemessen: 24 → 33 durch bloßes Scrollen) und ein Versand gilt als bestätigt,
+// obwohl nichts ankam. Eine NEUE id mit der erwarteten Bildzahl kann dagegen nur
+// entstehen, wenn die Nachricht wirklich rausging.
+function kpLineSentMedia() {
+  const m = new Map();
+  document.querySelectorAll('#chat-message-layout .chat').forEach(row => {
+    if (!/chat-reverse/.test(row.className || '')) return;       // eingehende zählen nicht
+    const n = row.querySelectorAll('.chat-media-link').length;
+    if (!n) return;
+    const b = row.querySelector('[data-id]');
+    if (b) m.set(b.getAttribute('data-id'), n);
+  });
+  return m;
 }
 
 // Name des offenen Chats, nur für die Rückfrage vor dem Versand.
