@@ -15,14 +15,21 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::
 
 $Base    = 'https://raw.githubusercontent.com/andrkumbi-droid/kp-wallpanel/main/meta-assistant/extension/'
 $ExtName = 'KP Sortiment senden'
+# ACHTUNG: Diese Liste MUSS zu den content_scripts in manifest.json passen.
+# Faellt hier eine Datei aus, verteilt das Skript ein Manifest, das auf eine
+# nicht vorhandene Datei zeigt — und die Erweiterung ist auf dem Buero-Rechner
+# kaputt, waehrend sie bei Andre laeuft (er laedt direkt aus dem Repo-Ordner).
+# Neue Datei in der Erweiterung = neue Zeile hier. Sonst nichts.
 $Files   = @(
   'manifest.json',
   'background/sw.js',
-  'content/selectors.js',
-  'content/main-hook.js',
-  'content/catalog-send.js',
-  'content/overlay.js',
-  'content/overlay.css'
+  'content/selectors.js',          # Meta
+  'content/main-hook.js',          # Meta
+  'content/catalog-send.js',       # Meta
+  'content/line-selectors.js',     # LINE
+  'content/line-send.js',          # LINE
+  'content/overlay.js',            # beide
+  'content/overlay.css'            # beide
 )
 
 function Find-ExtensionFolder {
@@ -57,8 +64,12 @@ if (-not $Dest) { $Dest = Find-ExtensionFolder }
 if (-not $Dest) { $Dest = 'C:\KP\extension' }
 
 $old = ''
+$oldMf = ''
 $mf  = Join-Path $Dest 'manifest.json'
-if (Test-Path $mf) { try { $old = (Get-Content $mf -Raw -Encoding UTF8 | ConvertFrom-Json).version } catch {} }
+if (Test-Path $mf) {
+  try { $oldMf = Get-Content $mf -Raw -Encoding UTF8 } catch {}
+  try { $old = ($oldMf | ConvertFrom-Json).version } catch {}
+}
 
 Write-Host ("  Ordner / โฟลเดอร์: " + $Dest)
 if ($old) { Write-Host ("  bisher / เดิม:     v" + $old) }
@@ -92,12 +103,36 @@ try {
 $new = ''
 try { $new = (Get-Content $mf -Raw -Encoding UTF8 | ConvertFrom-Json).version } catch {}
 
+$newMf = ''
+try { $newMf = Get-Content $mf -Raw -Encoding UTF8 } catch {}
+
 Write-Host ''
 Write-Host ('  fertig / เสร็จแล้ว:  v' + $new) -ForegroundColor Green
 Write-Host ''
-Write-Host '  >> Jetzt business.facebook.com oeffnen und F5 druecken.' -ForegroundColor Yellow
-Write-Host '  >> เปิด business.facebook.com แล้วกด F5' -ForegroundColor Yellow
-Write-Host ''
+
+# Content-Skripte liest Chrome bei jedem Seitenaufbau neu — da reicht F5.
+# Aendert sich die manifest.json (neue Datei, neue Seite, neue Rechte), muss
+# Chrome die Erweiterung neu einlesen. Das ⟳ auf chrome://extensions kann das,
+# ist aber fuer die Kolleginnen eine fremde Seite mit Entwicklermodus und
+# englischen Knoepfen. Chrome GANZ schliessen und neu oeffnen bewirkt dasselbe
+# und ist etwas, das jeder kann. Deshalb steht hier das, und das ⟳ nur als
+# Fussnote.
+if ($oldMf -and $newMf -and ($oldMf.Trim() -ne $newMf.Trim())) {
+  Write-Host '  ================================================================' -ForegroundColor Red
+  Write-Host '   WICHTIG: Chrome GANZ schliessen und wieder oeffnen.' -ForegroundColor Red
+  Write-Host '   สำคัญ: ปิด Chrome ทั้งหมด แล้วเปิดใหม่' -ForegroundColor Red
+  Write-Host ''
+  Write-Host '   Alle Chrome-Fenster zumachen (nicht nur den Tab),' -ForegroundColor Yellow
+  Write-Host '   dann Chrome wieder starten. F5 alleine reicht diesmal nicht.' -ForegroundColor Yellow
+  Write-Host '   ปิดหน้าต่าง Chrome ทุกหน้าต่าง (ไม่ใช่แค่แท็บ) แล้วเปิดใหม่' -ForegroundColor Yellow
+  Write-Host '   ครั้งนี้กด F5 อย่างเดียวไม่พอ' -ForegroundColor Yellow
+  Write-Host '  ================================================================' -ForegroundColor Red
+  Write-Host ''
+} else {
+  Write-Host '  >> Jetzt business.facebook.com oder chat.line.biz oeffnen und F5 druecken.' -ForegroundColor Yellow
+  Write-Host '  >> เปิด business.facebook.com หรือ chat.line.biz แล้วกด F5' -ForegroundColor Yellow
+  Write-Host ''
+}
 if (-not $old) {
   Write-Host '  Die Erweiterung war hier noch nie geladen. Einmalig:' -ForegroundColor Yellow
   Write-Host '  chrome://extensions  ->  Entwicklermodus  ->  "Entpackte Erweiterung laden"  ->  ' -NoNewline

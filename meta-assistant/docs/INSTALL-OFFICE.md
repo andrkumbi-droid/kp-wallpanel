@@ -16,9 +16,15 @@ lieferbar sind, als Fotos — automatisch in 10er-Schüben, weil beide Seiten nu
 > statt einer Minute) und LINE zeigt vor dem Absenden noch einen eigenen Dialog
 > mit allen Bildern — der wird automatisch bestätigt.
 >
-> **Dieses Update braucht einmalig das ⟳ auf `chrome://extensions`**, weil sich die
-> `manifest.json` geändert hat. Sonst greift LINE nicht. Danach reicht wieder F5.
-> / ต้องกด ⟳ ที่ `chrome://extensions` หนึ่งครั้ง
+> **Nach diesem Update einmal Chrome GANZ schließen und wieder öffnen** — alle
+> Fenster, nicht nur den Tab. F5 alleine reicht diesmal nicht, weil sich die
+> `manifest.json` geändert hat. Danach ist wieder F5 genug.
+> / **ปิด Chrome ทั้งหมด แล้วเปิดใหม่ หนึ่งครั้ง**
+>
+> `KP-Update.bat` sagt das von selbst: es vergleicht die alte mit der neuen
+> `manifest.json` und blendet den Hinweis nur dann ein, wenn er nötig ist.
+> (Wer mag, kann statt des Neustarts auch das ⟳ auf der Kachel in
+> `chrome://extensions` drücken — dasselbe Ergebnis, nur unbequemer.)
 
 - **Kein Bilderordner mehr.** Die Liste kommt aus der KP-App (`pub/chatCatalog`):
   was einen Lagersatz hat und nicht ausverkauft ist.
@@ -62,11 +68,23 @@ holt die aktuellen Dateien direkt aus dem Repo und legt sie in den Ordner, aus d
 Chrome die Erweiterung wirklich lädt — den liest sie aus Chromes eigener
 Aufzeichnung, geraten wird nichts. Kein ZIP mehr, kein Anhang, keine Rückfrage.
 
-Warum meist **kein ⟳** nötig ist: bei einer entpackten Erweiterung liest Chrome die
-Content-Skripte (`overlay.js`, `catalog-send.js`, `overlay.css`) bei **jedem
-Seitenaufbau** frisch von der Platte. Ein ⟳ auf der Kachel in `chrome://extensions`
-braucht es nur, wenn sich die `manifest.json` wirklich ändert (neue Datei, neue
-Rechte) oder der Service Worker im Hintergrund.
+Warum meist **nur F5** nötig ist: bei einer entpackten Erweiterung liest Chrome die
+Content-Skripte (`overlay.js`, `catalog-send.js`, `line-send.js`, `overlay.css`) bei
+**jedem Seitenaufbau** frisch von der Platte. Mehr braucht es nur, wenn sich die
+`manifest.json` wirklich ändert (neue Datei, neue Seite, neue Rechte) oder der
+Service Worker im Hintergrund — dann muss Chrome die Erweiterung neu einlesen.
+
+**Dafür sagt das Skript: „Chrome ganz schließen und wieder öffnen."** Das bewirkt
+dasselbe wie das ⟳ auf der Kachel in `chrome://extensions`, ist aber etwas, das
+jeder kann — ohne Entwicklermodus, ohne fremde Seite, ohne englische Knöpfe.
+`kp-update.ps1` vergleicht dazu die alte mit der neuen `manifest.json` und blendet
+den Hinweis nur ein, wenn er wirklich nötig ist.
+
+> ⚠ **Für mich, nicht fürs Büro:** Die Dateiliste `$Files` in `kp-update.ps1` muss zu
+> den `content_scripts` in `manifest.json` passen. Fehlt dort eine Datei, verteilt
+> das Skript ein Manifest, das auf eine nicht vorhandene Datei zeigt — die
+> Erweiterung ist dann auf den Bürorechnern kaputt, während sie bei André läuft
+> (er lädt direkt aus dem Repo-Ordner). **Neue Datei = neue Zeile in `$Files`.**
 
 Gar kein Update nötig ist bei **Produkten, Fotos, Preisen, Ausverkauft und neuen
 Rillen-Gruppen** — die kommen über Firebase und GitHub Pages und sind nach einem
