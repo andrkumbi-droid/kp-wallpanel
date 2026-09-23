@@ -20908,6 +20908,36 @@ var WHTX = {
   cancel_seen:   {th:'เห็นแล้ว / Seen', en:'Seen ✓', my:'တွေ့ပြီး ✓'}
 };
 function wtx(k){ var e=WHTX[k]; if(!e) return k; return e[WH_LANG]||e.th; }
+
+/* ── Clips: STUECK und PACKUNGEN sind zwei verschiedene Dinge ────────────────
+   Im Lager stand bisher eine einzige Zahl „302" — zusammengerechnet aus 300
+   losen Clips (Stueck) und 2 gekauften Clip-Packs (Packungen). Das sind
+   verschiedene Einheiten, die Summe ist sinnlos, und der Packer legt zwei
+   verschiedene Sachen in den Karton. Der Orders-Tab zeigt es laengst richtig
+   getrennt ("📎 300 clips · 🛍️ 2 คลิปแพ็ค").
+
+   free-clips / free-gift-clips = lose Clips in STUECK (Beigabe zur Bestellung)
+   clips                        = gekaufte Clip-Packs in PACKUNGEN (199 ฿/Pack)  */
+function whClipPcs(o){
+  var n=(o.lineItems||[]).reduce(function(a,i){
+    return (i.type==='free-clips'||i.type==='free-gift-clips') ? a+(parseInt(i.qty)||0) : a; },0);
+  return n || (parseInt(o&&o.clips)||0);      // aeltere Auftraege ohne Zeilen
+}
+function whClipPacks(o){
+  return (o.lineItems||[]).reduce(function(a,i){
+    return i.type==='clips' ? a+(parseInt(i.qty)||0) : a; },0);
+}
+/* Die Zeilen fuer die Packliste — eine fuer die Stueck, eine fuer die Packs,
+   und die Pack-Zeile nur, wenn es welche gibt. */
+function whClipRows(o){
+  var pcs=whClipPcs(o), packs=whClipPacks(o);
+  return '<div class="pkrow"><span class="pklbl">'+wtx('lbl_clips')+'</span>'
+       +   '<span class="pkval">'+pcs.toLocaleString()+'</span></div>'
+       + (packs>0
+          ? '<div class="pkrow"><span class="pklbl">🛍️ Clip packs / คลิปแพ็ค</span>'
+            + '<span class="pkval">'+packs.toLocaleString()+'</span></div>'
+          : '');
+}
 function whApplyLang(){
   try{
     document.querySelectorAll('#s-warehouse [data-k]').forEach(function(el){ el.textContent = wtx(el.getAttribute('data-k')); });
@@ -20972,7 +21002,6 @@ function whRender() {
       tpList.innerHTML = cancelHTML + changeHTML + toPack.map(function(o) {
         var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
         var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
-        var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
         return '<div class="card"'+(o.priority?' style="border-left:5px solid #7c3aed"':'')+'>'+
           (o.priority?'<div style="background:#f3e8ff;color:#7c3aed;border-radius:var(--rs);padding:4px 8px;font-size:11px;font-weight:800;margin-bottom:6px">⭐ PRIORITY / สำคัญมาก'+(o.priorityReason?' — <span style="font-weight:600">'+o.priorityReason+'</span>':'')+'</div>':'')+
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
@@ -20982,7 +21011,7 @@ function whRender() {
           '<div class="pklist">'+
           '<div class="pkrow"><span class="pklbl">'+wtx('lbl_panels')+'</span><span class="pkval">'+panels+'</span></div>'+
           '<div class="pkrow"><span class="pklbl">'+wtx('lbl_edges')+'</span><span class="pkval">'+edges+'</span></div>'+
-          '<div class="pkrow"><span class="pklbl">'+wtx('lbl_clips')+'</span><span class="pkval">'+clips.toLocaleString()+'</span></div>'+
+          whClipRows(o)+
           '</div>'+
           '<button type="button" class="btn" style="background:#fdcb6e;color:#1a1d27;border:none;margin-top:10px;margin-bottom:6px;width:100%;min-height:52px;font-size:15px;font-weight:700;-webkit-tap-highlight-color:transparent;touch-action:manipulation" onclick="whAcceptBtnSafe(this)" data-id="'+o.id+'"><i class="ti ti-hand-stop"></i> '+wtx('btn_accept')+'</button>'+
           '</div>';
@@ -21007,7 +21036,6 @@ function whRender() {
         var pcnt = (typeof orderPhotoCount==='function')?orderPhotoCount(o.id,'warehouse'):0;
         var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
         var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
-        var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
         return '<div class="card card-done">'+
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
           '<span style="font-size:16px;font-weight:700">'+o.id+'</span>'+
@@ -21016,7 +21044,7 @@ function whRender() {
           '<div class="pklist">'+
           '<div class="pkrow"><span class="pklbl">'+wtx('lbl_panels')+'</span><span class="pkval">'+panels+'</span></div>'+
           '<div class="pkrow"><span class="pklbl">'+wtx('lbl_edges')+'</span><span class="pkval">'+edges+'</span></div>'+
-          '<div class="pkrow"><span class="pklbl">'+wtx('lbl_clips')+'</span><span class="pkval">'+clips.toLocaleString()+'</span></div>'+(o.ctn?'<div class="pkrow" style="background:#f0fdf4;border-radius:var(--rs);margin-top:4px"><span class="pklbl" style="font-weight:700">📦 CTN</span><span class="pkval" style="font-weight:800;color:var(--green);font-size:16px">'+o.ctn+' ลัง</span></div>':'')+(o.bundle?'<div class="pkrow" style="background:#fff7ed;border-radius:var(--rs);margin-top:4px"><span class="pklbl" style="font-weight:700">🧶 Bundle</span><span class="pkval" style="font-weight:800;color:#ea580c;font-size:16px">'+o.bundle+' มัด</span></div>':'')+
+          whClipRows(o)+(o.ctn?'<div class="pkrow" style="background:#f0fdf4;border-radius:var(--rs);margin-top:4px"><span class="pklbl" style="font-weight:700">📦 CTN</span><span class="pkval" style="font-weight:800;color:var(--green);font-size:16px">'+o.ctn+' ลัง</span></div>':'')+(o.bundle?'<div class="pkrow" style="background:#fff7ed;border-radius:var(--rs);margin-top:4px"><span class="pklbl" style="font-weight:700">🧶 Bundle</span><span class="pkval" style="font-weight:800;color:#ea580c;font-size:16px">'+o.bundle+' มัด</span></div>':'')+
           '</div>'+
           // Add-photo field — e.g. after an order was changed / re-packed
           '<input type="file" accept="image/*" capture="environment" id="whcam-'+o.id+'" style="display:none" onchange="whCapturePackPhoto(this,\''+o.id+'\')">'+
@@ -21061,7 +21089,6 @@ function whUnpack(id){const o=wOrders.find(x=>x.id===id);if(!o)return;o.packed=f
 function whCancelCard(o, mode){
   var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
   var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
-  var clips = ((o.lineItems||[]).reduce(function(a,i){return (i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0)) || (parseInt(o.clips)||0);
   var note = (mode==='seen') ? wtx('cancel_note_new') : wtx('cancel_note_packed');
   var bStyle = 'background:#dc2626;color:#fff;border:none;margin-top:10px;width:100%;min-height:52px;font-size:15px;font-weight:700;-webkit-tap-highlight-color:transparent;touch-action:manipulation';
   var btn = (mode==='accept')
@@ -21078,7 +21105,7 @@ function whCancelCard(o, mode){
     '<div class="pklist">'+
     '<div class="pkrow"><span class="pklbl">'+wtx('lbl_panels')+'</span><span class="pkval">'+panels+'</span></div>'+
     '<div class="pkrow"><span class="pklbl">'+wtx('lbl_edges')+'</span><span class="pkval">'+edges+'</span></div>'+
-    '<div class="pkrow"><span class="pklbl">'+wtx('lbl_clips')+'</span><span class="pkval">'+clips.toLocaleString()+'</span></div>'+
+    whClipRows(o)+
     '</div>'+ btn +'</div>';
 }
 // Warehouse accepts a cancelled+packed order → move it to Packing to be unpacked.
@@ -21291,12 +21318,13 @@ function drReady(){
       var li2 = o.lineItems||[];
       var pnls2 = li2.filter(function(i){return i.type==='panel';});
       var edgs2 = li2.filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge'||i.type==='pvc';});
-      var clps2 = li2.reduce(function(a,i){return(i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0);
-      if(pnls2.length||edgs2.length||clps2) {
+      var clps2 = whClipPcs(o), cpk2 = whClipPacks(o);
+      if(pnls2.length||edgs2.length||clps2||cpk2) {
         html += '<div style="background:rgba(0,0,0,0.04);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12px">';
         pnls2.forEach(function(i){html+='<div style="display:flex;justify-content:space-between;font-weight:700"><span>'+i.code+'</span><span style="color:var(--green)">'+i.qty+' pcs</span></div>';});
         edgs2.forEach(function(i){var t=i.type==='lcorner'?'L-Corner':(i.type==='utrim'||i.type==='uedge')?'U-Trim':(i.type==='ttrim'||i.type==='tedge')?'H-Profile':'PVC';html+='<div style="display:flex;justify-content:space-between"><span style="color:var(--text2)">'+t+' '+i.code+'</span><span style="color:var(--text2)">'+i.qty+' pcs</span></div>';});
         if(clps2) html+='<div style="display:flex;justify-content:space-between"><span style="color:var(--text2)">📎 Clips</span><span style="color:var(--text2)">'+clps2.toLocaleString()+' pcs</span></div>';
+        if(cpk2)  html+='<div style="display:flex;justify-content:space-between"><span style="color:var(--text2)">🛍️ Clip packs</span><span style="color:var(--text2)">'+cpk2.toLocaleString()+' แพ็ค</span></div>';
         if(o.ctn) html+='<div style="display:flex;justify-content:space-between;margin-top:4px;padding-top:4px;border-top:1px solid rgba(0,0,0,0.08);font-weight:700"><span>📦 CTN</span><span style="color:var(--green)">'+o.ctn+' ลัง</span></div>';
         if(o.bundle) html+='<div style="display:flex;justify-content:space-between;margin-top:4px;font-weight:700"><span>🧶 Bundle</span><span style="color:#ea580c">'+o.bundle+' มัด</span></div>';
         html += '</div>';
@@ -28750,7 +28778,6 @@ function whRenderPacking() {
   el.innerHTML = cancelUnpackHTML + packingOrders.map(function(o) {
     var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
     var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
-    var totalClips = ((o.lineItems||[]).filter(function(i){return i.type==='free-clips'||i.type==='clips'||i.type==='free-gift-clips';}).reduce(function(a,i){return a+(parseInt(i.qty)||0);},0)) || (parseInt(o.clips)||0);
     var pcnt = orderPhotoCount(o.id,'warehouse');
     return '<div class="card" style="margin-bottom:12px'+(o.cantFinish?';background:#fef2f2;border:1.5px solid #fca5a5':'')+'">'+
       (o.cantFinish?'<div style="background:#fee2e2;color:#dc2626;border-radius:var(--rs);padding:5px 9px;font-size:11px;font-weight:800;margin-bottom:8px">'+wtx('tag_cantfinish')+(o.cantFinishReason?' — <span style="font-weight:600">'+o.cantFinishReason+'</span>':'')+'</div>':'')+
@@ -28762,7 +28789,7 @@ function whRenderPacking() {
       (o.changeReq&&(o.changeReq.status==='pending'||o.changeReq.status==='confirmed')?(function(){var _cr=o.changeReq,_p=_cr.status==='pending';return '<div style="background:'+(_p?'#fff7ed':'#f0fdf4')+';color:'+(_p?'#ea580c':'#16a34a')+';border:1.5px solid '+(_p?'#fed7aa':'#bbf7d0')+';border-radius:var(--rs);padding:7px 10px;font-size:12px;margin-bottom:8px"><div style="font-weight:800;margin-bottom:3px">'+(_p?wtx('tag_change'):wtx('tag_changed'))+'</div><div style="font-weight:700">'+coDiffText(_cr)+'</div><div style="margin-top:3px;color:#888"><s>เดิม: '+coProdText(_cr.oldItems)+'</s></div><div style="font-weight:700;color:#16a34a">ใหม่: '+coProdText(_cr.newItems)+'</div></div>';})():'')+
       '<div class="pkbox"><div class="pkrow"><span class="pklbl">'+wtx('lbl_panels')+'</span><span class="pkval">'+panels+'</span></div>'+
       '<div class="pkrow"><span class="pklbl">'+wtx('lbl_edges')+'</span><span class="pkval">'+edges+'</span></div>'+
-      '<div class="pkrow"><span class="pklbl">'+wtx('lbl_clips')+'</span><span class="pkval">'+totalClips.toLocaleString()+'</span></div></div>'+
+      whClipRows(o)+'</div>'+
       '<div style="display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px;background:var(--bg2);border-radius:var(--rs);border:1px solid var(--border)">'+
       '<label style="font-size:13px;font-weight:600;white-space:nowrap;flex-shrink:0">📦 CTN:</label>'+
       '<input type="number" id="ctn-'+o.id+'" value="'+(o.ctn||'')+'" min="1" placeholder="'+wtx('ph_ctn')+'" oninput="whPackFieldInput(\''+o.id+'\',\'ctn\',this.value)" style="flex:1;padding:8px 10px;border:1.5px solid var(--border);border-radius:var(--rs);font-size:16px;font-weight:700;text-align:center;background:var(--bg);color:var(--text)">'+
