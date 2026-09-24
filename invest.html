@@ -215,6 +215,7 @@ nav button.on{background:var(--panel3);color:var(--ink);box-shadow:0 1px 0 rgba(
 .p-run{background:rgba(91,157,255,.12);color:var(--blue);border-color:rgba(91,157,255,.28)}
 .p-soon{background:rgba(255,162,62,.13);color:var(--amber);border-color:rgba(255,162,62,.3)}
 .p-late{background:rgba(255,107,107,.13);color:var(--red);border-color:rgba(255,107,107,.3)}
+.p-way{background:rgba(170,140,255,.12);color:#B9A4FF;border-color:rgba(170,140,255,.3)}
 .p-done{background:rgba(61,214,140,.12);color:var(--andre);border-color:rgba(61,214,140,.28)}
 .price{font-size:20px;font-weight:700;letter-spacing:-.5px}
 .price small{font-size:11.5px;color:var(--ink3);font-weight:600;margin-left:5px;letter-spacing:0}
@@ -505,7 +506,11 @@ function ledger(){
    Jede Karte darf das ueberschreiben (Feld "Gewinn an Alex %") — für Faelle,
    die anders vereinbart waren.
    ═══════════════════════════════════════════════════════════════════════════ */
-function startDate(c){ return c.arrive || c.order || ''; }
+/* Die zwei Monate zaehlen NUR ab Ankunft im Lager. Das Bestelldatum ist kein
+   Ersatz dafuer: solange der Container auf dem Schiff ist, laeuft keine Uhr
+   ("unterwegs"), bis André das Ankunftsdatum eintraegt. */
+function startDate(c){ return c.arrive || ''; }
+function transit(c){ return !c.paid && !c.arrive && !c.due; }
 function due(c){ return c.due || addM(startDate(c), c.months!=null&&c.months!==''?+c.months:cfg('months')); }
 
 function calc(c){
@@ -524,7 +529,7 @@ function calc(c){
   var prog = (sn!=null&&dn!=null&&dn>sn) ? Math.max(0,Math.min(1,(tn-sn)/(dn-sn))) : (c.paid?1:0);
   return { invA:a, invN:n, tot:tot, rate:rate, profit:profit, shareA:sA,
            pA:pA, pN:pN, outA:a+pA, outN:n+pN, due:d, left:left, prog:prog,
-           late: !c.paid && left!=null && left<0 };
+           late: !c.paid && left!=null && left<0, way: transit(c) };
 }
 
 /* Alex' Kasse. Ich verwalte sein Geld, also muss die Seite jederzeit sagen
@@ -603,12 +608,13 @@ function renderOver(){
     h+='<div class="card"><div class="tl">';
     open.forEach(function(c,i){
       var k=calc(c);
-      var lab = k.left==null ? 'Datum fehlt'
+      var lab = k.way        ? 'noch unterwegs'
+              : k.left==null ? 'Datum fehlt'
               : k.left<0     ? Math.abs(k.left)+' Tage überfällig'
               : k.left===0   ? 'heute fällig'
               : 'in '+k.left+' Tagen';
       h+='<div class="tlr">'
-        +  '<div class="d">'+deDate(k.due)+'<em>'+lab+'</em></div>'
+        +  '<div class="d">'+(k.way?'Ankunft + 2 Mon.':deDate(k.due))+'<em>'+lab+'</em></div>'
         +  '<div><div class="nm">'+esc(c.name||'Container')+'</div>'
         +    '<div class="mini"><i class="'+(k.late?'late':'')+'" style="width:'+(k.prog*100).toFixed(1)+'%"></i></div></div>'
         +  '<div class="amt">'
@@ -668,6 +674,7 @@ function group(title, L, withAdd){
   L.forEach(function(c){
     var k=calc(c);
     var st = c.paid ? ['p-done','Ausgezahlt']
+           : k.way  ? ['p-way','Unterwegs']
            : k.late ? ['p-late','Überfällig']
            : (k.left!=null && k.left<=14) ? ['p-soon','in '+k.left+' T.']
            : ['p-run','Läuft'];
@@ -675,7 +682,8 @@ function group(title, L, withAdd){
     h+='<div class="cc'+(c.paid?' done':'')+(k.late?' late':'')+'">'
       + '<div class="top"><div style="flex:1">'
       +   '<div class="nm">'+esc(c.name||'Container')+'</div>'
-      +   '<div class="dt">Ankunft '+deDate(startDate(c))+' → fällig '+deDate(k.due)+'</div>'
+      +   '<div class="dt">'+(k.way ? 'Bestellt '+deDate(c.order)+' · noch unterwegs'
+                                    : 'Ankunft '+deDate(startDate(c))+' → fällig '+deDate(k.due))+'</div>'
       + '</div><span class="pill '+st[0]+'">'+st[1]+'</span></div>'
 
       + '<div class="price">'+B0(c.price||k.tot)+'<small>Kaufpreis</small></div>'
@@ -698,7 +706,9 @@ function group(title, L, withAdd){
       +     '<div class="x n" style="padding-top:5px;color:var(--andre)">'+B0(k.outN)+'</div>'
       + '</div>';
 
-    if(!c.paid){
+    if(k.way){
+      h+='<div class="prog"><div class="t" style="margin-top:9px"><span>Die 2 Monate starten mit der Ankunft im Lager</span></div></div>';
+    }else if(!c.paid){
       h+='<div class="prog"><div class="bar"><i class="'+(k.late?'late':'')+'" style="width:'+(k.prog*100).toFixed(1)+'%"></i></div>'
         + '<div class="t"><span>'+shortDate(startDate(c))+'</span>'
         +   '<span>'+(k.left==null?'':(k.left<0?Math.abs(k.left)+' Tage über':k.left+' Tage'))+'</span>'
@@ -711,6 +721,7 @@ function group(title, L, withAdd){
       h+='<div class="acts">'
         + '<button type="button" onclick="openC(\''+c.id+'\')">Bearbeiten</button>'
         + (c.paid ? '<button type="button" onclick="unpay(\''+c.id+'\')">Zurücknehmen</button>'
+           : k.way ? '<button type="button" class="go" onclick="arrived(\''+c.id+'\')">Angekommen ✓</button>'
                   : '<button type="button" class="go" onclick="pay(\''+c.id+'\')">Ausgezahlt ✓</button>')
         + '<button type="button" class="dl" title="Löschen" onclick="delC(\''+c.id+'\')">✕</button>'
         + '</div>';
@@ -908,7 +919,7 @@ function preview(){
            : k.invN>0 ? 'André allein' : '—';
   if(c.pctA!=='' && c.pctA!=null) mode='von Hand: Alex '+NF0.format(num(c.pctA))+' %';
   $('f-pv').innerHTML='<div class="hd">Vorschau · '+esc(mode)+'</div>'
-    + '<div class="r"><span>Fällig am</span><b>'+deDate(k.due)+'</b></div>'
+    + '<div class="r"><span>Fällig am</span><b>'+(k.way?'noch unterwegs – ab Ankunft + 2 Mon.':deDate(k.due))+'</b></div>'
     + '<div class="r"><span>Gewinn gesamt ('+NF0.format(k.rate)+' %)</span><b>'+B(k.profit)+'</b></div>'
     + '<div class="r"><span style="color:var(--alex)">Auszahlung Alex</span><b style="color:var(--alex)">'+B(k.outA)+'</b></div>'
     + '<div class="r"><span style="color:var(--andre)">Auszahlung André</span><b style="color:var(--andre)">'+B(k.outN)+'</b></div>';
@@ -945,6 +956,16 @@ function pay(id){
   var iso = p.length===3 ? (p[2].padStart(4,'20')+'-'+p2(+p[1])+'-'+p2(+p[0])) : todayISO();
   IDB.ref('containers/'+id).update({ paid:true, paidDate:iso })
      .then(function(){ say('Als ausgezahlt vermerkt.'); }).catch(oops);
+}
+/* Container ist im Lager: ab hier laufen die zwei Monate. */
+function arrived(id){
+  var c=CTS[id]; if(!c) return;
+  var d=prompt('Angekommen im Lager am (TT.MM.JJJJ):', deDate(todayISO()));
+  if(d==null) return;
+  var p=String(d).trim().split('.');
+  var iso = p.length===3 ? (p[2].padStart(4,'20')+'-'+p2(+p[1])+'-'+p2(+p[0])) : todayISO();
+  IDB.ref('containers/'+id).update({ arrive:iso })
+     .then(function(){ say('Ankunft eingetragen – fällig am '+deDate(addM(iso,cfg('months')))+'.'); }).catch(oops);
 }
 function unpay(id){
   IDB.ref('containers/'+id).update({ paid:false, paidDate:null })
