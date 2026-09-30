@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KP Wallpanel — Warehouse Display</title>
+<link rel="icon" href="kp-icon-wh.svg" type="image/svg+xml">
+
+<!-- ── SMART-TV COMPAT ───────────────────────────────────────────────────
+     Old TV browsers (Tizen / webOS / older Android TV) often lack ES2017
+     helpers; one missing method blanks the whole screen with no way to see
+     why (no devtools on a TV). Polyfill the few we use, and show any real
+     error on-screen so it can be photographed instead of a black screen. -->
+<script>
+(function(){
+  // --- polyfills ---
+  if(!String.prototype.padStart){
+    String.prototype.padStart=function(len,pad){
+      var s=String(this); pad=pad===undefined?' ':String(pad);
+      if(!pad) return s;
+      while(s.length<len) s=pad+s;
+      return s.length>len?s.slice(s.length-len):s;
+    };
+  }
+  if(!Object.values){
+    Object.values=function(o){ var r=[]; for(var k in o){ if(Object.prototype.hasOwnProperty.call(o,k)) r.push(o[k]); } return r; };
+  }
+  if(!Array.prototype.find){
+    Array.prototype.find=function(fn){ for(var i=0;i<this.length;i++){ if(fn(this[i],i,this)) return this[i]; } };
+  }
+  if(!Array.prototype.includes){
+    Array.prototype.includes=function(v){ return this.indexOf(v)>=0; };
+  }
+  // --- on-screen error reporter (TVs have no devtools) ---
+  function showErr(msg){
+    var d=document.getElementById('tv-err');
+    if(!d){
+      d=document.createElement('div'); d.id='tv-err';
+      d.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#7f1d1d;color:#fff;font:14px/1.5 monospace;padding:12px 16px;max-height:45%;overflow:auto;white-space:pre-wrap;border-top:3px solid #fca5a5';
+      (document.body||document.documentElement).appendChild(d);
+    }
+    d.textContent='⚠ Display error (send a photo of this to Andre):\n'+msg;
+  }
+  window.addEventListener('error',function(e){
+    showErr((e.message||'script error')+(e.filename?'\n'+e.filename+':'+(e.lineno||'?'):''));
+  });
+  window.addEventListener('unhandledrejection',function(e){
+    showErr('promise: '+((e.reason&&(e.reason.message||e.reason))||'unknown'));
+  });
+  window.__tvShowErr=showErr;
+})();
+</script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f1117; color: #fff; font-family: Arial, sans-serif; min-height: 100vh; overflow: hidden; }
+
+  .header {
+    background: #1a1d27;
+    padding: 12px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 3px solid #00b894;
+    height: 60px;
+  }
+  .logo { font-size: 20px; font-weight: 900; color: #00b894; }
+  .logo-sub { font-size: 12px; color: #888; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #00b894; display: inline-block; margin-right: 6px; animation: pulse 2s infinite; }
+  .clock { font-size: 32px; font-weight: 900; font-variant-numeric: tabular-nums; }
+  .dateth { font-size: 12px; color: #888; text-align: right; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr 1fr; height: calc(100vh - 60px); }
+  .col { padding: 14px; border-right: 1px solid #2a2d3a; overflow-y: auto; }
+  .col:last-child { border-right: none; }
+
+  .col-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid; }
+  .col-header.new { border-color: #fdcb6e; }
+  .col-header.packing { border-color: #74b9ff; }
+  .col-header.ready { border-color: #00b894; }
+
+  .col-title { font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+  .col-title.new { color: #fdcb6e; }
+  .col-title.packing { color: #74b9ff; }
+  .col-title.ready { color: #00b894; }
+
+  .cnt { font-size: 12px; font-weight: 700; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+  .cnt.new { background: #fdcb6e22; color: #fdcb6e; }
+  .cnt.packing { background: #74b9ff22; color: #74b9ff; }
+  .cnt.ready { background: #00b89422; color: #00b894; }
+
+  .card { border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; border-left: 4px solid; }
+  .card.new { background: #1a1d27; border-color: #fdcb6e; animation: blink 1.2s infinite; }
+  .card.packing { background: #1a1d27; border-color: #74b9ff; }
+  .card.ready { background: #1a1d27; border-color: #00b894; }
+
+  @keyframes blink { 0%,100%{box-shadow:0 0 0 0 #fdcb6e00} 50%{box-shadow:0 0 16px 3px #fdcb6e44} }
+
+  .card.change { border-color: #ea580c !important; outline: 4px solid #ea580c; outline-offset: 2px; animation: changeBlink 0.7s infinite; }
+  @keyframes changeBlink { 0%,100%{box-shadow:0 0 0 0 #ea580c00; outline-color:#ea580c} 50%{box-shadow:0 0 30px 9px #ea580ccc; outline-color:#ffd700} }
+  .change-banner { background: #ea580c; color: #fff; font-size: 18px; font-weight: 900; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; line-height: 1.5; }
+
+  /* Cancelled order waiting for the warehouse to acknowledge it. Deliberately calmer
+     than a new order or a change: a slow pulse, no full-screen alert box — the box is
+     usually just standing there packed, it is not an emergency. */
+  .card.cancel { background: #241a1d; border-color: #ef4444; animation: cancelPulse 2.4s infinite; }
+  @keyframes cancelPulse { 0%,100%{box-shadow:0 0 0 0 #ef444400} 50%{box-shadow:0 0 18px 4px #ef444455} }
+  .cancel-banner { background: #ef4444; color: #fff; font-size: 18px; font-weight: 900; padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; letter-spacing: 0.04em; }
+  .cancel-what { background: #0f1117; color: #fca5a5; font-size: 15px; font-weight: 700; padding: 7px 10px; border-radius: 6px; margin: 6px 0; line-height: 1.4; }
+
+  .card.prio { outline: 3px solid #ffd700; outline-offset: 2px; }
+  .prio-badge { display: inline-block; background: #ffd700; color: #1a1d27; font-size: 14px; font-weight: 900; padding: 3px 10px; border-radius: 6px; margin-bottom: 8px; letter-spacing: 0.04em; }
+  /* Claim / exchange orders ("<orig>-C") — the goods go back out to a customer who
+     already received the original order, so the packers must not mistake them. */
+  .card.claim { outline: 3px solid #16a34a; outline-offset: 2px; }
+  .claim-badge { display: inline-block; background: #16a34a; color: #fff; font-size: 14px; font-weight: 900; padding: 3px 10px; border-radius: 6px; margin-bottom: 8px; letter-spacing: 0.04em; }
+  .claim-note { background: #ecfdf5; color: #065f46; font-size: 13px; font-weight: 700; padding: 6px 9px; border-radius: 6px; margin-bottom: 8px; line-height: 1.4; }
+
+  .order-id { font-size: 28px; font-weight: 900; margin-bottom: 4px; }
+  .order-zone { font-size: 12px; color: #666; margin-bottom: 8px; }
+
+  .items { border-top: 1px solid #2a2d3a; padding-top: 8px; margin-top: 6px; }
+  .item { display: flex; justify-content: space-between; padding: 2px 0; }
+  .item-code { font-weight: 700; }
+  .item-qty { color: #00b894; font-weight: 700; }
+
+  .clips { font-size: 12px; color: #aaa; margin-top: 6px; background: #0f1117; padding: 5px 8px; border-radius: 5px; }
+  /* 🛠️ Extra — what the office typed into the Extra field of the order
+     ("ตัดแผ่น / cutting", "งานพิเศษ"). It is work somebody in the warehouse has
+     to do, so it is amber and cannot be mistaken for another product line. */
+  .extra { font-size: 13px; font-weight: 800; color: #111; margin-top: 6px; background: #f59e0b; padding: 6px 9px; border-radius: 5px; }
+  .order-time { font-size: 11px; color: #444; text-align: right; margin-top: 6px; }
+  .phone-hint { text-align: center; padding: 8px; font-size: 13px; color: #555; font-style: italic; }
+
+  .empty { text-align: center; padding: 40px 10px; color: #333; font-size: 13px; }
+  .empty-icon { font-size: 32px; margin-bottom: 6px; }
+
+  .alert-border { position: fixed; inset: 0; border: 6px solid #fdcb6e; pointer-events: none; opacity: 0; z-index: 100; }
+  .alert-border.show { opacity: 1; animation: borderBlink 0.8s infinite; }
+  @keyframes borderBlink { 0%,100%{border-color:#fdcb6e} 50%{border-color:transparent} }
+
+  .alert-box { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #fdcb6e; color: #1a1d27; font-size: 36px; font-weight: 900; padding: 20px 40px; border-radius: 16px; text-align: center; pointer-events: none; opacity: 0; z-index: 101; }
+  .alert-box.show { opacity: 1; animation: boxPulse 0.8s infinite; }
+  @keyframes boxPulse { 0%,100%{transform:translate(-50%,-50%) scale(1)} 50%{transform:translate(-50%,-50%) scale(1.04)} }
+  .alert-sub { font-size: 16px; font-weight: 400; margin-top: 4px; }
+
+  /* Fullscreen toggle button — for wall-TV / phone-mirroring */
+  #fsbtn {
+    position: fixed; bottom: 18px; right: 18px; z-index: 200;
+    width: 54px; height: 54px; border-radius: 50%;
+    border: none; background: rgba(0,184,148,0.92); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+    -webkit-tap-highlight-color: transparent;
+    transition: opacity .4s ease, transform .15s ease;
+  }
+  #fsbtn:active { transform: scale(0.92); }
+  #fsbtn.hide { opacity: 0; pointer-events: none; }
+  #fstip {
+    position: fixed; bottom: 82px; right: 18px; z-index: 200;
+    background: #1a1d27; color: #fff; border: 1px solid #2a2d3a;
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; max-width: 240px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5); display: none; line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<div class="alert-border" id="ab"></div>
+<div class="alert-box" id="ax">
+  🔔 ออเดอร์ใหม่เข้า!
+  <div class="alert-sub">กรุณารับออเดอร์ผ่านมือถือ</div>
+</div>
+
+<button id="fsbtn" type="button" onclick="toggleFs()" title="Fullscreen / เต็มจอ (F)"></button>
+<div id="fstip"></div>
+
+<div class="header">
+  <div>
+    <div class="logo">📦 KP Wallpanel — Warehouse <span id="whname" style="padding:2px 12px;border-radius:12px;color:#fff;font-weight:900"></span> <span style="font-size:14px;color:#c4b5fd">🧪 TEST</span></div>
+    <div class="logo-sub"><span class="dot"></span>Live real-time</div>
+  </div>
+  <div style="text-align:right">
+    <div class="clock" id="clock">00:00:00</div>
+    <div class="dateth" id="dateth"></div>
+  </div>
+</div>
+
+<div class="cols">
+  <div class="col">
+    <div class="col-header new">
+      <span class="col-title new">🆕 NEW / ใหม่</span>
+      <span class="cnt new" id="cnt-new">0</span>
+    </div>
+    <div id="col-new"></div>
+  </div>
+  <div class="col">
+    <div class="col-header packing">
+      <span class="col-title packing">📦 PACKING / แพ็คอยู่</span>
+      <span class="cnt packing" id="cnt-packing">0</span>
+    </div>
+    <div id="col-packing"></div>
+  </div>
+  <div class="col">
+    <div class="col-header ready">
+      <span class="col-title ready">✅ READY / พร้อมส่ง</span>
+      <span class="cnt ready" id="cnt-ready">0</span>
+    </div>
+    <div id="col-ready"></div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js" onerror="window.__tvShowErr&&window.__tvShowErr('Cannot load Firebase (firebase-app.js). The TV browser is blocking gstatic.com or has no internet / outdated certificates.')"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js" onerror="window.__tvShowErr&&window.__tvShowErr('Cannot load Firebase (firebase-auth.js) from gstatic.com.')"></script>
+<!-- App Check: no onerror handler on purpose. If the old TV browser cannot load
+     this file the display must still come up (it only fails once enforcement is
+     on, and that is exactly what the App Check metrics are for). -->
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app-check.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js" onerror="window.__tvShowErr&&window.__tvShowErr('Cannot load Firebase (firebase-database.js) from gstatic.com.')"></script>
+<script>
+if(typeof firebase==='undefined'){ window.__tvShowErr&&window.__tvShowErr('Firebase did not load — the display cannot show live orders. Check the TV browser internet / try a newer browser or a streaming stick.'); }
+else {
+firebase.initializeApp({
+  apiKey: "AIzaSyBhUzwMR28dvulez9q6AZ4gZS80Y9VK0qQ",
+  authDomain: "kp-wallpanel.firebaseapp.com",
+  databaseURL: "https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "kp-wallpanel",
+  storageBucket: "kp-wallpanel.firebasestorage.app",
+  messagingSenderId: "794246593779",
+  appId: "1:794246593779:web:703fc0a4ba89ba58734b86"
+});
+// APP CHECK — same reCAPTCHA v3 site key as index.html, same rule: empty key =
+// not activated = nothing changes. Must run before the first db.ref(). See SECURITY.md.
+var APPCHECK_SITE_KEY = '6LebwYgtAAAAAB9LWZ91x3eZfllT9mPsV3Y8Vfpv';   // reCAPTCHA v3 SITE key — same as index.html
+try {
+  if (APPCHECK_SITE_KEY && firebase.appCheck) {
+    if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) || location.protocol === 'file:') {
+      self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    }
+    firebase.appCheck().activate(APPCHECK_SITE_KEY, true);
+  }
+} catch(e){ }
+// SEASON ROOT — TEST PAGE: reads the test area (lagertest/) of index-test.html.
+var SEASON = 'lagertest';
+/* 2 คลัง: one screen per warehouse — ?wh=1 or ?wh=2. Without it the screen shows
+   everything (old behaviour). Same rules as index-test.html: a line's warehouse is
+   li.wh, else o.wh, else คลัง 2; a split order shows in both, each screen with
+   its own part (o.whp[W].st). */
+var WH = /[?&]wh=1(&|$)/.test(location.search) ? 'L1' : (/[?&]wh=2(&|$)/.test(location.search) ? 'L2' : null);
+var WH_NAME={L1:'คลัง 1', L2:'คลัง 2'}, WH_COLOR={L1:'#3b82f6', L2:'#f97316'};
+var WH_PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+function whNorm(w){ return w==='L1' ? 'L1' : 'L2'; }
+function whOfLine(o, li){ return whNorm((li && li.wh) || (o && o.wh)); }
+function whOfOrder(o){
+  var set={}, any=false;
+  (o && o.lineItems || []).forEach(function(li){ if(WH_PROD[li.type]){ set[whOfLine(o,li)]=1; any=true; } });
+  if(!any && o && o.wh) set[whNorm(o.wh)]=1;
+  var arr=['L1','L2'].filter(function(w){ return set[w]; });
+  return arr.length ? arr : ['L2'];
+}
+function whIsSplit(o){ return whOfOrder(o).length>1; }
+function whPart(o){ // this screen's part: 'new' | 'packing' | 'done'
+  if(o.status==='new') return 'new';
+  if(o.status==='packing'){ if(!WH || !whIsSplit(o)) return 'packing'; return (o.whp && o.whp[WH] && o.whp[WH].st) || 'new'; }
+  return 'done';
+}
+function whSplitNote(o){
+  if(!whIsSplit(o)) return '';
+  var t={new:'รอ',packing:'กำลังแพ็ค',done:'✓ เสร็จ'};
+  return '<div style="margin:4px 0 6px;padding:4px 8px;border-radius:8px;background:#facc15;color:#1a1d27;font-size:14px;font-weight:900">✂️ แบ่ง 2 คลัง / SPLIT · '
+    +whOfOrder(o).map(function(w){ var st=(o.status==='new')?'new':(o.status==='packing'?((o.whp&&o.whp[w]&&o.whp[w].st)||'new'):'done'); return WH_NAME[w]+': '+t[st]; }).join(' · ')+'</div>';
+}
+var _rootDb = firebase.database();
+var db = { ref: function(p){ return _rootDb.ref(SEASON + '/' + (p == null ? '' : p)); } };
+
+function tick() {
+  var n = new Date();
+  document.getElementById('clock').textContent =
+    String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0')+':'+String(n.getSeconds()).padStart(2,'0');
+  var days=['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'];
+  var months=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  document.getElementById('dateth').textContent='วัน'+days[n.getDay()]+' '+n.getDate()+' '+months[n.getMonth()]+' '+(n.getFullYear()+543);
+}
+setInterval(tick,1000); tick();
+
+function beep(f,t,d,type,vol){var ctx=getAudioCtx();var o=ctx.createOscillator(),g=ctx.createGain();o.type=type||'sine';o.connect(g);g.connect(ctx.destination);o.frequency.value=f;g.gain.setValueAtTime(vol||0.4,ctx.currentTime+t);g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+t+d);o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+d+0.05);}
+function playSound() {
+  try {
+    var b=beep;
+    b(440,0,0.15);b(550,0.2,0.15);b(660,0.4,0.15);b(880,0.6,0.4);
+    b(440,1.2,0.15);b(550,1.4,0.15);b(660,1.6,0.15);b(880,1.8,0.4);
+  } catch(e){}
+}
+// Distinct alert for ORDER CHANGES: low/high two-tone "warble" with a square wave
+function playChangeSound() {
+  try {
+    var b=beep;
+    b(330,0,0.18,'square');b(494,0.22,0.18,'square');b(330,0.44,0.18,'square');b(494,0.66,0.5,'square');
+    b(330,1.4,0.18,'square');b(494,1.62,0.18,'square');b(330,1.84,0.18,'square');b(494,2.06,0.5,'square');
+  } catch(e){}
+}
+
+// Cancellation: NOT an alarm. A soft descending chime at well under half the volume
+// of the new-order sound — enough to make someone look up, not enough to make the
+// whole hall stop. Repeated every 3 minutes while a cancellation stays unacknowledged,
+// because a packed box that nobody unpacks otherwise just stands there for days.
+function playCancelSound() {
+  try {
+    var b=beep;
+    b(784,0,0.5,'sine',0.16); b(659,0.28,0.5,'sine',0.16); b(523,0.56,0.9,'sine',0.14);
+  } catch(e){}
+}
+
+var audioCtx = null;
+function getAudioCtx() {
+  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+// Unlock audio on first touch/click (required by browsers)
+document.addEventListener('click', function(){ getAudioCtx(); }, {once:true});
+document.addEventListener('touchstart', function(){ getAudioCtx(); }, {once:true});
+
+var alertOn=false, alertTimer=null;
+function startAlert(title, sub, sound) {
+  var ax=document.getElementById('ax');
+  ax.innerHTML = (title||'🔔 ออเดอร์ใหม่เข้า!')+'<div class="alert-sub">'+(sub||'กรุณารับออเดอร์ผ่านมือถือ')+'</div>';
+  var snd = sound || playSound;
+  if(alertOn) { snd(); return; }
+  alertOn=true;
+  document.getElementById('ab').classList.add('show');
+  ax.classList.add('show');
+  snd();
+  alertTimer=setInterval(snd,3000);
+}
+function coDiffText(cr){
+  if(!cr||!cr.diff)return'';
+  return cr.diff.map(function(d){
+    if((d.old||0)===0)return'➕ '+d.code+' ×'+d['new'];
+    if((d['new']||0)===0)return'➖ '+d.code+' (เอาออก)';
+    return '✏️ '+d.code+' '+d.old+'→'+d['new'];
+  }).join(', ');
+}
+function coProdText(items){
+  var pa=[],la=[];
+  (items||[]).forEach(function(li){
+    if(li.type==='panel')pa.push(li.code+' × '+li.qty);
+    else if(li.type==='lcorner'||li.type==='tedge'||li.type==='uedge'||li.type==='ttrim'||li.type==='utrim')la.push(li.code+' × '+li.qty);
+  });
+  return pa.concat(la).join(' · ')||'—';
+}
+function changeBanner(o){
+  var cr=o.changeReq; if(!cr||(cr.status!=='pending'&&cr.status!=='confirmed'))return'';
+  var p=cr.status==='pending';
+  return '<div class="change-banner"'+(p?'':' style="background:#16a34a"')+'>'+(p?'🔄 แก้ไขออเดอร์ / CHANGE':'✅ แก้ไขแล้ว / CHANGED')+'<br>'+coDiffText(cr).split(', ').join('<br>')+
+    '<div style="font-size:14px;font-weight:400;margin-top:6px;opacity:.85;text-decoration:line-through">เดิม: '+coProdText(cr.oldItems)+'</div>'+
+    '<div style="font-size:15px;font-weight:700;margin-top:2px">ใหม่: '+coProdText(cr.newItems)+'</div>'+
+    (cr.note?'<br>📝 '+cr.note:'')+(p?'<div style="font-size:13px;font-weight:400;margin-top:4px">รอยืนยันผ่านมือถือ / confirm on phone</div>':'')+'</div>';
+}
+function ccls(o){ return ((o.changeReq&&o.changeReq.status==='pending')?' change':'') + (o.isReplacement?' claim':''); }
+// Claim / exchange banner: says what it is and repeats the office note.
+function claimBanner(o){
+  if(!o || !o.isReplacement) return '';
+  var t = o.isExchange ? '🔄 เปลี่ยนสินค้า / EXCHANGE' : '🔁 เคลม / CLAIM';
+  return '<div class="claim-badge">'+t+(o.replacementOf?' · '+o.replacementOf:'')+'</div>'
+    + (o.notes?'<div class="claim-note">'+String(o.notes).replace(/[<>]/g,'')+'</div>':'');
+}
+function stopAlert() {
+  alertOn=false;
+  clearInterval(alertTimer);
+  document.getElementById('ab').classList.remove('show');
+  document.getElementById('ax').classList.remove('show');
+}
+
+// Same rule as the app: Grade A stays silent, B and C are called out — C with its
+// cut length, because that decides which stack the packer takes it from. Bright
+// colours on purpose, this screen is dark and read from across the warehouse.
+function tvMark(i) {
+  var g = (i && i.grade === 'B') ? 'B' : ((i && i.grade === 'C') ? 'C' : 'A');
+  if (g === 'A') return '';
+  var n = parseInt(i.cutLen) || 0;
+  var txt = g === 'B' ? '⚠ B' : ('✂ ' + (n > 0 ? n + 'cm' : 'C'));
+  var col = g === 'B' ? '#f59e0b' : '#a78bfa';
+  return '<span style="margin-left:10px;font-size:0.62em;font-weight:900;color:' + col
+    + ';border:2px solid ' + col + ';border-radius:8px;padding:1px 7px;vertical-align:middle">' + txt + '</span>';
+}
+
+function buildItems(o, cls) {
+  var li = o.lineItems||[];
+  var panels = li.filter(function(i){return i.type==='panel';});
+  var edges = li.filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='pvc';});
+  // Lose Clips (Stueck) und gekaufte Clip-Packs (Packungen) sind zwei Dinge mit
+  // zwei Einheiten. Zusammengezaehlt kam hier "302" heraus, wo 300 Clips und
+  // 2 Packs im Karton liegen muessen — der Orders-Tab zeigt es laengst getrennt.
+  var clips = li.reduce(function(a,i){return (i.type==='free-clips'||i.type==='free-gift-clips')?a+(parseInt(i.qty)||0):a;},0);
+  var clipPacks = li.reduce(function(a,i){return i.type==='clips'?a+(parseInt(i.qty)||0):a;},0);
+  var big = cls==='new'||cls==='packing';
+  var sz = big ? 'font-size:20px;font-weight:900' : 'font-size:13px';
+  var html = '<div class="items">';
+  var _dim=function(i){ return (WH && whIsSplit(o) && whOfLine(o,i)!==WH) ? ';opacity:.3' : ''; };
+  var _tag=function(i){ return (WH && whIsSplit(o) && whOfLine(o,i)!==WH) ? ' <span style="font-size:12px;color:'+WH_COLOR[whOfLine(o,i)]+'">→'+WH_NAME[whOfLine(o,i)]+'</span>' : ''; };
+  panels.forEach(function(i){ html+='<div class="item" style="padding:4px 0'+_dim(i)+'"><span class="item-code" style="'+sz+'">'+i.code+tvMark(i)+_tag(i)+'</span><span class="item-qty" style="'+sz+'">'+i.qty+' pcs</span></div>'; });
+  edges.forEach(function(i){
+    var t=i.type==='lcorner'?'L-Corner':i.type==='utrim'?'U-Trim':i.type==='ttrim'?'H-Profile':'PVC';
+    html+='<div class="item" style="padding:4px 0'+_dim(i)+'"><span class="item-code" style="'+sz+'">'+t+' '+i.code+_tag(i)+'</span><span class="item-qty" style="'+sz+'">'+i.qty+' pcs</span></div>';
+  });
+  html+='</div>';
+  if(clips>0) html+='<div class="clips" style="'+(big?'font-size:16px':'')+'">📎 Clips: <strong>'+clips.toLocaleString()+' pcs</strong></div>';
+  if(clipPacks>0) html+='<div class="clips" style="'+(big?'font-size:16px':'')+'">🛍️ Clip packs / คลิปแพ็ค: <strong>'+clipPacks.toLocaleString()+'</strong></div>';
+  // Extra work on the order — cutting, a special job. It used to live only in the
+  // office form, so the warehouse packed the order without ever seeing it.
+  var extras = li.filter(function(i){ return i.type==='extra' && String(i.code||'').trim(); });
+  if(extras.length) html+='<div class="extra" style="'+(big?'font-size:17px':'')+'">🛠️ '
+    + extras.map(function(i){ return String(i.code).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }).join(' · ')
+    + '</div>';
+  return html;
+}
+
+var knownNew=null, knownChange=null, knownCancel=null, cancelTimer=null;
+
+// A cancelled order the warehouse has not acknowledged yet. Same rule as the app:
+// stage 'new' → it sits with the To-Pack work, stage 'unpack' → with the packing work
+// (the goods are already in a box and have to come out again). Cancellations from
+// before this flow existed carry no stage and are left alone.
+function cancelCard(o){
+  var packed=!!o.cancelWasPacked;
+  return '<div class="card cancel">'
+    +'<div class="cancel-banner">❌ ยกเลิก / CANCELLED</div>'
+    +'<div class="order-id">'+o.id+'</div>'
+    +(o.zone?'<div class="order-zone">📍 '+o.zone+'</div>':'')
+    +'<div class="cancel-what">'+(packed
+        ? '📦 แกะของออก คืนสต็อก / unpack, goods back to stock'
+        : '✋ ไม่ต้องแพ็ค / do not pack')+'</div>'
+    +buildItems(o,'new')
+    +'<div class="phone-hint">📱 กดรับทราบผ่านมือถือ / acknowledge on phone</div>'
+    +'</div>';
+}
+
+function render(orders) {
+  var nw=[], pk=[], rd=[], changeOrders=[], cancels=[];
+  var newSet=new Set(), changeSet=new Set(), cancelSet=new Set();
+  Object.values(orders||{}).forEach(function(o) {
+    if(!o||!o.id) return;
+    if(WH && whOfOrder(o).indexOf(WH)<0) return;   // 2 คลัง: not this warehouse's order
+    if(o.status==='cancelled'){
+      if(o.whCancelStage && o.whCancelStage!=='done' && !o.whCancelAck){ cancels.push(o); cancelSet.add(o.id); }
+      return;
+    }
+    if(o.changeReq && o.changeReq.status==='pending') { changeSet.add(o.id); changeOrders.push(o); return; }
+    if(o.status==='new' || o.status==='packing'){
+      var _p=whPart(o);
+      if(_p==='new'){ nw.push(o); newSet.add(o.id); }
+      else if(_p==='packing') pk.push(o);
+      else rd.push(o);                               // my part done, the other warehouse still packing
+    }
+    else if(o.status==='ready') rd.push(o);
+  });
+  var cancelNew=cancels.filter(function(o){ return o.whCancelStage!=='unpack'; });
+  var cancelUnpack=cancels.filter(function(o){ return o.whCancelStage==='unpack'; });
+  // Pin change-requests to the TOP of the NEW column so they can't be missed
+  nw = changeOrders.concat(nw);
+
+  var hasNew=false, hasChange=false;
+  if(knownNew!==null) newSet.forEach(function(id){ if(!knownNew.has(id)) hasNew=true; });
+  if(knownChange!==null) changeSet.forEach(function(id){ if(!knownChange.has(id)) hasChange=true; });
+  knownNew=newSet; knownChange=changeSet;
+
+  // Changes ring continuously until confirmed (even after reload); new orders ring on arrival.
+  if(changeSet.size>0){
+    if(!alertOn || hasChange) startAlert('🔄 แก้ไขออเดอร์! / ORDER CHANGED','กรุณายืนยันผ่านมือถือ / confirm on phone', playChangeSound);
+  } else if(newSet.size>0){
+    if(hasNew) startAlert();
+  } else {
+    stopAlert();
+  }
+
+  // Cancellations get their own soft chime — they must not be dressed up as an alarm,
+  // but they must not disappear silently either (two packed boxes sat unnoticed once).
+  var hasNewCancel=false;
+  if(knownCancel!==null) cancelSet.forEach(function(id){ if(!knownCancel.has(id)) hasNewCancel=true; });
+  knownCancel=cancelSet;
+  if(cancelSet.size>0){
+    if(hasNewCancel) playCancelSound();
+    if(!cancelTimer) cancelTimer=setInterval(function(){
+      if(knownCancel && knownCancel.size>0) playCancelSound(); else { clearInterval(cancelTimer); cancelTimer=null; }
+    }, 180000);
+  } else if(cancelTimer){ clearInterval(cancelTimer); cancelTimer=null; }
+
+  document.getElementById('cnt-new').textContent=nw.length+cancelNew.length;
+  document.getElementById('cnt-packing').textContent=pk.length+cancelUnpack.length;
+  document.getElementById('cnt-ready').textContent=rd.length;
+
+  // NEW column - no buttons, just info + hint (cancellations pinned above everything)
+  document.getElementById('col-new').innerHTML = cancelNew.map(cancelCard).join('') + (nw.length===0
+    ? (cancelNew.length?'':'<div class="empty"><div class="empty-icon">😴</div>ไม่มีออเดอร์ใหม่</div>')
+    : nw.map(function(o){
+        return '<div class="card new'+(o.priority?' prio':'')+ccls(o)+'">'+
+          (o.priority?'<div class="prio-badge">⭐ ด่วน / PRIORITY</div>':'')+
+          claimBanner(o)+
+          '<div class="order-id">'+o.id+'</div>'+whSplitNote(o)+
+          changeBanner(o)+
+          buildItems(o,'new')+
+          '<div class="phone-hint">📱 รับผ่านมือถือ</div>'+
+          '<div class="order-time">'+(o.date||'')+'</div>'+
+          '</div>';
+      }).join(''));
+
+  // PACKING column - no buttons (a cancelled order being unpacked sits on top)
+  document.getElementById('col-packing').innerHTML = cancelUnpack.map(cancelCard).join('') + (pk.length===0
+    ? (cancelUnpack.length?'':'<div class="empty"><div class="empty-icon">💤</div>ไม่มีออเดอร์</div>')
+    : pk.map(function(o){
+        return '<div class="card packing'+(o.priority?' prio':'')+ccls(o)+'">'+
+          (o.priority?'<div class="prio-badge">⭐ ด่วน / PRIORITY</div>':'')+
+          claimBanner(o)+
+          '<div class="order-id">'+o.id+'</div>'+whSplitNote(o)+
+          changeBanner(o)+
+          buildItems(o,'packing')+
+          '<div class="order-time">'+(o.date||'')+'</div>'+
+          '</div>';
+      }).join(''));
+
+  // READY column - show zone
+  document.getElementById('col-ready').innerHTML = rd.length===0
+    ? '<div class="empty"><div class="empty-icon">🕐</div>รอ Driver รับ</div>'
+    : rd.map(function(o){
+        return '<div class="card ready'+(o.priority?' prio':'')+ccls(o)+'">'+
+          (o.priority?'<div class="prio-badge">⭐ ด่วน / PRIORITY</div>':'')+
+          claimBanner(o)+
+          '<div class="order-id">'+o.id+'</div>'+whSplitNote(o)+
+          '<div class="order-zone">📍 '+(o.zone||'')+'</div>'+
+          changeBanner(o)+
+          buildItems(o,'ready')+
+          '<div class="order-time">'+(o.date||'')+'</div>'+
+          '</div>';
+      }).join('');
+}
+
+// The DB rules require `auth != null` — sign in anonymously BEFORE listening,
+// otherwise the listener is rejected once and never retried.
+(function(){ var el=document.getElementById('whname'); if(!el) return;
+  if(WH){ el.textContent='🏬 '+WH_NAME[WH]; el.style.background=WH_COLOR[WH]; } else { el.textContent='🏬 ทุกคลัง / all'; el.style.background='#475569'; } })();
+firebase.auth().signInAnonymously()
+  .then(function(){
+    db.ref('orders').on('value', function(snap){ render(snap.val()||{}); });
+    // Nobody ever touches the wall display, so without this it keeps running the code
+    // it was loaded with for weeks. Same appVersion node the app uses (every device
+    // that opens a newer index.html raises `build`, Management → "Reload all devices"
+    // raises `force`) → the screen reloads itself a moment later.
+    var _tvVer=null;
+    db.ref('appVersion').on('value', function(snap){
+      var v=snap.val()||{}, key=(parseInt(v.build,10)||0)+'|'+(parseInt(v.force,10)||0);
+      if(_tvVer===null){ _tvVer=key; return; }
+      if(key!==_tvVer){ _tvVer=key; setTimeout(function(){ try{ location.reload(true); }catch(e){ location.reload(); } }, 1500); }
+    });
+  })
+  .catch(function(e){
+    window.__tvShowErr && window.__tvShowErr('Firebase login failed ('+(e&&e.code)+') — the display cannot show live orders.');
+  });
+}
+</script>
+
+<!-- Fullscreen kept in its own block so it works even if Firebase is slow/blocked -->
+<script>
+// ── FULLSCREEN (PC + phone → mirror to TV) ─────────────────────────────
+var ICON_EXPAND='<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/></svg>';
+var ICON_COMPRESS='<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h5V3M21 8h-5V3M16 21v-5h5M8 21v-5H3"/></svg>';
+var fsbtn=document.getElementById('fsbtn');
+var wakeLock=null, fsHideTimer=null;
+
+function fsSupported(){ var d=document.documentElement; return !!(d.requestFullscreen||d.webkitRequestFullscreen||d.mozRequestFullScreen||d.msRequestFullscreen); }
+function isFs(){ return !!(document.fullscreenElement||document.webkitFullscreenElement||document.mozFullScreenElement||document.msFullscreenElement); }
+function enterFs(){ var d=document.documentElement; var fn=d.requestFullscreen||d.webkitRequestFullscreen||d.mozRequestFullScreen||d.msRequestFullscreen; return fn?fn.call(d):Promise.reject(); }
+function exitFs(){ var fn=document.exitFullscreen||document.webkitExitFullscreen||document.mozCancelFullScreen||document.msExitFullscreen; if(fn) fn.call(document); }
+
+// Keep the wall display awake while shown
+function requestWake(){ try{ if('wakeLock' in navigator){ navigator.wakeLock.request('screen').then(function(w){ wakeLock=w; }).catch(function(){}); } }catch(e){} }
+document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible' && isFs()) requestWake(); });
+
+function showTip(msg){ var t=document.getElementById('fstip'); if(!t) return; t.textContent=msg; t.style.display='block'; setTimeout(function(){ t.style.display='none'; }, 5000); }
+
+function toggleFs(){
+  if(isFs()){ exitFs(); return; }
+  if(!fsSupported()){
+    // iOS Safari has no element fullscreen — guide the user to the OS-level options.
+    showTip('📱 iPhone: use AirPlay to mirror the whole screen to the TV / ใช้ AirPlay สะท้อนหน้าจอทั้งหมดขึ้นทีวี');
+    return;
+  }
+  var p=enterFs();
+  if(p && p.then) p.then(requestWake).catch(function(){ showTip('Fullscreen blocked by browser / เบราว์เซอร์บล็อกเต็มจอ'); });
+  else requestWake();
+}
+
+function updateFsUi(){
+  if(!fsbtn) return;
+  fsbtn.innerHTML = isFs() ? ICON_COMPRESS : ICON_EXPAND;
+  fsbtn.title = isFs() ? 'Exit fullscreen / ออกจากเต็มจอ (F)' : 'Fullscreen / เต็มจอ (F)';
+  if(isFs()) scheduleHide(); else { clearTimeout(fsHideTimer); fsbtn.classList.remove('hide'); }
+}
+['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','msfullscreenchange'].forEach(function(ev){ document.addEventListener(ev, updateFsUi); });
+
+// On the wall display, fade the button out when idle; reveal on any activity
+function scheduleHide(){ clearTimeout(fsHideTimer); if(isFs()){ fsHideTimer=setTimeout(function(){ if(fsbtn) fsbtn.classList.add('hide'); }, 3500); } }
+function revealBtn(){ if(fsbtn) fsbtn.classList.remove('hide'); scheduleHide(); }
+document.addEventListener('pointermove', revealBtn);
+document.addEventListener('touchstart', revealBtn, {passive:true});
+
+// Keyboard shortcut: F toggles (handy on a PC display)
+document.addEventListener('keydown', function(e){ if((e.key==='f'||e.key==='F') && !e.ctrlKey && !e.metaKey && !e.altKey){ toggleFs(); } });
+
+updateFsUi();
+</script>
+</body>
+</html>
