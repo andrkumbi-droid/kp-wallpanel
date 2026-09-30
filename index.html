@@ -6639,7 +6639,8 @@ function closeSM(){document.getElementById('sm-modal').classList.remove('open');
 var _stLogFilt='all';
 var ST_ACT={ add:{i:'➕',l:'Added',c:'var(--blue)'}, edit:{i:'✏️',l:'Edited',c:'var(--text)'},
              move:{i:'⬇️',l:'A→B',c:'var(--orange)'}, delete:{i:'🗑',l:'Deleted',c:'#dc2626'},
-             arrive:{i:'🚢',l:'Arrived',c:'#16a34a'} };
+             arrive:{i:'🚢',l:'Arrived',c:'#16a34a'}, return:{i:'↩️',l:'Cancel → back',c:'#0891b2'},
+             retake:{i:'↪️',l:'Un-cancel',c:'#7c3aed'} };
 function stLogOpen(){ _stLogFilt='all'; var s=document.getElementById('stlog-search'); if(s)s.value='';
   document.getElementById('stlog-modal').classList.add('open'); stLogRender(); }
 function stLogClose(){ document.getElementById('stlog-modal').classList.remove('open'); }
@@ -9209,7 +9210,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20260917004;
+var KP_BUILD = 20261001001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -12732,7 +12733,9 @@ function quickStatus(btn) {
     o.cancelWasPacked = (old==='ready'||old==='loaded');
     o.whCancelStage = 'new';   // 'new' → To Pack list, 'unpack' → Packing list, 'done' → cleared
     o.whCancelAck = false;
+    if(old!=='cancelled') stockReturnOrder(o, 'cancel');
   }
+  if(old==='cancelled' && newStatus!=='cancelled') stockRetakeOrder(o);
   // Order moving to ready/loaded/delivered auto-confirms a still-pending change (keeps it as a record)
   // A pending change used to be confirmed silently by this very status change —
   // which is how a changed order got loaded with the old goods on 03.09. Whoever
@@ -20543,8 +20546,10 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   o.packStatus=document.getElementById('em-packstatus').value;o.notes=document.getElementById('em-notes').value;o.status=document.getElementById('em-status').value;var newDate=document.getElementById('em-date').value;if(newDate)o.date=newDate;const editorMember=staffList.find(x=>x.id===currentStaffId);if(editorMember)o.editedBy=editorMember.name;o._editTs=Date.now();
   // Cancelling via the edit modal → same warehouse acknowledgement flow as quickStatus
   if(o.status==='cancelled' && old!=='cancelled'){ o.cancelWasPacked=(old==='ready'||old==='loaded'); o.whCancelStage='new'; o.whCancelAck=false; }
-  // Rebuild products from the edited lines (give old stock back first, re-deduct after)
-  try{ if(o._stockDeducted){ addOrderStock(o); o._stockDeducted=false; } }catch(e){}
+  // Rebuild products from the edited lines (give old stock back first, re-deduct after).
+  // An order that was ALREADY cancelled is left out of the stock entirely.
+  var _emStkSkip=(old==='cancelled' && o.status==='cancelled'), _emStkBack=false;
+  try{ if(!_emStkSkip && o._stockDeducted){ addOrderStock(o); o._stockDeducted=false; _emStkBack=true; } }catch(e){}
   var emItems=[], emPa=[], emLa=[], emTq=0;
   document.querySelectorAll('#em-lines .pline').forEach(function(l){
     var i=l.querySelectorAll('input');
@@ -20575,7 +20580,10 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   // Already-delivered order whose total changed (e.g. a discount added at payment):
   // keep the recorded revenue in sync so Sales/Pay reflect the discounted amount.
   if(o.status==='delivered'){ var _nt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0; var _r=revOrders.find(function(x){return x.id===o.id;}); if(_r && _r.amt!==_nt){ _r.amt=_nt; try{ syncRevOrders(); }catch(e){} } }
-  try{ deductOrderStock(o); }catch(e){}if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}try{sheetsUpdateMaster(o);}catch(e){console.error('Master update failed (non-blocking):',e);}try{ if(o.status!==old) auditStatus(o.id,old,o.status,o.editedBy,(o.status==='cancelled'?_cancelWorkNote(o):'')); else auditAdd({type:'edit',orderId:o.id,by:o.editedBy}); }catch(e){}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
+  try{ if(!_emStkSkip){ deductOrderStock(o); /* no-op when cancelled */
+    if(o.status==='cancelled'){ if(_emStkBack){ o._stockReturned=Date.now(); stAudit('return', o.id, 'cancel (edit)', {orderId:o.id}); } }
+    else o._stockReturned=null;
+    syncStockItems(); syncPrecut(); } }catch(e){}if(o.status==='delivered'&&old!=='delivered'){const amt=parseFloat((o.total+'').replace(/[^0-9]/g,''))||0;if(amt>0){revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt,date:new Date().toISOString().split('T')[0],zone:o.zone,month:mkey(new Date().toISOString())});addLog('Order '+o.id+' delivered: '+amt.toLocaleString()+' ฿','+');}try{sheetsSyncOrder(o);}catch(e){console.error('Sheets sync failed (non-blocking):',e);}}try{sheetsUpdateMaster(o);}catch(e){console.error('Master update failed (non-blocking):',e);}try{ if(o.status!==old) auditStatus(o.id,old,o.status,o.editedBy,(o.status==='cancelled'?_cancelWorkNote(o):'')); else auditAdd({type:'edit',orderId:o.id,by:o.editedBy}); }catch(e){}closeEM();ofRenderOrders();mgRender();syncOrders();syncRevOrders();try{payUpdateBadge();}catch(e){}try{if(document.getElementById('ofv-pay')&&document.getElementById('ofv-pay').classList.contains('active'))payRender();}catch(e){}}
 
 /* Extra-Zeilen einer Bestellung zusammenfassen. Es koennen mehrere sein (aus
    dem Verkauf, aus einer Reklamation); fuer die beiden Masken wird daraus EIN
@@ -20821,7 +20829,7 @@ function submitCO(){
   o.clips=tq*10+freeGift;
   o.boxes=Math.max(1,Math.ceil(tq/10));
   o.total=newItems.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0).toLocaleString('en-US')+' ฿';
-  try{ deductOrderStock(o); }catch(e){}
+  try{ deductOrderStock(o); syncStockItems(); syncPrecut(); }catch(e){}
   o.editedBy=who; o._editTs=Date.now();
   // Already-delivered order whose total changed (price/discount fix): keep the booked
   // revenue in sync, same as Edit order does.
@@ -21392,7 +21400,7 @@ function drWho(){
 }
 // NOTE: loading used to be the ONE status change that wrote no log at all — an order
 // sat on "loaded" with nothing saying who put it there. It logs like every other step now.
-function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded',drWho());auditStatus(id,_o,'loaded',drWho());}const tour=drGetTour();if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();syncOrders();syncTours();}
+function drLoad(id){dStatus[id]='loaded';if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded',drWho());auditStatus(id,_o,'loaded',drWho());if(_o==='cancelled')stockRetakeOrder(ord);}const tour=drGetTour();if(tour)tour.status[id]='loaded';drReady();document.getElementById('dr-t-cnt').textContent=dTour.filter(id=>dAllOrders.find(x=>x.id===id)).length;ofRenderOrders();syncOrders();syncTours();}
 function drUnload(id){dStatus[id]='ready';if(!dTour.includes(id))dTour.push(id);delete dChecks[id];const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='ready';addStatusLog(ord,'ready',drWho());auditStatus(id,_o,'ready',drWho());}const tour=drGetTour();if(tour)tour.status[id]='ready';drTour();drReady();syncOrders();syncTours();}
 
 function drRenderStatusBar(){
@@ -28001,7 +28009,9 @@ function stockBucketAdd(code, qty, grade, cutLen){
   else            st.qty    =(parseInt(st.qty)||0)+qty;
 }
 function deductOrderStock(o){
-  if(!o || !o.lineItems || o._stockDeducted || typeof stockItems==='undefined') return;
+  // A cancelled order holds no goods — covers the sheet import, the retro-deduction
+  // and edits of cancelled orders, which all used to take its goods (again).
+  if(!o || !o.lineItems || o._stockDeducted || o.status==='cancelled' || typeof stockItems==='undefined') return;
   var PRODUCT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
   o.lineItems.forEach(function(li){
     if(!PRODUCT[li.type]) return;
@@ -28028,6 +28038,24 @@ function deductImportedStockOnce(){
   }
 }
 
+// Cancelled / deleted order → its goods go back into stock (since 01.10.2026).
+// Orders cancelled before that still carry _stockDeducted=true and are left
+// alone on purpose: the stock was counted around them, André wants it as it is.
+function stockReturnOrder(o, why){
+  if(!o || !o._stockDeducted) return false;
+  addOrderStock(o); o._stockDeducted=false; o._stockReturned=Date.now();
+  try{ stAudit('return', o.id, (why||'cancel')+' · '+[o.panels,o.lcorner].filter(function(x){return x&&x!=='—';}).join(' · '), {orderId:o.id}); }catch(e){}
+  try{ syncStockItems(); syncPrecut(); }catch(e){}
+  try{ if(typeof mgStock==='function') mgStock(); if(typeof ofRenderStock==='function') ofRenderStock(); }catch(e){}
+  return true;
+}
+// Un-cancel → take the goods out again (only if the cancel had given them back).
+function stockRetakeOrder(o){
+  if(!o || o._stockDeducted || !o._stockReturned) return;
+  deductOrderStock(o); o._stockReturned=null;
+  try{ stAudit('retake', o.id, 'un-cancel', {orderId:o.id}); }catch(e){}
+  try{ syncStockItems(); syncPrecut(); }catch(e){}
+}
 // Reverse a stock deduction (add the products back).
 function addOrderStock(o){
   if(!o || !o.lineItems || typeof stockItems==='undefined') return;
@@ -28387,7 +28415,7 @@ function drDoDeliver(id, photoUrl){
   ofRenderOrders();mgRender();syncOrders();syncTours();syncRevOrders();try{payUpdateBadge();}catch(e){}
   try{ if(ord) sheetsSyncOrder(ord); }catch(e){ console.error('Sheets sync failed (non-blocking):', e); }
 }
-function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded',drWho());auditStatus(id,_o,'loaded',drWho());}revOrders=revOrders.filter(x=>x.id!==id);const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
+function drUndoD(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded',drWho());auditStatus(id,_o,'loaded',drWho());if(_o==='cancelled')stockRetakeOrder(ord);}revOrders=revOrders.filter(x=>x.id!==id);const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();mgRender();syncOrders();syncTours();syncRevOrders();}
 // Shipper handover: driver dropped the goods at a carrier company. The order is done
 // for the driver/tour (counts as complete), but is NOT delivered to the customer yet —
 // no revenue is booked here; office finalises to "delivered" once the customer receives it.
@@ -28415,12 +28443,12 @@ function drCancel(id){
   const name=ord?ord.id:id;
   if(!confirm('Cancel order '+name+'?\nThis cannot be undone / ยืนยันการยกเลิก?')) return;
   dStatus[id]='cancelled';dTour=dTour.filter(x=>x!==id);if(!dDone.includes(id))dDone.push(id);delete dChecks[id];
-  if(ord){var _oc=ord.status;ord.status='cancelled';addStatusLog(ord,'cancelled',drWho());auditStatus(id,_oc,'cancelled',drWho());}
+  if(ord){var _oc=ord.status;ord.status='cancelled';addStatusLog(ord,'cancelled',drWho());auditStatus(id,_oc,'cancelled',drWho());if(_oc!=='cancelled')stockReturnOrder(ord,'driver cancel');}
   const tour=drGetTour();
   if(tour)tour.status[id]='cancelled';
   drTour();drReady();ofRenderOrders();syncOrders();syncTours();
 }
-function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded',drWho());auditStatus(id,_o,'loaded',drWho());}const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();syncOrders();}
+function drUndoC(id){dStatus[id]='loaded';dDone=dDone.filter(x=>x!==id);if(!dTour.includes(id))dTour.push(id);const ord=orders.find(x=>x.id===id);if(ord){var _o=ord.status;ord.status='loaded';addStatusLog(ord,'loaded',drWho());auditStatus(id,_o,'loaded',drWho());if(_o==='cancelled')stockRetakeOrder(ord);}const tour=drGetTour();if(tour)tour.status[id]='loaded';drTour();ofRenderOrders();syncOrders();}
 
 // ── STAFF MODAL FUNCTIONS ──
 // Drivers are derived from staffList (staff flagged isDriver). Old driver ids are
@@ -28725,6 +28753,15 @@ function deleteOrder(btn) {
   var _pinBy = requireStaffPin('Delete order / ลบออเดอร์ · ' + id);
   if(!_pinBy) return;
   var _delOrd = orders.find(function(o){ return o.id===id; }); // capture for master clear
+  // Goods back to stock: still in the warehouse (new/packing/ready) → automatically;
+  // already left (loaded/shipped/delivered) → only if the order was a mistake/duplicate.
+  try{
+    if(_delOrd && _delOrd._stockDeducted && _delOrd.status!=='cancelled'){
+      var _inWh=['new','packing','ready'].indexOf(_delOrd.status)>=0;
+      if(_inWh || confirm('คืนสินค้าเข้าสต็อก? / Put the goods back into stock?\n\nOK = ออเดอร์ซ้ำ/ผิด ของยังอยู่ / duplicate or mistake, goods are still here\nCancel = ของออกไปแล้วจริง / the goods really left'))
+        stockReturnOrder(_delOrd, 'delete');
+    }
+  }catch(e){ console.error('stock return on delete', e); }
   // Remove from orders array
   orders = orders.filter(function(o) { return o.id !== id; });
   // Remove from wOrders
@@ -36167,6 +36204,9 @@ function clArrived(id) {
        immer nur von einer der beiden ab. */
     var existing = (typeof _stockFind==='function') ? _stockFind(code)
                  : stockItems.find(function(s){return s.code===code;});
+    var _aFrom = existing ? (parseInt(existing.qty)||0) : 0;
+    try{ stAudit('arrive', existing?existing.code:code, '+'+qty.toLocaleString()+' · '+(c.supplier||'')+(c.containerNo?' '+c.containerNo:''),
+      {aFrom:_aFrom, aTo:_aFrom+qty, containerId:id}); }catch(e){}
     if(existing) {
       existing.qty += qty;                 // incoming is always Grade A
       if(per>0) existing.pcsPerCtn = per;

@@ -7,6 +7,9 @@
 // ── CONFIG ─────────────────────────────────────────────────
 var LINE_TOKEN   = 'PUT_LINE_CHANNEL_ACCESS_TOKEN';
 var FIREBASE_URL = 'https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app';
+// The app keeps all live data under the season prefix 'v2/' — the root still holds the
+// old pre-season copy. Reading the root gave the bot months-old stock/orders (fixed 01.10.2026).
+var SEASON = 'v2/';
 // DB rules require auth — put the legacy database secret in Script Properties
 // (key: FIREBASE_SECRET), never in this file.
 var FIREBASE_SECRET = (function(){ try { return PropertiesService.getScriptProperties().getProperty('FIREBASE_SECRET') || ''; } catch(e){ return ''; } })();
@@ -116,9 +119,9 @@ function route(text, role, lang){
 // ── Firebase reads + helpers ───────────────────────────────
 function fbGet(path){ var url=FIREBASE_URL+'/'+path+'.json'+(FIREBASE_SECRET?('?auth='+FIREBASE_SECRET):''); var res=UrlFetchApp.fetch(url,{muteHttpExceptions:true}); try{ return JSON.parse(res.getContentText()||'null'); }catch(e){ return null; } }
 function asArr(v){ return v ? (Array.isArray(v) ? v.filter(Boolean) : Object.keys(v).map(function(k){return v[k];})) : []; }
-function getOrders(){ return asArr(fbGet('orders')); }
-function getStock(){ return asArr(fbGet('stockItems')); }
-function getContainers(){ return asArr(fbGet('containerLog')); }
+function getOrders(){ return asArr(fbGet(SEASON+'orders')); }
+function getStock(){ return asArr(fbGet(SEASON+'stockItems')); }
+function getContainers(){ return asArr(fbGet(SEASON+'containerLog')); }
 function amt(o){ return parseFloat(String(o && o.total!=null ? o.total : '0').replace(/[^0-9.]/g,'')) || 0; }
 function f(n){ return Math.round(n).toLocaleString('en-US'); }
 function dToday(){ return Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd'); }
@@ -225,14 +228,14 @@ function fmtHelp(lang){ return de(lang)?'Hallo! 👋\nTippe einen Knopf, eine Fr
 
 // ── Claims / Attendance / Customers (Office data) ──────────
 function fmtClaims(lang){
-  var cs=asArr(fbGet('claims')); var open=cs.filter(function(c){return c.status==='open';});
+  var cs=asArr(fbGet(SEASON+'claims')); var open=cs.filter(function(c){return c.status==='open';});
   open.sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
   var lines=open.slice(0,15).map(function(c){ return '• '+(c.orderId||'?')+' — '+String(c.reason||'').slice(0,30)+(c.items?(' ('+(Array.isArray(c.items)?c.items.join(','):c.items)+')'):''); });
   if(de(lang)) return '🛠️ Offene Claims: '+open.length+' / gesamt '+cs.length+(lines.length?('\n\n'+lines.join('\n')):'');
   return '🛠️ เคลมที่เปิด: '+open.length+' / ทั้งหมด '+cs.length+(lines.length?('\n\n'+lines.join('\n')):'');
 }
 function fmtAttendance(lang){
-  var lg=asArr(fbGet('lateLog')); var mk=dMonth();
+  var lg=asArr(fbGet(SEASON+'lateLog')); var mk=dMonth();
   var month=lg.filter(function(e){return String(e.date||'').indexOf(mk)===0;});
   var byStaff={}; month.forEach(function(e){ var n=e.staffName||e.staffId||'?'; byStaff[n]=(byStaff[n]||0)+(parseInt(e.minutes)||0); });
   var names=Object.keys(byStaff).sort(function(a,b){return byStaff[b]-byStaff[a];});

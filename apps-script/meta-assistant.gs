@@ -17,6 +17,9 @@ var OPENAI_API_KEY    = '';        // optional alternative provider
 var PROVIDER = 'claude';           // 'claude' | 'openai' — see PROVIDERS below
 var MODELS = { claude: 'claude-sonnet-5', openai: 'gpt-4o' };
 var FIREBASE_URL = 'https://kp-wallpanel-default-rtdb.asia-southeast1.firebasedatabase.app';
+// App data (stock, orders, product catalog) lives under 'v2/'; the root copy is stale.
+// The assistant's OWN nodes (styleSamples, corrections, staff, profiles) stay at the root.
+var SEASON = 'v2/';
 // DB rules require auth — put the legacy database secret in Script Properties
 // (key: FIREBASE_SECRET), never in this file.
 var FIREBASE_SECRET = (function(){ try { return PropertiesService.getScriptProperties().getProperty('FIREBASE_SECRET') || ''; } catch(e){ return ''; } })();
@@ -87,14 +90,14 @@ function asArr(v){ return v ? (Array.isArray(v) ? v.filter(Boolean) : Object.key
 // ── Context builders (grounding) ───────────────────────────
 // Catalog mirror written by the app (assistant/productCatalog, see qtRebuildProducts in index.html).
 function ctxCatalog(){
-  var cat = fbGet('assistant/productCatalog');
+  var cat = fbGet(SEASON+'assistant/productCatalog');
   var items = asArr(cat && cat.items).filter(function(p){ return p.code && (+p.price > 0); });
   if(!items.length) return 'PRODUCT CATALOG: (not synced yet — open the app once)';
   return 'PRODUCT CATALOG (code | thai name | ฿/pc | width cm | material):\n' +
     items.map(function(p){ return p.code+' | '+(p.name||'')+' | '+p.price+' | '+(p.w||'-')+' | '+(p.mat||''); }).join('\n');
 }
 function ctxStock(){
-  var st = asArr(fbGet('stockItems'));
+  var st = asArr(fbGet(SEASON+'stockItems'));
   if(!st.length) return '';
   return 'LIVE STOCK (code: pcs — 0 means SOLD OUT, do not promise it):\n' +
     st.map(function(s){ return s.code+': '+(parseInt(s.qty)||0); }).join(', ');
@@ -140,7 +143,7 @@ function ctxStyleFor(name){
 function ctxCustomer(name){
   if(!name) return '';
   var n = String(name).toLowerCase().replace(/\s+/g,'');
-  var hits = asArr(fbGet('orders')).filter(function(o){
+  var hits = asArr(fbGet(SEASON+'orders')).filter(function(o){
     var c = String(o.customer||'').toLowerCase().replace(/\s+/g,'');
     return c && n && (c.indexOf(n)>=0 || n.indexOf(c)>=0);
   });
