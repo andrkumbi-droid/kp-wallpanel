@@ -104,7 +104,9 @@ const KPUI = {
       if (i.profile && profs.indexOf(i.profile) < 0) profs.push(i.profile);
     });
     const chips = [{ label: 'ทั้งหมด / alle', sub: '', test: () => true }];
-    if (mats.length > 1) mats.forEach(m => chips.push({
+    // ACC = die Kantenprofile; die haben ihren eigenen Rillen-Knopf („ขอบ L · H · U").
+    const pmats = mats.filter(m => m !== 'ACC');
+    if (pmats.length > 1) pmats.forEach(m => chips.push({
       label: (m === 'PVC' ? '🔲 ' : '🪵 ') + m, sub: '',
       test: i => (i.mat || '').toUpperCase() === m
     }));
