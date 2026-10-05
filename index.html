@@ -4520,6 +4520,26 @@ function fbSeedSnap(node, raw){
     _fbSnap[node]=m;
   }catch(e){}
 }
+// Stock change as a server-side DELTA (transaction) instead of a whole-record
+// overwrite. Before 05.10.2026 two devices booking the same code a moment apart
+// (POS + office, office + driver) overwrote each other: the later write carried
+// the earlier device's number from before the other sale. The local copy already
+// holds the new value; it is marked as synced so syncStockItems() does not send
+// the whole record on top. If the server had moved meanwhile, the listener brings
+// the correct number back.
+function stockTxn(st, field, delta){
+  try{
+    delta=parseInt(delta)||0;
+    if(!window.fbDB || !st || !st.code || !delta) return;
+    var key=_fbKey(st.code);
+    window.fbDB.ref('stockItems/'+key+'/'+field).transaction(function(cur){
+      var v=(parseInt(cur)||0)+delta;
+      return delta<0 ? Math.max(0,v) : v;
+    });
+    var snap=_fbSnap.stockItems||(_fbSnap.stockItems={});
+    snap[key]=JSON.stringify(st);
+  }catch(e){ console.error('stockTxn', e); }
+}
 function fbSyncList(node, arr, keyOf){
   if(!window.fbDB) return;
   var snap=_fbSnap[node]||(_fbSnap[node]={});
@@ -6576,7 +6596,7 @@ function mgRevenue(){
 function selM(m){selMonth=m;mgRevenue();}
 
 function smGuessType(code){code=(code||'').toUpperCase();if(code.indexOf('K-PVC')===0)return 'pvc';if(code.indexOf('KP')===0)return 'panel';if(code.indexOf('L-P')===0)return 'lcorner';if(code.charAt(0)==='T')return 'ttrim';if(code.charAt(0)==='U')return 'utrim';if(code.charAt(0)==='L')return 'lcorner';return 'panel';}
-function openSM(code){const s=code?stockItems.find(x=>x.code===code):null;editSM=s?code:null;document.getElementById('sm-title').textContent=s?'Edit stock':'Add stock';document.getElementById('sm-del').style.display=s?'flex':'none';if(s){document.getElementById('sm-code').value=s.code;document.getElementById('sm-code').disabled=true;document.getElementById('sm-type').value=s.type||((s.code==='T07'||s.code==='T08')?'ttrim':'panel');document.getElementById('sm-qty').value=s.qty;document.getElementById('sm-dmg').value=s.damaged;document.getElementById('sm-notes').value=s.notes||'';document.getElementById('sm-ctn-per').value=(s.pcsPerCtn||'');}else{document.getElementById('sm-code').value=(code||'');document.getElementById('sm-code').disabled=false;document.getElementById('sm-type').value=smGuessType(code);['sm-qty','sm-dmg','sm-notes','sm-ctn-per'].forEach(x=>document.getElementById(x).value='');}document.getElementById('sm-ctn').value='';var _cr=document.getElementById('sm-ctn-res');if(_cr)_cr.textContent='0';document.getElementById('sm-move').value='';var _mn=document.getElementById('sm-move-note');if(_mn)_mn.style.display='none';document.getElementById('sm-move-row').style.display=s?'flex':'none';try{smPrecutInfo(s?s.code:'');}catch(e){}document.getElementById('sm-modal').classList.add('open');}
+function openSM(code){const s=code?stockItems.find(x=>x.code===code):null;editSM=s?code:null;document.getElementById('sm-title').textContent=s?'Edit stock':'Add stock';document.getElementById('sm-del').style.display=s?'flex':'none';if(s){document.getElementById('sm-code').value=s.code;document.getElementById('sm-code').disabled=true;document.getElementById('sm-type').value=s.type||((s.code==='T07'||s.code==='T08')?'ttrim':'panel');document.getElementById('sm-qty').value=s.qty;document.getElementById('sm-dmg').value=s.damaged;window._smOpen={a:parseInt(s.qty)||0,b:parseInt(s.damaged)||0};document.getElementById('sm-notes').value=s.notes||'';document.getElementById('sm-ctn-per').value=(s.pcsPerCtn||'');}else{document.getElementById('sm-code').value=(code||'');document.getElementById('sm-code').disabled=false;document.getElementById('sm-type').value=smGuessType(code);['sm-qty','sm-dmg','sm-notes','sm-ctn-per'].forEach(x=>document.getElementById(x).value='');}document.getElementById('sm-ctn').value='';var _cr=document.getElementById('sm-ctn-res');if(_cr)_cr.textContent='0';document.getElementById('sm-move').value='';var _mn=document.getElementById('sm-move-note');if(_mn)_mn.style.display='none';document.getElementById('sm-move-row').style.display=s?'flex':'none';try{smPrecutInfo(s?s.code:'');}catch(e){}document.getElementById('sm-modal').classList.add('open');}
 // Count by CTN → auto-fill Grade A (pcs = CTN × pcs/CTN). pcs/CTN is remembered per product.
 function smCtnCalc(){
   var ctn=parseFloat((document.getElementById('sm-ctn')||{}).value)||0;
@@ -6602,7 +6622,10 @@ function smMoveToB(){
   // Adding a brand-new product has nothing to book against yet — there the fields
   // really are the only thing to change, and Save is what creates the item.
   if(!s){ smMoveNote(n.toLocaleString()+' pcs → Grade B. Press Save to book it. / กด Save', false); return; }
-  s.qty=a-n; s.damaged=b+n;
+  var _la=parseInt(s.qty)||0, _lb=parseInt(s.damaged)||0;
+  if(n>_la){ alert('Not enough Grade A stock ('+_la.toLocaleString()+' pcs) / สต็อก A ไม่พอ'); return; }
+  s.qty=_la-n; s.damaged=_lb+n; stockTxn(s,'qty',-n); stockTxn(s,'damaged',n);
+  a=_la; b=_lb; window._smOpen={a:s.qty,b:s.damaged};
   // A carton count left in the box would recompute Grade A on the next keystroke
   // and quietly undo what was just booked.
   var _c=document.getElementById('sm-ctn'); if(_c) _c.value='';
@@ -6688,13 +6711,13 @@ function stLogRender(){
       +'</div></div>';
   }).join('');
 }
-function saveSM(){const code=document.getElementById('sm-code').value.trim().toUpperCase();if(!code){alert('Enter a code');return;}const qty=parseInt(document.getElementById('sm-qty').value)||0,dmg=parseInt(document.getElementById('sm-dmg').value)||0,type=document.getElementById('sm-type').value,notes=document.getElementById('sm-notes').value,pcsPerCtn=parseInt(document.getElementById('sm-ctn-per').value)||0;if(editSM){const s=stockItems.find(x=>x.code===editSM);const _aQty=parseInt(s.qty)||0,_aDmg=parseInt(s.damaged)||0;const d=qty-_aQty;const db=dmg-_aDmg;s.qty=qty;s.damaged=dmg;s.type=type;s.notes=notes;if(pcsPerCtn>0)s.pcsPerCtn=pcsPerCtn;if(d!==0)addLog(code+' '+(d>0?'+'+d:d)+' pcs',d>0?'+':'-');if(db!==0)addLog(code+' Grade B '+(db>0?'+'+db:db)+' pcs',db>0?'+':'-');
+function saveSM(){const code=document.getElementById('sm-code').value.trim().toUpperCase();if(!code){alert('Enter a code');return;}const qty=parseInt(document.getElementById('sm-qty').value)||0,dmg=parseInt(document.getElementById('sm-dmg').value)||0,type=document.getElementById('sm-type').value,notes=document.getElementById('sm-notes').value,pcsPerCtn=parseInt(document.getElementById('sm-ctn-per').value)||0;if(editSM){const s=stockItems.find(x=>x.code===editSM);const _aQty=parseInt(s.qty)||0,_aDmg=parseInt(s.damaged)||0;const _o=window._smOpen||{a:_aQty,b:_aDmg};const d=qty-_o.a;const db=dmg-_o.b;s.qty=Math.max(0,_aQty+d);s.damaged=Math.max(0,_aDmg+db);if(d)stockTxn(s,'qty',d);if(db)stockTxn(s,'damaged',db);s.type=type;s.notes=notes;if(pcsPerCtn>0)s.pcsPerCtn=pcsPerCtn;if(d!==0)addLog(code+' '+(d>0?'+'+d:d)+' pcs',d>0?'+':'-');if(db!==0)addLog(code+' Grade B '+(db>0?'+'+db:db)+' pcs',db>0?'+':'-');
     // One audit line per save, saying what actually changed and by how much.
     // Grade C is not here on purpose — it is edited in the Stock tab's pre-cut area.
     if(d!==0||db!==0) stAudit('edit', code,
-      [d!==0?('Grade A '+_aQty+' → '+qty+' ('+(d>0?'+'+d:d)+')'):'',
-       db!==0?('Grade B '+_aDmg+' → '+dmg+' ('+(db>0?'+'+db:db)+')'):''].filter(Boolean).join(' · '),
-      {aFrom:_aQty, aTo:qty, bFrom:_aDmg, bTo:dmg, qty:d});
+      [d!==0?('Grade A '+_aQty+' → '+s.qty+' ('+(d>0?'+'+d:d)+')'):'',
+       db!==0?('Grade B '+_aDmg+' → '+s.damaged+' ('+(db>0?'+'+db:db)+')'):''].filter(Boolean).join(' · '),
+      {aFrom:_aQty, aTo:s.qty, bFrom:_aDmg, bTo:s.damaged, qty:d});
   }else{if(stockItems.find(x=>x.code.toUpperCase()===code.toUpperCase())){alert('Code already exists: '+code);return;}var _ni={code,type,qty,damaged:dmg,precut:0,notes};if(pcsPerCtn>0)_ni.pcsPerCtn=pcsPerCtn;stockItems.push(_ni);addLog(code+' added: '+qty+' pcs','+');stAudit('add',code,'New product · Grade A '+qty+(dmg?' · Grade B '+dmg:''),{aTo:qty,bTo:dmg,qty:qty});}closeSM();mgRender();syncStockItems();try{ ofStockCatalog(); }catch(e){}}
 function delSM(){if(!confirm('Delete '+editSM+'?'))return;var _d=stockItems.find(x=>x.code===editSM)||{};stockItems=stockItems.filter(x=>x.code!==editSM);
   // Its pre-cut rows go with it, otherwise they would linger as stock of a product
@@ -7308,6 +7331,11 @@ function ofNormCode(code){
   var m;
   // K-PVC is the only "K-P…" family, so any two-letter salad after the P (K-PCV-10,
   // K-PVD-09, KPVC9 …) is a typo of it and folds onto the correct code.
+  // A code typed together with its description — "U17 - ปิดขอบ สีขาว…", "H17 (ตัวต่อ…)" —
+  // is still that code. Without this the line matched no stock item and nothing was
+  // deducted (Vladimir 14, Oct 2026: 203 profiles sold, none booked).
+  c=c.replace(/^[\u0E00-\u0E7F]+/,'');
+  var _th=c.search(/[\u0E00-\u0E7F]/); if(_th>0) c=c.slice(0,_th).replace(/[-(]+$/,'');
   c=c.replace(/[_.]/g,'-');          // KP_036 / K.PVC.09 are the same typing slip as a dash
   if((m=c.match(/^K-?P[A-Z]{2}-?(\d+)$/))) return 'K-PVC-'+pad(m[1],2);
   if((m=c.match(/^L-?P-?(\d+)$/)))   return 'L-P-'+pad(m[1],2);
@@ -9210,7 +9238,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261004001;
+var KP_BUILD = 20261005001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -11983,7 +12011,7 @@ function ofSugFind(q,kind){
   list.forEach(function(p){ seen[ofNormCode(p.code)]=1; });
   // Codes the stock knows but the price list does not — findable, just without a price.
   try{
-    (window.stockItems||[]).forEach(function(it){
+    (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(it){
       if(!it||!it.code) return;
       var n=ofNormCode(it.code); if(seen[n]) return;
       seen[n]=1; list.push({code:it.code, name:'', price:0, _nolist:1});
@@ -12117,7 +12145,7 @@ function ofCodeAll(){
     var c=String(p&&p.code||'').toUpperCase(); if(c && !seen[c]){ seen[c]=1; out.push(c); }
   });
   try{
-    (window.stockItems||[]).forEach(function(s){
+    (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
       var c=String(s&&s.code||'').toUpperCase(); if(c && !seen[c]){ seen[c]=1; out.push(c); }
     });
   }catch(e){}
@@ -12129,7 +12157,7 @@ function ofCodeKnown(code){
   if(ofCatProd(c)) return true;             // covers KP36 → KP036 as well
   var n=ofNormCode(c), hit=false;
   try{
-    (window.stockItems||[]).forEach(function(s){
+    (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
       if(!hit && s && s.code && ofNormCode(s.code)===n) hit=true;
     });
   }catch(e){}
@@ -12527,16 +12555,25 @@ function ofCreate(){
   // Last look at the codes. A product nobody can pick is only noticed in the
   // warehouse, hours later — so an order carrying a code that is in neither the
   // price list nor the stock list has to be confirmed here, by name.
-  var _badCodes=[];
+  var _badCodes=[], _noStock=[];
   document.querySelectorAll('#of-panels .pline, #of-edges .eline').forEach(function(l){
     var i=l.querySelectorAll('input');
     var c=String(i[0]&&i[0].value||'').trim().toUpperCase();
     var q=parseInt(i[1]&&i[1].value)||0;
     if(!c || q<=0) return;
-    try{ if(ofCodeKnown(c)) return; }catch(e){ return; }
+    var _known=true; try{ _known=ofCodeKnown(c); }catch(e){}
+    if(_known){
+      // Known from the price list but no stock row → the sale would not be booked.
+      var _isC=(l.classList.contains('pline') && (function(){ try{ return lineGrade(l)==='C'; }catch(e){ return false; } })());
+      try{ if(!_isC && !_stockFind(c)) _noStock.push('• '+c+' × '+q); }catch(e){}
+      return;
+    }
     var near=[]; try{ near=ofCodeNear(c); }catch(e){}
     _badCodes.push('• '+c+' × '+q+(near.length?('   → '+near.join(' / ')+' ?'):''));
   });
+  if(_noStock.length){
+    if(!confirm('⚠️ ไม่มีในรายการสต็อก — สต็อกจะไม่ถูกหัก\nNot in the stock list — stock will NOT be deducted\n\n'+_noStock.join('\n')+'\n\nเช็ครหัสในแท็บ Stock (เช่น L-P-16 / L16) / check the code in the Stock tab\nOK = สร้างต่อ / create anyway   ·   Cancel = กลับไปแก้ / go back and fix')) return;
+  }
   if(_badCodes.length){
     if(!confirm('⚠️ ไม่มีรหัสนี้ในระบบ / code not found\n\n'+_badCodes.join('\n')
       +'\n\nพิมพ์ผิดหรือเปล่า? / a typo?\nOK = สร้างต่อ / create anyway   ·   Cancel = กลับไปแก้ / go back and fix')) return;
@@ -12668,7 +12705,7 @@ function ofCreate(){
     if(_dsNum>0){ try{ revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt:_dsNum,date:_dsToday,zone:o.zone,month:mkey(new Date().toISOString())}); addLog('Instore sale '+o.id+': '+_dsNum.toLocaleString()+' ฿','+'); syncRevOrders(); }catch(e){} }
     _insPayId=no; _insPayTotal=_dsNum;
   }
-  {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;stockBucketDeduct(li.code,_q,li.grade,li.cutLen);addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
+  {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;if(!stockBucketDeduct(li.code,_q,li.grade,li.cutLen))(o._stockMiss=o._stockMiss||[]).push(li.code);addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
   var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';ofUpdPrioCnt();addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order'});}catch(e){}
   ['of-no','of-cust','of-phone','of-province','of-loc','of-contact-ch','of-contact-name','of-deliveround','of-reqdate','of-reqnote','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';
   // A prepayment left in the box would silently attach itself to the NEXT order.
@@ -12733,7 +12770,7 @@ function quickStatus(btn) {
     o.cancelWasPacked = (old==='ready'||old==='loaded');
     o.whCancelStage = 'new';   // 'new' → To Pack list, 'unpack' → Packing list, 'done' → cleared
     o.whCancelAck = false;
-    if(old!=='cancelled') stockReturnOrder(o, 'cancel');
+    if(old!=='cancelled') stockReturnOrder(o, 'cancel', old);
   }
   if(old==='cancelled' && newStatus!=='cancelled') stockRetakeOrder(o);
   // Order moving to ready/loaded/delivered auto-confirms a still-pending change (keeps it as a record)
@@ -13184,6 +13221,7 @@ function ofOrderCard(o, sfx){
   // At-shipper orders: show WHICH shipper the goods are currently with.
   if(o.status==='shipped'){ var _shp=(o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:'ส่งเอง / self'+(o.driver?' ('+o.driver+')'+drvPhoneTag(o.driver):''); s += '<div style="font-size:12px;color:#4f46e5;font-weight:700;margin-bottom:2px;background:#eef2ff;border-radius:var(--rs);padding:4px 8px;display:inline-block"><i class="ti ti-truck" style="font-size:12px;vertical-align:-1px"></i> ที่ขนส่ง / At shipper: '+_shp+'</div>'; }
   var _clipPacks=(o.lineItems||[]).reduce(function(a,i){return i.type==='clips'?a+(parseInt(i.qty)||0):a;},0);
+  if(o._stockMiss && o._stockMiss.length && o.status!=='cancelled') s += '<div style="font-size:12px;font-weight:700;color:#dc2626;background:#fee2e2;border-radius:var(--rs);padding:4px 8px;margin:3px 0;display:inline-block">⚠ ไม่ได้หักสต็อก / stock NOT deducted: '+o._stockMiss.map(function(x){return _esc(String(x));}).join(', ')+' — รหัสไม่ตรงกับสต็อก / code not in the stock list</div>';
   s += '<div style="display:flex;align-items:flex-start;gap:8px;margin-top:4px">'
     +'<div style="font-size:13px;flex:1;min-width:0">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':'')+(_clipPacks>0?' · 🛍️ '+_clipPacks+' คลิปแพ็ค / clip pack'+(_clipPacks>1?'s':''):'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+(o.bundle&&o.bundle>0?' <span style="background:#fff7ed;color:#ea580c;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">🧶 '+o.bundle+' มัด</span>':'')+'</div>'
     +'<button type="button" class="btnsm" onclick="ofCopyPack(\''+o.id+'\',this)" title="Copy pack list / คัดลอก" style="flex-shrink:0;padding:4px 8px"><i class="ti ti-copy"></i></button>'
@@ -20549,6 +20587,9 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   // Rebuild products from the edited lines (give old stock back first, re-deduct after).
   // An order that was ALREADY cancelled is left out of the stock entirely.
   var _emStkSkip=(old==='cancelled' && o.status==='cancelled'), _emStkBack=false;
+  // Cancelled after the goods reached the customer/carrier: only back to stock if they came back.
+  if(!_emStkSkip && o.status==='cancelled' && ['shipped','delivered'].indexOf(old)>=0
+     && !confirm('ของถึงลูกค้า/ขนส่งแล้ว — คืนเข้าสต็อกไหม?\nThe goods already went to the customer/carrier — put them back into stock?\n\nOK = ของกลับมาแล้ว / goods came back\nCancel = ไม่คืน / leave stock as it is')) _emStkSkip=true;
   try{ if(!_emStkSkip && o._stockDeducted){ addOrderStock(o); o._stockDeducted=false; _emStkBack=true; } }catch(e){}
   var emItems=[], emPa=[], emLa=[], emTq=0;
   document.querySelectorAll('#em-lines .pline').forEach(function(l){
@@ -20817,7 +20858,7 @@ function submitCO(){
   var oldItems=(o.lineItems||[]).map(function(li){return li;});
   var oldTotal=o.total;
   // APPLY the change to the order now: items, qty AND price/total
-  try{ if(o._stockDeducted){ addOrderStock(o); o._stockDeducted=false; } }catch(e){}
+  try{ if(o._stockDeducted && o.status!=='cancelled'){ addOrderStock(o); o._stockDeducted=false; } }catch(e){}
   var pa=[],la=[];
   newItems.forEach(function(li){
     if(li.type==='panel')pa.push(li.code+' × '+li.qty+gradeTag(li.grade, li.cutLen));
@@ -27985,14 +28026,16 @@ function stockBucketDeduct(code, qty, grade, cutLen){
   // the office sold a length the warehouse never cut — nothing is deducted rather
   // than silently taking it off a different length or off full-length stock.
   if(grade==='C'){
-    var p=precutFind(code, cutLen); if(!p) return;
+    var p=precutFind(code, cutLen); if(!p) return false;
     p.qty=Math.max(0,(parseInt(p.qty)||0)-qty);
     precutRollup(); syncPrecut();
-    return;
+    return true;
   }
-  var st=_stockFind(code); if(!st) return;
-  if(grade==='B') st.damaged=Math.max(0,(parseInt(st.damaged)||0)-qty);
-  else            st.qty    =Math.max(0,(parseInt(st.qty)||0)-qty);
+  var st=_stockFind(code); if(!st) return false;
+  var f=(grade==='B')?'damaged':'qty';
+  st[f]=Math.max(0,(parseInt(st[f])||0)-qty);
+  stockTxn(st, f, -qty);
+  return true;
 }
 function stockBucketAdd(code, qty, grade, cutLen){
   if(grade==='C'){
@@ -28005,21 +28048,23 @@ function stockBucketAdd(code, qty, grade, cutLen){
     return;
   }
   var st=_stockFind(code); if(!st) return;
-  if(grade==='B') st.damaged=(parseInt(st.damaged)||0)+qty;
-  else            st.qty    =(parseInt(st.qty)||0)+qty;
+  var f=(grade==='B')?'damaged':'qty';
+  st[f]=(parseInt(st[f])||0)+qty;
+  stockTxn(st, f, qty);
 }
 function deductOrderStock(o){
   // A cancelled order holds no goods — covers the sheet import, the retro-deduction
   // and edits of cancelled orders, which all used to take its goods (again).
   if(!o || !o.lineItems || o._stockDeducted || o.status==='cancelled' || typeof stockItems==='undefined') return;
-  var PRODUCT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  var PRODUCT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1}, miss=[];
   o.lineItems.forEach(function(li){
     if(!PRODUCT[li.type]) return;
     var code=(li.code||'').toUpperCase().trim();
     var qty=parseInt(li.qty)||0;
     if(!code||!qty) return;
-    stockBucketDeduct(code, qty, li.grade, li.cutLen);
+    if(!stockBucketDeduct(code, qty, li.grade, li.cutLen)) miss.push(code+(li.grade==='C'?' '+(li.cutLen||'?')+'cm':''));
   });
+  o._stockMiss = miss.length ? miss : null;   // shown red on the order card
   o._stockDeducted = true; // mark so it's never deducted twice
 }
 
@@ -28041,8 +28086,9 @@ function deductImportedStockOnce(){
 // Cancelled / deleted order → its goods go back into stock (since 01.10.2026).
 // Orders cancelled before that still carry _stockDeducted=true and are left
 // alone on purpose: the stock was counted around them, André wants it as it is.
-function stockReturnOrder(o, why){
+function stockReturnOrder(o, why, prev){
   if(!o || !o._stockDeducted) return false;
+  if(['shipped','delivered'].indexOf(prev)>=0 && !confirm('ของถึงลูกค้า/ขนส่งแล้ว — คืนเข้าสต็อกไหม?\nThe goods already went to the customer/carrier — put them back into stock?\n\nOK = ของกลับมาแล้ว / goods came back\nCancel = ไม่คืน / leave stock as it is')) return false;
   addOrderStock(o); o._stockDeducted=false; o._stockReturned=Date.now();
   try{ stAudit('return', o.id, (why||'cancel')+' · '+[o.panels,o.lcorner].filter(function(x){return x&&x!=='—';}).join(' · '), {orderId:o.id}); }catch(e){}
   try{ syncStockItems(); syncPrecut(); }catch(e){}
@@ -36197,6 +36243,8 @@ function clArrived(id) {
       +'\n[Cancel] ทำต่อโดยไม่มีเอกสาร / go on without them')){ clDocsOpen(id); return; }
     if(!confirm('รับตู้เข้าคลังโดยไม่มี '+miss.length+' อย่างข้างบน?\nBook the container in anyway, without the '+miss.length+' item(s) above?')) return;
   }
+  // Two devices showing the same pending card could both book it in — twice the goods.
+  if(c.arrivedWh){ alert('ตู้นี้รับเข้าสต็อกแล้ว ('+clFmtD(c.arrivedWh)+') / already booked into stock'); try{ clRender(); }catch(e){} return; }
   var today = new Date().toISOString().split('T')[0];
   if(!confirm('Mark container from '+c.supplier+' as arrived today ('+clFmtD(today)+')?\nThis will add all products to stock.')) return;
   c.arrivedWh = today;
@@ -36220,7 +36268,8 @@ function clArrived(id) {
     try{ stAudit('arrive', existing?existing.code:code, '+'+qty.toLocaleString()+' · '+(c.supplier||'')+(c.containerNo?' '+c.containerNo:''),
       {aFrom:_aFrom, aTo:_aFrom+qty, containerId:id}); }catch(e){}
     if(existing) {
-      existing.qty += qty;                 // incoming is always Grade A
+      existing.qty = (parseInt(existing.qty)||0) + qty;   // incoming is always Grade A
+      stockTxn(existing, 'qty', qty);
       if(per>0) existing.pcsPerCtn = per;
       addLog(code+' +'+qty.toLocaleString()+' pcs (Container '+c.supplier+')','+');
     } else {
@@ -36985,6 +37034,7 @@ function replReduceBill(o, broken, brokenTxt){
   if(restock) broken.forEach(function(b){
     try{ stockBucketAdd(b.code, b.qty, (b.grade==='C'?'C':'B'), b.cutLen); }catch(e){}
   });
+  if(restock){ try{ syncStockItems(); }catch(e){} }
 
   // 3. Bestellung neu rechnen. Clips bleiben, wie sie sind: die hat der Kunde
   //    schon in der Hand, der Fahrer nimmt nur die Paneele mit.
@@ -37143,7 +37193,7 @@ function saveReplacement(){
 
   // Stock: the goods going out are deducted once; broken goods return only if ticked.
   items.forEach(function(it){ if(it.type==='extra') return; try{ stockBucketDeduct(it.code, it.qty, it.grade, it.cutLen); }catch(e){} addLog(it.code+' -'+it.qty+' pcs (claim '+repId+')','-'); });
-  if(restock) broken.forEach(function(b){ try{ stockBucketAdd(b.code, b.qty, b.grade, b.cutLen); }catch(e){} addLog(b.code+' +'+b.qty+' pcs (returned '+repId+')','+'); });
+  if(restock) broken.forEach(function(b){ try{ stockBucketAdd(b.code, b.qty, (b.grade==='C'?'C':'B'), b.cutLen); }catch(e){} addLog(b.code+' +'+b.qty+' pcs (returned '+repId+')','+'); });
   try{ syncStockItems(); }catch(e){}
 
   // Keep a claim record in the database (history / reporting), linked to the new order.

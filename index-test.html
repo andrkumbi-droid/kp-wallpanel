@@ -7511,6 +7511,11 @@ function ofNormCode(code){
   var m;
   // K-PVC is the only "K-P…" family, so any two-letter salad after the P (K-PCV-10,
   // K-PVD-09, KPVC9 …) is a typo of it and folds onto the correct code.
+  // A code typed together with its description — "U17 - ปิดขอบ สีขาว…", "H17 (ตัวต่อ…)" —
+  // is still that code. Without this the line matched no stock item and nothing was
+  // deducted (Vladimir 14, Oct 2026: 203 profiles sold, none booked).
+  c=c.replace(/^[\u0E00-\u0E7F]+/,'');
+  var _th=c.search(/[\u0E00-\u0E7F]/); if(_th>0) c=c.slice(0,_th).replace(/[-(]+$/,'');
   c=c.replace(/[_.]/g,'-');          // KP_036 / K.PVC.09 are the same typing slip as a dash
   if((m=c.match(/^K-?P[A-Z]{2}-?(\d+)$/))) return 'K-PVC-'+pad(m[1],2);
   if((m=c.match(/^L-?P-?(\d+)$/)))   return 'L-P-'+pad(m[1],2);
@@ -12186,7 +12191,7 @@ function ofSugFind(q,kind){
   list.forEach(function(p){ seen[ofNormCode(p.code)]=1; });
   // Codes the stock knows but the price list does not — findable, just without a price.
   try{
-    (window.stockItems||[]).forEach(function(it){
+    (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(it){
       if(!it||!it.code) return;
       var n=ofNormCode(it.code); if(seen[n]) return;
       seen[n]=1; list.push({code:it.code, name:'', price:0, _nolist:1});
@@ -12320,7 +12325,7 @@ function ofCodeAll(){
     var c=String(p&&p.code||'').toUpperCase(); if(c && !seen[c]){ seen[c]=1; out.push(c); }
   });
   try{
-    (window.stockItems||[]).forEach(function(s){
+    (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
       var c=String(s&&s.code||'').toUpperCase(); if(c && !seen[c]){ seen[c]=1; out.push(c); }
     });
   }catch(e){}
@@ -12332,7 +12337,7 @@ function ofCodeKnown(code){
   if(ofCatProd(c)) return true;             // covers KP36 → KP036 as well
   var n=ofNormCode(c), hit=false;
   try{
-    (window.stockItems||[]).forEach(function(s){
+    (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
       if(!hit && s && s.code && ofNormCode(s.code)===n) hit=true;
     });
   }catch(e){}
@@ -12766,16 +12771,25 @@ function _ofCreateCore(){
   // Last look at the codes. A product nobody can pick is only noticed in the
   // warehouse, hours later — so an order carrying a code that is in neither the
   // price list nor the stock list has to be confirmed here, by name.
-  var _badCodes=[];
+  var _badCodes=[], _noStock=[];
   document.querySelectorAll('#of-panels .pline, #of-edges .eline').forEach(function(l){
     var i=l.querySelectorAll('input');
     var c=String(i[0]&&i[0].value||'').trim().toUpperCase();
     var q=parseInt(i[1]&&i[1].value)||0;
     if(!c || q<=0) return;
-    try{ if(ofCodeKnown(c)) return; }catch(e){ return; }
+    var _known=true; try{ _known=ofCodeKnown(c); }catch(e){}
+    if(_known){
+      // Known from the price list but no stock row → the sale would not be booked.
+      var _isC=(l.classList.contains('pline') && (function(){ try{ return lineGrade(l)==='C'; }catch(e){ return false; } })());
+      try{ if(!_isC && !_stockFind(c)) _noStock.push('• '+c+' × '+q); }catch(e){}
+      return;
+    }
     var near=[]; try{ near=ofCodeNear(c); }catch(e){}
     _badCodes.push('• '+c+' × '+q+(near.length?('   → '+near.join(' / ')+' ?'):''));
   });
+  if(_noStock.length){
+    if(!confirm('⚠️ ไม่มีในรายการสต็อก — สต็อกจะไม่ถูกหัก\nNot in the stock list — stock will NOT be deducted\n\n'+_noStock.join('\n')+'\n\nเช็ครหัสในแท็บ Stock (เช่น L-P-16 / L16) / check the code in the Stock tab\nOK = สร้างต่อ / create anyway   ·   Cancel = กลับไปแก้ / go back and fix')) return;
+  }
   if(_badCodes.length){
     if(!confirm('⚠️ ไม่มีรหัสนี้ในระบบ / code not found\n\n'+_badCodes.join('\n')
       +'\n\nพิมพ์ผิดหรือเปล่า? / a typo?\nOK = สร้างต่อ / create anyway   ·   Cancel = กลับไปแก้ / go back and fix')) return;
@@ -12910,7 +12924,7 @@ function _ofCreateCore(){
     if(_dsNum>0){ try{ revOrders.push({rid:'r'+Date.now(),id:o.id,cust:o.customer,amt:_dsNum,date:_dsToday,zone:o.zone,month:mkey(new Date().toISOString())}); addLog('Instore sale '+o.id+': '+_dsNum.toLocaleString()+' ฿','+'); syncRevOrders(); }catch(e){} }
     _insPayId=no; _insPayTotal=_dsNum;
   }
-  {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;stockBucketDeduct(li.code,_q,li.grade,li.cutLen,whOfLine(o,li));addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
+  {var _PROD={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};o.lineItems.forEach(function(li){if(!_PROD[li.type])return;var _q=parseInt(li.qty)||0;if(!li.code||!_q)return;if(!stockBucketDeduct(li.code,_q,li.grade,li.cutLen,whOfLine(o,li)))(o._stockMiss=o._stockMiss||[]).push(li.code);addLog(li.code+' -'+_q+' pcs'+(li.grade==='B'?' (B)':'')+' (order '+no+')','-');});}
   var _acNew=orders.filter(function(o){return o.status!=='delivered'&&o.status!=='cancelled';});var _cntEl=document.getElementById('of-cnt');_cntEl.textContent=_acNew.length;_cntEl.style.display=_acNew.length>0?'':'none';ofUpdPrioCnt();addLog('Order '+no+' created','+');try{pushSend('warehouse','📦 New Order: '+no, zone+' · '+panStr, {tag:'new-order', orderId:no, wh:whOfOrder(o).join(',')});}catch(e){}
   ['of-no','of-cust','of-phone','of-province','of-loc','of-contact-ch','of-contact-name','of-deliveround','of-reqdate','of-reqnote','of-paste'].forEach(x=>{var _e=document.getElementById(x);if(_e)_e.value='';});document.getElementById('of-addr').value='';document.getElementById('of-clip-packs').value='';
   // A prepayment left in the box would silently attach itself to the NEXT order.
@@ -13427,6 +13441,7 @@ function ofOrderCard(o, sfx){
   if(o.status==='shipped'){ var _shp=(o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:'ส่งเอง / self'+(o.driver?' ('+o.driver+')'+drvPhoneTag(o.driver):''); s += '<div style="font-size:12px;color:#4f46e5;font-weight:700;margin-bottom:2px;background:#eef2ff;border-radius:var(--rs);padding:4px 8px;display:inline-block"><i class="ti ti-truck" style="font-size:12px;vertical-align:-1px"></i> ที่ขนส่ง / At shipper: '+_shp+'</div>'; }
   var _clipPacks=(o.lineItems||[]).reduce(function(a,i){return i.type==='clips'?a+(parseInt(i.qty)||0):a;},0);
   try{ s += whOfficeLine(o); }catch(e){}
+  if(o._stockMiss && o._stockMiss.length && o.status!=='cancelled') s += '<div style="font-size:12px;font-weight:700;color:#dc2626;background:#fee2e2;border-radius:var(--rs);padding:4px 8px;margin:3px 0;display:inline-block">⚠ ไม่ได้หักสต็อก / stock NOT deducted: '+o._stockMiss.map(function(x){return _esc(String(x));}).join(', ')+' — รหัสไม่ตรงกับสต็อก / code not in the stock list</div>';
   s += '<div style="display:flex;align-items:flex-start;gap:8px;margin-top:4px">'
     +'<div style="font-size:13px;flex:1;min-width:0">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':'')+(_clipPacks>0?' · 🛍️ '+_clipPacks+' คลิปแพ็ค / clip pack'+(_clipPacks>1?'s':''):'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+(o.bundle&&o.bundle>0?' <span style="background:#fff7ed;color:#ea580c;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">🧶 '+o.bundle+' มัด</span>':'')+'</div>'
     +'<button type="button" class="btnsm" onclick="ofCopyPack(\''+o.id+'\',this)" title="Copy pack list / คัดลอก" style="flex-shrink:0;padding:4px 8px"><i class="ti ti-copy"></i></button>'
@@ -28724,13 +28739,14 @@ function stockBucketDeduct(code, qty, grade, cutLen, wh){
   // the office sold a length the warehouse never cut — nothing is deducted rather
   // than silently taking it off a different length or off full-length stock.
   if(grade==='C'){
-    var p=precutFind(code, cutLen, wh); if(!p) return;
+    var p=precutFind(code, cutLen, wh); if(!p) return false;
     p.qty=Math.max(0,(parseInt(p.qty)||0)-qty);
     precutRollup(); syncPrecut();
-    return;
+    return true;
   }
-  var st=_stockFind(code); if(!st) return;
+  var st=_stockFind(code); if(!st) return false;
   whAdd(st, wh, grade==='B'?'B':'A', -qty);   // floors at 0 inside that warehouse
+  return true;
 }
 function stockBucketAdd(code, qty, grade, cutLen, wh){
   if(grade==='C'){
@@ -28749,14 +28765,15 @@ function deductOrderStock(o){
   // A cancelled order holds no goods — covers the sheet import, the retro-deduction
   // and edits of cancelled orders, which all used to take its goods (again).
   if(!o || !o.lineItems || o._stockDeducted || o.status==='cancelled' || typeof stockItems==='undefined') return;
-  var PRODUCT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
+  var PRODUCT={panel:1,lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1}, miss=[];
   o.lineItems.forEach(function(li){
     if(!PRODUCT[li.type]) return;
     var code=(li.code||'').toUpperCase().trim();
     var qty=parseInt(li.qty)||0;
     if(!code||!qty) return;
-    stockBucketDeduct(code, qty, li.grade, li.cutLen, whOfLine(o, li));
+    if(!stockBucketDeduct(code, qty, li.grade, li.cutLen, whOfLine(o, li))) miss.push(code+(li.grade==='C'?' '+(li.cutLen||'?')+'cm':''));
   });
+  o._stockMiss = miss.length ? miss : null;   // shown red on the order card
   o._stockDeducted = true; // mark so it's never deducted twice
 }
 
