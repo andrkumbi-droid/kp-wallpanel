@@ -1740,6 +1740,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         <div id="qt-result" style="background:var(--bg2);border-radius:var(--rs);padding:14px;font-size:13px;white-space:pre-wrap;font-family:monospace;line-height:1.7"></div>
         <div style="margin-top:10px">
           <button type="button" onclick="qtCopy()" id="qt-copy-btn" class="btn btng" style="width:100%"><i class="ti ti-copy"></i> Copy Text</button>
+          <button type="button" onclick="qtToOrder()" class="btn" style="width:100%;margin-top:8px;background:#1d4ed8;color:#fff;border:none;font-weight:800"><i class="ti ti-file-plus"></i> ลูกค้าตกลง → สร้างออเดอร์ / to New Order</button>
         </div>
       </div>
     </div>
@@ -4363,6 +4364,7 @@ function _enterWarehouse(s){
 // Enter the Office area for staff s (no PIN — used by login AND SSO area switch).
 function _enterOffice(s){
   if(!s) return;
+  if(window._qtFill){ var _qf=window._qtFill; window._qtFill=null; setTimeout(function(){ try{ _qf(); }catch(e){ console.error('qtFill',e); } }, 400); }
   currentStaffId=s.id; try{ currentStaffName=s.name; }catch(e){}
   document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
   document.getElementById('s-office').classList.add('active');
@@ -32120,6 +32122,73 @@ function qtShipReset(){ qtShipManual = false; qtRender(); }
 function qtRender() {
   qtRenderItems();
   qtRenderResult();
+}
+
+// Customer said yes → carry the quote into New Order: models, quantities, the
+// quoted (possibly reduced) prices, the L/H/U profiles, clip packs, the customer
+// discount, delivery and extra items. The colleague only adds zone, customer,
+// address and contact, then creates the order as usual.
+function qtToOrder(){
+  if(!qtItems.length){ alert('ยังไม่มีสินค้าในใบเสนอราคา / the quote is empty'); return; }
+  var ph=document.getElementById('of-panels'), eh=document.getElementById('of-edges');
+  if(!ph || !eh){ return; }
+  var hasLines=Array.prototype.some.call(document.querySelectorAll('#of-panels .pline input, #of-edges .eline input'), function(i){ return i.type==='text' && String(i.value||'').trim(); });
+  if(hasLines && !confirm('ฟอร์ม New Order มีสินค้าอยู่แล้ว — แทนที่ด้วยใบเสนอราคานี้ไหม?\nNew Order already has items — replace them with this quote?')) return;
+  var panels=[], edges=[], packs=0;
+  function edge(type, code, qty, price){ if(code && qty>0) edges.push({type:type, code:code, qty:qty, price:price}); }
+  qtItems.forEach(function(item){
+    var p=QT_PRODUCTS.find(function(x){ return x.code===item.code; }) || {};
+    var code=item.code, q=parseInt(item.qty)||0, pr=+item.customPrice||+p.price||0;
+    if(/^CL/i.test(code)) packs+=q;
+    else if(qtIsLcorner(code)) edge('lcorner', code, q, pr);
+    else if(/^[HT]\d/i.test(code)) edge('ttrim', code, q, pr);
+    else if(/^U\d/i.test(code)) edge('utrim', code, q, pr);
+    else if(q>0) panels.push({code:code, qty:q, price:pr});
+    if(item.hasLcorner && item.lcornerQty>0) edge('lcorner', qtLcornerName(code), parseInt(item.lcornerQty)||0, +item.lcornerPrice||0);
+    if(item.hasTU && item.tQty>0) edge('ttrim', code.replace('K-PVC-','H'), parseInt(item.tQty)||0, +item.tPrice||0);
+    if(item.hasTU && item.uQty>0) edge('utrim', code.replace('K-PVC-','U'), parseInt(item.uQty)||0, +item.uPrice||0);
+  });
+  var num=function(id){ return Math.max(0, parseFloat((document.getElementById(id)||{}).value)||0); };
+  var ship=num('qt-shipping'), extraShip=num('qt-extraship'), extra=num('qt-extra'), disc=num('qt-discount');
+  var extraNote=String((document.getElementById('qt-extraship-note')||{}).value||'').trim();
+  var extraLbl=String((document.getElementById('qt-extra-note')||{}).value||'').trim();
+  // The quote screen is reachable from the hub without an office login: then log in
+  // first and fill the form right after (_enterOffice picks up window._qtFill).
+  if(quoteReturn==='office'){ qtBack(); fill(); }
+  else { window._qtFill=fill; goArea('office'); }
+  function fill(){
+  oft('new');
+  ph=document.getElementById('of-panels'); eh=document.getElementById('of-edges');
+  ph.innerHTML=''; eh.innerHTML='';
+  panels.forEach(function(x){
+    ofAddP(); var l=ph.lastElementChild, ins=l.querySelectorAll('input');
+    ins[0].value=x.code; ins[1].value=x.qty; ins[2].value=x.price;
+  });
+  if(!ph.children.length) ofAddP();
+  edges.forEach(function(x){
+    ofAddE(); var l=eh.lastElementChild, ins=l.querySelectorAll('input');
+    var sel=l.querySelector('select'); if(sel) sel.value=x.type;
+    ins[0].value=x.code; ins[1].value=x.qty; ins[2].value=x.price;
+  });
+  function set(id,v){ var e=document.getElementById(id); if(e) e.value=(v==null?'':v); }
+  set('of-clip-packs', packs||'');
+  set('of-discount', disc||'');
+  set('of-delivery', ship+extraShip);
+  _ofShipManual=true;                 // the quoted delivery is what the customer agreed to
+  // Extra work and the special-area trip share the one extra field of the form.
+  set('of-extra-label', extra>0 ? (extraLbl||'รายการเพิ่มเติม') : '');
+  set('of-extra-price', extra||'');
+  var note=document.getElementById('of-reorder-note');
+  if(note){
+    note.style.display='block';
+    note.innerHTML='<div style="background:#dbeafe;border:1.5px solid #93c5fd;border-radius:var(--rs);padding:8px 10px;margin-bottom:10px;font-size:12px;color:#1d4ed8;font-weight:700">📋 จากใบเสนอราคา / from the quote — เลือกโซน กรอกลูกค้า ที่อยู่ ช่องทางติดต่อ แล้วกด Create order'
+      +(extraShip>0?'<div style="font-weight:600;margin-top:3px">ค่าส่งพื้นที่พิเศษ '+extraShip.toLocaleString()+'฿ รวมอยู่ในช่องค่าส่งแล้ว'+(extraNote?' ('+_esc(extraNote)+')':'')+'</div>':'')
+      +'<button type="button" onclick="var n=document.getElementById(\'of-reorder-note\');n.style.display=\'none\';n.innerHTML=\'\'" style="float:right;border:none;background:none;color:#1d4ed8;cursor:pointer;font-weight:700;margin-top:-16px">✕</button></div>';
+  }
+  try{ ofCalc(); }catch(e){}
+  window.scrollTo(0,0);
+  try{ var z=document.getElementById('of-zone'); if(!z || !z.value){ var c=document.getElementById('of-cust'); if(c) c.focus(); } }catch(e){}
+  }
 }
 
 function qtCopy() {
