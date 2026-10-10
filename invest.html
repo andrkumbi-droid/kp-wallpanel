@@ -195,6 +195,26 @@ nav button.on{background:var(--panel3);color:var(--ink);box-shadow:0 1px 0 rgba(
 .leg span{display:flex;align-items:center;gap:6px}
 .leg b{width:9px;height:9px;border-radius:3px;display:inline-block}
 
+/* ── Verlauf (Diagramm) ──────────────────────────────────────────────────── */
+.ch-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.ch-hero .k{font-size:11px;color:var(--ink3);font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.ch-hero .v{font-size:22px;font-weight:750;letter-spacing:-.5px;font-family:var(--num);margin-top:2px}
+.ch-hero .s{font-size:12px;color:var(--ink2);margin-top:2px;font-family:var(--num)}
+.ch-hero.fut .v{color:var(--ink2);font-size:17px;margin-top:6px}
+.cur{margin-left:auto;display:flex;background:var(--panel2);border:1px solid var(--edge);border-radius:9px;padding:2px}
+.cur button{border:0;background:transparent;color:var(--ink3);font-weight:700;font-size:12.5px;
+  padding:5px 11px;border-radius:7px;cursor:pointer}
+.cur button.on{background:var(--panel3);color:var(--ink)}
+.chart{position:relative;touch-action:pan-y;user-select:none;-webkit-user-select:none}
+.chart svg{display:block;width:100%;overflow:visible}
+.chart text{fill:var(--ink3);font-size:10.5px;font-family:var(--sys)}
+.ch-tip{position:absolute;top:6px;pointer-events:none;background:var(--panel3);border:1px solid var(--edge2);
+  border-radius:10px;padding:8px 10px;font-size:12px;min-width:150px;box-shadow:0 8px 24px rgba(0,0,0,.45);display:none}
+.ch-tip .d{color:var(--ink3);font-size:11px;margin-bottom:4px}
+.ch-tip .r{display:flex;justify-content:space-between;gap:12px;font-family:var(--num)}
+.ch-tip .r span:first-child{font-family:var(--sys);color:var(--ink2)}
+.ch-note{font-size:11.5px;color:var(--ink3);margin-top:8px}
+
 /* ── Container-Karten ────────────────────────────────────────────────────── */
 /* Immer drei Karten pro Reihe (André will das so, auch im schmalen Fenster),
    am Tablet zwei, am Telefon eine. Flex statt Grid, damit eine halbvolle
@@ -558,6 +578,229 @@ function totals(){
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   3b · VERLAUF
+   ---------------------------------------------------------------------------
+   Ein Wert pro Tag, vom ersten Geld bis zur letzten Faelligkeit:
+     · Alex  = was er eingezahlt hat (minus Auszahlungen) + Gewinn bis dahin
+     · André = nur der Gewinn (sein Einsatz steht nirgends vollstaendig drin)
+   Der Gewinn eines Containers waechst gleichmaessig von Ankunft bis Faelligkeit
+   — so steigt die Linie, statt alle zwei Monate zu springen. Was nach heute
+   kommt, ist erwartet und wird blasser gezeichnet. Container auf dem Schiff
+   (ohne Ankunft) zaehlen noch nicht.
+   Euro: ein Kurs fuer alles, der von heute (EZB ueber frankfurter.dev).
+   ═══════════════════════════════════════════════════════════════════════════ */
+var CUR='thb';
+try{ CUR=localStorage.getItem('kp-invest-cur')==='eur'?'eur':'thb'; }catch(e){}
+var FX={ r:0.0266, d:'', live:false };            // Notnagel, falls offline
+(function(){
+  var fresh=false;
+  try{
+    var c=JSON.parse(localStorage.getItem('kp-invest-fx')||'null');
+    if(c && c.r){ FX={ r:c.r, d:c.d, live:true }; fresh=(Date.now()-c.ts)<6*3600*1000; }
+  }catch(e){}
+  if(fresh || !window.fetch) return;
+  fetch('https://api.frankfurter.dev/v1/latest?base=THB&symbols=EUR')
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      var r=j && j.rates && +j.rates.EUR; if(!r) return;
+      FX={ r:r, d:j.date||'', live:true };
+      try{ localStorage.setItem('kp-invest-fx', JSON.stringify({ r:r, d:FX.d, ts:Date.now() })); }catch(e){}
+      render();
+    }).catch(function(){});
+})();
+function E0(v){ return NF0.format(Math.round((+v||0)*FX.r))+' €'; }
+function cv(v){ return CUR==='eur' ? v*FX.r : v; }
+function M(v){ return CUR==='eur' ? E0(v) : B0(v); }          // Hauptwaehrung
+function M2(v){ return CUR==='eur' ? B0(v) : E0(v); }         // die andere, klein
+/* Alex' Bild: 'gew' = nur der Gewinn (die Linie, die waechst), 'ges' = Einsatz
+   mit Gewinn obendrauf. Neben 955k Einsatz waere der Gewinn sonst nur ein
+   duenner Streifen. */
+var AMODE='gew';
+try{ AMODE=localStorage.getItem('kp-invest-amode')==='ges'?'ges':'gew'; }catch(e){}
+function setAMode(m){ AMODE=m; try{ localStorage.setItem('kp-invest-amode',m); }catch(e){} render(); }
+function setCur(c){ CUR=c; try{ localStorage.setItem('kp-invest-cur',c); }catch(e){} render(); }
+function isoOf(n){ var d=new Date(n*86400000);
+  return d.getUTCFullYear()+'-'+p2(d.getUTCMonth()+1)+'-'+p2(d.getUTCDate()); }
+
+function curve(){
+  var cap=[], acc=[], way=0;
+  ledger().forEach(function(l){
+    var d=dayNo(l.date); if(d==null) return;
+    cap.push({ d:d, v:(l.type==='out'?-1:1)*num(l.amount) });
+  });
+  list().forEach(function(c){
+    var k=calc(c);
+    if(k.way){ way++; return; }
+    var e=dayNo(k.due||c.paidDate), s=dayNo(c.arrive);
+    if(s==null) s=e;
+    if(s==null) return;
+    if(e==null || e<s) e=s;
+    acc.push({ s:s, e:e, a:k.pA, n:k.pN });
+  });
+  var t=dayNo(todayISO());
+  var all=cap.map(function(x){ return x.d; }).concat(acc.map(function(x){ return x.s; }));
+  if(!all.length) return null;
+  var d0=Math.min.apply(null, all);
+  var d1=Math.max.apply(null, [t].concat(acc.map(function(x){ return x.e; })));
+  if(d1-d0<14) d1=d0+14;
+  var C={ d0:d0, d1:d1, t:Math.min(Math.max(t,d0),d1), way:way, cap:[], pa:[], pn:[] };
+  for(var d=d0; d<=d1; d++){
+    var c=0, a=0, n=0;
+    cap.forEach(function(x){ if(x.d<=d) c+=x.v; });
+    acc.forEach(function(x){
+      var f = d>=x.e ? 1 : d<x.s ? 0 : (d-x.s)/(x.e-x.s);
+      a+=x.a*f; n+=x.n*f;
+    });
+    C.cap.push(c); C.pa.push(a); C.pn.push(n);
+  }
+  return C;
+}
+function at(C,d){ return Math.max(0, Math.min(C.cap.length-1, d-C.d0)); }
+
+/* Kopf + leere Flaeche. Gezeichnet wird erst, wenn die Breite bekannt ist. */
+function chartBox(who, C){
+  if(!C) return '';
+  var i=at(C,C.t), j=C.cap.length-1, h='<div class="card">', fut=C.d1>C.t;
+  var curBtns='<div class="cur"><button type="button" class="'+(CUR==='thb'?'on':'')+'" onclick="setCur(\'thb\')">฿</button>'
+            + '<button type="button" class="'+(CUR==='eur'?'on':'')+'" onclick="setCur(\'eur\')">€</button></div>';
+  if(who==='A'){
+    var nowT=C.cap[i]+C.pa[i], endT=C.cap[j]+C.pa[j];
+    h+='<div class="ch-head">'
+      + '<div class="ch-hero"><div class="k">Alex heute</div><div class="v">'+M(nowT)+'</div>'
+      +   '<div class="s">'+M2(nowT)+' · davon Gewinn +'+M(C.pa[i])+'</div></div>'
+      + (fut ? '<div class="ch-hero fut"><div class="k">Erwartet bis '+shortDate(isoOf(C.d1))+'</div>'
+             +   '<div class="v">'+M(endT)+'</div><div class="s">Gewinn +'+M(C.pa[j])+'</div></div>' : '')
+      + '<div class="cur" style="margin-left:auto"><button type="button" class="'+(AMODE==='gew'?'on':'')+'" onclick="setAMode(\'gew\')">Gewinn</button>'
+      +   '<button type="button" class="'+(AMODE==='ges'?'on':'')+'" onclick="setAMode(\'ges\')">Mit Einsatz</button></div>'
+      + curBtns.replace('class="cur"','class="cur" style="margin-left:0"') + '</div>';
+  }else{
+    h+='<div class="ch-head">'
+      + '<div class="ch-hero"><div class="k">Dein Gewinn bis heute</div><div class="v" style="color:var(--andre)">+'+M(C.pn[i])+'</div>'
+      +   '<div class="s">+'+M2(C.pn[i])+'</div></div>'
+      + (fut ? '<div class="ch-hero fut"><div class="k">Erwartet bis '+shortDate(isoOf(C.d1))+'</div>'
+             +   '<div class="v">+'+M(C.pn[j])+'</div><div class="s">+'+M2(C.pn[j])+'</div></div>' : '')
+      + curBtns + '</div>';
+  }
+  h+='<div class="chart" id="ch-'+who+'"></div>';
+  if(who==='A' && AMODE==='ges'){
+    h+='<div class="leg" style="margin-top:8px">'
+      + '<span><b style="background:#5A6274"></b>Eingezahlt</span>'
+      + '<span><b style="background:var(--alex)"></b>Gewinn</span>'
+      + '<span style="color:var(--ink3)">blass = erwartet</span></div>';
+  }
+  h+='<div class="ch-note">'
+    + (FX.live ? '1 € = '+NF2.format(1/FX.r)+' ฿ (EZB'+(FX.d?', '+deDate(FX.d):'')+')' : 'Euro grob geschätzt (1 € ≈ '+NF0.format(1/FX.r)+' ฿) — Kurs gerade nicht abrufbar')
+    + (C.way ? ' · '+C.way+' Container unterwegs, zählt ab Ankunft' : '')
+    + '</div></div>';
+  return h;
+}
+
+var MON=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
+function kfmt(v){
+  var s=CUR==='eur'?'€':'฿', a=Math.abs(v);
+  if(a>=1e6) return s+NF2.format(v/1e6).replace(/,?0+$/,'')+' Mio';
+  if(a>=1e3) return s+NF0.format(Math.round(v/1e3))+'k';
+  return s+NF0.format(Math.round(v));
+}
+/* Runde Gitterschritte (1-2-2,5-5), damit an der Achse 50k/100k steht und
+   nicht 37,5k/113k. */
+function niceStep(v){
+  if(!(v>0)) return 1;
+  var p=Math.pow(10, Math.floor(Math.log(v)/Math.LN10));
+  return [1,2,2.5,5,10].find(function(m){ return m*p>=v; })*p;
+}
+function drawChart(who, C){
+  var el=$('ch-'+who); if(!el || !C) return;
+  var W=el.clientWidth; if(!W) return;                // Reiter versteckt → spaeter
+  var H=W<500?190:230, pl=46, pr=10, pt=10, pb=22, pw=W-pl-pr, ph=H-pt-pb;
+  var n=C.cap.length;
+  var lo=[], hi=[];
+  for(var i=0;i<n;i++){
+    if(who==='A' && AMODE==='ges'){ lo.push(cv(Math.max(0,C.cap[i]))); hi.push(cv(Math.max(0,C.cap[i])+C.pa[i])); }
+    else if(who==='A'){ lo.push(0); hi.push(cv(C.pa[i])); }
+    else         { lo.push(0); hi.push(cv(C.pn[i])); }
+  }
+  var ystep=niceStep(Math.max.apply(null, hi)/4), ymax=Math.max(1, Math.ceil(Math.max.apply(null, hi)/ystep))*ystep;
+  var ng=Math.round(ymax/ystep);
+  function X(i){ return pl + (n<2?0:i/(n-1))*pw; }
+  function Y(v){ return pt + (1-v/ymax)*ph; }
+  function line(arr){ return arr.map(function(v,i){ return (i?'L':'M')+X(i).toFixed(1)+','+Y(v).toFixed(1); }).join(''); }
+  function band(top,bot){
+    var p=line(top);
+    for(var i=n-1;i>=0;i--) p+='L'+X(i).toFixed(1)+','+Y(bot[i]).toFixed(1);
+    return p+'Z';
+  }
+  var tx=X(C.t-C.d0), zero=lo.map(function(){ return 0; });
+  var col = who==='A' ? 'var(--alex)' : 'var(--andre)';
+  var s='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">'
+    + '<defs><clipPath id="cp-'+who+'-p"><rect x="0" y="0" width="'+tx+'" height="'+H+'"/></clipPath>'
+    +       '<clipPath id="cp-'+who+'-f"><rect x="'+tx+'" y="0" width="'+(W-tx)+'" height="'+H+'"/></clipPath></defs>';
+  for(var g=0; g<=ng; g++){                                   // Gitter + y-Beschriftung
+    var gv=ystep*g, gy=Y(gv);
+    s+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+gy+'" y2="'+gy+'" stroke="var(--edge)" stroke-width="1" '+(g?'stroke-dasharray="2 4"':'')+'/>'
+     + '<text x="'+(pl-6)+'" y="'+(gy+3.5)+'" text-anchor="end">'+kfmt(gv)+'</text>';
+  }
+  var months=[], d=new Date(C.d0*86400000);                  // Monatsanfaenge
+  var m=new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+1, 1));
+  while(m.getTime()/86400000<=C.d1){ months.push(m.getTime()/86400000); m=new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth()+1, 1)); }
+  var step=Math.ceil(months.length/(W<500?5:9));
+  months.forEach(function(md,k){
+    if(k%step) return;
+    var mx=X(md-C.d0), mm=new Date(md*86400000).getUTCMonth();
+    s+='<line x1="'+mx+'" x2="'+mx+'" y1="'+(H-pb)+'" y2="'+(H-pb+4)+'" stroke="var(--edge2)"/>'
+     + '<text x="'+mx+'" y="'+(H-5)+'" text-anchor="middle">'+MON[mm]+'</text>';
+  });
+  ['p','f'].forEach(function(part){
+    var op = part==='p' ? 1 : .38;
+    s+='<g clip-path="url(#cp-'+who+'-'+part+')" opacity="'+op+'">';
+    if(who==='A' && AMODE==='ges'){
+      s+='<path d="'+band(lo,zero)+'" fill="#5A6274" fill-opacity=".55"/>'
+       + '<path d="'+band(hi,lo)+'" fill="var(--alex)" fill-opacity=".35"/>'
+       + '<path d="'+line(lo)+'" fill="none" stroke="var(--panel)" stroke-width="2"/>';
+    }else{
+      s+='<path d="'+band(hi,zero)+'" fill="'+col+'" fill-opacity=".28"/>';
+    }
+    s+='<path d="'+line(hi)+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round"'
+     + (part==='f'?' stroke-dasharray="5 4"':'')+'/></g>';
+  });
+  if(C.t<C.d1){
+    s+='<line x1="'+tx+'" x2="'+tx+'" y1="'+pt+'" y2="'+(H-pb)+'" stroke="var(--ink3)" stroke-dasharray="3 3"/>'
+     + '<text x="'+(tx+4)+'" y="'+(pt+9)+'" style="fill:var(--ink2)">heute</text>';
+  }
+  s+='<line id="gl-'+who+'" y1="'+pt+'" y2="'+(H-pb)+'" stroke="var(--ink2)" stroke-width="1" style="display:none"/>'
+   + '<circle id="gd-'+who+'" r="4.5" fill="'+col+'" stroke="var(--panel)" stroke-width="2" style="display:none"/>'
+   + '</svg><div class="ch-tip" id="tt-'+who+'"></div>';
+  el.innerHTML=s;
+
+  function hide(){ ['gl-','gd-','tt-'].forEach(function(p){ var e=$(p+who); if(e) e.style.display='none'; }); }
+  function show(ev){
+    var r=el.getBoundingClientRect(), x=ev.clientX-r.left;
+    if(x<pl-8 || x>W-pr+8){ hide(); return; }
+    var i=Math.round(Math.max(0,Math.min(1,(x-pl)/pw))*(n-1)), xi=X(i), dd=C.d0+i;
+    var gl=$('gl-'+who), gd=$('gd-'+who), tt=$('tt-'+who);
+    gl.setAttribute('x1',xi); gl.setAttribute('x2',xi); gl.style.display='';
+    gd.setAttribute('cx',xi); gd.setAttribute('cy',Y(hi[i])); gd.style.display='';
+    var fut = dd>C.t;
+    var rows = who==='A'
+      ? '<div class="r"><span>Eingezahlt</span><b>'+M(C.cap[i])+'</b></div>'
+      + '<div class="r"><span>Gewinn</span><b>+'+M(C.pa[i])+'</b></div>'
+      + '<div class="r" style="border-top:1px solid var(--edge);margin-top:4px;padding-top:4px"><span>Gesamt</span><b>'+M(C.cap[i]+C.pa[i])+'</b></div>'
+      + '<div class="r"><span></span><span style="color:var(--ink3)">'+M2(C.cap[i]+C.pa[i])+'</span></div>'
+      : '<div class="r"><span>Gewinn</span><b>+'+M(C.pn[i])+'</b></div>'
+      + '<div class="r"><span></span><span style="color:var(--ink3)">+'+M2(C.pn[i])+'</span></div>';
+    tt.innerHTML='<div class="d">'+deDate(isoOf(dd))+(fut?' · erwartet':'')+'</div>'+rows;
+    tt.style.display='block';
+    var tw=tt.offsetWidth||170;
+    tt.style.left = (xi+12+tw > W ? Math.max(0, xi-12-tw) : xi+12)+'px';
+  }
+  el.onpointermove=show; el.onpointerdown=show; el.onpointerleave=hide;
+}
+var CURV=null;
+function drawCharts(){ drawChart('A',CURV); drawChart('N',CURV); }
+var _rz;
+window.addEventListener('resize', function(){ clearTimeout(_rz); _rz=setTimeout(drawCharts,150); });
+
+/* ═══════════════════════════════════════════════════════════════════════════
    4 · ANSICHT · ÜBERSICHT
    ═══════════════════════════════════════════════════════════════════════════ */
 function tile(cls,k,v,s){
@@ -567,6 +810,7 @@ function tile(cls,k,v,s){
 function renderOver(){
   var t=totals(), L=list(), open=L.filter(function(c){ return !c.paid; });
   var h='';
+  CURV=curve();
 
   /* Alex zuerst — sein Geld verwalte ich, also ist das die Zahl, die zaehlt. */
   h+='<div class="sec"><h2 style="color:var(--alex)">Alex</h2><div class="line"></div></div>';
@@ -592,6 +836,7 @@ function renderOver(){
     +   '<span><b style="background:var(--alex)"></b>Investiert '+B0(t.invA)+'</span>'
     +   '<span style="margin-left:auto;color:var(--ink2)">Vermögen gesamt <b style="background:none;width:auto;font-weight:700;color:var(--ink)" class="n">'+B0(t.kapA)+'</b></span>'
     + '</div></div>';
+  h+=chartBox('A',CURV);
 
   h+='<div class="sec"><h2 style="color:var(--andre)">André</h2><div class="line"></div></div>';
   h+='<div class="tiles g3">'
@@ -599,6 +844,7 @@ function renderOver(){
     + tile('n','Gewinn realisiert', '<span class="vn">+'+B0(t.realN)+'</span>', t.cntDone+' abgeschlossen')
     + tile('n','Gewinn offen', '+'+B0(t.openN), 'wird noch fällig')
     + '</div>';
+  h+=chartBox('N',CURV);
 
   /* Wann kommt was zurueck. Das ist der eigentliche Grund für die Seite. */
   h+='<div class="sec"><h2>Nächste Auszahlungen</h2><div class="line"></div>'
@@ -644,6 +890,7 @@ function renderOver(){
     + '</div>';
 
   $('v-over').innerHTML=h;
+  drawCharts();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1090,6 +1337,7 @@ $('tabs').addEventListener('click', function(e){
   Array.prototype.forEach.call($('tabs').children, function(b){
     b.classList.toggle('on', b.getAttribute('data-v')===v); });
   ['over','cont','acct','set'].forEach(function(k){ $('v-'+k).style.display = k===v?'':'none'; });
+  if(v==='over') drawCharts();
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
