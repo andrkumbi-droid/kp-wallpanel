@@ -326,6 +326,12 @@ table.tb td{ padding:9px 6px; border-bottom:1px solid var(--border); }
       <div class="chips" id="ord-chips"></div>
       <div id="ord-list"></div>
     </div>
+    <!-- sales kit -->
+    <div id="t-kit" class="hide">
+      <div class="sec-h"><h2>ช่วยขาย / Sales kit</h2></div>
+      <div class="chips" id="kit-chips"></div>
+      <div id="kit-body"></div>
+    </div>
     <!-- earnings -->
     <div id="t-earn" class="hide">
       <div class="sec-h"><h2>รายได้ / Earnings</h2><select id="earn-m" style="width:auto;min-height:40px;padding:6px 10px" onchange="spRenderEarn()"></select></div>
@@ -353,6 +359,7 @@ table.tb td{ padding:9px 6px; border-bottom:1px solid var(--border); }
     <button data-t="shop" class="on" onclick="spTab('shop')"><i class="ti ti-layout-grid"></i>สินค้า</button>
     <button data-t="quote" onclick="spTab('quote')"><i class="ti ti-file-invoice"></i>ใบเสนอราคา<span class="badge hide" id="nb-quote"></span></button>
     <button data-t="orders" onclick="spTab('orders')"><i class="ti ti-truck-delivery"></i>ออเดอร์<span class="badge hide" id="nb-orders"></span></button>
+    <button data-t="kit" onclick="spTab('kit')"><i class="ti ti-bulb"></i>ช่วยขาย</button>
     <button data-t="earn" onclick="spTab('earn')"><i class="ti ti-coin"></i>รายได้</button>
     <button data-t="me" onclick="spTab('me')"><i class="ti ti-user-circle"></i>โปรไฟล์</button>
   </div></div>
@@ -573,9 +580,9 @@ function spMemberStart(){
   });
 }
 function spTab(t){
-  ['shop','quote','orders','earn','me'].forEach(function(k){ $('t-'+k).classList.toggle('hide', k!==t); });
+  ['shop','quote','orders','kit','earn','me'].forEach(function(k){ $('t-'+k).classList.toggle('hide', k!==t); });
   document.querySelectorAll('#scr-app .nav button').forEach(function(b){ b.classList.toggle('on', b.dataset.t===t); });
-  if(t==='quote') spRenderQuote(); if(t==='orders') spRenderOrders(); if(t==='earn') spRenderEarn();
+  if(t==='quote') spRenderQuote(); if(t==='orders') spRenderOrders(); if(t==='earn') spRenderEarn(); if(t==='kit') spRenderKit();
   window.scrollTo(0,0);
 }
 
@@ -597,7 +604,7 @@ function spRenderShop(){
   var inCart={}; CART.forEach(function(c){ inCart[c.code]=(inCart[c.code]||0)+c.qty; });
   $('shop-grid').innerHTML=list.map(function(p){
     var g=prodGroup(p), st=stockOf(p.code), out=SOLDOUT[p.code] || (st!=null && st<=0);
-    var stk = st==null ? '' : '<span class="stk '+(out?'out':(st<(g==='ACC'?50:300)?'low':'ok'))+'">'+(out?'หมด / out':'คงเหลือ '+fmt(st))+'</span>';
+    var stk = (st==null && !SOLDOUT[p.code]) ? (g==='ACC'?'<span class="stk" style="background:#f1ede4;color:var(--text2)">สอบถาม KP / ask KP</span>':'') : (st==null ? '<span class="stk out">หมด / out</span>' : '<span class="stk '+(out?'out':(st<(g==='ACC'?50:300)?'low':'ok'))+'">'+(out?'หมด / out':'คงเหลือ '+fmt(st))+'</span>');
     return '<button class="pc" onclick="spProd(\''+esc(p.code)+'\')"><div class="ph">'+imgTag(p)+(inCart[p.code]?'<span class="incart">× '+inCart[p.code]+'</span>':'')+'</div>'
       +'<div class="bd"><div class="cd">'+esc(p.code)+' <span class="mat '+(g==='PVC'?'pvc':(g==='WPC'?'':'acc'))+'">'+(g==='ACC'?'ขอบ':g)+'</span></div>'
       +'<div class="nm">'+esc(p.name||(PROFILES[p.profile]||{}).label||'')+'</div>'
@@ -615,6 +622,7 @@ function spProd(code){
       +'<tr><td style="color:var(--text2)">ราคา / Price</td><td style="text-align:right;font-weight:800;color:var(--gold3)">'+fmt(p.price)+' ฿/'+prodUnit(p)+'</td></tr>'
       +'<tr><td style="color:var(--text2)">คงเหลือ / Stock</td><td style="text-align:right;font-weight:800">'+(st==null?'—':fmt(st))+'</td></tr>'
     +'</table></div>'
+    +((g==='WPC'||g==='PVC') ? spCalcBox(p) : '')
     +'<div class="row" style="margin-bottom:12px"><div class="qty"><button onclick="spQtyStep(-1)">−</button><input id="pq" type="number" inputmode="numeric" value="'+(g==='ACC'?1:10)+'"><button onclick="spQtyStep(1)">+</button></div>'
     +'<button class="btn gold" style="flex:1" onclick="spAddCart(\''+esc(code)+'\')"><i class="ti ti-file-plus"></i> ใส่ใบเสนอราคา</button></div>'
     +'<div class="row"><button class="btn line" style="flex:1" onclick="copyText(spInfoCache)"><i class="ti ti-copy"></i> คัดลอกข้อมูล</button>'
@@ -622,6 +630,47 @@ function spProd(code){
   window.spInfoCache=prodInfoText(p);
 }
 function spQtyStep(d){ var e=$('pq'); e.value=Math.max(1,(parseInt(e.value)||0)+d); }
+/* m² calculator — the same method as the KP POS / office sheet:
+   area ÷ m² per panel → +10 % → +2 spare. Trims: L = wall perimeter ÷ 2.9 m,
+   H only when the wall is higher than one panel (2.9 m). */
+var SQM_PER_PANEL={ '15.5':0.4321, '16.5':0.46, '16.9':0.47, '17':0.4785, '20':0.58, '21':0.6, '26.5':0.725, '30':0.87, '40':1.16 };
+function sqmPerPanel(w){ var k=String(w); if(SQM_PER_PANEL[k]) return SQM_PER_PANEL[k]; var W=parseFloat(w)||16.5; return Math.round((Math.max(5,W-0.6))/100*2.9*1000)/1000; }
+// Matching trims of a panel that exist in the catalogue: WPC KP028 → L28; PVC K-PVC-16 → L-P-16 / H16 / U16.
+function trimsFor(p){
+  var m=String(p.code).match(/(\d+)\s*$/); if(!m) return [];
+  var n=String(parseInt(m[1],10)).padStart(2,'0'), g=prodGroup(p);
+  var want = g==='PVC' ? [['L-P-'+n,'L'],['H'+n,'H'],['U'+n,'U']] : [['L'+n,'L']];
+  return want.map(function(w){ var c=CATALOG.find(function(x){ return normCode(x.code)===normCode(w[0]); }); return c ? {p:c, kind:w[1]} : null; }).filter(Boolean);
+}
+function spCalcBox(p){
+  var tr=trimsFor(p);
+  return '<div class="card pad" style="margin-bottom:12px">'
+    +'<div style="font-weight:800;margin-bottom:2px"><i class="ti ti-calculator"></i> คำนวณจำนวนแผ่น / how many panels</div>'
+    +'<div style="font-size:12px;color:var(--text2)">ขนาดผนัง (เมตร) · เผื่อเศษ +10% และ +2 แผ่นแล้ว</div>'
+    +'<div class="row" style="margin-top:8px"><div style="flex:1"><label class="l" style="margin-top:0">กว้าง / width (m)</label><input id="cw" type="text" inputmode="decimal" placeholder="4.0" oninput="spCalcRun(\''+esc(p.code)+'\')"></div>'
+    +'<div style="flex:1"><label class="l" style="margin-top:0">สูง / height (m)</label><input id="ch" type="text" inputmode="decimal" placeholder="2.8" oninput="spCalcRun(\''+esc(p.code)+'\')"></div></div>'
+    +'<div id="calc-res" style="font-size:13.5px;margin-top:8px;color:var(--text2)"></div>'
+    +(tr.length?'<div style="font-weight:700;font-size:13px;margin-top:10px">ขอบที่เข้ากัน / matching trims (เส้นละ 2.90 ม.)</div>'
+      +tr.map(function(t){ return '<div class="row" style="margin-top:6px"><span style="flex:1;font-size:13.5px"><b>'+esc(t.p.code)+'</b> <span style="color:var(--text2)">'+esc((PROFILES[t.kind==='L'?(prodGroup(p)==='PVC'?'LP':'L'):t.kind]||{}).label||'')+' · '+fmt(t.p.price)+' ฿</span></span>'
+        +'<input id="tq-'+esc(t.p.code)+'" data-code="'+esc(t.p.code)+'" class="tq" type="number" inputmode="numeric" min="0" value="0" style="width:78px;min-height:40px;padding:6px 8px;text-align:center"></div>'; }).join('')
+      +'<div style="font-size:11.5px;color:var(--text3);margin-top:4px">L ปิดมุม/ขอบนอก · H ต่อรอยแผ่น · U ปิดขอบปลาย — ใส่จำนวนที่ลูกค้าต้องการ</div>':'')
+    +'</div>';
+}
+function panelW(p){ if(+p.w>0) return +p.w; var sub=(PROFILES[p.profile]||{}).sub||''; var m=String(sub).match(/^([\d.]+)/); return m?parseFloat(m[1]):16.5; }
+function numIn(id){ return parseFloat(String(($(id)||{}).value||'').replace(',','.'))||0; }
+function spCalcRun(code){
+  var p=prodOf(code), w=numIn('cw'), h=numIn('ch');
+  if(!(w>0&&h>0)){ $('calc-res').textContent=''; document.querySelectorAll('#sh-b .tq').forEach(function(e){ e.value=0; }); return; }
+  if(w>50||h>20){ $('calc-res').textContent='ตรวจขนาดอีกครั้ง (เมตร) / check the size (metres)'; return; }
+  var area=w*h, n=Math.round(Math.round(area/sqmPerPanel(panelW(p)))*1.1)+2;
+  $('pq').value=n;
+  $('calc-res').innerHTML='พื้นที่ <b>'+area.toFixed(2)+' ตร.ม.</b> → <b style="color:var(--gold3);font-size:16px">'+n+' แผ่น</b> · '+fmt(n*(+p.price||0))+' ฿';
+  trimsFor(p).forEach(function(t){
+    var e=$('tq-'+t.p.code); if(!e) return;
+    if(t.kind==='L') e.value=Math.ceil(2*(w+h)/2.9);
+    else if(t.kind==='H') e.value=(h>2.9?Math.ceil(w/2.9):0);
+  });
+}
 
 /* cart / quote */
 function spCartKey(){ return 'kpsp-cart-'+(ME?ME.uid:'x'); }
@@ -629,9 +678,11 @@ function spLoadCart(){ try{ CART=JSON.parse(localStorage.getItem(spCartKey())||'
 function spSaveCart(){ try{ localStorage.setItem(spCartKey(), JSON.stringify(CART)); }catch(e){} spCartBadge(); }
 function spCartBadge(){ var n=CART.length, b=$('nb-quote'); b.textContent=n; b.classList.toggle('hide', !n); }
 function spAddCart(code){
-  var q=parseInt(($('pq')||{}).value)||1, c=CART.find(function(x){ return x.code===code; });
-  if(c) c.qty+=q; else CART.push({code:code, qty:q});
-  spSaveCart(); spSheetClose(); spRenderShop(); toast('ใส่ใบเสนอราคาแล้ว ✓ '+code+' × '+q);
+  var q=Math.min(5000, Math.max(0, parseInt(($('pq')||{}).value)||0)), c=CART.find(function(x){ return x.code===code; }), added=[];
+  if(q>0){ if(c) c.qty+=q; else CART.push({code:code, qty:q}); added.push(code+' × '+q); }
+  document.querySelectorAll('#sh-b .tq').forEach(function(e){ var n=Math.min(5000, Math.max(0, parseInt(e.value)||0)), tc=e.dataset.code; if(n>0){ var ex=CART.find(function(x){ return x.code===tc; }); if(ex) ex.qty+=n; else CART.push({code:tc, qty:n}); added.push(tc+' × '+n); } });
+  if(!added.length){ toast('ใส่จำนวนก่อน / enter a quantity'); return; }
+  spSaveCart(); spSheetClose(); spRenderShop(); toast('ใส่ใบเสนอราคาแล้ว ✓ '+added.join(', '));
 }
 function spCartQty(i,d){ var c=CART[i]; if(!c) return; c.qty=Math.max(0,c.qty+d); if(!c.qty) CART.splice(i,1); spSaveCart(); spRenderQuote(); }
 function spCartSet(i,v){ var c=CART[i]; if(!c) return; c.qty=Math.max(0,parseInt(v)||0); if(!c.qty) CART.splice(i,1); spSaveCart(); spRenderQuote(); }
@@ -747,6 +798,7 @@ function reqStage(r){
   if(r.status==='rejected') return 'rejected';
   if(r.status==='processing') return 'checking';
   if(r.status!=='approved') return 'sent';
+  if(r.orderDeleted || (ORDERS.hasOwnProperty(r.orderId) && ORDERS[r.orderId]===null)) return 'cancelled';   // order deleted in KP
   var o=ORDERS[r.orderId]; if(!o) return 'approved';
   if(o.status==='cancelled') return 'cancelled';
   if(o.status==='delivered') return isPaid(o)?'paid':'delivered';
@@ -783,7 +835,7 @@ function spOrdDetail(k){
   var tl = (st==='rejected'||st==='cancelled') ? '<div style="color:var(--red);font-weight:700">'+(st==='rejected'?'ไม่อนุมัติ / not approved':'ออเดอร์ถูกยกเลิก / cancelled')+(r.rejectReason?' — '+esc(r.rejectReason):'')+'</div>'
     : '<ul class="tl">'+STEPS.map(function(s,i){ return '<li class="'+(i<idx?'done':(i===idx?'now':''))+'">'+s[1]+'</li>'; }).join('')+'</ul>';
   var o=r.orderId?ORDERS[r.orderId]:null;
-  var trackTxt='สถานะออเดอร์'+(r.orderId?' #'+r.orderId:'')+': '+(STEPS[idx]?STEPS[idx][1].split(' / ')[0]:'')+(o&&o.deliveryRound?'\nรอบส่ง: '+o.deliveryRound:'');
+  var trackTxt='สถานะออเดอร์'+(r.orderId?' #'+r.orderId:'')+': '+(STEPS[idx]?STEPS[idx][1].split(' / ')[0]:(st==='rejected'?'ไม่อนุมัติ':'ยกเลิก'))+(o&&o.deliveryRound?'\nรอบส่ง: '+o.deliveryRound:'');
   spSheet('ออเดอร์ '+esc(cu.name||''),
     '<div class="card pad" style="margin-bottom:12px">'+tl+'</div>'
     +'<div class="card pad" style="margin-bottom:12px;font-size:13.5px;line-height:1.7"><b>'+esc(cu.name||'')+'</b> · '+esc(cu.phone||'')+'<br>'+esc(cu.address||'')+' '+esc(cu.province||'')+(r.wantDate?'<br>ต้องการ: '+esc(r.wantDate):'')+(r.note?'<br>📝 '+esc(r.note):'')+'</div>'
@@ -792,6 +844,53 @@ function spOrdDetail(k){
       +'<div style="display:flex;justify-content:space-between;font-size:16px;padding-top:6px;border-top:1px solid var(--border);margin-top:6px"><b>รวม</b><b>'+fmt(o?orderTotal(o):(r.totals||{}).total)+' ฿</b></div></div>'
     +(OWNER?'':'<button class="btn dark w" onclick="copyText(spTrackCache)"><i class="ti ti-copy"></i> คัดลอกสถานะให้ลูกค้า / copy status for customer</button>'));
   window.spTrackCache=trackTxt;
+}
+
+/* ═════════════ sales kit ═════════════
+   Only statements KP has confirmed (products, prices, delivery, payment, the
+   guarantee and "no installation"). No moisture/fire/outdoor/installation advice —
+   the rules tab tells partners not to promise it. Answers are neutral (no ค่ะ/ครับ). */
+var KIT={
+  rules:[
+    ['การรับประกัน / Guarantee','KP รับประกันว่าลูกค้าได้รับสินค้าครบและถูกต้อง หากสินค้าเสียหายจากการขนส่ง แจ้งพร้อมรูปถ่ายตอนรับของ เคลมฟรี โดยตกลงกับลูกค้าเป็นกรณีไป: ลดราคา หรือ ส่งของใหม่'],
+    ['การติดตั้ง / Installation','KP ไม่มีบริการติดตั้งและไม่ให้คำแนะนำการติดตั้ง ถ้าตัวแทนมีช่างของตัวเอง เป็นความรับผิดชอบของตัวแทนเอง ไม่เกี่ยวกับ KP'],
+    ['การชำระเงิน / Payment','ลูกค้าชำระกับ KP เท่านั้น ชำระปลายทาง หรือโอนเข้าบัญชีบริษัท ห้ามรับเงินเข้าบัญชีส่วนตัว'],
+    ['ห้ามสัญญา / Never promise','ห้ามพูดว่า "กันไฟ", "กันน้ำ", "ใช้กลางแจ้งได้", "รับประกัน X ปี", "โรงงานผลิตเอง" หรือข้อมูลที่ KP ยังไม่ยืนยัน ถ้าไม่แน่ใจ ถามทีม KP ก่อน'],
+    ['ค่าส่ง / Delivery','25 แผ่นขึ้นไปส่งฟรี ต่ำกว่านั้น 400 บาท · L-Corner อย่างเดียว ไม่เกิน 10 เส้น 250 บาท / 11 เส้นขึ้นไป 400 บาท · ส่งทั่วประเทศ · บางพื้นที่ (เช่น ต้องข้ามเรือ) อาจมีค่าส่งเพิ่ม ถามทีม KP ก่อนยืนยันกับลูกค้า'],
+    ['ราคา / Prices','ใช้ราคาตามแอปนี้ (ราคาเดียวกับ KP) · งานโปรเจกต์ใหญ่ สอบถามทีม KP'],
+    ['คำลงท้าย / Politeness','คำตอบด้านล่างไม่มีคำลงท้าย เติม ครับ/ค่ะ เองตามผู้พูด']
+  ],
+  faq:[
+    ['WPC กับ PVC ต่างกันยังไง?','WPC มีหลายลาย (ลอนลึก ลอนตื้น หน้าเรียบ) ดูมีมิติเหมือนไม้ ส่วน PVC เป็นแผ่นหน้าเรียบ กว้าง 26.5/40 ซม. ราคาต่อตารางเมตรถูกกว่า ยาว 2.90 ม. ทุกรุ่น'],
+    ['ต่างจากไม้จริงยังไง?','เป็นแผ่นสำเร็จรูปสำหรับตกแต่งภายในอาคาร ลายไม้มากับแผ่น ไม่ต้องทาสี ราคาถูกกว่าไม้จริงมาก แต่ไม่ใช่ไม้แท้'],
+    ['ต้องใช้กี่แผ่น?','ส่งขนาดผนัง กว้าง × สูง มาได้เลย คำนวณให้ฟรี รวมเผื่อเศษแล้ว'],
+    ['1 แผ่นได้กี่ตารางเมตร?','กว้าง 15.5 ซม. ≈ 0.43 · 16.5 ≈ 0.46 · 20 ≈ 0.58 · PVC 26.5 ≈ 0.73 · PVC 40 ≈ 1.16 ตร.ม. (ยาว 2.90 ม.)'],
+    ['ผนังสูงเกิน 2.90 ม. ทำยังไง?','ใช้ H-Profile ต่อแผ่น สอบถามรหัสที่เข้ากับแผ่นได้'],
+    ['L / H / U ใช้ทำอะไร?','L ปิดมุม/ขอบ · H ต่อรอยต่อแผ่น · U ปิดขอบปลายแผ่น ยาว 2.90 ม. เส้นละ 89 บาท สอบถามรหัสที่เข้ากับแผ่นได้'],
+    ['มีบริการติดตั้งไหม?','ทางเราจำหน่ายสินค้า ไม่มีบริการติดตั้ง แนะนำใช้ช่างที่มีประสบการณ์ แถมคลิปฟรี 10 ตัวต่อแผ่น'],
+    ['รับประกันไหม?','รับประกันว่าได้ของครบและถูกต้อง ถ้าของเสียหายจากการขนส่ง แจ้งพร้อมรูปตอนรับของ เคลมฟรี'],
+    ['ค่าส่งเท่าไหร่?','25 แผ่นขึ้นไปส่งฟรี ต่ำกว่านั้น 400 บาท ส่งทั่วประเทศ'],
+    ['เก็บเงินปลายทางได้ไหม?','ได้ ชำระตอนรับของ หรือโอนเข้าบัญชีบริษัท'],
+    ['ขอดูสีจริงได้ไหม?','นัดดูสินค้าที่ร้านที่ปทุมธานีได้ หรือขอรูปสีจริงเพิ่มเติม']
+  ],
+  obj:[
+    ['แพงไป','แผ่นยาวเต็ม 2.90 ม. (ผนังสูงไม่เกิน 2.90 ม. ไม่ต้องต่อแผ่น) แถมคลิปฟรี 10 ตัวต่อแผ่น ส่งฟรีตั้งแต่ 25 แผ่น ลองเทียบราคาทั้งงาน'],
+    ['ขอดูของจริงก่อน','ได้เลย นัดดูที่ร้านที่ปทุมธานีได้ หรือส่งรูปสีจริงเพิ่มให้'],
+    ['ขอคิดก่อน','ได้เลย เดี๋ยวส่งใบเสนอราคาพร้อมรูปสีไว้ให้ดู สะดวกเมื่อไหร่ทักมาได้เลย'],
+    ['ไม่กล้าโอนก่อน','ไม่ต้องโอนก่อน ชำระปลายทางได้ หรือโอนเข้าบัญชีบริษัท'],
+    ['ไม่มีช่าง','ทางเราไม่มีบริการติดตั้ง แนะนำหาช่างที่มีประสบการณ์ในพื้นที่']
+  ]
+};
+var _kitTab='rules';
+function spRenderKit(){
+  var T=[['rules','กติกา / rules'],['faq','คำถามลูกค้า / FAQ'],['obj','รับมือข้อโต้แย้ง / objections']];
+  $('kit-chips').innerHTML=T.map(function(t){ return '<button class="chip'+(_kitTab===t[0]?' on':'')+'" onclick="_kitTab=\''+t[0]+'\';spRenderKit()">'+t[1]+'</button>'; }).join('');
+  var list=KIT[_kitTab]||[];
+  $('kit-body').innerHTML=list.map(function(x,i){
+    return '<div class="card pad" style="margin-bottom:10px"><div style="font-weight:800;margin-bottom:4px">'+(_kitTab==='obj'?'“'+esc(x[0])+'”':esc(x[0]))+'</div>'
+      +'<div style="font-size:14px;line-height:1.65;color:var(--text)">'+esc(x[1])+'</div>'
+      +(_kitTab==='rules'?'':'<button class="btn line sm" style="margin-top:8px" onclick="copyText(KIT[_kitTab]['+i+'][1])"><i class="ti ti-copy"></i> คัดลอกคำตอบ</button>')+'</div>';
+  }).join('');
 }
 
 /* commission */
