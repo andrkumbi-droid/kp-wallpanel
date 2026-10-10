@@ -1080,6 +1080,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       db.ref('stockItems').on('value', function(snap) {
         stockItems = snap.val() ? Object.values(snap.val()) : [];
         try{ fbSeedSnap('stockItems', snap.val()); }catch(e){}
+        try{ qtStockTrimsCheck(); }catch(e){}
         // Quotation shows the remaining pieces per product → keep it live with the warehouse
         try{ if(document.getElementById('qt-suggestions').innerHTML){ qtRefreshSoldOut(); qtInitCounts(); } }catch(e){}
         try{if(document.getElementById('s-manager').classList.contains('active'))mgStock();}catch(e){}
@@ -9240,7 +9241,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261008001;
+var KP_BUILD = 20261010001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -30541,6 +30542,10 @@ function qtRebuildProducts(){
     return {code:p.code, name:p.name||p.nameEN||p.code, price:+p.price||0, w:+p.w||0, mat:(p.mat||'WPC'), profile:p.profile||'', nameEN:p.nameEN||'', spec:p.spec||'', _custom:true};
   }).filter(function(p){ return p.code && !have[p.code]; });
   QT_PRODUCTS = QT_BASE.concat(extra);
+  // Every L/H/U profile that is in STOCK can be quoted, even if nobody added it to
+  // the catalog by hand — a container booked in with new trims (Vladimir 14: H16,
+  // U16 …) used to be invisible here until someone remembered to add each code.
+  QT_PRODUCTS = QT_PRODUCTS.concat(qtStockTrims(QT_PRODUCTS));
   // Sort WPC then PVC then ACC; within WPC/PVC by code (numeric) so newly added
   // products slot in next to their siblings instead of stuck at the end of the
   // list (where they were easy to miss in the long "All Products" view).
@@ -30557,6 +30562,35 @@ function qtRebuildProducts(){
   try{ publishWebCatalog(); }catch(e){}
   try{ publishChatCatalog(); }catch(e){}
   _kpPhotoDone=false;   // catalogue changed - look at the photos again
+}
+
+// Trims from the stock list that the catalog does not have yet. Code as the office
+// writes it (T16 → H16, U044 → U44); codes that are no L/L-P/H/U profile are left out.
+function qtStockTrims(list){
+  var have={}, out=[];
+  (list||[]).forEach(function(p){ if(p&&p.code) have[ofNormCode(p.code)]=1; });
+  (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
+    if(!s || !s.code || ['lcorner','ttrim','utrim'].indexOf(s.type)<0) return;
+    var n=ofNormCode(s.code), fam='';
+    if(/^L-P-\d+$/.test(n)) fam='LP'; else if(/^L\d+$/.test(n)) fam='L'; else if(/^H\d+$/.test(n)) fam='H'; else if(/^U\d+$/.test(n)) fam='U';
+    if(!fam || have[n]) return;
+    have[n]=1;
+    out.push({code:n, name:{L:'L-Corner WPC', LP:'L-Corner PVC', H:'H-Profile', U:'U-Profile'}[fam], price:89, w:0, mat:'ACC', profile:fam, _fromStock:true});
+  });
+  return out;
+}
+// Rebuild only when the set of stocked trims changes — not on every sale.
+var _qtTrimSig='';
+function qtStockTrimsCheck(){
+  try{
+    var sig=(typeof stockItems!=='undefined'?stockItems:[]).filter(function(s){ return s && ['lcorner','ttrim','utrim'].indexOf(s.type)>=0; })
+      .map(function(s){ return ofNormCode(s.code); }).sort().join(',');
+    if(sig===_qtTrimSig) return;
+    // Catalog not loaded yet: its own listener rebuilds (with these trims). Publishing
+    // now would put a catalog without the custom products on the website.
+    if(!(typeof qtCatalog!=='undefined' && qtCatalog && Object.keys(qtCatalog).length)) return;
+    _qtTrimSig=sig; qtRebuildProducts();
+  }catch(e){}
 }
 
 // Mirror the merged catalog to Firebase (assistant/productCatalog) so the
