@@ -2341,6 +2341,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         <option value="Line Bobby">Line Bobby</option>
         <option value="Line Noy">Line Noy</option>
         <option value="หน้าร้าน / Walk-in">หน้าร้าน / Walk-in</option>
+        <option value="Sales">🤝 Sales / ตัวแทนขาย</option>
       </select>
       <input type="text" id="of-contact-name" placeholder="ชื่อลูกค้าในแชท / name" style="flex:1;min-width:0">
     </div>
@@ -4366,6 +4367,7 @@ function _enterWarehouse(s){
 function _enterOffice(s){
   if(!s) return;
   if(window._qtFill){ var _qf=window._qtFill; window._qtFill=null; setTimeout(function(){ try{ _qf(); }catch(e){ console.error('qtFill',e); } }, 400); }
+  if(window._salesReqPending){ var _sr=window._salesReqPending; window._salesReqPending=null; setTimeout(function(){ try{ salesReqLoad(_sr); }catch(e){ console.error('salesReq',e); } }, 700); }
   currentStaffId=s.id; try{ currentStaffName=s.name; }catch(e){}
   document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
   document.getElementById('s-office').classList.add('active');
@@ -12885,6 +12887,17 @@ function _ofCreateCore(){
   })();
   // Approving a POS draft: the sale stays the tablet seller's (commission,
   // 🏪 marker) and their tax-invoice request rides onto the real order.
+  // Sales partner order (sales.html): the order keeps who sold it — commission and
+  // the partner's tracking hang on these fields.
+  if(window._salesReq && window._salesReq.r){
+    var _sq=window._salesReq.r, _sqP=String((_sq.customer||{}).phone||'').replace(/\D/g,''), _ofP=String(o.phone||'').replace(/\D/g,'');
+    // A request loaded earlier must not ride on a different order typed in the same tab.
+    if(_sqP && _ofP.indexOf(_sqP)<0 && !confirm('เบอร์ลูกค้าไม่ตรงกับคำสั่งซื้อของตัวแทน '+(_sq.brand||'')+'\nCustomer phone differs from the sales partner request.\n\nOK = เป็นออเดอร์ของตัวแทน / it IS the partner order\nCancel = ออเดอร์ปกติ / a normal order')){
+      try{ salesReqCancel(); }catch(e){}
+    } else {
+      o.salesUid=_sq.uid||''; o.salesBrand=_sq.brand||''; o.salesSeller=_sq.seller||''; o.salesReq=window._salesReq.id;
+    }
+  }
   if(window._posPendingDraft){
     var _pd=window._posPendingDraft;
     o.posSale=true; o.posSeller=_pd.seller||''; o.posSellerId=_pd.sellerId||'';
@@ -12938,6 +12951,17 @@ function _ofCreateCore(){
   _ofPriority=false;_ofPriorityReason='';try{ofUpdatePriorityBtn();}catch(e){}
   // POS draft approved → tell the tablet (it shows "✓ ออกเลข <no>") and bump the
   // seller's monthly panel counter for the tablet's own display.
+  if(window._salesReq && o.salesReq){
+    try{
+      // the commission rule of today travels with the request — a later change does not rewrite it
+      (function(rid, no2, by2){ window.fbDB.ref('sales/config').once('value').then(function(cs){
+        var c=cs.val()||{}, rule={mode:c.mode||'pct', pct:(c.pct!=null?+c.pct:5), perPanel:(c.perPanel!=null?+c.perPanel:10)};   // same defaults as sales.html
+        return window.fbDB.ref('sales/requests/'+rid).update({status:'approved', orderId:no2, approvedBy:by2, approvedAt:Date.now(), rule:rule, lockBy:null, lockTs:null});
+      }).catch(function(e){ console.error('sales approve', e); }); })(window._salesReq.id, no, createdBy);
+      auditAdd({type:'edit', orderId:no, by:createdBy, detail:'🤝 Sales order of '+((window._salesReq.r||{}).brand||'')+' approved'});
+    }catch(e){}
+    salesReqCancel();
+  }
   if(window._posPendingKey){
     try{
       var _pk=window._posPendingKey, _pdd=window._posPendingDraft||{};
@@ -13289,6 +13313,7 @@ function posPendRender(){
     }).join('')+'</div>';
 }
 function posPendFill(key){
+  if(window._salesReq){ try{ salesReqCancel(); }catch(e){} }
   var p=posPendingData[key]; if(!p){ alert('draft is gone'); return; }
   var zone=(document.getElementById('ppz-'+key)||{}).value || kpProvinceZone(p.province||'') || 'Bangkok';
   window._posPendingKey=key; window._posPendingDraft=p;
@@ -13336,6 +13361,68 @@ function posPendFill(key){
   }
   try{ ofCalc(); }catch(e){}
   window.scrollTo(0,0);
+}
+// ── Sales partner request → New Order (opened from sales.html as ?salesReq=<id>) ──
+window._salesReqPending=(function(){ try{ var m=location.search.match(/[?&]salesReq=([^&]+)/); return m?decodeURIComponent(m[1]):null; }catch(e){ return null; } })();
+window._salesReq=null;
+function salesReqLoad(id){
+  if(!window.fbDB || !id) return;
+  window.fbDB.ref('sales/requests/'+id).once('value').then(function(snap){
+    var r=snap.val();
+    if(!r){ alert('ไม่พบคำสั่งซื้อของตัวแทน / sales request not found'); return; }
+    if(r.status!=='pending' && r.status!=='processing'){ alert('คำสั่งซื้อนี้ดำเนินการแล้ว ('+r.status+(r.orderId?' · '+r.orderId:'')+') / already processed'); return; }
+    var me=(typeof ofWho==='function'?ofWho():'Office');
+    return window.fbDB.ref('sales/requests/'+id).transaction(function(cur){
+      if(cur===null) return null;   // first pass without server data — Firebase retries with the real value
+      var stale=!cur.lockTs || (Date.now()-cur.lockTs)>15*60*1000;
+      if(cur.status==='pending' || (cur.status==='processing' && (stale || cur.lockBy===me))){ cur.status='processing'; cur.lockBy=me; cur.lockTs=Date.now(); return cur; }
+      return;            // someone else is on it, or it is done → abort
+    }).then(function(res){
+      if(!res.committed){ var c=res.snapshot.val()||{}; alert(c.status==='processing' ? ('กำลังเปิดอยู่ที่ '+(c.lockBy||'')+' / already open with '+(c.lockBy||'')) : 'คำสั่งซื้อนี้ดำเนินการแล้ว / already processed'); return; }
+      salesReqFill(id, res.snapshot.val());
+    });
+  }).catch(function(e){ alert('โหลดไม่ได้ / could not load: '+(e&&e.message||e)); });
+}
+function salesReqFill(id, r){
+    var _cl=function(x){ return String(x==null?'':x).replace(/[<>]/g,''); };
+    var cu=r.customer||{}; cu={name:_cl(cu.name), phone:_cl(cu.phone), address:_cl(cu.address), province:_cl(cu.province), maps:/^https:\/\//i.test(cu.maps||'')?cu.maps:''};
+    r.customer=cu; r.note=_cl(r.note); r.brand=_cl(r.brand); r.seller=_cl(r.seller);
+    window._salesReq={id:id, r:r};
+    oft('new');
+    var zone=''; try{ zone=kpProvinceZone(cu.province||''); }catch(e){}
+    if(zone){ try{ selectZone(zone); }catch(e){} }
+    function set(i,v){ var e=document.getElementById(i); if(e) e.value=(v==null?'':v); }
+    set('of-cust',cu.name); set('of-phone',cu.phone); set('of-addr',cu.address); set('of-province',cu.province); set('of-loc',cu.maps);
+    set('of-reqdate',r.wantDate||''); set('of-contact-ch','Sales'); set('of-contact-name',(r.brand||'')+(r.seller?' · '+r.seller:''));
+    var ph=document.getElementById('of-panels'), eh=document.getElementById('of-edges'); ph.innerHTML=''; eh.innerHTML='';
+    var packs=0;
+    (r.lineItems||[]).forEach(function(li){
+      if(li.type==='panel'){ ofAddP(); var l=ph.lastElementChild, i=l.querySelectorAll('input'); i[0].value=li.code; i[1].value=li.qty; i[2].value=li.unitPrice; }
+      else if(li.type==='clips'){ packs+=parseInt(li.qty)||0; }
+      else { ofAddE(); var le=eh.lastElementChild, ie=le.querySelectorAll('input'); var sel=le.querySelector('select'); if(sel) sel.value=li.type; ie[0].value=li.code; ie[1].value=li.qty; ie[2].value=li.unitPrice; }
+    });
+    if(!ph.children.length) ofAddP();
+    set('of-clip-packs', packs||''); set('of-discount','');
+    set('of-delivery', (r.totals||{}).delivery||0); _ofShipManual=true;
+    var note=document.getElementById('of-reorder-note');
+    if(note){
+      note.style.display='block';
+      note.innerHTML='<div style="background:#fbf3d9;border:1.5px solid #ecd78f;border-radius:var(--rs);padding:8px 10px;margin-bottom:10px;font-size:12px;color:#8a6d1f;font-weight:700">🤝 คำสั่งซื้อจากตัวแทน / Sales order — '+_esc(r.brand||'')+' ('+_esc(r.seller||'')+')'
+        +'<div style="font-weight:600;margin-top:3px">'+(r.payment==='transfer'?'💳 ลูกค้าแจ้งว่าโอนแล้ว — ตรวจสลิป':'💵 ชำระปลายทาง')+(r.note?' · 📝 '+_esc(r.note):'')+'</div>'
+        +'<div style="font-weight:600">ตรวจโซน/ที่อยู่ แล้วกด Create order ตามปกติ / check zone & address, then Create order</div>'
+        +'<button type="button" onclick="salesReqCancel()" style="float:right;border:none;background:none;color:#8a6d1f;cursor:pointer;font-weight:700;margin-top:-16px">✕</button></div>';
+    }
+    try{ ofCalc(); }catch(e){}
+    window.scrollTo(0,0);
+}
+function salesReqCancel(){
+  // give the request back (only if it is still ours and not yet turned into an order)
+  try{ if(window._salesReq && window.fbDB){ var _rid=window._salesReq.id, _me=(typeof ofWho==='function'?ofWho():'Office');
+    window.fbDB.ref('sales/requests/'+_rid).transaction(function(cur){ if(cur===null) return null; if(cur.status==='processing' && cur.lockBy===_me){ cur.status='pending'; cur.lockBy=null; cur.lockTs=null; return cur; } return; }); } }catch(e){}
+  window._salesReq=null;
+  var note=document.getElementById('of-reorder-note');
+  if(note){ note.style.display='none'; note.innerHTML=''; }
+  try{ if(/[?&]salesReq=/.test(location.search)) history.replaceState(null,'',location.pathname); }catch(e){}
 }
 function posPendFillCancel(){
   window._posPendingKey=''; window._posPendingDraft=null;
@@ -13444,6 +13531,7 @@ function ofOrderCard(o, sfx){
   if(o.status==='shipped'){ var _shp=(o.shipper&&o.shipper!=='ส่งเอง')?o.shipper:'ส่งเอง / self'+(o.driver?' ('+o.driver+')'+drvPhoneTag(o.driver):''); s += '<div style="font-size:12px;color:#4f46e5;font-weight:700;margin-bottom:2px;background:#eef2ff;border-radius:var(--rs);padding:4px 8px;display:inline-block"><i class="ti ti-truck" style="font-size:12px;vertical-align:-1px"></i> ที่ขนส่ง / At shipper: '+_shp+'</div>'; }
   var _clipPacks=(o.lineItems||[]).reduce(function(a,i){return i.type==='clips'?a+(parseInt(i.qty)||0):a;},0);
   try{ s += whOfficeLine(o); }catch(e){}
+  if(o.salesBrand) s += '<div style="font-size:12px;font-weight:800;color:#8a6d1f;background:#fbf3d9;border:1px solid #ecd78f;border-radius:var(--rs);padding:3px 9px;margin:3px 0;display:inline-block">🤝 Sales: '+_esc(o.salesBrand)+(o.salesSeller?' · '+_esc(o.salesSeller):'')+'</div> ';
   if(o._stockMiss && o._stockMiss.length && o.status!=='cancelled') s += '<div style="font-size:12px;font-weight:700;color:#dc2626;background:#fee2e2;border-radius:var(--rs);padding:4px 8px;margin:3px 0;display:inline-block">⚠ ไม่ได้หักสต็อก / stock NOT deducted: '+o._stockMiss.map(function(x){return _esc(String(x));}).join(', ')+' — รหัสไม่ตรงกับสต็อก / code not in the stock list</div>';
   s += '<div style="display:flex;align-items:flex-start;gap:8px;margin-top:4px">'
     +'<div style="font-size:13px;flex:1;min-width:0">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':'')+(_clipPacks>0?' · 🛍️ '+_clipPacks+' คลิปแพ็ค / clip pack'+(_clipPacks>1?'s':''):'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+(o.bundle&&o.bundle>0?' <span style="background:#fff7ed;color:#ea580c;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">🧶 '+o.bundle+' มัด</span>':'')+'</div>'
@@ -32191,6 +32279,7 @@ function qtToOrder(){
   if(quoteReturn==='office'){ qtBack(); fill(); }
   else { window._qtFill=fill; goArea('office'); }
   function fill(){
+  if(window._salesReq){ try{ salesReqCancel(); }catch(e){} }
   oft('new');
   ph=document.getElementById('of-panels'); eh=document.getElementById('of-edges');
   ph.innerHTML=''; eh.innerHTML='';
