@@ -644,14 +644,15 @@ function E0(v){ return NF0.format(Math.round((+v||0)*FX.r))+' €'; }
 function cv(v){ return CUR==='eur' ? v*FX.r : v; }
 function M(v){ return CUR==='eur' ? E0(v) : B0(v); }          // Hauptwaehrung
 function M2(v){ return CUR==='eur' ? B0(v) : E0(v); }         // die andere, klein
-/* Alex' Bild: 'konto' = sein Kontostand — runter, wenn ein Container bezahlt
+/* 'ges' = Gesamtvermoegen inkl. Container (grau = steckt im Container).
+   Alex' Bild: 'konto' = sein Kontostand — runter, wenn ein Container bezahlt
    wird, hoch, wenn er Einsatz + Gewinn zurueckbringt (so wollte André es
    sehen); 'gew' = nur der aufsummierte Gewinn. */
 var AMODE='konto';
-try{ AMODE=localStorage.getItem('kp-invest-amode2')==='gew'?'gew':'konto'; }catch(e){}
+try{ AMODE=({gew:'gew',ges:'ges'})[localStorage.getItem('kp-invest-amode2')]||'konto'; }catch(e){}
 function setAMode(m){ AMODE=m; try{ localStorage.setItem('kp-invest-amode2',m); }catch(e){} render(); }
 var NMODE='konto';
-try{ NMODE=localStorage.getItem('kp-invest-nmode')==='gew'?'gew':'konto'; }catch(e){}
+try{ NMODE=({gew:'gew',ges:'ges'})[localStorage.getItem('kp-invest-nmode')]||'konto'; }catch(e){}
 function setNMode(m){ NMODE=m; try{ localStorage.setItem('kp-invest-nmode',m); }catch(e){} render(); }
 function setCur(c){ CUR=c; try{ localStorage.setItem('kp-invest-cur',c); }catch(e){} render(); }
 function isoOf(n){ var d=new Date(n*86400000);
@@ -731,6 +732,7 @@ function chartBox(who, C){
       + (fut ? '<div class="ch-hero fut"><div class="k">Wenn alles zurück ist ('+shortDate(isoOf(lastP))+')</div>'
              +   '<div class="v">'+M(C.tot[j])+'</div><div class="s">Gewinn insgesamt +'+M(C.pa[j])+'</div></div>' : '')
       + '<div class="cur" style="margin-left:auto"><button type="button" class="'+(AMODE==='konto'?'on':'')+'" onclick="setAMode(\'konto\')">Kontostand</button>'
+      +   '<button type="button" class="'+(AMODE==='ges'?'on':'')+'" onclick="setAMode(\'ges\')">Gesamt</button>'
       +   '<button type="button" class="'+(AMODE==='gew'?'on':'')+'" onclick="setAMode(\'gew\')">Nur Gewinn</button></div>'
       + curBtns.replace('class="cur"','class="cur" style="margin-left:0"') + '</div>';
   }else{
@@ -741,6 +743,7 @@ function chartBox(who, C){
       + (futN ? '<div class="ch-hero fut"><div class="k">Wenn alles zurück ist ('+shortDate(isoOf(lastP))+')</div>'
               +   '<div class="v">+'+M(C.pn[j])+'</div><div class="s">+'+M2(C.pn[j])+'</div></div>' : '')
       + '<div class="cur" style="margin-left:auto"><button type="button" class="'+(NMODE==='konto'?'on':'')+'" onclick="setNMode(\'konto\')">Kontostand</button>'
+      +   '<button type="button" class="'+(NMODE==='ges'?'on':'')+'" onclick="setNMode(\'ges\')">Gesamt</button>'
       +   '<button type="button" class="'+(NMODE==='gew'?'on':'')+'" onclick="setNMode(\'gew\')">Nur Gewinn</button></div>'
       + curBtns.replace('class="cur"','class="cur" style="margin-left:0"') + '</div>';
   }
@@ -749,6 +752,12 @@ function chartBox(who, C){
   if(who==='A' && AMODE==='konto'){
     h+='<span><b style="background:'+col+'"></b>Auf dem Konto (frei) — runter beim Bezahlen, hoch bei Rückzahlung</span>'
      + '<span><b style="background:var(--ink2);height:2px;border-radius:0"></b>Gesamt inkl. Container</span>';
+  }else if(who==='A' && AMODE==='ges'){
+    h+='<span><b style="background:'+col+'"></b>Gesamt — frei + im Container</span>'
+     + '<span><b style="background:#5A6274"></b>davon im Container</span>';
+  }else if(who==='N' && NMODE==='ges'){
+    h+='<span><b style="background:'+col+'"></b>Gewinn bis dahin</span>'
+     + '<span><b style="background:#5A6274"></b>dein Geld im Container</span>';
   }else if(who==='N' && NMODE==='konto'){
     h+='<span><b style="background:'+col+'"></b>Dein Geld — runter beim Bezahlen, hoch bei Rückzahlung (Start = 0)</span>'
      + '<span><b style="background:var(--ink2);height:2px;border-radius:0"></b>Gewinn bis dahin</span>';
@@ -786,14 +795,36 @@ function monthsIn(d0,d1){
 function drawChart(who, C){
   var el=$('ch-'+who); if(!el || !C) return;
   var W=el.clientWidth; if(!W) return;                // Reiter versteckt → spaeter
-  var konto = who==='A' ? AMODE==='konto' : NMODE==='konto';
-  var H=W<500?(konto?260:230):(konto?320:280), pl=50, pr=14, pt=40, pb=22, pw=W-pl-pr, ph=H-pt-pb;
+  var md = who==='A' ? AMODE : NMODE, konto = md==='konto', ges = md==='ges';
+  var H=W<500?(md!=='gew'?260:230):(md!=='gew'?320:280), pl=50, pr=14, pt=40, pb=22, pw=W-pl-pr, ph=H-pt-pb;
   var n=C.free.length, col = who==='A' ? 'var(--alex)' : 'var(--andre)';
 
   /* Was gezeichnet wird: eine Treppe (main) mit Flaeche, optional eine duenne
      Bezugslinie (ref), und Punkte mit Beschriftung an jeder Bewegung (marks). */
-  var main=[], ref=null, marks=[];
-  if(konto){
+  var main=[], ref=null, base=null, marks=[];
+  function profitMarks(){
+    C.ev.forEach(function(e){
+      var p=who==='A'?e.k.pA:e.k.pN;
+      if(e.P==null || p<=0.5) return;
+      var inv=who==='A'?e.k.invA:e.k.invN;
+      marks.push({ d:e.P, fut:e.fut, name:e.c.name||'Container', val:'+'+M(p),
+                   list:[{ t:(e.c.name||'Container')+(e.fut?' fällig':' zurück'), v:p,
+                           sub: inv>0 ? 'Einsatz '+B0(inv)+' + Gewinn '+B0(p)+' = '+B0(inv+p) : '' }] });
+    });
+  }
+  if(ges){
+    /* Gesamt: Alex = frei + im Container (steigt bei Einzahlung und Gewinn).
+       André = sein Geld im Container + Gewinn bis dahin. Grau darunter: der
+       Teil, der gerade im Container steckt. */
+    if(who==='A'){
+      main=C.tot.map(cv); base=C.tot.map(function(v,i){ return cv(Math.max(0,Math.min(v, v-C.free[i]))); });   // grau nie ueber der Gesamtlinie (Konto im Minus)
+      C.mv.forEach(function(m){ if(/^(Einzahlung|Auszahlung an Alex)/.test(m.t))
+        marks.push({ d:m.d, fut:m.fut, name:m.t, val:(m.v<0?'−':'+')+M(Math.abs(m.v)), list:[m] }); });
+    }else{
+      main=C.ninC.map(function(v,i){ return cv(v+C.pn[i]); }); base=C.ninC.map(cv);
+    }
+    profitMarks();
+  }else if(konto){
     main=(who==='A'?C.free:C.nfree).map(cv); ref=(who==='A'?C.tot:C.pn).map(cv);
     var byDay={};
     (who==='A'?C.mv:C.mvN).forEach(function(m){ (byDay[m.d]=byDay[m.d]||[]).push(m); });
@@ -804,20 +835,12 @@ function drawChart(who, C){
                    val: (v<0?'−':'+')+M(Math.abs(v)), list:L });
     });
   }else{
-    var pro = who==='A' ? C.pa : C.pn;
-    main=pro.map(cv);
-    C.ev.forEach(function(e){
-      var p=who==='A'?e.k.pA:e.k.pN;
-      if(e.P==null || p<=0.5) return;
-      var inv=who==='A'?e.k.invA:e.k.invN;
-      marks.push({ d:e.P, fut:e.fut, name:e.c.name||'Container', val:'+'+M(p),
-                   list:[{ t:(e.c.name||'Container')+(e.fut?' fällig':' zurück'), v:p,
-                           sub: inv>0 ? 'Einsatz '+B0(inv)+' + Gewinn '+B0(p)+' = '+B0(inv+p) : '' }] });
-    });
+    main=(who==='A' ? C.pa : C.pn).map(cv);
+    profitMarks();
   }
   marks.sort(function(a,b){ return a.d-b.d; });
 
-  var vals=main.concat(ref||[]);
+  var vals=main.concat(ref||[], base||[]);
   var top=Math.max.apply(null, vals.concat([0])), bot=Math.min.apply(null, vals.concat([0]));
   var ystep=niceStep(Math.max(1,top-bot)/4);
   var ymax=Math.ceil(top*1.04/ystep)*ystep, ymin=Math.floor(bot/ystep)*ystep;
@@ -849,7 +872,14 @@ function drawChart(who, C){
   ['p','f'].forEach(function(part){
     s+='<g clip-path="url(#cp-'+who+'-'+part+')" opacity="'+(part==='p'?1:.45)+'">';
     var o=pts(main);
-    s+='<path d="'+path(o)+'L'+X(n-1).toFixed(1)+','+y0.toFixed(1)+'L'+X(0).toFixed(1)+','+y0.toFixed(1)+'Z" fill="'+col+'" fill-opacity=".2"/>';
+    if(base){
+      var ob=pts(base);
+      s+='<path d="'+path(ob)+'L'+X(n-1).toFixed(1)+','+y0.toFixed(1)+'L'+X(0).toFixed(1)+','+y0.toFixed(1)+'Z" fill="#5A6274" fill-opacity=".5"/>'
+       + '<path d="'+path(o.concat(ob.slice().reverse()))+'Z" fill="'+col+'" fill-opacity=".28"/>'
+       + '<path d="'+path(ob)+'" fill="none" stroke="var(--panel)" stroke-width="2"/>';
+    }else{
+      s+='<path d="'+path(o)+'L'+X(n-1).toFixed(1)+','+y0.toFixed(1)+'L'+X(0).toFixed(1)+','+y0.toFixed(1)+'Z" fill="'+col+'" fill-opacity=".2"/>';
+    }
     if(ref) s+='<path d="'+path(pts(ref))+'" fill="none" stroke="var(--ink2)" stroke-width="1.5" stroke-dasharray="'+(part==='f'?'5 4':'none')+'"/>';
     s+='<path d="'+path(o)+'" fill="none" stroke="'+col+'" stroke-width="2.2" stroke-linejoin="round"'
      + (part==='f'?' stroke-dasharray="5 4"':'')+'/></g>';
@@ -901,7 +931,16 @@ function drawChart(who, C){
     var gl=$('gl-'+who), gd=$('gd-'+who), tt=$('tt-'+who);
     gl.setAttribute('x1',xi); gl.setAttribute('x2',xi); gl.style.display='';
     gd.setAttribute('cx',xi); gd.setAttribute('cy',Y(main[i])); gd.style.display='';
-    var rows = konto && who==='N'
+    var rows = ges && who==='A'
+      ? '<div class="r"><span>Gesamt</span><b>'+M(C.tot[i])+'</b></div>'
+      + '<div class="r"><span>davon frei</span><b>'+M(C.free[i])+'</b></div>'
+      + '<div class="r"><span>davon im Container</span><b>'+M(C.tot[i]-C.free[i])+'</b></div>'
+      + '<div class="r"><span>Gewinn bis hier</span><b>+'+M(C.pa[i])+'</b></div>'
+      : ges
+      ? '<div class="r"><span>Im Container</span><b>'+M(C.ninC[i])+'</b></div>'
+      + '<div class="r"><span>Gewinn bis hier</span><b>+'+M(C.pn[i])+'</b></div>'
+      + '<div class="r"><span>Zusammen</span><b>'+M(C.ninC[i]+C.pn[i])+'</b></div>'
+      : konto && who==='N'
       ? '<div class="r"><span>Dein Stand</span><b>'+(C.nfree[i]<0?'−':'')+M(Math.abs(C.nfree[i]))+'</b></div>'
       + '<div class="r"><span>Im Container</span><b>'+M(C.ninC[i])+'</b></div>'
       + '<div class="r"><span>Gewinn bis hier</span><b>+'+M(C.pn[i])+'</b></div>'
