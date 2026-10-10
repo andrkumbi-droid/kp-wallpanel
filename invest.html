@@ -468,7 +468,7 @@ function oops(){ say('Speichern fehlgeschlagen — Verbindung?',3600); }
 /* ═══════════════════════════════════════════════════════════════════════════
    2 · ZUSTAND
    ═══════════════════════════════════════════════════════════════════════════ */
-var staffList=[], ACC={}, CTS={}, LED={}, CFG={}, me=null, role='view', boss=false, view='over';
+var staffList=[], ACC={}, CTS={}, LED={}, CFG={}, VIS={}, me=null, role='view', boss=false, view='over';
 /* Nur dieser eine KP-Datensatz oeffnet die Seite ueber den KP-PIN. Frueher
    reichte das Buchhaltungsrecht — das haben aber auch Pim und Nicky, und die
    haben mit Alex' Geld nichts zu tun. Alle weiteren Zugaenge laufen ueber
@@ -836,11 +836,19 @@ function renderSet(){
   }else{
     h+='<div class="card"><table class="t-acc"><thead><tr><th>Name</th><th>PIN</th><th>Recht</th><th></th></tr></thead><tbody>';
     ak.forEach(function(k){ var a=ACC[k]||{};
-      h+='<tr><td>'+esc(a.name||'')+'</td><td class="n">'+esc(a.pin||'')+'</td>'
+      var vs=Object.keys(VIS[k]||{}).map(function(x){ return VIS[k][x]||{}; });
+      var nPin=vs.filter(function(v){ return v.k==='pin'; }).length;
+      var last=vs.reduce(function(m,v){ return Math.max(m, +v.ts||0); }, 0);
+      var vl = vs.length
+        ? vs.length+' Aufrufe · '+nPin+' mit PIN · zuletzt '+dtTime(last)
+        : 'noch nicht reingeschaut';
+      h+='<tr><td>'+esc(a.name||'')+'<div class="muted" style="font-size:11.5px;margin-top:2px">'+vl+'</div></td><td class="n">'+esc(a.pin||'')+'</td>'
         + '<td><span class="tag '+(a.role==='owner'?'t-pay':'t-inv')+'">'+(a.role==='owner'?'Vollzugriff':'Nur lesen')+'</span></td>'
         + '<td class="r"><button class="xdel" onclick="delAcc(\''+k+'\')">✕</button></td></tr>';
     });
-    h+='</tbody></table></div>';
+    h+='</tbody></table></div>'
+      + '<div class="muted" style="font-size:11.5px;margin-top:6px">Aufrufe werden erst seit 11.10.2026 gezählt. '
+      +   '„Mit PIN" = echtes Einloggen, der Rest = Seite innerhalb von 4 Stunden wieder geöffnet.</div>';
   }
 
   h+='<div class="sec"><h2>Daten</h2><div class="line"></div></div>';
@@ -1121,7 +1129,20 @@ function tryPin(){
   }
   me=f; role=f.role; boss=!!f.boss; $('pin-err').textContent='';
   try{ localStorage.setItem('kp-invest-session', JSON.stringify({id:f.id, ts:Date.now()})); }catch(e){}
+  logVisit('pin');
   open_();
+}
+/* Wer schaut wann rein. Nur die Zugaenge von hier (Alex), nicht ich mit dem
+   KP-PIN. 'pin' = PIN eingetippt, 'auto' = innerhalb der 4-Stunden-Sitzung
+   wieder geoeffnet. Sehen kann das nur der Einstellungen-Reiter. */
+function logVisit(kind){
+  if(!me || !me.acc) return;
+  try{ IDB.ref('visits/'+me.acc+'/'+uid()).set({ ts:Date.now(), k:kind }).catch(function(){}); }catch(e){}
+}
+function dtTime(ts){
+  if(!ts) return '—';
+  var d=new Date(ts);
+  return p2(d.getDate())+'.'+p2(d.getMonth()+1)+'. '+p2(d.getHours())+':'+p2(d.getMinutes());
 }
 function open_(){
   $('gate').style.display='none';
@@ -1136,6 +1157,9 @@ function open_(){
   if(!boss){
     var t=$('tabs').querySelector('[data-v="set"]'); if(t) t.style.display='none';
     if(view==='set'){ view='over'; }
+  }else if(!open_.vis){
+    open_.vis=true;
+    IDB.ref('visits').on('value', function(s){ VIS=s.val()||{}; render(); });
   }
   render();
 }
@@ -1202,7 +1226,7 @@ function resume(){
     if(!s || (Date.now()-s.ts)>=4*3600*1000) return;       // 4 Stunden, wie im POS
     if(s.id.indexOf('acc:')===0){
       var a=ACC[s.id.slice(4)];
-      if(a){ me={name:a.name||'Zugang', acc:s.id.slice(4)}; role=a.role==='owner'?'owner':'view'; boss=false; open_(); }
+      if(a){ me={name:a.name||'Zugang', acc:s.id.slice(4)}; role=a.role==='owner'?'owner':'view'; boss=false; logVisit('auto'); open_(); }
     }else{
       var st=staffList.find(function(x){ return x && x.id===OWNER_STAFF && x.id===s.id.slice(3) && x.active!==false; });
       if(st){ me={name:st.name||'André'}; role='owner'; boss=true; open_(); }
