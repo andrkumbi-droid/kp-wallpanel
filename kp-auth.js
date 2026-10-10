@@ -17,14 +17,10 @@
    firebase.database(), so it works with the v8 SDK and the v10 compat SDK. */
 (function(){
   var EMAIL = 'kp-device@kp-wallpanel.firebaseapp.com';
-  // invest.html only (Alex, external investor): the rules give this account v2/invest and
-  // nothing else. He opens his personal link …invest.html#kpinv=CODE once — no typing.
-  var INV_EMAIL = 'kp-invest@kp-wallpanel.firebaseapp.com';
   var ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';           // no 0/O/1/I/L — easy to type
   function A(){ return firebase.auth(); }
   function D(p){ return firebase.database().ref(p); }
   function isDev(u){ return !!(u && !u.isAnonymous && String(u.email||'').toLowerCase()===EMAIL); }
-  function isInv(u){ return !!(u && !u.isAnonymous && String(u.email||'').toLowerCase()===INV_EMAIL); }
   function norm(c){ return String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
   function fmtCode(c){ return norm(c).replace(/(.{4})(?=.)/g,'$1-'); }
   function newCode(){
@@ -50,9 +46,9 @@
       p.then(function(v){ clearTimeout(t); res(v); }, function(e){ clearTimeout(t); rej(e); });
     });
   }
-  function hashKey(name){ var m=String(location.hash||'').match(new RegExp('[#&]'+(name||'kpdev')+'=([^&]+)')); if(!m) return ''; try{ return decodeURIComponent(m[1]); }catch(e){ return m[1]; } }
+  function hashKey(){ var m=String(location.hash||'').match(/[#&]kpdev=([^&]+)/); if(!m) return ''; try{ return decodeURIComponent(m[1]); }catch(e){ return m[1]; } }
   function dropHash(){
-    try{ var h=String(location.hash||'').replace(/^#/,'').split('&').filter(function(p){ return p && !/^kp(dev|inv)=/.test(p); }).join('&');
+    try{ var h=String(location.hash||'').replace(/^#/,'').split('&').filter(function(p){ return p && !/^kpdev=/.test(p); }).join('&');
       history.replaceState(null, '', location.pathname+location.search+(h ? '#'+h : '')); }catch(e){}
   }
   function devId(){
@@ -122,17 +118,12 @@
     opt=opt||{};
     var err=null, prompt=opt.prompt||'always';
     _p=firstUser().then(function(u){
-      var key=hashKey(), ikey=opt.invest ? hashKey('kpinv') : '';
-      if(key || hashKey('kpinv')) dropHash();          // never leave a code in the address bar
+      var key=hashKey(); if(key) dropHash();          // never leave the code in the address bar
       if(isDev(u)) return u;
-      if(opt.invest && ikey) return timeout(A().signInWithEmailAndPassword(INV_EMAIL, norm(ikey)).then(function(c){ return c.user; }), 15000)
-        .then(null, function(e){ err='inv:'+errCode(e); return isInv(u) ? u : anon(u); });
-      if(opt.invest && isInv(u)) return u;
       if(key) return timeout(signDev(key), 15000).then(null, function(e){ err='link:'+errCode(e); console.warn('[KP auth] activation link failed:', err); return anon(u); });
       return anon(u);
     }).then(function(u){
-      window._kpAuthMode=isDev(u)?'device':(isInv(u)?'invest':(u?'anon':'none'));
-      if(isInv(u)) return u;                            // Alex: no telemetry, no bar
+      window._kpAuthMode=isDev(u)?'device':(u?'anon':'none');
       if(isDev(u)){ try{ sessionStorage.removeItem('kpAuthLost'); }catch(e){} watch(); }
       seen(page, u, err);
       if(!isDev(u) && prompt!=='never'){
@@ -178,22 +169,6 @@
       .then(function(){ return D('kpAuth/secret').set({code:code, ts:Date.now()}); })
       .then(function(){ D('kpAuth/next').remove(); return fmtCode(code); },
         function(e){ throw {code:(e&&e.code)||'kp/rotate-failed', deviceCode:fmtCode(code)}; });
-  };
-  // Alex's personal link. First call creates his account in a separate app instance, so this
-  // device's own session is untouched. Only a KP device can read or store the code.
-  window.kpAuthInvestLink=function(){
-    var base='https://andrkumbi-droid.github.io/kp-wallpanel/invest.html?openExternalBrowser=1#kpinv=';
-    return D('kpAuth/invest/code').once('value').then(function(s){
-      if(s.val()) return base+fmtCode(s.val());
-      var code=newCode(), app2=firebase.initializeApp(firebase.app().options, 'kpInvMaker'+Date.now());
-      return app2.auth().createUserWithEmailAndPassword(INV_EMAIL, code).then(function(c){
-        var uid=c.user.uid;
-        return D('kpAuth/invest').set({code:code, uid:uid, ts:Date.now()}).then(function(){
-          try{ app2.auth().signOut(); app2.delete(); }catch(e){}
-          return base+fmtCode(code);
-        }, function(e){ throw {code:(e&&e.code)||'kp/save-failed', deviceCode:fmtCode(code)}; });
-      });
-    });
   };
   window.KP_DEVICE_EMAIL=EMAIL;
 })();
