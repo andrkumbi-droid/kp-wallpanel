@@ -727,6 +727,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="kp-auth.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
@@ -863,7 +864,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     // Chained behind App Check on purpose: once enforcement is on, a sign-in that
     // starts before the App Check token exists is the one request that gets denied.
     const fbAuthReady = fbAppCheckReady
-      .then(function(){ return firebase.auth().signInAnonymously(); })
+      .then(function(){ return window.kpAuthEnsure ? kpAuthEnsure('app-test') : firebase.auth().signInAnonymously(); })
       .then(function(){ window._kpAuthOk=true; return true; })
       .catch(function(e){
         console.error('[FB] anonymous sign-in failed — DB access will be denied:', e && e.code, e && e.message);
@@ -963,7 +964,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     db.ref('pushQueue').on('child_added', function(snap) {
       var n = snap.val();
       if(!n || n.delivered) return;
-      if(n.role === _fcmRole && n.ts > Date.now() - 30000 && _whPushMine(n.role, n.data)) {
+      if(n.role === _fcmRole && n.ts > Date.now() - 30000 && n.ts < Date.now() + 60000 && _whPushMine(n.role, n.data)) {
         showInAppNotif(n.title, n.body, n.data);
       }
     });
@@ -978,12 +979,14 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
         return !o || whOfOrder(o).indexOf(window.WH_CUR)>=0;
       }catch(e){ return true; }
     }
+    // pushQueue is written by other devices and by sales partners — plain text only.
+    function _notifEsc(s){ return String(s==null?'':s).slice(0,300).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
     function showInAppNotif(title, body, data) {
       var el = document.createElement('div');
       el.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:99999;background:var(--bg);border:1.5px solid var(--border);border-radius:12px;padding:12px 16px;box-shadow:0 4px 20px rgba(0,0,0,0.15);max-width:360px;width:90%;display:flex;align-items:flex-start;gap:10px;animation:slideDown 0.3s ease';
       el.innerHTML = '<span style="font-size:20px;flex-shrink:0">🔔</span>'
-        +'<div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--text)">'+title+'</div>'
-        +(body?'<div style="font-size:12px;color:var(--text2);margin-top:2px">'+body+'</div>':'')+'</div>'
+        +'<div style="flex:1"><div style="font-size:13px;font-weight:700;color:var(--text)">'+_notifEsc(title)+'</div>'
+        +(body?'<div style="font-size:12px;color:var(--text2);margin-top:2px">'+_notifEsc(body)+'</div>':'')+'</div>'
         +'<button onclick="this.parentNode.remove()" style="background:none;border:none;cursor:pointer;font-size:18px;color:var(--text2);line-height:1;padding:0;flex-shrink:0">×</button>';
       document.body.appendChild(el);
       setTimeout(function(){ if(el.parentNode) el.remove(); }, 5000);
@@ -2095,6 +2098,12 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
       <div class="stit" style="margin-bottom:6px">📦 Stock log / ประวัติสต็อก</div>
       <div style="font-size:11px;color:#92400e;margin-bottom:10px">Its own book: who changed which product, when, and by how much — Grade A/B edits, A→B moves, new products, container arrivals. Kept apart so daily stock work does not bury the order history below.</div>
       <button type="button" class="btnsm" style="width:100%;justify-content:center;background:#b45309;color:#fff;border-color:#b45309" onclick="stLogOpen()"><i class="ti ti-history"></i> Open stock log / เปิดประวัติสต็อก</button>
+    </div>
+    <div style="border:1.5px solid var(--border);border-radius:var(--rs);padding:12px;margin-bottom:14px;background:var(--bg2)">
+      <div class="stit" style="margin-bottom:6px"><i class="ti ti-shield-lock"></i> อุปกรณ์ / Device access</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">ทุกเครื่องของ KP ใส่รหัสอุปกรณ์ครั้งเดียว — หลังจากนั้นคนนอก (เช่น ตัวแทนขาย) เข้าฐานข้อมูลไม่ได้ / Every KP device enters the device code once — after that nobody outside (e.g. sales partners) can get into the database.</div>
+      <div id="kpdev-box" style="font-size:12.5px;margin-bottom:10px">—</div>
+      <button type="button" class="btnsm" style="width:100%;justify-content:center" onclick="kpDevRender()"><i class="ti ti-refresh"></i> อัปเดต / refresh</button>
     </div>
     <div style="border:1.5px solid var(--border);border-radius:var(--rs);padding:12px;margin-bottom:14px;background:var(--bg2)">
       <div class="stit" style="margin-bottom:6px"><i class="ti ti-refresh"></i> โหลดใหม่ทุกเครื่อง / Reload all devices</div>
@@ -3942,6 +3951,7 @@ var KP_SESSION_MS = 4*60*60*1000;
 var kpActingAs = null;   // set while an office user works inside a colleague's view
 function kpSessionSave(s){
   try{ kpLS.setItem('kp-session', JSON.stringify({id:s.id, ts:Date.now()})); }catch(e){}
+  try{ if(window.kpAuthNote) kpAuthNote(s.name||s.id); }catch(e){}
 }
 function kpSessionClear(){ try{ kpLS.removeItem('kp-session'); }catch(e){} }
 // staffList arrives fresh from Firebase on every change, which leaves kpUser
@@ -5206,6 +5216,7 @@ var tourPayouts={};    // driver payouts: po-id -> {tourIds[],amount,slips[],…
 let editId=null,editSM=null,editIM=null,editDM=null,selMonth='';
 
 function go(s){
+  if(s==='manager') setTimeout(function(){ try{ kpDevRender(); }catch(e){} }, 400);
   // manager-login: show PIN screen
   if(s==='manager-login'){
     document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
@@ -9576,6 +9587,75 @@ function kpTourPhotoMigrate(btn){
   next(0);
 }
 // Management button: every device reloads, no deploy needed.
+// ── Device access (SECURITY.md Stufe 3a, kp-auth.js) ───────────────────────
+// This device's status, the device code (only readable on an activated device),
+// activation links, and every device seen in the last 14 days that is still
+// anonymous. Phase B (rules without anonymous access) only once that list is empty.
+function kpDevRender(){
+  var box=document.getElementById('kpdev-box'); if(!box || !window.kpAuthIsDevice) return;
+  var dev=kpAuthIsDevice(), B='class="btnsm" style="flex:1;justify-content:center"';
+  if(!dev){
+    box.innerHTML='<div style="margin-bottom:8px;color:#b45309;font-weight:700">⚠️ เครื่องนี้ยังไม่ได้เปิดใช้งาน / this device is not activated</div>'
+      +'<div style="display:flex;gap:6px;margin-bottom:8px"><input id="kpdev-code" placeholder="XXXX-XXXX-XXXX" autocomplete="off" style="flex:1;font-family:monospace;text-transform:uppercase">'
+      +'<button type="button" class="btnsm btnsmp" onclick="kpDevActivate()">เปิดใช้งาน / Activate</button></div>'
+      +'<div style="font-size:11px;color:var(--text2);margin-bottom:6px">ครั้งแรกเท่านั้น — ยังไม่มีรหัส: / first time only — no code exists yet:</div>'
+      +'<button type="button" '+B+' onclick="kpDevCreate(this)"><i class="ti ti-key"></i> สร้างรหัสอุปกรณ์ / create the device code</button>';
+    return;
+  }
+  box.innerHTML='<div style="margin-bottom:8px;color:#15803d;font-weight:700">✅ เครื่องนี้เปิดใช้งานแล้ว / this device is activated</div>'
+    +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><span style="flex:1">รหัสอุปกรณ์ / device code: <b id="kpdev-show" style="font-family:monospace;letter-spacing:.05em">••••-••••-••••</b></span>'
+    +'<button type="button" class="btnsm" onclick="kpDevReveal()">แสดง / show</button></div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'
+    +'<button type="button" '+B+' onclick="kpDevCopy(\'code\',this)"><i class="ti ti-copy"></i> รหัส / code</button>'
+    +'<button type="button" '+B+' onclick="kpDevCopy(\'app\',this)"><i class="ti ti-link"></i> ลิงก์แอป / app link</button>'
+    +'<button type="button" '+B+' onclick="kpDevCopy(\'sales\',this)"><i class="ti ti-crown"></i> Sales owner</button></div>'
+    +'<div id="kpdev-list" style="margin-bottom:8px">⏳</div>'
+    +'<button type="button" class="btnsm" style="width:100%;justify-content:center;color:#b91c1c" onclick="kpDevRotate(this)"><i class="ti ti-refresh-alert"></i> เปลี่ยนรหัสอุปกรณ์ / new device code</button>';
+  firebase.database().ref('kpAuth/seen').once('value').then(function(s){
+    var v=s.val()||{}, now=Date.now();
+    var rows=Object.keys(v).map(function(k){ var x=v[k]||{}; x.k=k; return x; })
+      .filter(function(x){ return now-(x.t||0) < 14*864e5; })
+      .sort(function(a,b){ return ((a.m==='device')-(b.m==='device')) || ((b.t||0)-(a.t||0)); });
+    var on=rows.filter(function(x){ return x.m==='device'; }).length, off=rows.length-on;
+    document.getElementById('kpdev-list').innerHTML='<div style="margin-bottom:4px">14 วัน / days: <b style="color:#15803d">'+on+' ✅</b> · <b style="color:'+(off?'#b45309':'#15803d')+'">'+off+' ⚠️ ยังไม่เปิดใช้งาน / not activated</b></div>'
+      +rows.filter(function(x){ return x.m!=='device'; }).slice(0,40).map(function(x){
+        return '<div style="padding:4px 0;border-top:1px solid var(--border)">⚠️ <b>'+_esc(x.n||'?')+'</b> · '+_esc(x.pg||'')+' · '
+          +new Date(x.t||0).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})
+          +'<div style="color:var(--text3);font-size:10.5px">'+_esc(String(x.ua||'').slice(0,90))+(x.e?' · '+_esc(x.e):'')+'</div></div>'; }).join('');
+  }).catch(function(e){ var l=document.getElementById('kpdev-list'); if(l) l.textContent='—'; });
+}
+function kpDevActivate(){
+  var c=(document.getElementById('kpdev-code')||{}).value||'';
+  kpAuthActivate(c).then(function(){ alert('✓ เปิดใช้งานแล้ว / activated'); location.reload(); },
+    function(e){ alert('รหัสไม่ถูกต้อง / wrong code\n'+((e&&e.code)||'')); });
+}
+function kpDevCreate(btn){
+  if(!confirm('สร้างรหัสอุปกรณ์ใหม่? ทำครั้งเดียวเท่านั้น / Create the device code? Only ever once.')) return;
+  if(btn) btn.disabled=true;
+  kpAuthCreate().then(function(code){ alert('✓ รหัสอุปกรณ์ / device code:\n\n'+code+'\n\nส่งให้ทีมทาง LINE (กลุ่มพนักงานเท่านั้น) / send it to the team via LINE (staff group only)'); location.reload(); },
+    function(e){ if(btn) btn.disabled=false;
+      if(e && e.deviceCode){ alert('⚠️ จดรหัสนี้ไว้! / WRITE THIS CODE DOWN:\n\n'+e.deviceCode+'\n\n(saving failed: '+e.code+')'); return; }
+      alert(/already-in-use/.test(String(e&&e.code))
+        ? '⚠️ บัญชีอุปกรณ์มีอยู่แล้ว — ถ้าคุณยังไม่เคยสร้าง แจ้ง André ทันที (อาจมีคนสร้างไว้ก่อน) / The device account already exists. If nobody at KP created it, tell André right away — someone else may have registered it first.'
+        : 'Error: '+((e&&(e.code||e.message))||e)); });
+}
+function kpDevReveal(){ kpAuthCode().then(function(c){ var el=document.getElementById('kpdev-show'); if(el) el.textContent=c||'—'; }); }
+function kpDevCopy(kind, btn){
+  var p = kind==='code' ? kpAuthCode()
+    : kpAuthSetupLink(kind==='sales' ? 'https://kp-sales.web.app/?owner&openExternalBrowser=1' : 'https://andrkumbi-droid.github.io/kp-wallpanel/?openExternalBrowser=1');
+  p.then(function(t){
+    if(!t){ alert('—'); return; }
+    var ok=function(){ if(btn){ var h=btn.innerHTML; btn.innerHTML='✓ คัดลอกแล้ว / copied'; setTimeout(function(){ btn.innerHTML=h; }, 2200); } };
+    if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(ok, function(){ prompt('Copy:', t); });
+    else prompt('Copy:', t);
+  });
+}
+function kpDevRotate(btn){
+  if(!confirm('เปลี่ยนรหัสอุปกรณ์? ทุกเครื่องอื่นจะต้องใส่รหัสใหม่ภายใน 1 ชม. / New device code? Every OTHER device must enter the new code within the hour.')) return;
+  if(btn) btn.disabled=true;
+  kpAuthRotate().then(function(code){ alert('✓ รหัสใหม่ / new code:\n\n'+code); kpDevRender(); },
+    function(e){ if(btn) btn.disabled=false; alert('Error: '+((e&&(e.code||e.message))||e)+(e&&e.deviceCode?'\n\n⚠️ อาจเป็นรหัสใหม่แล้ว / the new code may already be active:\n'+e.deviceCode:'')); });
+}
 function kpForceReloadAll(btn){
   if(!window.fbDB){ alert('ออฟไลน์ / offline'); return; }
   if(!confirm('โหลดแอปใหม่ทุกเครื่องเลยไหม? / Reload the app on every device now?\n\n'

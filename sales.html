@@ -15,6 +15,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-check-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://andrkumbi-droid.github.io/kp-wallpanel/kp-auth.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <script>
 /* ═══ KP SALES PARTNER ════════════════════════════════════════════════════
@@ -56,6 +57,11 @@ var spAcReady = new Promise(function(resolve){
   }).catch(function(){ clearTimeout(to); resolve(false); });
 });
 var SP_TEST = /[?&]test=1(&|$)/.test(location.search);
+// Partners sign in on kp-sales.web.app only: on github.io a partner login would replace
+// the KP device session of the whole origin (KP app, POS, … share it). Owner side stays.
+if(/github\.io$/.test(location.hostname) && !/[?&]owner(=|&|$)/.test(location.search)) location.replace('https://kp-sales.web.app/'+location.search+location.hash);
+var KP_DEV_EMAIL = 'kp-device@kp-wallpanel.firebaseapp.com';   // same as kp-auth.js — kept here in case that file fails to load
+function isKpDevice(u){ return !!(u && !u.isAnonymous && String(u.email||'').toLowerCase()===KP_DEV_EMAIL); }
 // The page also runs on kp-sales.web.app (Firebase Hosting) — photos and the KP app
 // always come from GitHub Pages, so every link here is absolute.
 var KP_BASE = 'https://andrkumbi-droid.github.io/kp-wallpanel/';
@@ -605,13 +611,22 @@ var _bootDone=false;
 spAcReady.then(function(){
   AUTH.onAuthStateChanged(function(u){
     _bootDone=true;
-    if(u && u.isAnonymous && !$('scr-pin').classList.contains('hide')) return;
+    var dev=isKpDevice(u);   // KP device account = owner side, never a member
+    if(u && (u.isAnonymous||dev) && !$('scr-pin').classList.contains('hide')) return;
     if(spOwnerSession()){ spOwnerStart(); return; }
-    if(u && !u.isAnonymous){ ME=u; spMemberStart(); }
-    else { ME=null; spShow('auth'); }
+    if(u && !u.isAnonymous && !dev){ ME=u; spMemberStart(); }
+    else { ME=null; spShow('auth'); if(dev) $('own-door').classList.remove('hide'); }
   });
 });
 setTimeout(function(){ if(!_bootDone) spShow('auth'); }, 6000);
+// Activation link (…/?owner#kpdev=…) from KP Management → this browser becomes a KP device.
+if(/[#&]kpdev=/.test(location.hash) && window.kpAuthEnsure) spAcReady.then(function(){ kpAuthEnsure('sales-owner',{prompt:'locked'}).then(function(u){ toast(isKpDevice(u)?'✓ เปิดใช้งานแล้ว / activated':'รหัสไม่ถูกต้อง / activation failed'); }); });
+// Owner side signs in as the KP device when possible; anonymous only until Phase B.
+function spOwnerAuth(){
+  var u=AUTH.currentUser;
+  if(u && (isKpDevice(u) || u.isAnonymous)) return Promise.resolve(u);
+  return window.kpAuthEnsure ? kpAuthEnsure('sales-owner',{prompt:'locked'}) : AUTH.signInAnonymously();
+}
 
 /* ═════════════ auth ═════════════ */
 function spAuthTab(t){
@@ -899,7 +914,7 @@ function spOrderSend(){
 /* my orders + tracking */
 function spAttachMyOrders(){
   R('sales/requests/'+ME.uid).on('value', function(s){
-    MYREQ=s.val()||{};
+    MYREQ=s.val()||{}; Object.keys(MYREQ).forEach(function(k){ if(!/^[-_A-Za-z0-9]{1,40}$/.test(k)) delete MYREQ[k]; });
     Object.keys(MYREQ).forEach(function(k){ var r=MYREQ[k]; if(r && r.orderId) spWatchOrder(r.orderId); });
     spRenderOrders(); spRenderEarn();
   });
@@ -1155,7 +1170,8 @@ function spPinCheck(){
   var go=function(){ return DBR.ref('v2/managerPin').once('value').then(function(s){ var real=(s.val()&&s.val().pin)||''; if(!real){ $('pin-msg').textContent='ยังไม่ได้ตั้งรหัส / no PIN set'; _pin=''; setTimeout(spPinRender,250); return; }
     if(p===real){ try{ localStorage.setItem('kpsp-owner', JSON.stringify({ts:Date.now(), test:SP_TEST})); }catch(e){} spOwnerStart(); }
     else if(p.length>=String(real).length){ $('pin-msg').textContent='รหัสไม่ถูกต้อง / wrong PIN'; _pin=''; setTimeout(spPinRender,250); } }); };
-  (AUTH.currentUser ? Promise.resolve() : AUTH.signInAnonymously()).then(go).catch(function(e){ $('pin-msg').textContent=spErr(e); });
+  spOwnerAuth().then(go).catch(function(e){ $('pin-msg').textContent=/permission/i.test(String(e&&(e.code||e.message)))
+    ? 'อุปกรณ์นี้ยังไม่ได้เปิดใช้งาน — เปิดลิงก์จากแอป KP / open the activation link from the KP app first' : spErr(e); });
 }
 function spOwnerOut(){ try{ localStorage.removeItem('kpsp-owner'); }catch(e){} OWNER=false; location.reload(); }
 var _ownOn=false;
@@ -1167,12 +1183,13 @@ function spOwnerStart(){
     R('sales/members').on('value', function(s){ MEMBERS=s.val()||{}; spRenderTeam(); spRenderInbox(); spRenderOwnStats(); });
     R('sales/requests').on('value', function(s){
       var v=s.val()||{}; ALLREQ={};
-      Object.keys(v).forEach(function(uid){ var g=v[uid]||{}; Object.keys(g).forEach(function(rid){ var r=g[rid]; if(r && typeof r==='object' && r.uid) ALLREQ[uid+'/'+rid]=r; }); });
+      // Keys end up in onclick/href — partners choose rid, so only plain push-style keys are accepted.
+      Object.keys(v).forEach(function(uid){ var g=v[uid]||{}; Object.keys(g).forEach(function(rid){ var r=g[rid]; if(r && typeof r==='object' && r.uid && /^[-_A-Za-z0-9]{1,40}$/.test(rid) && /^[A-Za-z0-9]{1,128}$/.test(uid)) ALLREQ[uid+'/'+rid]=r; }); });
       Object.keys(ALLREQ).forEach(function(k){ var r=ALLREQ[k]; if(r && r.orderId) spWatchOrder(r.orderId); });
       spRenderInbox(); spRenderOwnStats(); spRenderTeam(); });
     R('sales/payouts').on('value', function(s){ PAYOUTS=s.val()||{}; spRenderOwnStats(); });
   };
-  if(AUTH.currentUser) start(); else AUTH.signInAnonymously().then(start).catch(function(){ spShow('auth'); });
+  spOwnerAuth().then(start).catch(function(){ spShow('auth'); });
 }
 function spOwnTab(t){
   ['inbox','team','stats','set'].forEach(function(k){ $('o-'+k).classList.toggle('hide', k!==t); });

@@ -160,3 +160,43 @@ sondern nur: eigenes `sales/members/<uid>` (Status nicht selbst änderbar), eige
 **Bleibt offen:** wer sich bewusst anonym anmeldet, hat weiter Vollzugriff → Stufe 3.
 Deploy: `firebase deploy --only database --project kp-wallpanel` aus einem Ordner mit
 `firebase.json` → `"database":{"rules":"firebase-rules.json"}` (Git-Bash: `MSYS_NO_PATHCONV=1`).
+
+## Stufe 3a — KP-Gerätezugang (ab 2026-10-11)
+
+**Ziel:** Anonyme Anmeldung darf nicht mehr die ganze Datenbank öffnen. Der API-Key ist
+öffentlich, jeder (z. B. ein Sales-Partner) könnte sich sonst anonym anmelden und alles lesen.
+
+**Lösung:** ein gemeinsames KP-Gerätekonto `kp-device@kp-wallpanel.firebaseapp.com`
+(E-Mail/Passwort). Das Passwort ist der **Gerätecode** `XXXX-XXXX-XXXX` (12 Zeichen aus 31,
+≈ 59 Bit). Jedes KP-Gerät gibt ihn **einmal** ein — im gelben/roten Balken, den `kp-auth.js`
+zeigt, unter Management → 🔐 *อุปกรณ์ / Device access*, oder per Link `…#kpdev=CODE`.
+Danach bleibt das Gerät dauerhaft angemeldet (Firebase-Persistenz). Der PIN-Login der App ist
+unverändert — das hier ersetzt nur die Firebase-Anmeldung.
+
+| Datei | Rolle |
+|---|---|
+| `kp-auth.js` | `kpAuthEnsure(page,{prompt})` statt `signInAnonymously()`; Balken; Telemetrie `kpAuth/seen`; Management-Helfer (`kpAuthCreate`, `kpAuthCode`, `kpAuthRotate`, `kpAuthSetupLink`) |
+| `index.html`, `index-test.html`, `pos.html`, `tour.html`, `moulds.html`, `warehouse-display(-test).html`, `kp-order-builder` | nutzen `kpAuthEnsure` |
+| `invest.html` | `prompt:'never'` (externer Investor — Lösung für Phase B offen) |
+| `sales.html` | Owner-Seite `prompt:'locked'`; das Gerätekonto ist nie ein Partner; Partner-Login nur auf kp-sales.web.app (github.io leitet um, sonst überschreibt ein Partner-Login die Gerätesitzung des ganzen Origins) |
+
+**Datenbank:** `kpAuth/secret {code}` und `kpAuth/uid` nur für das Gerätekonto lesbar,
+`kpAuth/seen/<gerät>` = Telemetrie (wer ist noch anonym), `pub/kpDev/on` = Code existiert
+(schaltet den gelben Balken ein).
+
+**Regeln:** Root hat keine Regel mehr; `$top` gilt für alle Top-Level-Knoten **außer** den
+benannten (`kpAuth`, `pub`, `v2`, `lagertest` — Firebase-Doku: „$other means any key excluding…").
+- **Phase A** (`firebase-rules.json`): KP = anonym **oder** Gerätekonto. Für alle bisherigen
+  Clients identisch zu vorher, nur `kpAuth` ist neu und nur fürs Gerätekonto.
+- **Phase B** (`firebase-rules.phaseB.json`): KP = nur Gerätekonto. Partner-Regeln enger
+  (pushQueue nur mit Member-Datensatz, members nur Passwort-Konten, config nur aktive).
+
+**Reihenfolge:** Phase-A-Regeln → Clients deployen → im Management „สร้างรหัสอุปกรณ์ / create
+the device code" (einmalig; sofort danach, damit niemand die E-Mail vorher registriert —
+schlägt die Anlage mit *email-already-in-use* fehl, hat jemand sie vorweggenommen → E-Mail in
+`kp-auth.js`/`sales.html` ändern) → Code an das Team (LINE, nur Staff-Gruppe) → jedes Gerät
+einmal eingeben → Management-Liste „ยังไม่เปิดใช้งาน / not activated" leer → Phase-B-Regeln.
+
+**Code wechseln** (Mitarbeiter geht, Code geleakt): Management → „เปลี่ยนรหัสอุปกรณ์". Alle
+anderen Geräte verlieren innerhalb ~1 h die Sitzung und brauchen den neuen Code.
+Rollback: `firebase-rules.json` der Phase A wieder deployen (Geräte und Anonyme haben dann Zugriff).
