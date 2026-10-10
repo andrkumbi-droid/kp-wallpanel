@@ -148,3 +148,15 @@ unberührt bleiben. Vor Schritt 5 trotzdem in den Metriken gegenprüfen, statt d
 - **Stufe 3 — echte Nutzer-Auth**: pro Mitarbeiter ein Firebase-Login (Custom Token aus
   Apps Script, Rolle als Claim). Erst damit ist die Rollentrennung serverseitig echt —
   heute ist der PIN-Login reine UI.
+
+## Sales-Partner-Konten — **aktiv seit 2026-10-10**
+
+`sales.html` lässt externe Verkäufer sich mit E-Mail + Passwort anmelden. Solche Konten
+(`sign_in_provider == 'password'`) bekommen **nicht** mehr den Vollzugriff von `auth != null`,
+sondern nur: eigenes `sales/members/<uid>` (Status nicht selbst änderbar), eigene
+`sales/requests/<uid>/` (neu anlegen nur als `pending` und nur wenn freigegeben),
+`sales/config`, Orders mit `salesUid == uid`, sowie Katalog/Stock/soldOut wenn freigegeben;
+`pushQueue` nur neue Einträge an `office`. Anonyme Anmeldung (App, POS, TV) unverändert.
+**Bleibt offen:** wer sich bewusst anonym anmeldet, hat weiter Vollzugriff → Stufe 3.
+Deploy: `firebase deploy --only database --project kp-wallpanel` aus einem Ordner mit
+`firebase.json` → `"database":{"rules":"firebase-rules.json"}` (Git-Bash: `MSYS_NO_PATHCONV=1`).
