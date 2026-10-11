@@ -3,6 +3,7 @@
 # GitHub Pages keeps serving sales.html too; this only refreshes the short address.
 set -e
 cd "$(dirname "$0")/.."
+node tools/check-html.js sales.html fragebogen.html
 cp sales.html sales-site/index.html
 cp fragebogen.html sales-site/fragebogen.html
 MSYS_NO_PATHCONV=1 firebase deploy --only hosting:kp-sales --project kp-wallpanel --non-interactive
