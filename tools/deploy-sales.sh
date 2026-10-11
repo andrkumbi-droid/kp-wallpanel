@@ -4,4 +4,5 @@
 set -e
 cd "$(dirname "$0")/.."
 cp sales.html sales-site/index.html
+cp fragebogen.html sales-site/fragebogen.html
 MSYS_NO_PATHCONV=1 firebase deploy --only hosting:kp-sales --project kp-wallpanel --non-interactive
