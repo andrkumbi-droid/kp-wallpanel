@@ -9255,7 +9255,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261011004;
+var KP_BUILD = 20261011005;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -12816,8 +12816,12 @@ function ofCreate(){
   if(window._salesReq && o.salesReq){
     try{
       // the commission rule of today travels with the request — a later change does not rewrite it
-      (function(rid, no2, by2){ window.fbDB.ref('sales/config').once('value').then(function(cs){
-        var c=cs.val()||{}, rule={mode:c.mode||'pct', pct:(c.pct!=null?+c.pct:5), perPanel:(c.perPanel!=null?+c.perPanel:10)};   // same defaults as sales.html
+      // A partner's individual rule (sales.html → Owner → Team → settings) wins over the standard one.
+      (function(rid, no2, by2){ var puid=String(rid).split('/')[0];
+        Promise.all([window.fbDB.ref('sales/config').once('value'), window.fbDB.ref('sales/memberRules/'+puid).once('value').catch(function(){ return {val:function(){ return null; }}; })]).then(function(res){
+        var c=res[0].val()||{}, mr=res[1].val()||{};
+        if((mr.mode==='pct' && +mr.pct>0) || (mr.mode==='perPanel' && +mr.perPanel>0)) c={mode:mr.mode, pct:mr.pct, perPanel:mr.perPanel};
+        var rule={mode:c.mode||'pct', pct:(c.pct!=null?+c.pct:5), perPanel:(c.perPanel!=null?+c.perPanel:10)};   // same defaults as sales.html
         return window.fbDB.ref('sales/requests/'+rid).update({status:'approved', orderId:no2, approvedBy:by2, approvedAt:Date.now(), rule:rule, lockBy:null, lockTs:null});
       }).catch(function(e){ console.error('sales approve', e); }); })(window._salesReq.id, no, createdBy);
       auditAdd({type:'edit', orderId:no, by:createdBy, detail:'🤝 Sales order of '+((window._salesReq.r||{}).brand||'')+' approved'});
