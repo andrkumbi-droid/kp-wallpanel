@@ -691,6 +691,9 @@ function spAttachQuotes(){
   if(_quotesOn || !ME) return; _quotesOn=true;
   R('sales/quotes/'+ME.uid).on('value', function(sn){
     QUOTES=sn.val()||{}; Object.keys(QUOTES).forEach(function(k){ if(!spQSafe(k) || !QUOTES[k]) delete QUOTES[k]; });
+    // The quote on screen was deleted or ordered on another device → it is no longer
+    // "that" quote: keep the items on screen as an unsaved copy, never write over it.
+    if(QMETA.id && (!QUOTES[QMETA.id] || QUOTES[QMETA.id].status==='ordered')) spQDetach();
     spRenderQSeg(); if(_qView==='folder') spRenderFolder(); spRenderQHead();
     try{ spRenderOrders(); }catch(e){}
   }, function(){});
@@ -699,10 +702,12 @@ function spAttachQuotes(){
   if(old.length){
     var up={}; old.forEach(function(q){ if(!q || !(q.items||[]).length) return;
       var id=R('sales/quotes/'+ME.uid).push().key;
-      up[id]={name:clean(q.name||'').slice(0,80), phone:'', fb:'', line:'', note:'', items:q.items.filter(function(c){ return c&&c.code&&c.qty>0; }).map(function(c){ return {code:String(c.code), qty:+c.qty}; }), total:0, status:'waiting', ts:+q.ts||Date.now(), updatedAt:+q.ts||Date.now()}; });
+      up[id]={name:clean(q.name||'').slice(0,80), phone:'', fb:'', line:'', note:'', items:q.items.filter(function(c){ return c&&c.code&&c.qty>0; }).slice(0,99).map(function(c){ return {code:String(c.code).slice(0,30), qty:Math.min(5000,+c.qty)}; }), total:0, status:'waiting', ts:+q.ts||Date.now(), updatedAt:+q.ts||Date.now()}; });
     R('sales/quotes/'+ME.uid).update(up).then(function(){ try{ localStorage.removeItem(spSavedKey()); }catch(e){} }).catch(function(){});
   }
 }
+function spQMetaStore(){ try{ localStorage.setItem(spMetaKey(), JSON.stringify(QMETA)); }catch(e){} }
+function spQDetach(){ clearTimeout(_qSaveT); QMETA.id=''; delete QMETA.ts; spQMetaStore(); spRenderQHead(); try{ spRenderQuoteOut(); }catch(e){} }
 function spQMetaRead(){
   var v=function(id){ return clean(($(id)||{}).value||''); };
   QMETA.name=v('q-cust').replace(/^คุณ\s*/,'').slice(0,80); QMETA.phone=v('q-phone').slice(0,20); QMETA.line=v('q-line').slice(0,80); QMETA.fb=v('q-fb').slice(0,200); QMETA.note=v('q-note').slice(0,200);
@@ -711,7 +716,7 @@ function spQMetaFill(){
   [['q-cust','name'],['q-phone','phone'],['q-line','line'],['q-fb','fb'],['q-note','note']].forEach(function(f){ var e=$(f[0]); if(e && document.activeElement!==e) e.value=QMETA[f[1]]||''; });
 }
 function spQMetaIn(){
-  spQMetaRead(); try{ localStorage.setItem(spMetaKey(), JSON.stringify(QMETA)); }catch(e){}
+  spQMetaRead(); spQMetaStore();
   var q=$('q-text'); if(q) q.textContent=spQuoteText(); spQAuto();
 }
 function spQHasWho(m){ m=m||QMETA; return !!(m.name||m.phone||m.fb||m.line); }
@@ -719,50 +724,54 @@ function spQAuto(){ if(!QMETA.id) return; clearTimeout(_qSaveT); _qSaveT=setTime
 function spQRec(){
   var c=spCalc(), now=Date.now();
   return {name:QMETA.name||'', phone:normPhone(QMETA.phone)||QMETA.phone||'', fb:QMETA.fb||'', line:QMETA.line||'', note:QMETA.note||'',
-    items:CART.map(function(x){ return {code:x.code, qty:x.qty}; }), total:c.total, panels:c.panels, status:'waiting', ts:QMETA.ts||now, updatedAt:now};
+    items:CART.slice(0,99).map(function(x){ return {code:String(x.code).slice(0,30), qty:x.qty}; }), total:c.total, panels:c.panels, status:'waiting', ts:QMETA.ts||now, updatedAt:now};
 }
-// silent = autosave; returns a promise
+// silent = autosave. The write is queued locally at once (works offline); the promise
+// only reports the server's answer, callers never wait for it before moving on.
 function spQuoteSave(silent){
   clearTimeout(_qSaveT);
-  if(!ME || !CART.length) return Promise.resolve(true);
+  if(!ME) return Promise.resolve(true);
   spQMetaRead();
+  if(!CART.length && !QMETA.id && !spQHasWho()) return Promise.resolve(true);
   if(!silent && !spQHasWho()){ toast('ใส่ชื่อ เบอร์ FB หรือ LINE อย่างน้อย 1 ช่อง / enter a name, phone, FB or LINE', 3500); var e=$('q-cust'); if(e) e.focus(); return Promise.resolve(false); }
+  var ex=QMETA.id ? QUOTES[QMETA.id] : null;
+  if(ex && ex.status==='ordered'){ spQDetach(); return Promise.resolve(true); }   // never rewrite an ordered quote
   var first=!QMETA.id; if(first) QMETA.id=R('sales/quotes/'+ME.uid).push().key;
-  var rec=spQRec(); QMETA.ts=rec.ts; try{ localStorage.setItem(spMetaKey(), JSON.stringify(QMETA)); }catch(e){}
-  return R('sales/quotes/'+ME.uid+'/'+QMETA.id).set(rec).then(function(){
-    if(!silent) toast('📁 บันทึกลงแฟ้มแล้ว ✓ '+(rec.name||rec.phone||rec.line||rec.fb)+' / saved to the quote folder'+(first?' — แก้ต่อได้ บันทึกอัตโนมัติ':''), 3500);
-    spRenderQHead(); spRenderQuoteOut(); return true;
-  }).catch(function(e){ if(first) QMETA.id=''; toast('บันทึกไม่สำเร็จ / save failed: '+(e&&e.code||e)); return false; });
+  var id=QMETA.id, rec=spQRec(); QMETA.ts=rec.ts; spQMetaStore();
+  if(!silent) toast('📁 บันทึกลงแฟ้มแล้ว ✓ '+(rec.name||rec.phone||rec.line||rec.fb)+' / saved to the quote folder'+(first?' — แก้ต่อได้ บันทึกอัตโนมัติ':''), 3500);
+  spRenderQHead(); spRenderQuoteOut();
+  return R('sales/quotes/'+ME.uid+'/'+id).set(rec).then(function(){ return true; })
+    .catch(function(e){ if(first && QMETA.id===id) spQDetach(); toast('บันทึกไม่สำเร็จ / save failed: '+(e&&e.code||e)); return false; });
 }
-function spQuoteReset(){ CART=[]; QMETA={}; spQMetaFill(); spSaveCart(); try{ localStorage.removeItem(spMetaKey()); }catch(e){} }
-// New quote: a saved one stays in the folder; an unsaved one is only dropped after asking.
+function spQuoteReset(){ clearTimeout(_qSaveT); CART=[]; QMETA={}; spQMetaFill(); spSaveCart(); try{ localStorage.removeItem(spMetaKey()); }catch(e){} }
+// New quote: a saved one stays in the folder; an unsaved one with a name/phone is parked
+// in the folder too; one without anything to find it by is only dropped after asking.
 function spQuoteNew(){
-  if(CART.length && !QMETA.id){
-    spQMetaRead();
-    if(spQHasWho()){ spQuoteSave(false).then(function(ok){ if(ok){ spQuoteReset(); spQView('edit'); spRenderShop(); } }); return; }
-    if(!confirm('ใบนี้ยังไม่ได้บันทึก จะล้างทิ้ง? / this quote is not saved — discard it?')) return;
-  } else if(QMETA.id) spQuoteSave(true);
+  spQMetaRead();
+  if(!QMETA.id && CART.length && !spQHasWho() && !confirm('ใบนี้ยังไม่ได้บันทึก จะล้างทิ้ง? / this quote is not saved — discard it?')) return;
+  if(QMETA.id || spQHasWho()){ var parked=!QMETA.id; spQuoteSave(true); if(parked) toast('📁 เก็บใบเดิมไว้ในแฟ้มแล้ว / previous quote kept in the folder'); }
   spQuoteReset(); spQView('edit'); spRenderShop();
 }
 function spCartClear(){ spQuoteNew(); }
 function spQuoteOpen(id, asCopy){
   var q=QUOTES[id]; if(!q) return;
-  var go=function(){
-    CART=(q.items||[]).filter(function(c){ return c && c.code && c.qty>0; }).map(function(c){ return {code:c.code, qty:+c.qty}; });
-    QMETA={name:q.name||'', phone:q.phone||'', fb:q.fb||'', line:q.line||'', note:q.note||''};
-    if(!asCopy){ QMETA.id=id; QMETA.ts=q.ts; }
-    spSaveCart(); spQMetaFill(); try{ localStorage.setItem(spMetaKey(), JSON.stringify(QMETA)); }catch(e){}
-    if(!asCopy && q.status==='lost') spQuoteSave(true);   // opened again → back to waiting
-    spQView('edit'); window.scrollTo(0,0);
-    if(asCopy) toast('คัดลอกเป็นใบใหม่แล้ว / copied as a new quote');
-  };
   if(QMETA.id===id && !asCopy){ spQView('edit'); return; }
-  // the quote on screen is never lost: saved ones are flushed, unsaved ones parked in the folder
-  if(CART.length && !QMETA.id){
-    spQMetaRead(); if(!spQHasWho()) $('q-cust').value='ไม่มีชื่อ '+new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
-    spQuoteSave(true).then(function(ok){ if(ok) go(); }); return;
-  }
-  if(QMETA.id) spQuoteSave(true).then(function(ok){ if(ok) go(); }); else go();
+  // the quote on screen is never lost: saved ones are flushed, unsaved ones parked in the
+  // folder (an unnamed one gets a private note so it can be told apart — never a fake name)
+  spQMetaRead();
+  if(!QMETA.id && (CART.length || spQHasWho())){
+    if(!spQHasWho()){ var n=$('q-note'); if(n) n.value=((n.value?n.value+' · ':'')+'พักไว้ / parked '+new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'})).slice(0,200); }
+    spQuoteSave(true);
+  } else if(QMETA.id) spQuoteSave(true);
+  clearTimeout(_qSaveT);
+  CART=(q.items||[]).filter(function(c){ return c && c.code && c.qty>0; }).map(function(c){ return {code:c.code, qty:+c.qty}; });
+  QMETA={name:q.name||'', phone:q.phone||'', fb:q.fb||'', line:q.line||'', note:q.note||''};
+  if(!asCopy){ QMETA.id=id; QMETA.ts=q.ts; }
+  try{ localStorage.setItem(spCartKey(), JSON.stringify(CART)); }catch(e){}
+  spCartBadge(); spQMetaFill(); spQMetaStore();
+  if(!asCopy && q.status==='lost') spQuoteSave(true);   // opened again → back to waiting
+  spQView('edit'); window.scrollTo(0,0);
+  if(asCopy) toast('คัดลอกเป็นใบใหม่แล้ว / copied as a new quote');
 }
 function spQuoteLost(id){
   var q=QUOTES[id]; if(!q || !ME) return;
@@ -770,7 +779,8 @@ function spQuoteLost(id){
 }
 function spQuoteDel(id){
   if(!ME || !confirm('ลบใบเสนอราคานี้ถาวร? / delete this quote for good?')) return;
-  R('sales/quotes/'+ME.uid+'/'+id).remove().then(function(){ if(QMETA.id===id){ QMETA.id=''; spRenderQHead(); } toast('ลบแล้ว / deleted'); });
+  if(QMETA.id===id) spQDetach();   // stop the autosave first, or it would bring the quote back
+  R('sales/quotes/'+ME.uid+'/'+id).remove().then(function(){ toast('ลบแล้ว / deleted'); });
 }
 function spQList(){ return Object.keys(QUOTES).map(function(k){ var q=QUOTES[k]; q._k=k; return q; }).sort(function(a,b){ return (b.updatedAt||b.ts||0)-(a.updatedAt||a.ts||0); }); }
 function spQView(v){ _qView=v; $('q-edit').classList.toggle('hide', v!=='edit'); $('q-folder').classList.toggle('hide', v!=='folder'); spRenderQSeg(); if(v==='folder') spRenderFolder(); else spRenderQuote(); }
@@ -813,7 +823,7 @@ function spRenderFolder(){
       +'<div style="font-size:12.5px;color:var(--text2)"><b style="color:var(--text)">'+fmt(tot)+' ฿</b> · '+new Date(q.updatedAt||q.ts||0).toLocaleDateString('th-TH',{day:'numeric',month:'short'})
         +(st==='waiting'?' · รอมา '+days+' วัน <span class="en">'+days+' d waiting</span>':'')+'</div>'
       +(q.note?'<div style="font-size:12.5px;margin-top:2px">📝 '+esc(q.note)+'</div>':'')+'</div>'
-      +(r?stageChip(rst):(st==='lost'?'<span class="st no">ไม่ซื้อ / lost</span>':'<span class="st pend">รอลูกค้า / waiting</span>'))+'</div>'
+      +(r?stageChip(rst):st==='ordered'?'<span class="st ok">สั่งแล้ว / ordered</span>':(st==='lost'?'<span class="st no">ไม่ซื้อ / lost</span>':'<span class="st pend">รอลูกค้า / waiting</span>'))+'</div>'
       +'<div class="row" style="margin-top:10px;flex-wrap:wrap">'
       +(st==='ordered'
         ? (r?'<button class="btn dark sm" style="flex:1" onclick="spOrdDetail(\''+esc(q.reqId)+'\')"><i class="ti ti-truck"></i> '+(r.orderId?'#'+esc(r.orderId):'ติดตาม')+' / track</button>':'')
