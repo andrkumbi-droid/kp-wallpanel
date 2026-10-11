@@ -1158,6 +1158,7 @@ function spProd(code){
     +((g==='WPC'||g==='PVC') ? spCalcBox(p) : '')
     +'<div class="row" style="margin-bottom:12px"><div class="qty"><button onclick="spQtyStep(-1)">−</button><input id="pq" type="number" inputmode="numeric" value="'+(g==='ACC'?1:10)+'"><button onclick="spQtyStep(1)">+</button></div>'
     +'<button class="btn gold" style="flex:1" onclick="spAddCart(\''+esc(code)+'\')"><i class="ti ti-file-plus"></i> เพิ่มในใบเสนอราคา / add to quote</button></div>'
+    +'<button class="btn dark w" style="margin-bottom:12px" onclick="spAddCart(\''+esc(code)+'\',true)"><i class="ti ti-circle-plus"></i> เพิ่ม แล้วเลือกสินค้าอื่นต่อ / add &amp; pick more (panels · trims · clips)</button>'
     +'<div class="row"><button class="btn line" style="flex:1" onclick="copyText(spInfoCache)"><i class="ti ti-copy"></i> คัดลอกข้อมูล / copy info</button>'
     +'<button class="btn line" style="flex:1" onclick="shareText(spInfoCache)"><i class="ti ti-share"></i> แชร์ / share</button></div>'
     +((g==='WPC'||g==='PVC')?'<button class="btn gold w" style="margin-top:10px" onclick="spPostGo(\''+esc(code)+'\')"><i class="ti ti-speakerphone"></i> แชร์ไป Facebook / LINE (รูป + ข้อความ)<span class="en">share photo + caption</span></button>'
@@ -1180,18 +1181,26 @@ function trimsFor(p){
   var want = g==='PVC' ? [['L-P-'+n,'L'],['H'+n,'H'],['U'+n,'U']] : [['L'+n,'L']];
   return want.map(function(w){ var c=CATALOG.find(function(x){ return normCode(x.code)===normCode(w[0]); }); return c ? {p:c, kind:w[1]} : null; }).filter(Boolean);
 }
+// Calculator folds away (most partners know the quantity); trims + clips sit in their own
+// card below it, always visible, so extras go into the quote in the same tap.
 function spCalcBox(p){
-  var tr=trimsFor(p);
-  return '<div class="card pad" style="margin-bottom:12px">'
-    +'<div style="font-weight:800;margin-bottom:2px"><i class="ti ti-calculator"></i> คำนวณจำนวนแผ่น / how many panels</div>'
-    +'<div style="font-size:12px;color:var(--text2)">ขนาดผนัง (เมตร) · เผื่อเศษ +10% และ +2 แผ่นแล้ว / wall size in metres · +10% waste and +2 spare included</div>'
+  return '<details class="card pad" style="margin-bottom:12px"><summary style="font-weight:800;cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px"><i class="ti ti-calculator"></i> <span style="flex:1">คำนวณจำนวนแผ่น / how many panels</span><i class="ti ti-chevron-down" style="color:var(--text3)"></i></summary>'
+    +'<div style="font-size:12px;color:var(--text2);margin-top:6px">ขนาดผนัง (เมตร) · เผื่อเศษ +10% และ +2 แผ่นแล้ว / wall size in metres · +10% waste and +2 spare included</div>'
     +'<div class="row" style="margin-top:8px"><div style="flex:1"><label class="l" style="margin-top:0">กว้าง / width (m)</label><input id="cw" type="text" inputmode="decimal" placeholder="4.0" oninput="spCalcRun(\''+esc(p.code)+'\')"></div>'
     +'<div style="flex:1"><label class="l" style="margin-top:0">สูง / height (m)</label><input id="ch" type="text" inputmode="decimal" placeholder="2.8" oninput="spCalcRun(\''+esc(p.code)+'\')"></div></div>'
-    +'<div id="calc-res" style="font-size:13.5px;margin-top:8px;color:var(--text2)"></div>'
-    +(tr.length?'<div style="font-weight:700;font-size:13px;margin-top:10px">ขอบที่เข้ากัน (เส้นละ 2.90 ม.) / matching trims (2.90 m each)</div>'
-      +tr.map(function(t){ return '<div class="row" style="margin-top:6px"><span style="flex:1;font-size:13.5px"><b>'+esc(t.p.code)+'</b> <span style="color:var(--text2)">'+esc((PROFILES[t.kind==='L'?(prodGroup(p)==='PVC'?'LP':'L'):t.kind]||{}).label||'')+' · '+fmt(t.p.price)+' ฿</span></span>'
-        +'<input id="tq-'+esc(t.p.code)+'" data-code="'+esc(t.p.code)+'" class="tq" type="number" inputmode="numeric" min="0" value="0" style="width:78px;min-height:40px;padding:6px 8px;text-align:center"></div>'; }).join('')
-      +'<div style="font-size:11.5px;color:var(--text3);margin-top:4px">L ปิดมุม/ขอบนอก · H ต่อรอยแผ่น · U ปิดขอบปลาย — ใส่จำนวนที่ลูกค้าต้องการ<span class="en b">L = corners &amp; outer edges · H = joins two panels · U = end cap — enter what the customer needs</span></div>':'')
+    +'<div id="calc-res" style="font-size:13.5px;margin-top:8px;color:var(--text2)"></div></details>'
+    +spExtrasBox(p);
+}
+function spExtrasBox(p){
+  var tr=trimsFor(p), clips=CATALOG.filter(function(x){ return prodGroup(x)==='CLIP'; });
+  var row=function(c, label){ return '<div class="row" style="margin-top:6px"><span style="flex:1;font-size:13.5px"><b>'+esc(c.code)+'</b> <span style="color:var(--text2)">'+esc(label)+' · '+fmt(c.price)+' ฿/'+prodUnit(c)+'</span></span>'
+    +'<div class="qty" style="flex-shrink:0"><button onclick="var e=$(\'tq-'+esc(c.code)+'\');e.value=Math.max(0,(parseInt(e.value)||0)-1)">−</button><input id="tq-'+esc(c.code)+'" data-code="'+esc(c.code)+'" class="tq" type="number" inputmode="numeric" min="0" value="0" style="width:52px"><button onclick="var e=$(\'tq-'+esc(c.code)+'\');e.value=(parseInt(e.value)||0)+1">+</button></div></div>'; };
+  if(!tr.length && !clips.length) return '';
+  return '<div class="card pad" style="margin-bottom:12px"><div style="font-weight:800"><i class="ti ti-puzzle"></i> ขอบ & คลิปเพิ่ม / trims & extra clips</div>'
+    +'<div style="font-size:12px;color:var(--text2)">ขอบยาวเส้นละ 2.90 ม. · แถมคลิป 10 ตัว/แผ่นอยู่แล้ว ใส่เฉพาะคลิปที่ซื้อเพิ่ม<span class="en b">trims are 2.90 m each · 10 clips per panel are free already — add only extra clips</span></div>'
+    +tr.map(function(t){ return row(t.p, (PROFILES[t.kind==='L'?(prodGroup(p)==='PVC'?'LP':'L'):t.kind]||{}).label||''); }).join('')
+    +clips.map(function(c){ return row(c, (c.name||'คลิป')); }).join('')
+    +(tr.length?'<div style="font-size:11.5px;color:var(--text3);margin-top:6px">L ปิดมุม/ขอบนอก · H ต่อรอยแผ่น · U ปิดขอบปลาย<span class="en b">L = corners &amp; outer edges · H = joins two panels · U = end cap</span></div>':'')
     +'</div>';
 }
 function panelW(p){ if(+p.w>0) return +p.w; var sub=(PROFILES[p.profile]||{}).sub||''; var m=String(sub).match(/^([\d.]+)/); return m?parseFloat(m[1]):16.5; }
@@ -1217,11 +1226,17 @@ function spCartKey(){ return 'kpsp-cart-'+(ME?ME.uid:'x'); }
 function spLoadCart(){ try{ CART=JSON.parse(localStorage.getItem(spCartKey())||'[]')||[]; }catch(e){ CART=[]; } try{ QMETA=JSON.parse(localStorage.getItem(spMetaKey())||'{}')||{}; }catch(e){ QMETA={}; } spQMetaFill(); spCartBadge(); }
 function spSaveCart(){ try{ localStorage.setItem(spCartKey(), JSON.stringify(CART)); }catch(e){} spCartBadge(); spQAuto(); }
 function spCartBadge(){ var n=CART.length, b=$('nb-quote'); b.textContent=n; b.classList.toggle('hide', !n); }
-function spAddCart(code){
+function spAddCart(code, more){
   var q=Math.min(5000, Math.max(0, parseInt(($('pq')||{}).value)||0)), c=CART.find(function(x){ return x.code===code; }), added=[];
   if(q>0){ if(c) c.qty+=q; else CART.push({code:code, qty:q}); added.push(code+' × '+q); }
   document.querySelectorAll('#sh-b .tq').forEach(function(e){ var n=Math.min(5000, Math.max(0, parseInt(e.value)||0)), tc=e.dataset.code; if(n>0){ var ex=CART.find(function(x){ return x.code===tc; }); if(ex) ex.qty+=n; else CART.push({code:tc, qty:n}); added.push(tc+' × '+n); } });
-  if(!added.length){ toast('ใส่จำนวนก่อน / enter a quantity'); return; }
+  if(!added.length && !more){ toast('ใส่จำนวนก่อน / enter a quantity'); return; }
+  if(more){   // straight on to the quote's quick add: search field focused, nothing else in the way
+    spSaveCart(); spSheetClose(); spRenderShop(); _qaGroup=''; spTab('quote'); spQView('edit');
+    var qa=$('qa-q'); if(qa){ qa.value=''; spRenderQA(); setTimeout(function(){ try{ qa.focus(); qa.scrollIntoView({block:'center'}); }catch(e){} }, 60); }
+    if(added.length) toast('ใส่ใบเสนอราคาแล้ว ✓ '+added.join(', ')+' — เลือกต่อได้เลย / added — pick more', 3500);
+    return;
+  }
   spSaveCart(); spSheetClose(); spRenderShop(); if(!$('t-quote').classList.contains('hide')) spRenderQuote(); toast('ใส่ใบเสนอราคาแล้ว ✓ '+added.join(', ')+' / added to quote');
 }
 function spCartQty(i,d){ var c=CART[i]; if(!c) return; c.qty=Math.max(0,c.qty+d); if(!c.qty) CART.splice(i,1); spSaveCart(); spRenderQuote(); }
