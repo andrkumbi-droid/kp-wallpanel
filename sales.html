@@ -1124,6 +1124,11 @@ function spChatOpen(){
   chatSheet('<i class="ti ti-message-circle-2"></i> แชทกับทีม KP / chat with KP', 'me', 'spChatSend()');
   R('sales/chatSeen/'+ME.uid+'/partner').set(firebase.database.ServerValue.TIMESTAMP).catch(function(){});
 }
+// Damage claim (Pim 11.10.): photos at delivery, within 7 days, the partner passes it on → chat with the order number.
+function spClaim(oid){
+  spChatOpen();
+  var t=$('chat-txt'); if(t){ t.value='แจ้งเคลม ออเดอร์ #'+oid+'\nสินค้าที่เสียหาย: \nจำนวน: \n(ส่งรูปตอนรับของทาง LINE ด้วย)'; t.focus(); }
+}
 function spChatSend(){
   var e=$('chat-txt'), t=clean((e||{}).value||'').slice(0,2000); if(!t || !ME) return;
   e.value='';
@@ -1198,7 +1203,7 @@ function spOrdDetail(k){
   var o=r.orderId?ORDERS[r.orderId]:null;
   // Customer wording — not the internal steps ("delivered to customer" reads odd to the customer).
   var CUS={sent:'📝 ได้รับออเดอร์แล้ว กำลังยืนยันกับคลังสินค้า', checking:'📝 ได้รับออเดอร์แล้ว กำลังยืนยันกับคลังสินค้า', approved:'✅ ยืนยันออเดอร์แล้ว',
-    packing:'📦 กำลังแพ็คสินค้า', ready:'📦 แพ็คเสร็จ รอรอบส่ง', loaded:'🚚 สินค้าออกจากคลังแล้ว กำลังนำส่งโดยพนักงานส่งของ KP Wallpanel', shipped:'🚛 ส่งฝากขนส่งแล้ว',
+    packing:'📦 กำลังแพ็คสินค้า', ready:'📦 แพ็คเสร็จ รอรอบส่ง', loaded:'🚚 สินค้าออกจากคลังแล้ว พนักงานส่งของ KP Wallpanel จะโทรนัดก่อนเข้าส่งนะคะ', shipped:'🚛 ส่งฝากขนส่งแล้ว',
     delivered:'🏠 จัดส่งเรียบร้อยแล้ว', paid:'💚 ได้รับชำระเงินแล้ว ขอบคุณที่อุดหนุนนะคะ', rejected:'ขออภัย ออเดอร์นี้ยังจัดส่งไม่ได้ จะติดต่อกลับนะคะ', cancelled:'ออเดอร์นี้ถูกยกเลิกแล้วค่ะ'};
   var cKey=(o && o.status==='shipped' && st==='loaded') ? 'shipped' : st;
   var trackTxt='สถานะออเดอร์'+(r.orderId?' #'+r.orderId:'')+'\n'+(CUS[cKey]||'')
@@ -1214,6 +1219,7 @@ function spOrdDetail(k){
     +'<div class="card pad" style="margin-bottom:12px">'+(o?'<div style="font-size:11.5px;color:var(--text2);margin-bottom:4px">ตามออเดอร์ KP #'+esc(r.orderId)+' / as in the KP order</div>':'')
       +((o&&o.lineItems)||r.lineItems||[]).filter(function(l){ return l && l.type!=='delivery'; }).map(function(l){ return '<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:3px 0"><span>'+esc(l.code)+' × '+fmt(l.qty)+'</span><b>'+fmt(l.amount)+' ฿</b></div>'; }).join('')
       +'<div style="display:flex;justify-content:space-between;font-size:16px;padding-top:6px;border-top:1px solid var(--border);margin-top:6px"><b>รวม <span class="en">total</span></b><b>'+fmt(o?orderTotal(o):(r.totals||{}).total)+' ฿</b></div></div>'
+    +((!OWNER && (st==='delivered'||st==='paid') && r.orderId) ? '<button class="btn red w" style="margin-bottom:10px" onclick="spClaim(\''+esc(String(r.orderId).replace(/[^A-Za-z0-9#-]/g,''))+'\')"><i class="ti ti-alert-triangle"></i> แจ้งเคลม / report damage</button>' : '')
     +(OWNER?'':'<div class="mono" style="margin-bottom:10px">'+esc(trackTxt)+'</div><div class="row"><button class="btn dark" style="flex:1" onclick="copyText(spTrackCache)"><i class="ti ti-copy"></i> คัดลอกสถานะ / copy status</button>'
       +'<button class="btn line" style="flex:1" onclick="shareText(spTrackCache)"><i class="ti ti-share"></i> แชร์ / share</button></div>'));
   window.spTrackCache=trackTxt;
@@ -1232,8 +1238,8 @@ var KIT={
       'KP guarantees the customer receives complete and correct goods. If something is damaged in transport, the customer takes photos at delivery and you pass them to KP within 7 days of delivery — free claim, agreed case by case: a discount or a replacement.'],
     ['การคืนสินค้า / Returns','รับคืนเฉพาะสินค้าที่เสียหายเท่านั้น สั่งเกินหรือเปลี่ยนใจ ไม่รับคืน ช่วยคำนวณจำนวนให้ถูกก่อนสั่ง (ใช้เครื่องคำนวณในแอป)',
       'Returns only for damaged goods. Over-ordering or a change of mind is not taken back — calculate the quantity carefully before ordering (use the calculator in the app).'],
-    ['ตัวอย่างสินค้า / Samples','ตัวแทนขอชิ้นตัวอย่างสีได้ KP ส่งให้ คิดค่าส่งเล็กน้อย · นัดถ่ายคลิป/รูปที่ร้าน นัดกันในกลุ่มแชท',
-      'Partners can ask for colour samples — KP sends them for a small delivery fee. Filming sessions at the shop are arranged in the group chat.'],
+    ['ตัวอย่างสินค้า / Samples','ชิ้นตัวอย่างสี: รับเองที่ร้านฟรี · ส่งให้ค่าส่ง 100 บาท · ครบทุกรุ่น 350 บาท · มาถ่ายรูป/คลิปที่ร้านได้ตลอด',
+      'Colour samples: free when collected at the shop · delivered 100 ฿ · all models 350 ฿ · you can film at the shop any time.'],
     ['การติดตั้ง / Installation','KP ไม่มีบริการติดตั้งและไม่ให้คำแนะนำการติดตั้ง ถ้าตัวแทนมีช่างของตัวเอง เป็นความรับผิดชอบของตัวแทนเอง ไม่เกี่ยวกับ KP',
       'KP does not install and gives no installation advice. If you bring your own installer, that is your responsibility, not KP\u2019s.'],
     ['การชำระเงิน / Payment','ลูกค้าชำระกับ KP เท่านั้น เก็บเงินปลายทาง หรือโอนเข้าบัญชีบริษัท ห้ามรับเงินเข้าบัญชีส่วนตัว',
@@ -1244,8 +1250,18 @@ var KIT={
       'Waterproof · termite-proof · flame-retardant · for walls and ceilings (as printed on the KP product photos).'],
     ['ห้ามสัญญา / Never promise','ห้ามพูดว่า "ไม่ติดไฟ 100%", "ใช้กลางแจ้งได้", "รับประกัน X ปี", "โรงงานผลิตเอง" หรือข้อมูลที่ KP ยังไม่ยืนยัน ถ้าไม่แน่ใจ ถามทีม KP ก่อน',
       'Never say "100 % non-combustible", "for outdoor use", "X-year warranty", "our own factory" or anything KP has not confirmed. If unsure, ask the KP team first.'],
-    ['ค่าส่ง / Delivery','25 แผ่นขึ้นไปส่งฟรี ต่ำกว่านั้น 400 บาท · L-Corner อย่างเดียว ไม่เกิน 10 เส้น 250 บาท, 11 เส้นขึ้นไป 400 บาท · ส่งทั่วประเทศ · บางพื้นที่ (เช่น ต้องข้ามเรือ) อาจมีค่าส่งเพิ่ม ถามทีม KP ก่อนยืนยันกับลูกค้า',
-      'Free delivery from 25 panels, otherwise 400 ฿ · L-corners only: up to 10 pcs 250 ฿, 11 or more 400 ฿ · nationwide · some areas (e.g. islands by ferry) may cost extra — ask the KP team before you confirm to the customer.'],
+    ['ค่าส่ง / Delivery','25 แผ่นขึ้นไปส่งฟรี ต่ำกว่านั้น 400 บาท · L-Corner อย่างเดียว ไม่เกิน 10 เส้น 250 บาท, 11 เส้นขึ้นไป 400 บาท · ส่งทั่วประเทศ · ส่งไปเกาะ (ต้องข้ามเรือ) ค่าส่งเพิ่มกล่องละ 400 บาท · ส่งต่างจังหวัดผ่านขนส่ง เก็บเงินปลายทางได้เหมือนรถ KP · คนขับโทรหาลูกค้าก่อนเข้าส่งทุกครั้ง',
+      'Free delivery from 25 panels, otherwise 400 ฿ · L-corners only: up to 10 pcs 250 ฿, 11 or more 400 ฿ · nationwide · islands (by ferry) cost 400 ฿ extra per box · provinces via a carrier: cash on delivery works like with KP trucks · the driver always calls the customer before delivering.'],
+    ['ลูกค้าไม่รับของ / Refused delivery','ถ้าลูกค้าไม่รับของตอนส่ง ตัวแทนไม่ได้ค่าคอมออเดอร์นั้น และช่วยออกค่าส่งกลับ · ครบ 2 ครั้ง ลูกค้ารายต่อไปของตัวแทนต้องโอนมัดจำก่อน',
+      'If the customer refuses the goods: no commission for that order and you share the return delivery cost · after 2 refusals your next customer must pay a deposit first.'],
+    ['ส่วนลด / Discounts','ให้ส่วนลดได้ไม่เกินค่าคอมของตัวเอง (หักจากค่าคอม) · ห้ามโพสต์ราคาลดในเพจ · งาน 100 แผ่นขึ้นไป ขอราคาพิเศษจากออฟฟิศ',
+      'A discount may not exceed your own commission (it is taken from it) · never post discounted prices on your page · 100+ panels: ask the office for a special price.'],
+    ['ห้าม / Not allowed','คอมเมนต์หรือแย่งลูกค้าในเพจ KP · รับเงินลูกค้าเข้าบัญชีส่วนตัว · ถ้าพูดเกินจริงแล้วลูกค้าร้องเรียน: คืนค่าคอมออเดอร์นั้น และช่วยรับผิดชอบค่าเสียหาย',
+      'No comments or customer-poaching on the KP page · never take customer money into a personal account · false promises that lead to a complaint: commission back and you share the damage.'],
+    ['ลูกค้ามาดูของ / Customer visits','ลูกค้าดูของได้เฉพาะโชว์รูม/หน้าร้าน แจ้งในแอป (แชท) ก่อนทุกครั้ง',
+      'Customers may view the showroom / shop only — always tell KP in the app chat first.'],
+    ['ติดต่อ KP / Contact','Pim และ Bobby ผ่านแชทในแอป โทร หรือ LINE · ตอบภายใน 15 นาที ในเวลาทำการ (ทุกวัน 08:00–18:00)',
+      'Pim and Bobby via the app chat, phone or LINE · answer within 15 minutes during office hours (daily 08:00–18:00).'],
     ['ราคา / Prices','ใช้ราคาตามแอปนี้ (ราคาเดียวกับ KP) · งานโครงการใหญ่ 100 แผ่นขึ้นไป ขายผ่านตัวแทนได้เหมือนกัน ราคาพิเศษสอบถามทีม KP ก่อนเสนอลูกค้า',
       'Use the prices in this app (the same as KP) · big projects from 100 panels also go through you — ask the KP team for a special price before quoting.'],
     ['คำลงท้าย / Politeness','ข้อความถึงลูกค้าลงท้ายด้วย ค่ะ หรือ ครับ ตามที่เลือกไว้ด้านบน (หรือในโปรไฟล์)',
