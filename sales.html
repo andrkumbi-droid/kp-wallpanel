@@ -423,7 +423,6 @@ b.num,.num b{ white-space:nowrap; }
     <button data-t="orders" onclick="spTab('orders')"><i class="ti ti-truck-delivery"></i>ออเดอร์<span class="en">Orders</span><span class="badge hide" id="nb-orders"></span></button>
     <button data-t="kit" onclick="spTab('kit')"><i class="ti ti-bulb"></i>ช่วยขาย<span class="en">Sales kit</span></button>
     <button data-t="earn" onclick="spTab('earn')"><i class="ti ti-coin"></i>รายได้<span class="en">Earnings</span></button>
-    <button data-t="me" onclick="spTab('me')"><i class="ti ti-user-circle"></i>โปรไฟล์<span class="en">Profile</span></button>
   </div></div>
 </section>
 
@@ -1463,6 +1462,7 @@ function spAttachChat(){
   if(!$('scr-app').classList.contains('hide')) $('chat-fab').classList.remove('hide');
   R('sales/memberRules/'+ME.uid).on('value', function(s){ MYRULE=s.val(); try{ spRenderEarn(); }catch(e){} }, function(){});
   R('sales/payouts/'+ME.uid).on('value', function(s){ MYPAY=s.val()||{}; try{ spRenderEarn(); }catch(e){} }, function(){});
+  R('sales/myAnswers/'+ME.uid).on('value', function(s){ MYANS=s.val()||{}; if(!$('t-kit').classList.contains('hide')) try{ spRenderKit(); }catch(e){} }, function(){});
   R('sales/slips/'+ME.uid).on('value', function(s){ SLIPS_ME=s.val()||{}; try{ spRenderOrders(); }catch(e){} }, function(){});
   R('sales/chatSeen/'+ME.uid).on('value', function(s){ CHATSEEN_ME=s.val()||{}; spChatBadge(); }, function(){});
   R('sales/chat/'+ME.uid).limitToLast(200).on('value', function(s){
@@ -1747,22 +1747,82 @@ function kitFill(t, en){
 }
 function kitAnswer(i){ var x=(KIT[_kitTab]||[])[i]; return x ? pol(kitFill(x[1])) : ''; }
 var _kitTab='rules';
+/* The kit has two parts: KP's rules (for the partner) and ready answers for customers.
+   Every partner can keep his OWN version of any standard answer, plus own questions —
+   sales/myAnswers/<uid> = { <tab>_<hash>: text, custom: {<id>: {q, a, ts}} }. */
+var MYANS={};
+function kitKey(tab, q){ var h=0, t=String(q); for(var n=0;n<t.length;n++){ h=((h<<5)-h+t.charCodeAt(n))|0; } return tab+'_'+(h>>>0).toString(36); }
+function kitMine(i){ var x=(KIT[_kitTab]||[])[i]; return x ? (MYANS[kitKey(_kitTab,x[0])]||'') : ''; }
+function kitBest(i){ return kitMine(i) || kitAnswer(i); }
 function spRenderKit(){
-  var T=[['rules','กติกา / rules'],['faq','คำถามลูกค้า / FAQ'],['obj','ตอบลูกค้าลังเล / objections']];
+  var T=[['rules','📋 กติกา KP / rules'],['faq','💬 คำถามลูกค้า / FAQ'],['obj','🤔 ลูกค้าลังเล / objections'],['mine','⭐ ของฉัน / my answers']];
   $('kit-contact').innerHTML=contactHtml()
     +'<div class="chips" style="padding-bottom:4px"><span style="font-size:12.5px;color:var(--text2);align-self:center;margin-right:4px">ลงท้าย / ending:</span>'
     +['ka','krub'].map(function(v){ var on=((MEMBER&&MEMBER.polite)||'ka')===v; return '<button class="chip'+(on?' on':'')+'" onclick="spSetPolite(\''+v+'\')">'+(v==='ka'?'ค่ะ':'ครับ')+'</button>'; }).join('')+'</div>';
-  $('kit-chips').innerHTML=T.map(function(t){ return '<button class="chip'+(_kitTab===t[0]?' on':'')+'" onclick="_kitTab=\''+t[0]+'\';spRenderKit()">'+t[1]+'</button>'; }).join('');
+  // rules (for you) | answers (for customers) — two visibly separate groups
+  $('kit-chips').innerHTML=T.map(function(t,n){ return (n===1?'<span style="width:1.5px;background:var(--border2);flex-shrink:0;margin:4px 2px"></span>':'')
+    +'<button class="chip'+(_kitTab===t[0]?' on':'')+'" onclick="_kitTab=\''+t[0]+'\';spRenderKit()">'+t[1]+'</button>'; }).join('');
+  var head = _kitTab==='rules'
+    ? '<div class="card pad" style="margin-bottom:10px;background:var(--ink);color:var(--cream);border-color:transparent;font-size:13px">📋 กติกาสำหรับตัวแทน — อ่านให้เข้าใจ ไม่ต้องส่งให้ลูกค้า<span class="en b" style="color:var(--cream2)">rules for you as a partner — read them, they are not for customers</span></div>'
+    : '<div class="card pad" style="margin-bottom:10px;background:var(--blue-bg);border-color:transparent;font-size:13px">💬 คำตอบสำเร็จรูปสำหรับลูกค้า — คัดลอกไปวางในแชทได้เลย · กด ✏️ เพื่อเขียนแบบของคุณเองแล้วบันทึกไว้<span class="en b">ready answers for customers — copy into the chat · tap ✏️ to write and save your own version</span></div>';
+  if(_kitTab==='mine'){ $('kit-body').innerHTML=head+spRenderMine(); return; }
   var list=KIT[_kitTab]||[];
-  $('kit-body').innerHTML=list.map(function(x,i){
-    var rules=_kitTab==='rules', qEn=rules?'':x[2], aEn=rules?x[2]:x[3];
+  $('kit-body').innerHTML=head+list.map(function(x,i){
+    var rules=_kitTab==='rules', qEn=rules?'':x[2], aEn=rules?x[2]:x[3], mine=rules?'':kitMine(i);
     return '<div class="card pad" style="margin-bottom:10px"><div style="font-weight:800;margin-bottom:4px">'+(_kitTab==='obj'?'“'+esc(x[0])+'”':esc(x[0]))+enSpan(qEn)+'</div>'
-      +'<div style="font-size:14px;line-height:1.65;color:var(--text)">'+esc(rules?x[1]:kitAnswer(i))+'</div>'
-      +(aEn?'<div class="kit-en">'+esc(kitFill(aEn,true))+'</div>':'')
-      +(rules?'':'<div class="row" style="margin-top:8px"><button class="btn line sm" onclick="copyText(kitAnswer('+i+'))"><i class="ti ti-copy"></i> คัดลอกคำตอบ / copy (Thai)</button>'
-        +'<button class="btn line sm" onclick="shareText(kitAnswer('+i+'))"><i class="ti ti-share"></i> แชร์ / share</button></div>')+'</div>';
+      +(mine?'<div style="font-size:11.5px;font-weight:800;color:var(--gold3);margin-bottom:2px">⭐ คำตอบของฉัน / my answer</div><div style="font-size:14px;line-height:1.65;white-space:pre-wrap;background:#fbf6e6;border-radius:10px;padding:8px 10px;margin-bottom:6px">'+esc(mine)+'</div>'
+        +'<details style="font-size:12.5px;color:var(--text2)"><summary>คำตอบมาตรฐาน KP / KP standard answer</summary><div style="margin-top:4px;line-height:1.6">'+esc(kitAnswer(i))+'</div></details>'
+        : '<div style="font-size:14px;line-height:1.65;color:var(--text)">'+esc(rules?x[1]:kitAnswer(i))+'</div>'
+          +(aEn?'<div class="kit-en">'+esc(kitFill(aEn,true))+'</div>':''))
+      +(rules?'':'<div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="btn line sm" onclick="copyText(kitBest('+i+'))"><i class="ti ti-copy"></i> คัดลอก / copy</button>'
+        +'<button class="btn line sm" onclick="shareText(kitBest('+i+'))"><i class="ti ti-share"></i> แชร์ / share</button>'
+        +'<button class="btn '+(mine?'line':'dark')+' sm" onclick="spAnsEdit('+i+')"><i class="ti ti-pencil"></i> '+(mine?'แก้คำตอบของฉัน / edit mine':'เขียนแบบของฉัน / my version')+'</button></div>')+'</div>';
   }).join('');
 }
+// edit my version of a standard answer (prefilled with the KP answer)
+function spAnsEdit(i){
+  var x=(KIT[_kitTab]||[])[i]; if(!x) return; var k=kitKey(_kitTab,x[0]), cur=MYANS[k]||kitAnswer(i);
+  spSheet('✏️ คำตอบของฉัน <span class="en">my answer</span>',
+    '<div style="font-weight:800;margin-bottom:6px">'+esc(x[0])+'</div>'
+    +'<textarea id="ans-t" maxlength="2000" style="min-height:200px">'+esc(cur)+'</textarea>'
+    +'<div style="font-size:11.5px;color:var(--text3);margin-top:4px">ห้ามสัญญาเกินกติกา KP (ดูแท็บ กติกา) / never promise more than KP\'s rules allow</div>'
+    +'<div class="row" style="margin-top:12px"><button class="btn gold" style="flex:2" onclick="spAnsSave(\''+k+'\')"><i class="ti ti-device-floppy"></i> บันทึก / save</button>'
+    +(MYANS[k]?'<button class="btn red" style="flex:1" onclick="spAnsSave(\''+k+'\',true)">ใช้ของ KP / reset</button>':'')+'</div>');
+}
+function spAnsSave(k, reset){
+  var t=reset ? null : clean(($('ans-t')||{}).value||'').slice(0,2000);
+  if(!reset && !t){ toast('ข้อความว่าง / empty'); return; }
+  R('sales/myAnswers/'+ME.uid+'/'+k).set(t).then(function(){ spSheetClose(); toast(reset?'กลับไปใช้คำตอบ KP / back to the KP answer':'บันทึกแล้ว ✓ / saved'); }).catch(function(e){ toast('Error: '+(e&&e.code||e)); });
+}
+// own questions + answers
+function spMineList(){ var c=MYANS.custom||{}; return Object.keys(c).filter(function(k){ return /^[-_A-Za-z0-9]{1,40}$/.test(k) && c[k]; }).map(function(k){ var o=c[k]; o._k=k; return o; }).sort(function(a,b){ return (b.ts||0)-(a.ts||0); }); }
+function spMineText(k){ return ((MYANS.custom||{})[k]||{}).a||''; }
+function spRenderMine(){
+  var L=spMineList();
+  return '<button class="btn gold w" style="margin-bottom:10px" onclick="spMineEdit()"><i class="ti ti-plus"></i> เพิ่มคำถาม-คำตอบของฉัน / add my own Q&amp;A</button>'
+    +(L.length ? L.map(function(o){
+      return '<div class="card pad" style="margin-bottom:10px"><div style="font-weight:800;margin-bottom:4px">'+esc(o.q||'')+'</div>'
+        +'<div style="font-size:14px;line-height:1.65;white-space:pre-wrap">'+esc(o.a||'')+'</div>'
+        +'<div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="btn line sm" onclick="copyText(spMineText(\''+o._k+'\'))"><i class="ti ti-copy"></i> คัดลอก / copy</button>'
+        +'<button class="btn line sm" onclick="shareText(spMineText(\''+o._k+'\'))"><i class="ti ti-share"></i> แชร์ / share</button>'
+        +'<button class="btn line sm" onclick="spMineEdit(\''+o._k+'\')"><i class="ti ti-pencil"></i> แก้ / edit</button>'
+        +'<button class="btn red sm" onclick="spMineDel(\''+o._k+'\')"><i class="ti ti-trash"></i></button></div></div>';
+    }).join('') : '<div class="empty"><i class="ti ti-message-plus"></i>ยังไม่มี — เพิ่มคำถามที่ลูกค้าของคุณถามบ่อย<span class="en b">nothing yet — add the questions your customers often ask</span></div>');
+}
+function spMineEdit(k){
+  var o=k ? ((MYANS.custom||{})[k]||{}) : {};
+  spSheet('⭐ คำถาม-คำตอบของฉัน <span class="en">my Q&amp;A</span>',
+    '<label class="l" style="margin-top:0">คำถามลูกค้า / question</label><input id="mq-q" maxlength="200" value="'+esc(o.q||'')+'" placeholder="เช่น ติดในห้องน้ำได้ไหม">'
+    +'<label class="l">คำตอบ / answer</label><textarea id="mq-a" maxlength="2000" style="min-height:180px">'+esc(o.a||'')+'</textarea>'
+    +'<button class="btn gold w" style="margin-top:12px" onclick="spMineSave('+(k?'\''+k+'\'':'')+')"><i class="ti ti-device-floppy"></i> บันทึก / save</button>');
+}
+function spMineSave(k){
+  var q=clean(($('mq-q')||{}).value||'').slice(0,200), a=clean(($('mq-a')||{}).value||'').slice(0,2000);
+  if(!q || !a){ toast('ใส่ทั้งคำถามและคำตอบ / fill both'); return; }
+  var ref=R('sales/myAnswers/'+ME.uid+'/custom'), id=k||ref.push().key;
+  ref.child(id).set({q:q, a:a, ts:Date.now()}).then(function(){ spSheetClose(); toast('บันทึกแล้ว ✓ / saved'); }).catch(function(e){ toast('Error: '+(e&&e.code||e)); });
+}
+function spMineDel(k){ if(!confirm('ลบ? / delete?')) return; R('sales/myAnswers/'+ME.uid+'/custom/'+k).remove(); }
 
 /* commission */
 var GOODS={panel:1,lcorner:1,ttrim:1,utrim:1,tedge:1,uedge:1,clips:1,discount:1};
