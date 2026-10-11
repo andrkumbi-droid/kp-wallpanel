@@ -355,15 +355,33 @@ b.num,.num b{ white-space:nowrap; }
     </div>
     <!-- quote -->
     <div id="t-quote" class="hide">
-      <div class="sec-h"><h2>ใบเสนอราคา / Quote</h2><button class="btn line sm" onclick="spCartClear()"><i class="ti ti-trash"></i> ล้าง / clear</button></div>
-      <div class="card pad" id="q-items"></div>
-      <label class="l">ชื่อลูกค้า (ไม่บังคับ) / customer name (optional)</label><input id="q-cust" placeholder="เช่น สมศรี" oninput="var q=$('q-text'); if(q) q.textContent=spQuoteText();">
-      <div id="q-out" style="margin-top:14px"></div>
-      <div id="q-saved" style="margin-top:18px"></div>
+      <div class="sec-h"><h2>ใบเสนอราคา / Quote</h2><button class="btn line sm" onclick="spQuoteNew()"><i class="ti ti-file-plus"></i> ใบใหม่ / new</button></div>
+      <div class="chips" id="q-seg"></div>
+      <div id="q-edit">
+        <div class="card pad" id="q-add" style="margin-bottom:12px"></div>
+        <div class="card pad" id="q-items"></div>
+        <div id="q-head" style="margin-top:12px"></div>
+        <div class="card pad" style="margin-top:12px">
+          <div style="font-weight:800;margin-bottom:2px"><i class="ti ti-user"></i> ลูกค้า / customer</div>
+          <div style="font-size:12px;color:var(--text2)">ใส่อย่างน้อย 1 ช่อง เพื่อค้นหาในแฟ้มได้ง่าย / fill at least one — makes the quote easy to find</div>
+          <label class="l">ชื่อลูกค้า / name</label><input id="q-cust" maxlength="80" placeholder="เช่น สมศรี" oninput="spQMetaIn()">
+          <div class="row"><div style="flex:1;min-width:0"><label class="l">เบอร์โทร / phone</label><input id="q-phone" type="tel" inputmode="tel" maxlength="20" placeholder="08x-xxx-xxxx" oninput="spQMetaIn()"></div>
+          <div style="flex:1;min-width:0"><label class="l">LINE</label><input id="q-line" maxlength="80" placeholder="ชื่อ / ID LINE" oninput="spQMetaIn()"></div></div>
+          <label class="l">Facebook</label><input id="q-fb" maxlength="200" placeholder="ชื่อเฟซบุ๊ก หรือ ลิงก์ / name or link" oninput="spQMetaIn()">
+          <label class="l">โน้ตส่วนตัว (ลูกค้าไม่เห็น) / private note</label><input id="q-note" maxlength="200" placeholder="เช่น รอถามสามีก่อน · โทรกลับวันศุกร์" oninput="spQMetaIn()">
+        </div>
+        <div id="q-out" style="margin-top:14px"></div>
+      </div>
+      <div id="q-folder" class="hide">
+        <div class="search"><i class="ti ti-search"></i><input id="qf-q" placeholder="ค้นหา ชื่อ / เบอร์ / FB / LINE / รหัส · search" oninput="spRenderFolder()"></div>
+        <div class="chips" id="qf-chips"></div>
+        <div id="qf-list"></div>
+      </div>
     </div>
     <!-- orders -->
     <div id="t-orders" class="hide">
-      <div class="sec-h"><h2>ออเดอร์ของฉัน / My orders</h2></div>
+      <div class="sec-h"><h2>ออเดอร์ของฉัน / My orders</h2><select id="ord-m" style="width:auto;min-height:40px;padding:6px 10px" onchange="spRenderOrders()"></select></div>
+      <div class="search"><i class="ti ti-search"></i><input id="ord-q" placeholder="ค้นหา ชื่อ / เบอร์ / เลขออเดอร์ / รหัส · search" oninput="spRenderOrders()"></div>
       <div class="chips" id="ord-chips"></div>
       <div id="ord-list"></div>
     </div>
@@ -662,39 +680,192 @@ function spQuoteImageGo(){
   var ok=function(){ try{ spQuoteImage(); }catch(e){ toast('Error: '+(e&&e.message||e)); } };
   if(document.fonts && document.fonts.load) Promise.all([document.fonts.load("700 30px 'Prompt'"), document.fonts.load("800 54px 'Prompt'")]).then(ok, ok); else ok();
 }
-/* Several customers at once: park the current quote under the customer's name. */
-function spSavedKey(){ return spCartKey()+'-saved'; }
-function spSavedGet(){ try{ return JSON.parse(localStorage.getItem(spSavedKey())||'[]')||[]; }catch(e){ return []; } }
-function spSavedSet(a){ try{ localStorage.setItem(spSavedKey(), JSON.stringify(a.slice(0,30))); }catch(e){} }
-function spQuoteSave(){
-  if(!CART.length) return;
-  var n=clean(($('q-cust')||{}).value||'').replace(/^คุณ\s*/,'');
-  if(!n){ n=clean(prompt('ชื่อลูกค้า / customer name:','')||'').replace(/^คุณ\s*/,''); if(!n) return; }
-  var a=spSavedGet(); a.unshift({id:Date.now().toString(36), name:n, items:CART.slice(), ts:Date.now()}); spSavedSet(a);
-  CART=[]; if($('q-cust')) $('q-cust').value=''; spSaveCart(); spRenderQuote(); toast('บันทึกแล้ว ✓ '+n+' / saved');
-}
-function spQuoteOpen(id){
-  var a=spSavedGet(), i=a.findIndex(function(q){ return q.id===id; }); if(i<0) return;
-  var q=a.splice(i,1)[0];
-  if(CART.length){   // the quote on screen is parked, never lost
-    var cur=clean(($('q-cust')||{}).value||'').replace(/^คุณ\s*/,'') || ('ไม่มีชื่อ '+new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}));
-    a.unshift({id:Date.now().toString(36), name:cur, items:CART.slice(), ts:Date.now()});
+/* ── Quote folder (sales/quotes/<uid>/<id>) ──
+   A quote is the waiting room until the customer says yes: name / phone / FB / LINE
+   make it easy to find again. Once saved it updates itself on every change.
+   status: waiting → ordered (reqId = the order request) · or lost (customer said no). */
+function spSavedKey(){ return spCartKey()+'-saved'; }   // old local list — moved into the DB once
+function spMetaKey(){ return spCartKey()+'-meta'; }
+function spQSafe(id){ return /^[-_A-Za-z0-9]{1,40}$/.test(String(id||'')); }
+function spAttachQuotes(){
+  if(_quotesOn || !ME) return; _quotesOn=true;
+  R('sales/quotes/'+ME.uid).on('value', function(sn){
+    QUOTES=sn.val()||{}; Object.keys(QUOTES).forEach(function(k){ if(!spQSafe(k) || !QUOTES[k]) delete QUOTES[k]; });
+    spRenderQSeg(); if(_qView==='folder') spRenderFolder(); spRenderQHead();
+    try{ spRenderOrders(); }catch(e){}
+  }, function(){});
+  // one-time move of quotes that were parked on this phone only
+  var old=[]; try{ old=JSON.parse(localStorage.getItem(spSavedKey())||'[]')||[]; }catch(e){}
+  if(old.length){
+    var up={}; old.forEach(function(q){ if(!q || !(q.items||[]).length) return;
+      var id=R('sales/quotes/'+ME.uid).push().key;
+      up[id]={name:clean(q.name||'').slice(0,80), phone:'', fb:'', line:'', note:'', items:q.items.filter(function(c){ return c&&c.code&&c.qty>0; }).map(function(c){ return {code:String(c.code), qty:+c.qty}; }), total:0, status:'waiting', ts:+q.ts||Date.now(), updatedAt:+q.ts||Date.now()}; });
+    R('sales/quotes/'+ME.uid).update(up).then(function(){ try{ localStorage.removeItem(spSavedKey()); }catch(e){} }).catch(function(){});
   }
-  spSavedSet(a); CART=(q.items||[]).filter(function(c){ return c && c.code && c.qty>0; }); if($('q-cust')) $('q-cust').value=q.name||'';
-  spSaveCart(); spRenderQuote(); window.scrollTo(0,0);
 }
-function spQuoteDel(id){ if(!confirm('ลบใบเสนอราคานี้? / delete this quote?')) return; spSavedSet(spSavedGet().filter(function(q){ return q.id!==id; })); spRenderSaved(); }
-function spRenderSaved(){
-  var el=$('q-saved'); if(!el) return; var a=spSavedGet();
-  if(!a.length){ el.innerHTML=''; return; }
-  el.innerHTML='<div style="font-weight:800;margin:0 2px 8px">ใบเสนอราคาที่บันทึกไว้ / saved quotes · '+a.length+'</div>'+a.map(function(q){
-    var tot=(q.items||[]).reduce(function(s,c){ return s+(c.qty||0)*(+prodOf(c.code).price||0); },0);
-    return '<div class="card pad" style="margin-bottom:8px"><div class="row"><div style="flex:1;min-width:0"><b>'+esc(q.name)+'</b>'
-      +'<div style="font-size:12px;color:var(--text2)">'+(q.items||[]).length+' รายการ · '+fmt(tot)+' ฿ · '+new Date(q.ts).toLocaleDateString('th-TH',{day:'numeric',month:'short'})+'</div></div>'
-      +'<button class="btn line sm" onclick="spQuoteOpen(\''+esc(q.id)+'\')">เปิด / open</button><button class="btn red sm" onclick="spQuoteDel(\''+esc(q.id)+'\')">✕</button></div></div>';
+function spQMetaRead(){
+  var v=function(id){ return clean(($(id)||{}).value||''); };
+  QMETA.name=v('q-cust').replace(/^คุณ\s*/,'').slice(0,80); QMETA.phone=v('q-phone').slice(0,20); QMETA.line=v('q-line').slice(0,80); QMETA.fb=v('q-fb').slice(0,200); QMETA.note=v('q-note').slice(0,200);
+}
+function spQMetaFill(){
+  [['q-cust','name'],['q-phone','phone'],['q-line','line'],['q-fb','fb'],['q-note','note']].forEach(function(f){ var e=$(f[0]); if(e && document.activeElement!==e) e.value=QMETA[f[1]]||''; });
+}
+function spQMetaIn(){
+  spQMetaRead(); try{ localStorage.setItem(spMetaKey(), JSON.stringify(QMETA)); }catch(e){}
+  var q=$('q-text'); if(q) q.textContent=spQuoteText(); spQAuto();
+}
+function spQHasWho(m){ m=m||QMETA; return !!(m.name||m.phone||m.fb||m.line); }
+function spQAuto(){ if(!QMETA.id) return; clearTimeout(_qSaveT); _qSaveT=setTimeout(function(){ spQuoteSave(true); }, 900); }
+function spQRec(){
+  var c=spCalc(), now=Date.now();
+  return {name:QMETA.name||'', phone:normPhone(QMETA.phone)||QMETA.phone||'', fb:QMETA.fb||'', line:QMETA.line||'', note:QMETA.note||'',
+    items:CART.map(function(x){ return {code:x.code, qty:x.qty}; }), total:c.total, panels:c.panels, status:'waiting', ts:QMETA.ts||now, updatedAt:now};
+}
+// silent = autosave; returns a promise
+function spQuoteSave(silent){
+  clearTimeout(_qSaveT);
+  if(!ME || !CART.length) return Promise.resolve(true);
+  spQMetaRead();
+  if(!silent && !spQHasWho()){ toast('ใส่ชื่อ เบอร์ FB หรือ LINE อย่างน้อย 1 ช่อง / enter a name, phone, FB or LINE', 3500); var e=$('q-cust'); if(e) e.focus(); return Promise.resolve(false); }
+  var first=!QMETA.id; if(first) QMETA.id=R('sales/quotes/'+ME.uid).push().key;
+  var rec=spQRec(); QMETA.ts=rec.ts; try{ localStorage.setItem(spMetaKey(), JSON.stringify(QMETA)); }catch(e){}
+  return R('sales/quotes/'+ME.uid+'/'+QMETA.id).set(rec).then(function(){
+    if(!silent) toast('📁 บันทึกลงแฟ้มแล้ว ✓ '+(rec.name||rec.phone||rec.line||rec.fb)+' / saved to the quote folder'+(first?' — แก้ต่อได้ บันทึกอัตโนมัติ':''), 3500);
+    spRenderQHead(); spRenderQuoteOut(); return true;
+  }).catch(function(e){ if(first) QMETA.id=''; toast('บันทึกไม่สำเร็จ / save failed: '+(e&&e.code||e)); return false; });
+}
+function spQuoteReset(){ CART=[]; QMETA={}; spQMetaFill(); spSaveCart(); try{ localStorage.removeItem(spMetaKey()); }catch(e){} }
+// New quote: a saved one stays in the folder; an unsaved one is only dropped after asking.
+function spQuoteNew(){
+  if(CART.length && !QMETA.id){
+    spQMetaRead();
+    if(spQHasWho()){ spQuoteSave(false).then(function(ok){ if(ok){ spQuoteReset(); spQView('edit'); spRenderShop(); } }); return; }
+    if(!confirm('ใบนี้ยังไม่ได้บันทึก จะล้างทิ้ง? / this quote is not saved — discard it?')) return;
+  } else if(QMETA.id) spQuoteSave(true);
+  spQuoteReset(); spQView('edit'); spRenderShop();
+}
+function spCartClear(){ spQuoteNew(); }
+function spQuoteOpen(id, asCopy){
+  var q=QUOTES[id]; if(!q) return;
+  var go=function(){
+    CART=(q.items||[]).filter(function(c){ return c && c.code && c.qty>0; }).map(function(c){ return {code:c.code, qty:+c.qty}; });
+    QMETA={name:q.name||'', phone:q.phone||'', fb:q.fb||'', line:q.line||'', note:q.note||''};
+    if(!asCopy){ QMETA.id=id; QMETA.ts=q.ts; }
+    spSaveCart(); spQMetaFill(); try{ localStorage.setItem(spMetaKey(), JSON.stringify(QMETA)); }catch(e){}
+    if(!asCopy && q.status==='lost') spQuoteSave(true);   // opened again → back to waiting
+    spQView('edit'); window.scrollTo(0,0);
+    if(asCopy) toast('คัดลอกเป็นใบใหม่แล้ว / copied as a new quote');
+  };
+  if(QMETA.id===id && !asCopy){ spQView('edit'); return; }
+  // the quote on screen is never lost: saved ones are flushed, unsaved ones parked in the folder
+  if(CART.length && !QMETA.id){
+    spQMetaRead(); if(!spQHasWho()) $('q-cust').value='ไม่มีชื่อ '+new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
+    spQuoteSave(true).then(function(ok){ if(ok) go(); }); return;
+  }
+  if(QMETA.id) spQuoteSave(true).then(function(ok){ if(ok) go(); }); else go();
+}
+function spQuoteLost(id){
+  var q=QUOTES[id]; if(!q || !ME) return;
+  R('sales/quotes/'+ME.uid+'/'+id).update({status:q.status==='lost'?'waiting':'lost', updatedAt:Date.now()}).then(function(){ toast(q.status==='lost'?'ย้ายกลับไปรอลูกค้า / back to waiting':'ย้ายไป ไม่ซื้อ / moved to lost'); });
+}
+function spQuoteDel(id){
+  if(!ME || !confirm('ลบใบเสนอราคานี้ถาวร? / delete this quote for good?')) return;
+  R('sales/quotes/'+ME.uid+'/'+id).remove().then(function(){ if(QMETA.id===id){ QMETA.id=''; spRenderQHead(); } toast('ลบแล้ว / deleted'); });
+}
+function spQList(){ return Object.keys(QUOTES).map(function(k){ var q=QUOTES[k]; q._k=k; return q; }).sort(function(a,b){ return (b.updatedAt||b.ts||0)-(a.updatedAt||a.ts||0); }); }
+function spQView(v){ _qView=v; $('q-edit').classList.toggle('hide', v!=='edit'); $('q-folder').classList.toggle('hide', v!=='folder'); spRenderQSeg(); if(v==='folder') spRenderFolder(); else spRenderQuote(); }
+function spRenderQSeg(){
+  var el=$('q-seg'); if(!el) return;
+  var w=spQList().filter(function(q){ return (q.status||'waiting')==='waiting'; }).length;
+  el.innerHTML='<button class="chip'+(_qView==='edit'?' on':'')+'" onclick="spQView(\'edit\')">✏️ ใบที่เปิดอยู่ / current'+(CART.length?' ('+CART.length+')':'')+'</button>'
+    +'<button class="chip'+(_qView==='folder'?' on':'')+'" onclick="spQView(\'folder\')">📁 แฟ้มใบเสนอราคา / folder'+(w?' · รอ '+w:'')+'</button>';
+}
+function spRenderQHead(){
+  var el=$('q-head'); if(!el) return;
+  if(QMETA.id) el.innerHTML='<div class="card pad" style="font-size:13px;background:var(--green-bg);border-color:transparent"><b>📁 '+esc(QMETA.name||QMETA.phone||QMETA.line||QMETA.fb||'')+'</b> · บันทึกในแฟ้มแล้ว แก้แล้วบันทึกอัตโนมัติ<span class="en b">saved in the folder — changes save automatically</span></div>';
+  else el.innerHTML=CART.length?'<div class="card pad" style="font-size:13px;background:var(--amber-bg);border-color:transparent">⚠ ใบนี้ยังไม่ได้บันทึกลงแฟ้ม<span class="en b">not saved in the folder yet</span></div>':'';
+}
+function spFbLink(fb){ return /^https:\/\/([a-z0-9-]+\.)*(facebook\.com|fb\.com|fb\.me|m\.me|messenger\.com)\//i.test(fb||'') ? fb : ''; }
+function spRenderFolder(){
+  if(!$('qf-list')) return;
+  var all=spQList(), qv=String(($('qf-q')||{}).value||'').trim().toLowerCase(), qd=qv.replace(/\D/g,'');
+  var cnt={waiting:0, ordered:0, lost:0}; all.forEach(function(q){ cnt[q.status||'waiting']=(cnt[q.status||'waiting']||0)+1; });
+  var F=[['waiting','⏳ รอลูกค้า / waiting',cnt.waiting],['ordered','✅ สั่งแล้ว / ordered',cnt.ordered],['lost','✕ ไม่ซื้อ / lost',cnt.lost],['all','ทั้งหมด / all',all.length]];
+  $('qf-chips').innerHTML=F.map(function(f){ return '<button class="chip'+(_qfFilter===f[0]?' on':'')+'" onclick="_qfFilter=\''+f[0]+'\';spRenderFolder()">'+f[1]+' ('+f[2]+')</button>'; }).join('');
+  var list=all.filter(function(q){
+    if(_qfFilter!=='all' && (q.status||'waiting')!==_qfFilter) return false;
+    if(!qv) return true;
+    var hay=[q.name,q.phone,q.fb,q.line,q.note,(q.items||[]).map(function(c){ return c.code; }).join(' ')].join(' ').toLowerCase();
+    var r=q.reqId && MYREQ[q.reqId]; if(r && r.orderId) hay+=' '+String(r.orderId).toLowerCase();
+    return hay.indexOf(qv)>=0 || (qd.length>=3 && String(q.phone||'').replace(/\D/g,'').indexOf(qd)>=0);
+  });
+  if(!list.length){ $('qf-list').innerHTML='<div class="empty"><i class="ti ti-folder-off"></i>'+(qv?'ไม่พบ / nothing found':'ยังไม่มีใบเสนอราคา — กด "บันทึกลงแฟ้ม" ในใบที่เปิดอยู่<span class="en b">no quotes yet — tap "save to folder" on the current quote</span>')+'</div>'; return; }
+  $('qf-list').innerHTML=list.map(function(q){
+    var k=q._k, st=q.status||'waiting', r=q.reqId?MYREQ[q.reqId]:null, rst=r?reqStage(r):'';
+    var tot=+q.total||(q.items||[]).reduce(function(a,c){ return a+(c.qty||0)*(+prodOf(c.code).price||0); },0);
+    var days=Math.floor((Date.now()-(q.ts||Date.now()))/864e5), fbl=spFbLink(q.fb);
+    var who=[q.phone?'📞 '+esc(q.phone):'', q.line?'LINE '+esc(q.line):'', q.fb?(fbl?'<a href="'+esc(fbl)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">FB ↗</a>':'FB '+esc(q.fb)):''].filter(Boolean).join(' · ');
+    var cur=(QMETA.id===k);
+    return '<div class="card pad" style="margin-bottom:10px'+(cur?';border-color:var(--gold)':'')+'">'
+      +'<div class="row"><div style="flex:1;min-width:0"><div style="font-weight:800">'+esc(q.name||q.phone||q.line||q.fb||'—')+(cur?' <span class="st dk">เปิดอยู่ / open</span>':'')+'</div>'
+      +(who?'<div style="font-size:12.5px;color:var(--text2);word-break:break-word">'+who+'</div>':'')
+      +'<div style="font-size:12.5px;color:var(--text2)">'+(q.items||[]).map(function(c){ return esc(c.code)+'×'+fmt(c.qty); }).join(', ')+'</div>'
+      +'<div style="font-size:12.5px;color:var(--text2)"><b style="color:var(--text)">'+fmt(tot)+' ฿</b> · '+new Date(q.updatedAt||q.ts||0).toLocaleDateString('th-TH',{day:'numeric',month:'short'})
+        +(st==='waiting'?' · รอมา '+days+' วัน <span class="en">'+days+' d waiting</span>':'')+'</div>'
+      +(q.note?'<div style="font-size:12.5px;margin-top:2px">📝 '+esc(q.note)+'</div>':'')+'</div>'
+      +(r?stageChip(rst):(st==='lost'?'<span class="st no">ไม่ซื้อ / lost</span>':'<span class="st pend">รอลูกค้า / waiting</span>'))+'</div>'
+      +'<div class="row" style="margin-top:10px;flex-wrap:wrap">'
+      +(st==='ordered'
+        ? (r?'<button class="btn dark sm" style="flex:1" onclick="spOrdDetail(\''+esc(q.reqId)+'\')"><i class="ti ti-truck"></i> '+(r.orderId?'#'+esc(r.orderId):'ติดตาม')+' / track</button>':'')
+          +'<button class="btn line sm" style="flex:1" onclick="spQuoteOpen(\''+k+'\',true)"><i class="ti ti-copy"></i> สั่งซ้ำ / reorder</button>'
+        : '<button class="btn gold sm" style="flex:1" onclick="spQuoteOpen(\''+k+'\')"><i class="ti ti-edit"></i> เปิด / แก้ไข · open</button>'
+          +'<button class="btn line sm" onclick="spQuoteLost(\''+k+'\')">'+(st==='lost'?'↩ รอต่อ / waiting':'✕ ไม่ซื้อ / lost')+'</button>')
+      +'<button class="btn red sm" onclick="spQuoteDel(\''+k+'\')" title="delete"><i class="ti ti-trash"></i></button></div></div>';
   }).join('');
 }
-// Shared Google Drive: one folder per model (product photos, customers' installations,
+/* POS-like quick add right inside the quote: search by code / colour / number,
+   group chips, one tap = +1. Panel lines offer their matching trims. */
+function spQAMatch(p, qv){
+  if(!qv) return true;
+  var hay=(p.code+' '+(p.name||'')+' '+(p.nameEN||'')+' '+nameEn(p)+' '+((PROFILES[p.profile]||{}).label||'')).toLowerCase();
+  // a bare number means "that colour number" across the family: 9 → KP009, L09, H09, U09 (not KP019)
+  if(/^\d{1,3}$/.test(qv)){ var m=String(p.code).match(/(\d+)\s*$/); return !!m && parseInt(m[1],10)===parseInt(qv,10); }
+  return hay.indexOf(qv)>=0;
+}
+function spQAGroupOk(p, g){
+  if(!g) return true; var pg=prodGroup(p), c=String(p.code).toUpperCase();
+  if(g==='WPC'||g==='PVC'||g==='CLIP') return pg===g;
+  if(pg!=='ACC') return false;
+  if(g==='U') return /^U/.test(c); if(g==='H') return /^[HT]/.test(c); return /^L/.test(c);
+}
+function spRenderQA(){
+  var el=$('q-add'); if(!el) return;
+  var G=[['WPC','WPC'],['PVC','PVC'],['L','ขอบ L'],['H','ขอบ H·T'],['U','ขอบ U'],['CLIP','คลิปเพิ่ม / clips']];
+  var inp=$('qa-q'), qv=inp?String(inp.value||'').trim().toLowerCase():'';
+  if(!inp){
+    el.innerHTML='<div style="font-weight:800;margin-bottom:8px"><i class="ti ti-circle-plus"></i> เพิ่มสินค้า / add items <span style="font-weight:500;font-size:12px;color:var(--text2)">· แตะ = +1 / tap = +1</span></div>'
+      +'<div class="search" style="margin-bottom:6px"><i class="ti ti-search"></i><input id="qa-q" placeholder="รหัส สี หรือเลข เช่น 9, KP028, โอ๊ค" oninput="spRenderQA()"></div>'
+      +'<div class="chips" id="qa-chips" style="padding-bottom:4px"></div><div id="qa-res"></div>';
+  }
+  $('qa-chips').innerHTML=G.map(function(g){ return '<button class="chip'+(_qaGroup===g[0]?' on':'')+'" onclick="_qaGroup=(_qaGroup===\''+g[0]+'\'?\'\':\''+g[0]+'\');spRenderQA()">'+g[1]+'</button>'; }).join('');
+  if(!qv && !_qaGroup){ $('qa-res').innerHTML=''; return; }
+  var inCart={}; CART.forEach(function(c){ inCart[c.code]=(inCart[c.code]||0)+c.qty; });
+  var list=CATALOG.filter(function(p){ return spQAGroupOk(p,_qaGroup) && spQAMatch(p,qv); }).slice(0,40);
+  $('qa-res').innerHTML=list.length ? list.map(function(p){
+    var g=prodGroup(p), st=stockOf(p.code), out=SOLDOUT[p.code] || (st!=null && st<=0), panel=(g==='WPC'||g==='PVC');
+    return '<div class="li" style="padding:8px 0">'+imgTag(p).replace('<img','<img style="width:42px;height:42px;border-radius:10px;object-fit:cover"')
+      +'<div style="flex:1;min-width:0"><div style="font-weight:800;font-size:14px">'+esc(p.code)+' <span style="font-weight:500;color:var(--text2);font-size:12.5px">'+esc(p.name||(PROFILES[p.profile]||{}).label||'')+'</span></div>'
+      +'<div style="font-size:12.5px;color:var(--text2)">'+fmt(p.price)+' ฿/'+prodUnit(p)+(out?' · <span style="color:var(--red);font-weight:700">หมด / out</span>':(st!=null?' · มี '+fmt(st):''))+(inCart[p.code]?' · <b style="color:var(--gold3)">ในใบ × '+fmt(inCart[p.code])+'</b>':'')+'</div></div>'
+      +(panel?'<button class="btn line sm" style="padding:6px 10px" title="calculator" onclick="spProd(\''+esc(p.code)+'\')"><i class="ti ti-calculator"></i></button>':'')
+      +'<button class="btn gold sm" style="min-width:52px" onclick="spQAdd(\''+esc(p.code)+'\',1)">+1</button></div>';
+  }).join('') : '<div style="font-size:13px;color:var(--text2);padding:6px 2px">ไม่พบสินค้า / nothing found</div>';
+}
+function spQAdd(code, n){
+  var p=CATALOG.find(function(x){ return x.code===code; }); if(!p) return;
+  var c=CART.find(function(x){ return x.code===code; }); if(c) c.qty=Math.min(5000,c.qty+n); else CART.push({code:code, qty:n});
+  spSaveCart(); spRenderQuote(); try{ spRenderShop(); }catch(e){}
+}
+// Shared Google Drive: one folder per model// Shared Google Drive: one folder per model (product photos, customers' installations,
 // accessories). sales/config/drive = {main, products:{code: folderId}} — written by KP.
 function driveId(id){ return /^[A-Za-z0-9_-]{10,80}$/.test(String(id||'')) ? String(id) : ''; }
 function driveBtn(code){
@@ -768,6 +939,7 @@ var MYRULE=null, MEMBER_RULES={}, MEMBER_NOTES={}, CHAT={}, CHATSEEN_ME={}, CHAT
 var ME=null, MEMBER=null, CATALOG=[], STOCK={}, SOLDOUT={}, CONFIG={mode:'pct',pct:5,perPanel:10,cycle:'monthly',priceMode:'list'};
 var MYREQ={}, ORDERS={}, _ordSubs={}, CART=[], OWNER=false, ALLREQ={}, MEMBERS={}, PAYOUTS={};
 var _shopFilter='all', _ordFilter='all', _oiFilter='pending';
+var QMETA={}, QUOTES={}, _qView='edit', _qfFilter='waiting', _qaGroup='', _qSaveT=null, _quotesOn=false;
 
 /* ═════════════ boot ═════════════ */
 if(SP_TEST){ $('testbar').classList.remove('hide'); $('testbar2').classList.remove('hide'); }
@@ -900,13 +1072,13 @@ function spMemberStart(){
     $('pf-email').textContent=MEMBER.email||'';
     ['name','brand','phone','line','fb','bank'].forEach(function(k){ var e=$('pf-'+k); if(e && document.activeElement!==e) e.value=MEMBER[k]||''; });
     $('pf-polite').value=MEMBER.polite==='krub'?'krub':'ka';
-    if($('scr-app').classList.contains('hide')){ spShow('app'); spAttachData(); spLoadCart(); spAttachMyOrders(); spAttachChat(); spTab('shop'); }
+    if($('scr-app').classList.contains('hide')){ spShow('app'); spAttachData(); spLoadCart(); spAttachMyOrders(); spAttachQuotes(); spAttachChat(); spTab('shop'); }
   });
 }
 function spTab(t){
   ['shop','quote','orders','kit','earn','me'].forEach(function(k){ $('t-'+k).classList.toggle('hide', k!==t); });
   document.querySelectorAll('#scr-app .nav button').forEach(function(b){ b.classList.toggle('on', b.dataset.t===t); });
-  if(t==='quote') spRenderQuote(); if(t==='orders') spRenderOrders(); if(t==='earn') spRenderEarn(); if(t==='kit') spRenderKit();
+  if(t==='quote') spQView(_qView); if(t==='orders') spRenderOrders(); if(t==='earn') spRenderEarn(); if(t==='kit') spRenderKit();
   if(t==='me') $('pf-contact').innerHTML=contactHtml();
   window.scrollTo(0,0);
 }
@@ -1006,19 +1178,18 @@ function spCalcRun(code){
 
 /* cart / quote */
 function spCartKey(){ return 'kpsp-cart-'+(ME?ME.uid:'x'); }
-function spLoadCart(){ try{ CART=JSON.parse(localStorage.getItem(spCartKey())||'[]')||[]; }catch(e){ CART=[]; } spCartBadge(); }
-function spSaveCart(){ try{ localStorage.setItem(spCartKey(), JSON.stringify(CART)); }catch(e){} spCartBadge(); }
+function spLoadCart(){ try{ CART=JSON.parse(localStorage.getItem(spCartKey())||'[]')||[]; }catch(e){ CART=[]; } try{ QMETA=JSON.parse(localStorage.getItem(spMetaKey())||'{}')||{}; }catch(e){ QMETA={}; } spQMetaFill(); spCartBadge(); }
+function spSaveCart(){ try{ localStorage.setItem(spCartKey(), JSON.stringify(CART)); }catch(e){} spCartBadge(); spQAuto(); }
 function spCartBadge(){ var n=CART.length, b=$('nb-quote'); b.textContent=n; b.classList.toggle('hide', !n); }
 function spAddCart(code){
   var q=Math.min(5000, Math.max(0, parseInt(($('pq')||{}).value)||0)), c=CART.find(function(x){ return x.code===code; }), added=[];
   if(q>0){ if(c) c.qty+=q; else CART.push({code:code, qty:q}); added.push(code+' × '+q); }
   document.querySelectorAll('#sh-b .tq').forEach(function(e){ var n=Math.min(5000, Math.max(0, parseInt(e.value)||0)), tc=e.dataset.code; if(n>0){ var ex=CART.find(function(x){ return x.code===tc; }); if(ex) ex.qty+=n; else CART.push({code:tc, qty:n}); added.push(tc+' × '+n); } });
   if(!added.length){ toast('ใส่จำนวนก่อน / enter a quantity'); return; }
-  spSaveCart(); spSheetClose(); spRenderShop(); toast('ใส่ใบเสนอราคาแล้ว ✓ '+added.join(', ')+' / added to quote');
+  spSaveCart(); spSheetClose(); spRenderShop(); if(!$('t-quote').classList.contains('hide')) spRenderQuote(); toast('ใส่ใบเสนอราคาแล้ว ✓ '+added.join(', ')+' / added to quote');
 }
 function spCartQty(i,d){ var c=CART[i]; if(!c) return; c.qty=Math.max(0,c.qty+d); if(!c.qty) CART.splice(i,1); spSaveCart(); spRenderQuote(); }
 function spCartSet(i,v){ var c=CART[i]; if(!c) return; c.qty=Math.max(0,parseInt(v)||0); if(!c.qty) CART.splice(i,1); spSaveCart(); spRenderQuote(); }
-function spCartClear(){ if(CART.length && !confirm('ล้างใบเสนอราคา? / clear the quote?')) return; CART=[]; if($('q-cust')) $('q-cust').value=''; spSaveCart(); spRenderQuote(); }
 function prodOf(code){ return CATALOG.find(function(x){ return x.code===code; }) || {code:code, price:0, mat:'ACC'}; }
 // Same rules as the KP quotation: free delivery from 25 panels, otherwise 400 ฿;
 // L-corners alone 250/400 ฿; 10 free clips per panel.
@@ -1053,26 +1224,41 @@ function spQuoteText(){
 }
 function spRenderQuote(){
   if(!$('q-items')) return;
-  spRenderSaved();
-  if(!CART.length){ $('q-items').innerHTML='<div class="empty"><i class="ti ti-file-invoice"></i>ยังไม่มีสินค้า — เลือกจากหน้า สินค้า<span class="en b">empty — add products from the Products tab</span></div>'; $('q-out').innerHTML=''; return; }
+  spRenderQSeg(); spRenderQHead(); spRenderQA(); spQMetaFill();
+  if(!CART.length){ $('q-items').innerHTML='<div class="empty" style="padding:22px"><i class="ti ti-file-invoice"></i>ยังไม่มีสินค้า — ค้นหาด้านบน หรือเลือกจากหน้า สินค้า<span class="en b">empty — search above or add from the Products tab</span></div>'; $('q-out').innerHTML=''; return; }
   var c=spCalc();
   $('q-items').innerHTML=CART.map(function(it,i){
     var p=prodOf(it.code), st=stockOf(it.code), short=(st!=null && st<it.qty);
     return '<div class="li">'+imgTag(p).replace('<img','<img style="width:54px;height:54px;border-radius:12px;object-fit:cover"')
       +'<div style="flex:1;min-width:0"><div style="font-weight:800">'+esc(p.code)+' <span style="font-weight:500;color:var(--text2);font-size:13px">'+esc(p.name||'')+enSpan(nameEn(p))+'</span></div>'
       +'<div style="font-size:13px;color:var(--text2)">'+fmt(p.price)+' ฿/'+prodUnit(p)+' · <b style="color:var(--text)">'+fmt(it.qty*(+p.price||0))+' ฿</b></div>'
-      +(short?'<div style="font-size:12px;color:var(--red);font-weight:700">⚠ สต็อกมี '+fmt(st)+' / only '+fmt(st)+' in stock</div>':'')+'</div>'
+      +(short?'<div style="font-size:12px;color:var(--red);font-weight:700">⚠ สต็อกมี '+fmt(st)+' / only '+fmt(st)+' in stock</div>':'')
+      +spTrimChips(p)+'</div>'
       +'<div class="qty"><button onclick="spCartQty('+i+',-1)">−</button><input type="number" inputmode="numeric" value="'+it.qty+'" onchange="spCartSet('+i+',this.value)"><button onclick="spCartQty('+i+',1)">+</button></div></div>';
   }).join('')
   +'<div style="display:flex;justify-content:space-between;margin-top:12px;font-size:14px"><span>รวม / goods</span><b class="num">'+fmt(c.sub)+' ฿</b></div>'
   +'<div style="display:flex;justify-content:space-between;font-size:14px"><span>ค่าส่ง / delivery</span><b class="num">'+(c.ship?fmt(c.ship)+' ฿':'ฟรี / free')+'</b></div>'
   +(c.clips?'<div style="display:flex;justify-content:space-between;font-size:14px"><span>ฟรีคลิป / free clips</span><b class="num">'+fmt(c.clips)+'</b></div>':'')
   +'<div style="display:flex;justify-content:space-between;font-size:18px;margin-top:6px;padding-top:8px;border-top:1.5px solid var(--border)"><b>ยอดรวม / total</b><b class="num" style="color:var(--gold3)">'+fmt(c.total)+' ฿</b></div>';
+  spRenderQuoteOut();
+}
+// Matching trims of a panel line, one tap each (L / H·T / U of the same number).
+function spTrimChips(p){
+  var g=prodGroup(p); if(g!=='WPC' && g!=='PVC') return '';
+  var tr=trimsFor(p); if(!tr.length) return '';
+  return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+tr.map(function(t){
+    var n=(CART.find(function(x){ return x.code===t.p.code; })||{}).qty||0;
+    return '<button class="chip" style="padding:4px 10px;font-size:12px" onclick="spQAdd(\''+esc(t.p.code)+'\',1)">+ '+esc(t.p.code)+(n?' ('+n+')':'')+'</button>';
+  }).join('')+'<button class="chip" style="padding:4px 10px;font-size:12px" onclick="spProd(\''+esc(p.code)+'\')"><i class="ti ti-calculator"></i></button></div>';
+}
+function spRenderQuoteOut(){
+  if(!$('q-out') || !CART.length) return;
   $('q-out').innerHTML='<div style="font-size:12.5px;font-weight:700;color:var(--text2);margin:0 2px 6px">ข้อความสำหรับลูกค้า (ภาษาไทย) / message for your customer (Thai)</div><div class="mono" id="q-text">'+esc(spQuoteText())+'</div>'
     +'<div class="row" style="margin-top:10px"><button class="btn dark" style="flex:1" onclick="copyText(spQuoteText())"><i class="ti ti-copy"></i> คัดลอก / copy</button>'
     +'<button class="btn line" style="flex:1" onclick="shareText(spQuoteText())"><i class="ti ti-share"></i> แชร์ / share</button></div>'
     +'<div class="row" style="margin-top:10px"><button class="btn dark" style="flex:1" onclick="spQuoteImageGo()"><i class="ti ti-photo"></i> เป็นรูปภาพ / as image</button>'
-    +'<button class="btn line" style="flex:1" onclick="spQuoteSave()"><i class="ti ti-bookmark"></i> บันทึกไว้ / save</button></div>'
+    +(QMETA.id?'<button class="btn line" style="flex:1" onclick="spQView(\'folder\')"><i class="ti ti-folder-check"></i> ในแฟ้มแล้ว / in folder</button></div>'
+      :'<button class="btn line" style="flex:1" onclick="spQuoteSave()"><i class="ti ti-folder-plus"></i> บันทึกลงแฟ้ม / save to folder</button></div>')
     +'<button class="btn gold w" style="margin-top:10px" onclick="spOrderForm()"><i class="ti ti-send"></i> ลูกค้าตกลงซื้อ → ส่งออเดอร์ให้ KP / order for customer</button>';
 }
 
@@ -1083,7 +1269,7 @@ function spOrderForm(){
   spSheet('<i class="ti ti-send"></i> ส่งออเดอร์ให้ KP / Order',
     '<div class="card pad" style="margin-bottom:12px;font-size:14px"><b>'+c.lines.length+' รายการ <span class="en">items</span> · '+fmt(c.total)+' ฿</b><div style="color:var(--text2);font-size:12.5px">KP แพ็คและจัดส่งให้ลูกค้าโดยตรง / KP packs & delivers to your customer</div></div>'
     +'<label class="l" style="margin-top:0">ชื่อลูกค้า / Customer *</label><input id="of-c" value="'+esc(clean(($('q-cust')||{}).value||'').replace(/^คุณ\s*/,''))+'">'
-    +'<label class="l">เบอร์โทร / Phone *</label><input id="of-p" type="tel" inputmode="tel" placeholder="08x-xxx-xxxx">'
+    +'<label class="l">เบอร์โทร / Phone *</label><input id="of-p" type="tel" inputmode="tel" placeholder="08x-xxx-xxxx" value="'+esc(normPhone(QMETA.phone||''))+'">'
     +'<label class="l">ที่อยู่จัดส่ง / Address *</label><textarea id="of-a" placeholder="บ้านเลขที่ หมู่บ้าน/ซอย ถนน ตำบล(แขวง) อำเภอ(เขต) · house no., village/soi, road, sub-district, district"></textarea>'
     +'<label class="l">รหัสไปรษณีย์ / postcode</label><input id="of-z" inputmode="numeric" maxlength="7" placeholder="12130">'
     +'<label class="l">จังหวัด / Province *</label><select id="of-v"><option value="">— เลือก / choose —</option>'+PROVINCES.map(function(p){ return '<option>'+p+'</option>'; }).join('')+'</select>'
@@ -1109,9 +1295,17 @@ function spOrderSend(){
     totals:{goods:c.sub, delivery:c.ship, panels:c.panels, freeClips:c.clips, total:c.total},
     status:'pending', createdAt:Date.now() };
   $('of-go').disabled=true;
-  R('sales/requests/'+ME.uid).push(req).then(function(){
+  spQMetaRead();
+  var reqRef=R('sales/requests/'+ME.uid).push();
+  reqRef.set(req).then(function(){
     notifyOffice('🤝 ออเดอร์จากตัวแทน / Sales order: '+(MEMBER.brand||''), cu.name+' · '+cu.province+' · '+fmt(c.total)+' ฿');
-    CART=[]; if($('q-cust')) $('q-cust').value=''; spSaveCart(); spSheetClose(); spTab('orders'); toast('ส่งออเดอร์แล้ว ✓ KP จะตรวจสอบและยืนยัน'+(CT().confirm?' ภายใน '+CT().confirm:'')+' / sent — KP will confirm', 4200);
+    // the quote moves to "ordered" in the folder (created now if it was never saved)
+    clearTimeout(_qSaveT);
+    var qid=QMETA.id || R('sales/quotes/'+ME.uid).push().key, qr=spQRec();
+    if(!qr.name) qr.name=cu.name; if(!qr.phone) qr.phone=cu.phone;
+    qr.status='ordered'; qr.reqId=reqRef.key; qr.orderedAt=Date.now();
+    R('sales/quotes/'+ME.uid+'/'+qid).set(qr).catch(function(){});
+    spQuoteReset(); spSheetClose(); spTab('orders'); toast('ส่งออเดอร์แล้ว ✓ KP จะตรวจสอบและยืนยัน'+(CT().confirm?' ภายใน '+CT().confirm:'')+' / sent — KP will confirm', 4200);
   }).catch(function(e){ $('of-go').disabled=false; toast('ส่งไม่สำเร็จ / failed: '+(e&&e.message||e)); });
 }
 
@@ -1208,31 +1402,61 @@ function stageChip(st){
   var M={checking:['pend','KP กำลังตรวจ / KP checking'],sent:['pend','รอ KP ยืนยัน / waiting for KP'],approved:['blue','ยืนยันแล้ว / confirmed'],packing:['blue','กำลังแพ็ค / packing'],ready:['blue','แพ็คเสร็จ / packed'],loaded:['dk','กำลังจัดส่ง / on the way'],delivered:['ok','ส่งแล้ว / delivered'],paid:['ok','ชำระแล้ว ✓ / paid'],rejected:['no','ไม่อนุมัติ / rejected'],cancelled:['no','ยกเลิก / cancelled']};
   var m=M[st]||['pend',st]; return '<span class="st '+m[0]+'">'+m[1]+'</span>';
 }
+// Who brings it: a KP driver (o.driver, set when the order joins a tour) or a carrier (o.shipper).
+function ordDriver(o){
+  if(!o) return null;
+  var ph=function(n){ n=String(n||''); return (!n || n.charAt(0)==='⏳' || n.indexOf('ยังไม่กำหนด')>=0) ? '' : n; };
+  if(o.shipper && o.shipper!=='ส่งเอง') return {carrier:String(o.shipper)};
+  var d=ph(o.driver)||ph(o.deliveredBy); return d ? {driver:d, tour:String(o.tourNo||'')} : null;
+}
+function ordDriverTxt(o){
+  var d=ordDriver(o); if(!d) return '';
+  return d.carrier ? '🚛 ขนส่ง / carrier: '+esc(d.carrier) : '🚚 คนขับ / driver: '+esc(d.driver)+(d.tour?' · ทัวร์ / tour '+esc(d.tour):'');
+}
+var ORD_F=[['all','ทั้งหมด / all',null],['wait','รอ KP / waiting',['sent','checking']],['conf','ยืนยันแล้ว / confirmed',['approved']],['pack','แพ็ค / packing',['packing','ready']],
+  ['way','กำลังส่ง / on the way',['loaded']],['deliv','ส่งแล้ว รอชำระ / delivered',['delivered']],['paid','ชำระแล้ว / paid',['paid']],['x','ไม่อนุมัติ·ยกเลิก / rejected',['rejected','cancelled']]];
+function spReqQuote(k){ var q=null; Object.keys(QUOTES).some(function(id){ if(QUOTES[id] && QUOTES[id].reqId===k){ q=QUOTES[id]; return true; } return false; }); return q; }
 function spRenderOrders(){
   if(!$('ord-list') || !ME) return;
-  var arr=Object.keys(MYREQ).map(function(k){ var r=MYREQ[k]; r._k=k; r._st=reqStage(r); return r; }).sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
-  var F=[['all','ทั้งหมด / all'],['open','กำลังดำเนินการ / open'],['done','ส่งแล้ว / delivered'],['x','ไม่อนุมัติ/ยกเลิก / rejected·cancelled']];
-  var open=arr.filter(function(r){ return ['sent','checking','approved','packing','ready','loaded'].indexOf(r._st)>=0; }).length;
+  var all=Object.keys(MYREQ).map(function(k){ var r=MYREQ[k]; r._k=k; r._st=reqStage(r); return r; }).sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
+  var open=all.filter(function(r){ return ['sent','checking','approved','packing','ready','loaded'].indexOf(r._st)>=0; }).length;
   var nb=$('nb-orders'); nb.textContent=open; nb.classList.toggle('hide', !open);
-  $('ord-chips').innerHTML=F.map(function(f){ return '<button class="chip'+(_ordFilter===f[0]?' on':'')+'" onclick="_ordFilter=\''+f[0]+'\';spRenderOrders()">'+f[1]+'</button>'; }).join('');
-  arr=arr.filter(function(r){ var s=r._st;
-    if(_ordFilter==='open') return ['sent','checking','approved','packing','ready','loaded'].indexOf(s)>=0;
-    if(_ordFilter==='done') return s==='delivered'||s==='paid';
-    if(_ordFilter==='x') return s==='rejected'||s==='cancelled';
-    return true; });
-  if(!arr.length){ $('ord-list').innerHTML='<div class="empty"><i class="ti ti-truck-off"></i>ยังไม่มีออเดอร์ / no orders yet</div>'; return; }
+  // month picker (by order date)
+  var mk=function(t){ var d=new Date(t||0); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); };
+  var ms=[]; all.forEach(function(r){ var m=mk(r.createdAt); if(ms.indexOf(m)<0) ms.push(m); });
+  var sel=$('ord-m'), cur=sel.value||'';
+  sel.innerHTML='<option value="">ทุกเดือน / all months</option>'+ms.map(function(m){ var p=m.split('-'); return '<option value="'+m+'"'+(m===cur?' selected':'')+'>'+new Date(+p[0],+p[1]-1,1).toLocaleDateString('th-TH',{month:'short',year:'2-digit'})+'</option>'; }).join('');
+  if(cur && ms.indexOf(cur)<0) cur='';
+  var qv=String(($('ord-q')||{}).value||'').trim().toLowerCase(), qd=qv.replace(/\D/g,'');
+  var base=all.filter(function(r){
+    if(cur && mk(r.createdAt)!==cur) return false;
+    if(!qv) return true;
+    var cu=r.customer||{}, q=spReqQuote(r._k)||{};
+    var hay=[cu.name,cu.phone,cu.province,cu.address,r.orderId,'#'+(r.orderId||''),r.note,q.fb,q.line,q.name,(r.lineItems||[]).map(function(l){ return l.code; }).join(' ')].join(' ').toLowerCase();
+    return hay.indexOf(qv)>=0 || (qd.length>=3 && String(cu.phone||'').indexOf(qd)>=0);
+  });
+  $('ord-chips').innerHTML=ORD_F.map(function(f){ var n=f[2]?base.filter(function(r){ return f[2].indexOf(r._st)>=0; }).length:base.length;
+    return '<button class="chip'+(_ordFilter===f[0]?' on':'')+'" onclick="_ordFilter=\''+f[0]+'\';spRenderOrders()">'+f[1]+' ('+n+')</button>'; }).join('');
+  var ff=(ORD_F.find(function(f){ return f[0]===_ordFilter; })||ORD_F[0])[2];
+  var arr=base.filter(function(r){ return !ff || ff.indexOf(r._st)>=0; });
+  if(!arr.length){ $('ord-list').innerHTML='<div class="empty"><i class="ti ti-truck-off"></i>'+(all.length?'ไม่พบ / nothing found':'ยังไม่มีออเดอร์ / no orders yet')+'</div>'; return; }
   $('ord-list').innerHTML=arr.map(function(r){
-    var cu=r.customer||{}, t=r.totals||{};
+    var cu=r.customer||{}, t=r.totals||{}, o=r.orderId?ORDERS[r.orderId]:null;
+    var extra='';
+    if(o && ['loaded','delivered','paid'].indexOf(r._st)>=0) extra=ordDriverTxt(o);
+    else if(o && o.deliveryRound && ['approved','packing','ready'].indexOf(r._st)>=0) extra='📅 รอบส่ง / round: '+esc(o.deliveryRound);
     return '<div class="card pad" style="margin-bottom:12px" onclick="spOrdDetail(\''+r._k+'\')">'
       +'<div class="row"><div style="flex:1;min-width:0"><div style="font-weight:800">'+esc(cu.name||'—')+(r.orderId?' <span style="color:var(--text3);font-weight:600;font-size:13px">#'+esc(r.orderId)+'</span>':'')+'</div>'
-      +'<div style="font-size:12.5px;color:var(--text2)">'+new Date(r.createdAt||0).toLocaleDateString('th-TH',{day:'numeric',month:'short'})+' · '+esc(cu.province||'')+' · '+fmt(t.total)+' ฿</div></div>'+stageChip(r._st)+'</div>'
+      +'<div style="font-size:12.5px;color:var(--text2)">'+new Date(r.createdAt||0).toLocaleDateString('th-TH',{day:'numeric',month:'short'})+' · '+esc(cu.province||'')+' · '+fmt(o?orderTotal(o):t.total)+' ฿</div>'
+      +(extra?'<div style="font-size:12.5px;margin-top:2px">'+extra+'</div>':'')+'</div>'+stageChip(r._st)+'</div>'
       +(r._st==='rejected'&&r.rejectReason?'<div style="font-size:12.5px;color:var(--red);margin-top:6px">เหตุผล <span class="en">reason</span>: '+esc(r.rejectReason)+'</div>':'')+'</div>';
   }).join('');
 }
 function spOrdDetail(k){
   var r=MYREQ[k]||ALLREQ[k]; if(!r) return; var st=reqStage(r), cu=r.customer||{}, idx=STEPS.findIndex(function(s){ return s[0]===(st==='checking'?'sent':st); });
   var tl = (st==='rejected'||st==='cancelled') ? '<div style="color:var(--red);font-weight:700">'+(st==='rejected'?'ไม่อนุมัติ / not approved':'ออเดอร์ถูกยกเลิก / cancelled')+(r.rejectReason?' — '+esc(r.rejectReason):'')+'</div>'
-    : '<ul class="tl">'+STEPS.map(function(s,i){ return '<li class="'+(i<idx?'done':(i===idx?'now':''))+'">'+s[1]+'</li>'; }).join('')+'</ul>';
+    : '<ul class="tl">'+STEPS.map(function(s,i){ var dt=(s[0]==='loaded' && i<=idx) ? ordDriverTxt(r.orderId?ORDERS[r.orderId]:null) : '';
+        return '<li class="'+(i<idx?'done':(i===idx?'now':''))+'">'+s[1]+(dt?'<div style="font-size:12px;font-weight:600;color:var(--text2)">'+dt+'</div>':'')+'</li>'; }).join('')+'</ul>';
   var o=r.orderId?ORDERS[r.orderId]:null;
   // Customer wording — not the internal steps ("delivered to customer" reads odd to the customer).
   var CUS={sent:'📝 ได้รับออเดอร์แล้ว กำลังยืนยันกับคลังสินค้า', checking:'📝 ได้รับออเดอร์แล้ว กำลังยืนยันกับคลังสินค้า', approved:'✅ ยืนยันออเดอร์แล้ว',
@@ -1514,7 +1738,7 @@ function spRenderInbox(){
       +'<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:14px"><span>'+(r.payment==='transfer'?'💳 โอนแล้ว'+enSpan('paid by transfer'):'💵 ชำระปลายทาง'+enSpan('cash on delivery'))+(r.note?' · 📝 '+esc(r.note):'')+'</span><b style="white-space:nowrap;margin-left:8px">'+fmt(t.total)+' ฿</b></div>'
       +(r.status==='processing'?'<div style="font-size:12.5px;color:var(--amber);font-weight:700;margin-top:8px">⏳ เปิดอยู่ใน KP โดย '+esc(r.lockBy||'')+' / open in KP</div>':'')
       +(r.status==='pending'||r.status==='processing'
-        ? '<div class="row" style="margin-top:12px"><a class="btn gold" style="flex:2;text-decoration:none" href="'+kpAppUrl(r._k)+'" target="_blank"><i class="ti ti-external-link"></i> เปิดใน KP<span class="en">create the order in KP</span></a>'
+        ? '<div class="row" style="margin-top:12px"><a class="btn gold" style="flex:2;text-decoration:none" href="'+kpAppUrl(r._k)+'" target="_blank"><i class="ti ti-circle-check"></i> รับออเดอร์ → KP<span class="en">accept → New Order in KP</span></a>'
           +'<button class="btn red" style="flex:1" onclick="spReject(\''+r._k+'\')">ไม่อนุมัติ / reject</button></div>'
         : (r.status==='rejected'&&r.rejectReason?'<div style="font-size:12.5px;color:var(--red);margin-top:8px">เหตุผล <span class="en">reason</span>: '+esc(r.rejectReason)+'</div>':''))
       +'</div>';
