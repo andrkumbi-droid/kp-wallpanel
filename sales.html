@@ -17,6 +17,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://andrkumbi-droid.github.io/kp-wallpanel/kp-auth.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
 <script>
 /* ═══ KP SALES PARTNER ════════════════════════════════════════════════════
    Externe Verkäufer (eigener Markenname, eigener Kundenkontakt) bestellen hier
@@ -1258,7 +1259,7 @@ function spMemberStart(){
     $('pf-email').textContent=MEMBER.email||'';
     ['name','brand','phone','line','fb','bank'].forEach(function(k){ var e=$('pf-'+k); if(e && document.activeElement!==e) e.value=MEMBER[k]||''; });
     $('pf-polite').value=MEMBER.polite==='krub'?'krub':'ka';
-    if($('scr-app').classList.contains('hide')){ spShow('app'); spAttachData(); spLoadCart(); spAttachMyOrders(); spAttachQuotes(); spAttachChat(); spTab('shop'); }
+    if($('scr-app').classList.contains('hide')){ spShow('app'); spAttachData(); spLoadCart(); spAttachMyOrders(); spAttachQuotes(); spAttachChat(); spTab('shop'); spPushRegister(); }
   });
 }
 function spTab(t){
@@ -1675,6 +1676,7 @@ function spSlipCheck(uid, rid, ok){
   if(!ok){ reason=prompt('เหตุผล (ตัวแทนจะเห็น) เช่น ยอดไม่ตรง / เงินยังไม่เข้า · reason (the partner sees it):',''); if(reason===null) return; reason=clean(reason).slice(0,200); }
   R('sales/slips/'+uid+'/'+rid).update({status:ok?'ok':'bad', reason:reason, checkedAt:Date.now()}).then(function(){
     toast(ok?'ยืนยันสลิปแล้ว ✓ / slip confirmed':'แจ้งตัวแทนแล้ว / partner informed'); spSheetClose();
+    var sl=slipOf(uid, rid)||{}; pushPartner(uid, ok?'💳 สลิปถูกต้อง ✓ / slip confirmed':'💳 สลิปไม่ผ่าน / slip rejected', fmt(sl.amount)+' ฿'+(reason?' — '+reason:''));
   }).catch(function(e){ toast('Error: '+(e&&e.code||e)); });
 }
 // one line on the owner inbox card
@@ -1706,9 +1708,30 @@ function spAlert(title, body, tag){
 function spNotifAsk(){
   if(!('Notification' in window)){ toast('เครื่องนี้ไม่รองรับ (iPhone: เพิ่มลงหน้าจอโฮมก่อน) / not supported here', 4500); return; }
   spBeep();   // unlocks sound on phones (needs a tap)
-  Notification.requestPermission().then(function(p){ toast(p==='granted'?'เปิดการแจ้งเตือนแล้ว ✓ / notifications on':'ไม่ได้อนุญาต — เปิดในตั้งค่าเบราว์เซอร์ / not allowed', 4000); spNotifBtn(); });
+  Notification.requestPermission().then(function(p){ toast(p==='granted'?'เปิดการแจ้งเตือนแล้ว ✓ / notifications on':'ไม่ได้อนุญาต — เปิดในตั้งค่าเบราว์เซอร์ / not allowed', 4000); spNotifBtn(); if(p==='granted') spPushRegister(); });
 }
 function spNotifBtn(){ var on=('Notification' in window) && Notification.permission==='granted'; document.querySelectorAll('.notif-btn').forEach(function(b){ b.classList.toggle('hide', on); }); }
+/* Real push (also with the app closed): this device's FCM token is stored, the Apps Script
+   push relay (apps-script/push-relay.gs) sends every pushQueue entry to the target's tokens.
+   Partner → sales/pushTokens/<uid>/<h> · Owner device → fcmTokens/salesOwner/<h>. */
+var VAPID_KEY='BI2FDWmGhzUsT0Qe58Bi-u9fINShcRx5ogPSsrMVAHU6xT47Kz8nPX-yE-EbP8vcUzlyAJcsSBAVB62PweaBsZ4';
+function spPushRegister(){
+  try{
+    if(!('Notification' in window) || Notification.permission!=='granted' || !window.firebase || !firebase.messaging || !('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.ready.then(function(reg){ return firebase.messaging().getToken({vapidKey:VAPID_KEY, serviceWorkerRegistration:reg}); }).then(function(tok){
+      if(!tok) return; var h=0; for(var i=0;i<tok.length;i++){ h=((h<<5)-h+tok.charCodeAt(i))|0; } h='d'+(h>>>0).toString(36);
+      if(OWNER) R('fcmTokens/salesOwner/'+h).set({token:tok, ts:Date.now(), role:'salesOwner'}).catch(function(){});
+      else if(ME) R('sales/pushTokens/'+ME.uid+'/'+h).set({token:tok, ts:Date.now()}).catch(function(){});
+    }).catch(function(e){ console.warn('push token', e); });
+    // the page is open → our own listeners already beep + notify; ignore the foreground copy
+    try{ firebase.messaging().onMessage(function(){}); }catch(e){}
+  }catch(e){}
+}
+// KP → one partner (chat answer, order confirmed / rejected, slip checked)
+function pushPartner(uid, title, body){
+  if(!/^[A-Za-z0-9_]{1,128}$/.test(String(uid||''))) return;
+  R('pushQueue').push({role:'partner', uid:uid, title:String(title).slice(0,120), body:String(body||'').slice(0,300), data:{tag:'sales'}, ts:Date.now(), delivered:false}).catch(function(){});
+}
 function notifBtnHtml(){ return '<button class="btn line w notif-btn" style="margin-bottom:12px" onclick="spNotifAsk()"><i class="ti ti-bell-ringing"></i> เปิดแจ้งเตือนบนเครื่องนี้<span class="en">turn on notifications on this device</span></button>'; }
 
 /* ── individual commission + chat with KP (partner side) ── */
@@ -2487,7 +2510,7 @@ function spOwnerStart(){
   OWNER=true;
   try{ $('oi-notif').innerHTML=notifBtnHtml(); spNotifBtn(); }catch(e){}
   var start=function(){
-    spShow('own'); spAttachData();
+    spShow('own'); spAttachData(); spPushRegister();
     if(_ownOn) return; _ownOn=true;
     R('sales/members').on('value', function(s){ MEMBERS=s.val()||{}; spRenderTeam(); spRenderInbox(); spRenderOwnStats(); try{ spRenderChats(); }catch(e){} });
     R('sales/memberNotes').on('value', function(s){ MEMBER_NOTES=s.val()||{}; }, function(){});
@@ -2560,7 +2583,8 @@ function spRenderInbox(){
 }
 function spReject(k){
   var why=prompt('เหตุผลที่ไม่อนุมัติ (ตัวแทนจะเห็น) / reason (the partner sees it):',''); if(why===null) return;
-  R('sales/requests/'+k).update({status:'rejected', rejectReason:why.trim(), rejectedAt:Date.now()}).then(function(){ toast('บันทึกแล้ว / saved'); });
+  R('sales/requests/'+k).update({status:'rejected', rejectReason:why.trim(), rejectedAt:Date.now()}).then(function(){ toast('บันทึกแล้ว / saved');
+    var rq=ALLREQ[k]||{}; pushPartner(String(k).split('/')[0], '❌ ออเดอร์ไม่อนุมัติ / order not approved', (rq.salesNo?rq.salesNo+' · ':'')+((rq.customer||{}).name||'')+(why.trim()?' — '+why.trim():'')); });
 }
 function spRenderTeam(){
   if(!$('ot-list')) return;
@@ -2614,7 +2638,7 @@ function spOwnChat(uid){
 }
 function spOwnChatSend(uid){
   var p=chatSendTo(uid, 'kp', 'KP'); if(!p) return;
-  p.then(function(){ spOwnSeen(uid); }).catch(function(){});
+  p.then(function(m){ spOwnSeen(uid); pushPartner(uid, '💬 KP Wallpanel', (m.ctx&&m.text===m.ctx?'':m.text)||'📷'); }).catch(function(){});
 }
 /* individual settings per partner (commission) — sales/memberRules/<uid>, partners can only read their own */
 function ruleLabel(rl){ return rl.mode==='perPanel' ? fmt(rl.perPanel)+' ฿/แผ่น' : (+rl.pct||0)+'%'; }

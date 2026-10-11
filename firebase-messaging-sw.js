@@ -15,8 +15,9 @@ const messaging = firebase.messaging();
 
 // Handle background messages
 messaging.onBackgroundMessage(function(payload) {
-  const n = payload.notification || {};
   const data = payload.data || {};
+  // the push relay (Apps Script) sends data-only messages: title/body live in data
+  const n = payload.notification || { title: data.title, body: data.body };
   self.registration.showNotification(n.title || 'KP Wallpanel', {
     body: n.body || '',
     icon: data.icon || '/kp-wallpanel/icon-192.png',
