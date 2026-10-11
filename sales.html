@@ -333,6 +333,7 @@ table.tb td{ padding:9px 6px; border-bottom:1px solid var(--border); }
       <div class="card pad" id="q-items"></div>
       <label class="l">ชื่อลูกค้า (ไม่บังคับ) / customer name (optional)</label><input id="q-cust" placeholder="เช่น สมศรี" oninput="var q=$('q-text'); if(q) q.textContent=spQuoteText();">
       <div id="q-out" style="margin-top:14px"></div>
+      <div id="q-saved" style="margin-top:18px"></div>
     </div>
     <!-- orders -->
     <div id="t-orders" class="hide">
@@ -557,6 +558,110 @@ function spPhoto(code){
   toast('⏳'); spPhotoPreload(code).then(go);
 }
 function spPayChange(sel){ $('of-bank').innerHTML = sel.value==='transfer' ? bankHtml() : ''; }
+// Share a file (phone share sheet → LINE/Messenger/Facebook/Photos) or download it.
+function shareFile(blob, name){
+  var f=null; try{ f=new File([blob], name, {type:blob.type||'image/png'}); }catch(e){}
+  var dl=function(){ var u=URL.createObjectURL(blob), a=document.createElement('a'); a.href=u; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){ URL.revokeObjectURL(u); }, 60000); toast('ดาวน์โหลดแล้ว ✓ / downloaded'); };
+  if(f && navigator.canShare && navigator.canShare({files:[f]})) navigator.share({files:[f]}).catch(function(e){ if(e && e.name==='AbortError') return; dl(); });
+  else dl();
+}
+// Ready-made post for a Facebook page / TikTok caption (Thai only, only confirmed claims).
+function prodPostText(p){
+  var g=prodGroup(p), pr=PROFILES[p.profile]||{}, m=String(pr.sub||'').match(/^([\d.]+)/), w=m?m[1]:(+p.w>0?String(p.w):'');
+  if(g!=='WPC' && g!=='PVC') return prodInfoText(p);
+  var t='✨ '+(g==='WPC'?'ผนังไม้เทียม WPC':'แผ่นผนัง PVC')+' '+(p.name||p.code)+(g==='WPC'&&pr.label?' ('+pr.label+')':'')+'\n'
+    +'📏 '+(w?'หน้ากว้าง '+w+' ซม. · ':'')+'ยาว 2.90 ม.\n'
+    +'💰 แผ่นละ '+fmt(p.price)+'.-'+(w?' (≈ '+fmt(p.price/sqmPerPanel(parseFloat(w)))+' บาท/ตร.ม.)':'')+'\n'
+    +'💧 กันน้ำ · กันปลวก · กันลามไฟ\n'
+    +'🎁 แถมคลิปล็อค 10 ตัว/แผ่น\n'
+    +'🚚 ส่งฟรีครบ 25 แผ่น · เก็บเงินปลายทาง\n'
+    +'📩 ทักแชท คำนวณจำนวนแผ่นให้ฟรีค่ะ\n'
+    +(g==='WPC' ? '#ผนังไม้เทียม #wpc #ไม้ตกแต่งผนัง #แต่งบ้าน #รีโนเวทบ้าน' : '#แผ่นผนังpvc #ผนังลายไม้ #แต่งบ้าน #รีโนเวทบ้าน #ตกแต่งภายใน');
+  return pol(t);
+}
+/* Quote as a picture — Thai customers get quotes in chat as an image, with the
+   partner's own brand on top. Same numbers as spQuoteText(). 1080 px wide. */
+function spQuoteImage(){
+  var c=spCalc(); if(!c.lines.length) return;
+  var brand=(MEMBER&&MEMBER.brand)||'KP Wallpanel', cust=clean(($('q-cust')||{}).value||'').replace(/^คุณ\s*/,''), ct=CT();
+  var W=1080, P=64, IN=W-2*P, FF="'Prompt','Leelawadee UI','Tahoma',sans-serif";
+  var cv=document.createElement('canvas'), x=cv.getContext('2d');
+  var seg=(window.Intl && Intl.Segmenter) ? new Intl.Segmenter('th',{granularity:'word'}) : null;
+  function wrap(t, font, maxW){
+    x.font=font; var parts=seg ? Array.from(seg.segment(String(t))).map(function(z){ return z.segment; }) : String(t).split(/(\s+)/);
+    var out=[], cur='';
+    parts.forEach(function(w){ if(x.measureText(cur+w).width>maxW && cur.trim()){ out.push(cur.trim()); cur=w.replace(/^\s+/,''); } else cur+=w; });
+    if(cur.trim()) out.push(cur.trim()); return out.length?out:[''];
+  }
+  var F1='700 30px '+FF, F2='400 26px '+FF, F3='500 26px '+FF;
+  var items=c.lines.map(function(l){ return {head:wrap(l.p.code+'  '+lineDesc(l.p), F1, IN), sub:fmt(l.qty)+' '+prodUnit(l.p)+' × '+fmt(l.price)+' บาท', amt:fmt(l.amt)+' บาท'}; });
+  var foot=[pol('✅ เก็บเงินปลายทางได้ ของถึงแล้วค่อยจ่าย'), '📦 จัดส่งและออกใบเสร็จโดย KP Wallpanel (คลังสินค้าปทุมธานี)', 'ชำระกับพนักงานส่งของ หรือโอนเข้าบัญชีบริษัทเท่านั้น', 'ℹ️ สีจริงอาจต่างจากในรูปเล็กน้อย ตามแสงและหน้าจอ'];
+  var qd=parseInt(ct.quoteDays)||0; if(qd>0) foot.push('🗓 ราคานี้ถึงวันที่ '+thDate(new Date(Date.now()+qd*864e5)));
+  var footL=[]; foot.forEach(function(t){ footL=footL.concat(wrap(t, F3, IN-40)); });
+  var H=250+items.reduce(function(a,it){ return a+it.head.length*42+64; },0)+40+(c.clips?3:2)*48+90+footL.length*40+60+110;
+  cv.width=W; cv.height=H;
+  // background + header band in the partner's colours (dark + gold, like the app)
+  x.fillStyle='#FBF8F1'; x.fillRect(0,0,W,H);
+  x.fillStyle='#14100A'; x.fillRect(0,0,W,220);
+  x.fillStyle='#E9C95C'; x.font='800 54px '+FF; x.textBaseline='alphabetic'; x.fillText(brand, P, 100);
+  x.fillStyle='#F5EFE0'; x.font='500 30px '+FF; x.fillText('ใบเสนอราคา', P, 150);
+  x.fillStyle='#BFB49E'; x.font='400 26px '+FF; x.fillText((cust?'คุณ'+cust+'  ·  ':'')+thDate(new Date()), P, 192);
+  var y=280;
+  items.forEach(function(it){
+    x.fillStyle='#221C11'; x.font=F1; it.head.forEach(function(l){ x.fillText(l, P, y); y+=42; });
+    x.fillStyle='#6B6355'; x.font=F2; x.fillText(it.sub, P, y);
+    x.fillStyle='#221C11'; x.font=F1; x.textAlign='right'; x.fillText(it.amt, W-P, y); x.textAlign='left';
+    y+=22; x.fillStyle='#E5E0D4'; x.fillRect(P, y, IN, 2); y+=42;
+  });
+  function row(label, val, big){
+    x.font=big?'800 40px '+FF:'500 28px '+FF; x.fillStyle=big?'#221C11':'#6B6355'; x.fillText(label, P, y);
+    x.textAlign='right'; x.fillStyle=big?'#A8842C':'#221C11'; x.fillText(val, W-P, y); x.textAlign='left'; y+=big?60:48;
+  }
+  y+=10; row('ค่าสินค้า', fmt(c.sub)+' บาท'); row('ค่าจัดส่ง', c.ship===0?'ฟรี 🚚':fmt(c.ship)+' บาท');
+  if(c.clips) row('แถมคลิปล็อค', fmt(c.clips)+' ตัว 🎁');
+  y+=10; x.fillStyle='#D5CEBF'; x.fillRect(P, y-40, IN, 2); row('ยอดชำระทั้งหมด', fmt(c.total)+' บาท', true);
+  var bh=footL.length*40+36; x.fillStyle='#F1EBDD'; x.fillRect(P, y-10, IN, bh);
+  x.fillStyle='#4A4235'; x.font=F3; var fy=y+28; footL.forEach(function(l){ x.fillText(l, P+20, fy); fy+=40; }); y+=bh+50;
+  x.fillStyle='#221C11'; x.font='600 28px '+FF; x.fillText(pol('สนใจสั่ง แจ้งชื่อ เบอร์โทร ที่อยู่ + หมุด Google Maps ได้เลยค่ะ 🙏'), P, y);
+  cv.toBlob(function(b){ if(b) shareFile(b, 'quote-'+(cust||'customer').replace(/[^\wก-๙-]+/g,'_')+'.png'); }, 'image/png');
+}
+function spQuoteImageGo(){
+  toast('⏳');
+  var ok=function(){ try{ spQuoteImage(); }catch(e){ toast('Error: '+(e&&e.message||e)); } };
+  if(document.fonts && document.fonts.load) Promise.all([document.fonts.load("700 30px 'Prompt'"), document.fonts.load("800 54px 'Prompt'")]).then(ok, ok); else ok();
+}
+/* Several customers at once: park the current quote under the customer's name. */
+function spSavedKey(){ return spCartKey()+'-saved'; }
+function spSavedGet(){ try{ return JSON.parse(localStorage.getItem(spSavedKey())||'[]')||[]; }catch(e){ return []; } }
+function spSavedSet(a){ try{ localStorage.setItem(spSavedKey(), JSON.stringify(a.slice(0,30))); }catch(e){} }
+function spQuoteSave(){
+  if(!CART.length) return;
+  var n=clean(($('q-cust')||{}).value||'').replace(/^คุณ\s*/,'');
+  if(!n){ n=clean(prompt('ชื่อลูกค้า / customer name:','')||'').replace(/^คุณ\s*/,''); if(!n) return; }
+  var a=spSavedGet(); a.unshift({id:Date.now().toString(36), name:n, items:CART.slice(), ts:Date.now()}); spSavedSet(a);
+  CART=[]; if($('q-cust')) $('q-cust').value=''; spSaveCart(); spRenderQuote(); toast('บันทึกแล้ว ✓ '+n+' / saved');
+}
+function spQuoteOpen(id){
+  var a=spSavedGet(), i=a.findIndex(function(q){ return q.id===id; }); if(i<0) return;
+  var q=a.splice(i,1)[0];
+  if(CART.length){   // the quote on screen is parked, never lost
+    var cur=clean(($('q-cust')||{}).value||'').replace(/^คุณ\s*/,'') || ('ไม่มีชื่อ '+new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}));
+    a.unshift({id:Date.now().toString(36), name:cur, items:CART.slice(), ts:Date.now()});
+  }
+  spSavedSet(a); CART=(q.items||[]).filter(function(c){ return c && c.code && c.qty>0; }); if($('q-cust')) $('q-cust').value=q.name||'';
+  spSaveCart(); spRenderQuote(); window.scrollTo(0,0);
+}
+function spQuoteDel(id){ if(!confirm('ลบใบเสนอราคานี้? / delete this quote?')) return; spSavedSet(spSavedGet().filter(function(q){ return q.id!==id; })); spRenderSaved(); }
+function spRenderSaved(){
+  var el=$('q-saved'); if(!el) return; var a=spSavedGet();
+  if(!a.length){ el.innerHTML=''; return; }
+  el.innerHTML='<div style="font-weight:800;margin:0 2px 8px">ใบเสนอราคาที่บันทึกไว้ / saved quotes · '+a.length+'</div>'+a.map(function(q){
+    var tot=(q.items||[]).reduce(function(s,c){ return s+(c.qty||0)*(+prodOf(c.code).price||0); },0);
+    return '<div class="card pad" style="margin-bottom:8px"><div class="row"><div style="flex:1;min-width:0"><b>'+esc(q.name)+'</b>'
+      +'<div style="font-size:12px;color:var(--text2)">'+(q.items||[]).length+' รายการ · '+fmt(tot)+' ฿ · '+new Date(q.ts).toLocaleDateString('th-TH',{day:'numeric',month:'short'})+'</div></div>'
+      +'<button class="btn line sm" onclick="spQuoteOpen(\''+esc(q.id)+'\')">เปิด / open</button><button class="btn red sm" onclick="spQuoteDel(\''+esc(q.id)+'\')">✕</button></div></div>';
+  }).join('');
+}
 function thDate(d){ return d.toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'2-digit'}); }
 function lineDesc(p){
   var g=prodGroup(p), pr=PROFILES[p.profile]||{};
@@ -756,8 +861,9 @@ function spProd(code){
     +'<button class="btn gold" style="flex:1" onclick="spAddCart(\''+esc(code)+'\')"><i class="ti ti-file-plus"></i> เพิ่มในใบเสนอราคา / add to quote</button></div>'
     +'<div class="row"><button class="btn line" style="flex:1" onclick="copyText(spInfoCache)"><i class="ti ti-copy"></i> คัดลอกข้อมูล / copy info</button>'
     +'<button class="btn line" style="flex:1" onclick="shareText(spInfoCache)"><i class="ti ti-share"></i> แชร์ / share</button></div>'
+    +((g==='WPC'||g==='PVC')?'<button class="btn line w" style="margin-top:10px" onclick="copyText(spPostCache,\'คัดลอกข้อความโพสต์แล้ว ✓ / post text copied\')"><i class="ti ti-brand-facebook"></i> ข้อความโพสต์ FB / TikTok · post text</button>':'')
     +'<button class="btn dark w" style="margin-top:10px" onclick="spPhoto(\''+esc(code)+'\')"><i class="ti ti-photo-down"></i> บันทึก/แชร์รูป / save or share photo</button>');
-  window.spInfoCache=prodInfoText(p);
+  window.spInfoCache=prodInfoText(p); window.spPostCache=prodPostText(p);
   try{ spPhotoPreload(code); }catch(e){}
 }
 function spQtyStep(d){ var e=$('pq'); e.value=Math.max(1,(parseInt(e.value)||0)+d); }
@@ -854,6 +960,7 @@ function spQuoteText(){
 }
 function spRenderQuote(){
   if(!$('q-items')) return;
+  spRenderSaved();
   if(!CART.length){ $('q-items').innerHTML='<div class="empty"><i class="ti ti-file-invoice"></i>ยังไม่มีสินค้า — เลือกจากหน้า สินค้า<span class="en b">empty — add products from the Products tab</span></div>'; $('q-out').innerHTML=''; return; }
   var c=spCalc();
   $('q-items').innerHTML=CART.map(function(it,i){
@@ -871,6 +978,8 @@ function spRenderQuote(){
   $('q-out').innerHTML='<div style="font-size:12.5px;font-weight:700;color:var(--text2);margin:0 2px 6px">ข้อความสำหรับลูกค้า (ภาษาไทย) / message for your customer (Thai)</div><div class="mono" id="q-text">'+esc(spQuoteText())+'</div>'
     +'<div class="row" style="margin-top:10px"><button class="btn dark" style="flex:1" onclick="copyText(spQuoteText())"><i class="ti ti-copy"></i> คัดลอก / copy</button>'
     +'<button class="btn line" style="flex:1" onclick="shareText(spQuoteText())"><i class="ti ti-share"></i> แชร์ / share</button></div>'
+    +'<div class="row" style="margin-top:10px"><button class="btn dark" style="flex:1" onclick="spQuoteImageGo()"><i class="ti ti-photo"></i> เป็นรูปภาพ / as image</button>'
+    +'<button class="btn line" style="flex:1" onclick="spQuoteSave()"><i class="ti ti-bookmark"></i> บันทึกไว้ / save</button></div>'
     +'<button class="btn gold w" style="margin-top:10px" onclick="spOrderForm()"><i class="ti ti-send"></i> ลูกค้าตกลงซื้อ → ส่งออเดอร์ให้ KP / order for customer</button>';
 }
 
