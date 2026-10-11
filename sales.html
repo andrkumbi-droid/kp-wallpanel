@@ -359,6 +359,25 @@ body.qbar-on #chat-fab{ bottom:calc(92px + env(safe-area-inset-bottom)); }
 .mk-area{ flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; padding:8px; }
 .mk-area canvas{ touch-action:none; max-width:100%; max-height:100%; border-radius:6px; }
 .bub .chat-pic.big{ max-height:none; }
+/* earnings: order by order with bill → base × rate = commission, block sums, month summary */
+.esum{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:var(--ink); color:var(--cream); border-radius:16px; padding:12px 14px; margin:4px 0 12px; }
+.esum .s{ font-size:11.5px; color:var(--cream2); }
+.esum .v{ font-size:20px; font-weight:800; }
+.esum .v.g{ color:var(--gold); }
+.esum .op{ font-size:20px; opacity:.6; }
+.esum .n{ margin-left:auto; font-size:12.5px; color:var(--cream2); }
+.eblk{ margin-top:10px; }
+.eblk-t{ font-weight:800; margin:0 2px 6px; }
+.erow{ border:1px solid var(--border); border-radius:12px; padding:8px 10px; margin-bottom:6px; background:#fff; cursor:pointer; }
+.erow-h{ display:flex; gap:6px; align-items:baseline; flex-wrap:wrap; font-size:13px; }
+.erow-h > span{ color:var(--text3); font-size:12px; }
+.erow-h .erow-c{ color:var(--text2); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.erow-h .erow-d{ color:var(--text3); }
+.erow-m{ display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; font-size:13px; margin-top:3px; }
+.erow-m .erow-f{ color:var(--text2); margin-left:auto; }
+.erow-m .erow-v{ font-size:15px; color:var(--green); }
+.erow-m .erow-v.dim{ color:var(--text3); }
+.eblk-s{ display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; font-size:13.5px; padding:6px 4px 0; border-top:1.5px solid var(--border); }
 </style>
 </head>
 <body>
@@ -553,6 +572,7 @@ body.qbar-on #chat-fab{ bottom:calc(92px + env(safe-area-inset-bottom)); }
       <div class="sec-h"><h2>ภาพรวม / Overview</h2><select id="os-m" style="width:auto;min-height:40px;padding:6px 10px" onchange="spRenderOwnStats()"></select></div>
       <div class="kpi" id="os-kpi"></div>
       <div class="card pad" style="margin-bottom:14px"><div style="font-weight:800;margin-bottom:6px">ยอดขายตามตัวแทน / Sales per partner</div><div class="bars" id="os-bars"></div></div>
+      <div class="card pad" style="margin-bottom:14px"><div style="font-weight:800;margin-bottom:6px">ยอดขาย &amp; ค่าคอมเดือนนี้ ต่อตัวแทน / sales &amp; commission per partner</div><div id="os-comm"></div></div>
       <div class="card pad"><div style="font-weight:800;margin-bottom:6px">ค่าคอมและการจ่าย / Commission & payouts</div><div id="os-pay"></div></div>
     </div>
     <div id="o-chat" class="hide">
@@ -2263,6 +2283,35 @@ function monthTh(m){ var p=m.split('-'); return new Date(+p[0], +p[1]-1, 1).toLo
 function monthClosed(m){ return m<monthKey(Date.now()); }
 function payoutsFor(uid, m){ var P=OWNER?(PAYOUTS[uid]||{}):(MYPAY||{}); return Object.keys(P).map(function(k){ return P[k]; }).filter(function(p){ return p && (!m || p.month===m); }); }
 function whtPct(){ return Math.max(0, Math.min(15, parseFloat(CONFIG.whtPct)||0)); }
+// One order: bill (what the customer pays), the base the commission is taken from, the rule, the commission.
+function commBreak(x){
+  var o=x.o, rq=x.r, rule=rq.rule||ruleOf(rq.uid), lines=(o&&o.lineItems)||rq.lineItems||[];
+  var bill=o?orderTotal(o):((rq.totals||{}).total||0);
+  if(rule.mode==='perPanel'){ var pn=lines.reduce(function(a,l){ return a+(l&&l.type==='panel'?(parseInt(l.qty)||0):0); },0);
+    return {bill:bill, base:pn, txt:fmt(pn)+' แผ่น × '+fmt(rule.perPanel)+' ฿', comm:x.comm}; }
+  var goods=Math.max(0, lines.reduce(function(a,l){ return a+(l&&GOODS[l.type]?(parseFloat(l.amount)||0):0); },0));
+  return {bill:bill, base:goods, txt:fmt(goods)+' ฿ × '+(+rule.pct||0)+'%', comm:x.comm};
+}
+// A block of orders: per order bill → base × rate = commission, and the block's sums underneath.
+function earnBlock(list, title, tag){
+  if(!list.length) return '';
+  var sb=0, sc=0;
+  var rows=list.map(function(x){ var b=commBreak(x); sb+=b.bill; sc+=b.comm;
+    return '<div class="erow" onclick="spOrdDetail(\''+esc(x.r._k)+'\')">'
+      +'<div class="erow-h"><b>'+esc(reqNo(x.r,x.r._k))+'</b>'+(x.r.orderId?' <span>· KP #'+esc(x.r.orderId)+'</span>':'')
+        +'<span class="erow-c">'+esc((x.r.customer||{}).name||'')+'</span>'+(tag==='paid'&&x.payDate?'<span class="erow-d">ชำระ '+esc(x.payDate.slice(8,10)+'/'+x.payDate.slice(5,7))+'</span>':'')+'</div>'
+      +'<div class="erow-m"><span>บิล <span class="en">bill</span> <b>'+fmt(b.bill)+' ฿</b></span><span class="erow-f">'+esc(b.txt)+' =</span><b class="erow-v'+(tag==='paid'?'':' dim')+'">'+fmt(b.comm)+' ฿</b></div></div>';
+  }).join('');
+  return '<div class="eblk"><div class="eblk-t">'+title+' · '+list.length+'</div>'+rows
+    +'<div class="eblk-s"><span>รวม <span class="en">total</span> · บิล '+fmt(sb)+' ฿</span><b>ค่าคอม '+fmt(sc)+' ฿</b></div></div>';
+}
+// Month summary: what was sold (paid) and what it earns.
+function earnSummary(paid, m){
+  var sb=0, sc=0; paid.forEach(function(x){ var b=commBreak(x); sb+=b.bill; sc+=b.comm; });
+  return '<div class="esum"><div><div class="s">ยอดขายที่ชำระแล้ว '+esc(monthTh(m))+'<span class="en b">sold &amp; paid this month</span></div><div class="v">'+fmt(sb)+' ฿</div></div>'
+    +'<div class="op">→</div><div><div class="s">ค่าคอมรวม<span class="en b">commission</span></div><div class="v g">'+fmt(sc)+' ฿</div></div>'
+    +'<div class="n">'+paid.length+' ออเดอร์ <span class="en">orders</span></div></div>';
+}
 function spRenderEarn(){
   if(!$('earn-kpi') || !ME || !MEMBER) return;
   var m=monthOpts($('earn-m')), rows=spEarnRows(ME.uid, m);
@@ -2288,12 +2337,10 @@ function spRenderEarn(){
     +(w>0?'<div>หักภาษี ณ ที่จ่าย '+w+'% → รับสุทธิ '+fmt(net)+' ฿<span class="en b">'+w+'% withholding tax → net '+fmt(net)+' ฿</span></div>':'')
     +(closed && earned>0 ? '<button class="btn gold w" style="margin-top:10px" onclick="spInvoice(\''+esc(ME.uid)+'\',\''+m+'\')"><i class="ti ti-file-type-pdf"></i> สร้างใบแจ้งหนี้ค่าคอม (PDF) / commission invoice</button>'
       : (earned>0 ? '<button class="btn line w" style="margin-top:10px" disabled><i class="ti ti-clock"></i> ออกใบแจ้งหนี้ได้วันที่ '+thDate(pay1)+' / invoice from the 1st</button>' : ''));
-  var tbl=function(list, title, tag){ if(!list.length) return '';
-    return '<div style="font-weight:800;margin:12px 2px 6px">'+title+' · '+list.length+'</div><table class="tb"><tr><th>ออเดอร์ / order</th><th>ลูกค้า / customer</th><th style="text-align:right">ค่าคอม / comm.</th></tr>'
-      +list.map(function(x){ return '<tr onclick="spOrdDetail(\''+esc(x.r._k)+'\')"><td>#'+esc(x.r.orderId||'')+(tag==='paid'&&x.payDate?'<div style="font-size:11px;color:var(--text3)">ชำระ '+esc(x.payDate.slice(8,10)+'/'+x.payDate.slice(5,7))+'</div>':'')+'</td><td>'+esc((x.r.customer||{}).name||'')+'</td><td style="text-align:right;font-weight:800'+(tag==='paid'?'':';color:var(--text3)')+'">'+fmt(x.comm)+' ฿</td></tr>'; }).join('')+'</table>'; };
+  var tbl=earnBlock;
   var allPo=payoutsFor(ME.uid).sort(function(a,b){ return (b.ts||0)-(a.ts||0); }).slice(0,12);
   $('earn-list').innerHTML=(paid.length||dlv.length||run.length||nodate.length)
-    ? tbl(paid,'✅ ชำระแล้ว — นับเดือนนี้ / paid, counted','paid')+tbl(nodate,'⚠ ชำระแล้ว แต่ KP ยังไม่ลงวันที่ชำระ — กำลังตรวจ / paid, date missing — KP checking','dlv')+tbl(dlv,'🏠 ส่งแล้ว รอลูกค้าชำระ — ยังไม่นับ / delivered, not paid yet','dlv')+tbl(run,'🚚 กำลังดำเนินการ / in progress','run')
+    ? earnSummary(paid, m)+tbl(paid,'✅ ชำระแล้ว — นับเดือนนี้ / paid, counted','paid')+tbl(nodate,'⚠ ชำระแล้ว แต่ KP ยังไม่ลงวันที่ชำระ — กำลังตรวจ / paid, date missing — KP checking','dlv')+tbl(dlv,'🏠 ส่งแล้ว รอลูกค้าชำระ — ยังไม่นับ / delivered, not paid yet','dlv')+tbl(run,'🚚 กำลังดำเนินการ / in progress','run')
       +(allPo.length?'<div style="font-weight:800;margin:14px 2px 6px">💸 KP โอนให้แล้ว / payouts</div>'+allPo.map(function(p){ return '<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:4px 0;border-bottom:1px solid var(--border)"><span>'+esc(p.date||'')+(p.month?' · รอบ '+esc(p.month):'')+(p.note?' · '+esc(p.note):'')+'</span><b>'+fmt(p.amount)+' ฿</b></div>'; }).join(''):'')
     : '<div class="empty"><i class="ti ti-coin-off"></i>ยังไม่มีค่าคอมเดือนนี้ / nothing this month yet</div>';
 }
@@ -2544,6 +2591,22 @@ function spMemberSet(k, st){
 function spRenderOwnStats(){
   if(!$('os-kpi') || !OWNER) return;
   var m=monthOpts($('os-m'));
+  // per partner: paid this month → bill total, commission (open orders shown as "still coming")
+  (function(){
+    var T={n:0,bill:0,comm:0,open:0}, rows=Object.keys(MEMBERS).filter(function(k){ return /^[A-Za-z0-9_]{1,128}$/.test(k) && MEMBERS[k]; }).map(function(k){
+      var all=spEarnRows(k, m), paid=all.filter(function(x){ return x.earned && x.month===m; }), open=all.filter(function(x){ return !x.earned; });
+      var bill=0, comm=0; paid.forEach(function(x){ var b=commBreak(x); bill+=b.bill; comm+=b.comm; });
+      var oc=open.reduce(function(a,x){ return a+x.comm; },0);
+      T.n+=paid.length; T.bill+=bill; T.comm+=comm; T.open+=oc;
+      return {k:k, name:(MEMBERS[k].brand||MEMBERS[k].name||k), code:partnerCode(MEMBERS[k],k), rule:ruleLabel((MEMBER_RULES[k]&&MEMBER_RULES[k].mode)?MEMBER_RULES[k]:CONFIG), n:paid.length, bill:bill, comm:comm, open:oc};
+    }).filter(function(x){ return x.n || x.open; }).sort(function(a,b){ return b.bill-a.bill; });
+    $('os-comm').innerHTML = rows.length ? '<table class="tb"><tr><th>ตัวแทน / partner</th><th style="text-align:right">ออเดอร์ชำระแล้ว</th><th style="text-align:right">ยอดขาย / sold</th><th style="text-align:right">ค่าคอม / comm.</th></tr>'
+      +rows.map(function(x){ return '<tr style="cursor:pointer" onclick="spOwnEarn(\''+x.k+'\')"><td><b>'+esc(x.name)+'</b><div style="font-size:11.5px;color:var(--text3)">'+esc(x.code)+' · '+esc(x.rule)+(x.open?' · รอชำระ '+fmt(x.open)+' ฿':'')+'</div></td>'
+        +'<td style="text-align:right">'+x.n+'</td><td style="text-align:right">'+fmt(x.bill)+'</td><td style="text-align:right;font-weight:800">'+fmt(x.comm)+'</td></tr>'; }).join('')
+      +'<tr style="border-top:2px solid var(--ink)"><td><b>รวม / total</b></td><td style="text-align:right"><b>'+T.n+'</b></td><td style="text-align:right"><b>'+fmt(T.bill)+'</b></td><td style="text-align:right;font-weight:800;color:var(--gold3)">'+fmt(T.comm)+' ฿</td></tr></table>'
+      +'<div style="font-size:11.5px;color:var(--text3);margin-top:6px">แตะชื่อเพื่อดูทีละออเดอร์ · นับตามวันที่ลูกค้าชำระครบ<span class="en b">tap a partner for every order · counted by the day the customer paid in full</span></div>'
+      : '<div class="empty" style="padding:16px">ยังไม่มีออเดอร์ที่ชำระเดือนนี้ / no paid orders this month</div>';
+  })();
   var reqs=Object.keys(ALLREQ).map(function(k){ var r=ALLREQ[k]; r._k=k; return r; });
   var appr=reqs.filter(function(r){ return r.status==='approved' && monthKey(r.approvedAt||r.createdAt)===m; });
   var sales=appr.reduce(function(a,r){ var o=ORDERS[r.orderId]; return a+(o&&o.status!=='cancelled'?orderTotal(o)||((r.totals||{}).total||0):0); },0);
@@ -2568,6 +2631,18 @@ function spRenderOwnStats(){
     +rows.map(function(x){ return '<tr><td><b>'+esc(x.name)+'</b>'+(x.bank?'<div style="font-size:11.5px;color:var(--text3)">'+esc(x.bank)+'</div>':'')+'</td><td style="text-align:right">'+fmt(x.earned)+'</td><td style="text-align:right">'+fmt(x.paid)+'</td><td style="text-align:right;font-weight:800;color:'+(x.open>0?'var(--amber)':'var(--text2)')+'">'+fmt(x.open)+'</td>'
       +'<td style="white-space:nowrap">'+(x.open>0?'<button class="btn dark sm" onclick="spPayout(\''+x.k+'\')">จ่าย / pay</button>':'')+' <button class="btn line sm" title="invoice" onclick="spInvoice(\''+x.k+'\',$(\'os-m\').value)"><i class="ti ti-file-type-pdf"></i></button></td></tr>'; }).join('')+'</table>'
     : '<div class="empty" style="padding:16px">ยังไม่มีตัวแทนที่ใช้งาน / no active partners</div>';
+}
+// owner: one partner's month, order by order — the same view the partner has
+function spOwnEarn(k){
+  var m=$('os-m').value, all=spEarnRows(k, m), paid=all.filter(function(x){ return x.earned && x.month===m; }),
+      dlv=all.filter(function(x){ return !x.earned && x.st==='delivered'; }), run=all.filter(function(x){ return !x.earned && x.st!=='delivered'; });
+  var mm=MEMBERS[k]||{};
+  spSheet(esc(mm.brand||mm.name||'')+' · '+esc(monthTh(m)),
+    earnSummary(paid, m)
+    +earnBlock(paid,'✅ ชำระแล้ว — นับเดือนนี้ / paid, counted','paid')
+    +earnBlock(dlv,'🏠 ส่งแล้ว รอชำระ / delivered, not paid yet','dlv')
+    +earnBlock(run,'🚚 กำลังดำเนินการ / in progress','run')
+    +(paid.length?'<button class="btn gold w" style="margin-top:12px" onclick="spInvoice(\''+k+'\',\''+m+'\')"><i class="ti ti-file-type-pdf"></i> ใบแจ้งหนี้ค่าคอม (PDF) / commission invoice</button>':''));
 }
 function spPayout(k){
   var sel=$('os-m').value||'', cur=monthKey(Date.now()), d=new Date(), prev=new Date(d.getFullYear(), d.getMonth()-1, 1);
