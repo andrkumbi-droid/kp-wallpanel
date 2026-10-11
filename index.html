@@ -9255,7 +9255,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261011007;
+var KP_BUILD = 20261011008;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -12591,6 +12591,12 @@ function ofCreate(){
     var _first=document.getElementById(_missing[0].el); if(_first){ try{_first.focus();}catch(e){} }
     return;
   }
+  // A confirmed partner slip is filled in as prepayment: if the phone no longer matches that
+  // partner order, stop BEFORE anything is booked — the money belongs to the partner's customer.
+  if(window._salesSlipFilled && window._salesReq && window._salesReq.r){
+    var _ssP=String((window._salesReq.r.customer||{}).phone||'').replace(/\D/g,''), _ssO=String((document.getElementById('of-phone')||{}).value||'').replace(/\D/g,'');
+    if(_ssP && _ssO.indexOf(_ssP)<0){ alert('เบอร์ลูกค้าไม่ตรงกับออเดอร์ของตัวแทน แต่มีสลิปชำระล่วงหน้าของตัวแทนอยู่ในฟอร์ม\nกด ✕ ที่กล่องตัวแทนก่อน แล้วค่อยสร้างออเดอร์อื่น\n\nPhone differs from the partner order, but the partner\'s prepayment slip is in the form — press ✕ on the partner box first.'); return; }
+  }
   // Phone must be a complete 10-digit number — a 9-digit typo means the driver
   // cannot reach the customer and the order is stuck on the road.
   var _phVal = String((document.getElementById('of-phone')||{}).value||'').trim();
@@ -12741,6 +12747,7 @@ function ofCreate(){
     var pm=(document.getElementById('of-prepaid-method')||{}).value==='online'?'online':'cash';
     o.paidAmount=pre;
     o.payDate=kpTodayStr(); o.paidBy=createdBy;
+    if(window._salesSlipFilled) o.salesSlip=pre;
     if(pre>=grand){ o.payMethod=pm; o.payMethodPartial=''; }
     else          { o.payMethod='';  o.payMethodPartial=pm; }
     if(pm==='online'){ o.paidOnline=pre; o.paidCash=0; } else { o.paidCash=pre; o.paidOnline=0; }
@@ -12776,7 +12783,11 @@ function ofCreate(){
   orders.unshift(o);wOrders.unshift({id:no,zone,boxes:o.boxes,panels:panStr,lcorner:lcStr,clips,packed:false,packedAt:null});
   // The slips were held in memory because the order had no id yet — attach them now.
   if(_ofPreSlips.length){
-    _ofPreSlips.forEach(function(d){ try{ addOrderPhoto(no,'slip',d,createdBy,function(){}); }catch(e){} });
+    var _ssImg=window._salesSlipImg||'', _ssId=(window._salesReq&&window._salesReq.id)||'';
+    _ofPreSlips.forEach(function(d){ try{ addOrderPhoto(no,'slip',d,createdBy,function(){
+      if(_ssImg && d===_ssImg && _ssId && window.fbDB) window.fbDB.ref('sales/slipImg/'+_ssId).remove().catch(function(){});
+    }); }catch(e){} });
+    window._salesSlipImg='';
     _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}
   }
   try{ picsSeedSlots(o); }catch(e){}   // show the order (empty) in all Pictures tabs right away
@@ -13257,6 +13268,9 @@ function salesReqFill(id, r){
     r.customer=cu; r.note=_cl(r.note); r.brand=_cl(r.brand); r.seller=_cl(r.seller);
     window._salesReq={id:id, r:r};
     oft('new');
+    // a prepayment / slip typed for an earlier order must not ride on this one
+    try{ var _pe0=document.getElementById('of-prepaid'); if(_pe0) _pe0.value=''; var _pm0=document.getElementById('of-prepaid-method'); if(_pm0) _pm0.value='cash'; _ofPreSlips=[]; ofPreSlipRender(); }catch(e){}
+    window._salesSlipFilled=false; window._salesSlipImg='';
     var zone=''; try{ zone=kpProvinceZone(cu.province||''); }catch(e){}
     if(zone){ try{ selectZone(zone); }catch(e){} }
     function set(i,v){ var e=document.getElementById(i); if(e) e.value=(v==null?'':v); }
@@ -13282,12 +13296,38 @@ function salesReqFill(id, r){
     }
     try{ ofCalc(); }catch(e){}
     window.scrollTo(0,0);
+    salesReqSlip(id);
+}
+// The partner's prepayment slip (sales.html → sales/slips + sales/slipImg). Only a slip
+// the office CONFIRMED in the Sales owner view fills the prepayment — amount, 🏦 online
+// and the slip photo, so Create order books it exactly like a prepayment typed here.
+function salesReqSlip(id){
+  if(!window.fbDB) return;
+  window.fbDB.ref('sales/slips/'+id).once('value').then(function(s){
+    var sl=s.val(); if(!sl || !window._salesReq || window._salesReq.id!==id) return;
+    var a=parseFloat(sl.amount)||0, box=document.getElementById('of-reorder-note'), msg='';
+    if(sl.status==='ok' && a>0){
+      var pe=document.getElementById('of-prepaid'), pm=document.getElementById('of-prepaid-method');
+      if(pe) pe.value=a; if(pm) pm.value='online'; window._salesSlipFilled=true;
+      window.fbDB.ref('sales/slipImg/'+id).once('value').then(function(si){
+        var d=si.val(); if(typeof d==='string' && /^data:image\/jpeg;base64,[A-Za-z0-9+\/=]+$/.test(d) && window._salesReq && window._salesReq.id===id){ _ofPreSlips.push(d); window._salesSlipImg=d; try{ ofPreSlipRender(); }catch(e){} }
+        try{ ofCalc(); }catch(e){}
+      }).catch(function(){});
+      msg='💳 สลิปจากตัวแทนตรวจแล้ว '+a.toLocaleString()+' ฿ — ใส่เป็นชำระล่วงหน้า (โอน) แล้ว / confirmed slip filled in as prepayment';
+    } else if(sl.status==='bad') msg='💳 สลิปไม่ผ่าน ('+a.toLocaleString()+' ฿) — ไม่ได้ใส่ชำระล่วงหน้า / slip rejected';
+    else msg='⚠️ มีสลิป '+a.toLocaleString()+' ฿ ยังไม่ได้ตรวจ — ตรวจใน Sales owner ก่อน แล้วเปิดใหม่ / slip not checked yet — check it in Sales owner first';
+    if(box){ var dv=document.createElement('div'); dv.style.cssText='background:#e8f1fb;border:1.5px solid #9cc3ea;border-radius:var(--rs);padding:7px 10px;margin-bottom:10px;font-size:12px;font-weight:700;color:#1d4e89'; dv.textContent=msg; box.appendChild(dv); }
+    try{ ofCalc(); }catch(e){}
+  }).catch(function(e){ console.error('sales slip', e); });
 }
 function salesReqCancel(){
   // give the request back (only if it is still ours and not yet turned into an order)
   try{ if(window._salesReq && window.fbDB){ var _rid=window._salesReq.id, _me=(typeof ofWho==='function'?ofWho():'Office');
     window.fbDB.ref('sales/requests/'+_rid).transaction(function(cur){ if(cur===null) return null; if(cur.status==='processing' && cur.lockBy===_me){ cur.status='pending'; cur.lockBy=null; cur.lockTs=null; return cur; } return; }); } }catch(e){}
   window._salesReq=null;
+  // a prepayment that came from the partner's slip belongs to that request only
+  if(window._salesSlipFilled){ window._salesSlipFilled=false; try{ var _pe=document.getElementById('of-prepaid'); if(_pe) _pe.value=''; var _pm=document.getElementById('of-prepaid-method'); if(_pm) _pm.value='cash';
+    if(window._salesSlipImg){ var _ix=_ofPreSlips.indexOf(window._salesSlipImg); if(_ix>=0) _ofPreSlips.splice(_ix,1); } window._salesSlipImg=''; ofPreSlipRender(); ofCalc(); }catch(e){} }
   var note=document.getElementById('of-reorder-note');
   if(note){ note.style.display='none'; note.innerHTML=''; }
   try{ if(/[?&]salesReq=/.test(location.search)) history.replaceState(null,'',location.pathname); }catch(e){}

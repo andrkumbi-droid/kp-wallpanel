@@ -461,6 +461,7 @@ b.num,.num b{ white-space:nowrap; }
         <div style="font-weight:800">ค่าคอมมิชชั่น / Commission</div>
         <label class="l">วิธีคิด / Rule</label>
         <select id="cs-mode"><option value="pct">% ของยอดสินค้า / % of goods</option><option value="perPanel">บาทต่อแผ่น / ฿ per panel</option></select>
+        <label class="l">กันสต็อกไว้ให้ KP (แผ่น/รุ่น) — ตัวแทนเห็นสต็อกหักส่วนนี้ ต่ำกว่านี้ = หมด / panels kept back per model</label><input id="cs-min" type="number" inputmode="numeric" min="0" step="10" placeholder="100">
         <label class="l">หักภาษี ณ ที่จ่าย % (0 = ไม่หัก) / withholding tax %</label><input id="cs-wht" type="number" inputmode="decimal" step="1" min="0" max="15" placeholder="0">
         <div class="row"><div style="flex:1"><label class="l">%</label><input id="cs-pct" type="number" inputmode="decimal" step="0.5"></div>
           <div style="flex:1"><label class="l">฿ ต่อแผ่น / ฿ per panel</label><input id="cs-pp" type="number" inputmode="decimal"></div></div>
@@ -608,7 +609,7 @@ function spPhoto(code){
   if(_phCache[code+'#b']){ go(_phCache[code+'#b']); return; }   // already loaded: share right inside the tap
   toast('⏳'); spPhotoPreload(code).then(go);
 }
-function spPayChange(sel){ $('of-bank').innerHTML = sel.value==='transfer' ? bankHtml() : ''; }
+function spPayChange(sel){ _slipData=''; $('of-bank').innerHTML = sel.value==='transfer' ? bankHtml()+spSlipFields(spCalc().total) : ''; }
 // Share a file (phone share sheet → LINE/Messenger/Facebook/Photos) or download it.
 function shareFile(blob, name){
   var f=null; try{ f=new File([blob], name, {type:blob.type||'image/png'}); }catch(e){}
@@ -1063,9 +1064,13 @@ function spAttachData(){
     spRenderShop();
   });
   R('soldOut').on('value', function(s){ SOLDOUT=s.val()||{}; spRenderShop(); });
-  R('sales/config').on('value', function(s){ CONFIG=Object.assign({mode:'pct',pct:5,perPanel:10,cycle:'monthly',priceMode:'list'}, s.val()||{}); try{ spRenderEarn(); }catch(e){} try{ spFillConfig(); }catch(e){} });
+  R('sales/config').on('value', function(s){ CONFIG=Object.assign({mode:'pct',pct:5,perPanel:10,cycle:'monthly',priceMode:'list'}, s.val()||{}); try{ spRenderEarn(); }catch(e){} try{ spFillConfig(); }catch(e){} try{ spRenderShop(); }catch(e){} });
 }
-function stockOf(code){ var n=normCode(code); return STOCK.hasOwnProperty(n) ? STOCK[n] : null; }
+function stockOf(code){
+  var n=normCode(code); if(!STOCK.hasOwnProperty(n)) return null;
+  var st=STOCK[n], p=CATALOG.find(function(x){ return x.code===code; }), g=p?prodGroup(p):'';
+  return (g==='WPC'||g==='PVC') ? Math.max(0, st-minStock()) : st;   // panels: KP keeps minStock() back
+}
 
 /* ═════════════ member area ═════════════ */
 function spMemberStart(){
@@ -1305,11 +1310,18 @@ function spOrderSend(){
     lineItems:c.lines.map(function(l){ return {type:TYPE(l.p), code:l.p.code, name:l.p.name||'', qty:l.qty, unitPrice:l.price, amount:l.amt}; }),
     totals:{goods:c.sub, delivery:c.ship, panels:c.panels, freeClips:c.clips, total:c.total},
     status:'pending', createdAt:Date.now() };
+  var _sd='', _sa=0;
+  if(req.payment==='transfer'){
+    _sd=_slipData; _sa=spSlipAmt();
+    if(_sd && !(_sa>0)){ toast('ใส่ยอดในสลิป / enter the slip amount'); return; }
+    if(!_sd && !confirm('ยังไม่มีสลิป — อัปโหลดทีหลังในหน้าออเดอร์ได้ ส่งออเดอร์เลยไหม?\nNo slip yet — you can upload it later in the order. Send now?')) return;
+  }
   $('of-go').disabled=true;
   spQMetaRead();
   var reqRef=R('sales/requests/'+ME.uid).push();
   reqRef.set(req).then(function(){
     notifyOffice('🤝 ออเดอร์จากตัวแทน / Sales order: '+(MEMBER.brand||''), cu.name+' · '+cu.province+' · '+fmt(c.total)+' ฿');
+    if(_sd) spSlipWrite(reqRef.key, _sa, _sd).then(function(){ _slipData=''; }).catch(function(){ toast('ส่งสลิปไม่สำเร็จ — ส่งใหม่ในหน้าออเดอร์ / slip failed — re-upload it in the order', 6000); });
     // the quote moves to "ordered" in the folder (created now if it was never saved)
     clearTimeout(_qSaveT);
     var qid=QMETA.id || R('sales/quotes/'+ME.uid).push().key, qr=spQRec();
@@ -1320,6 +1332,130 @@ function spOrderSend(){
   }).catch(function(e){ $('of-go').disabled=false; toast('ส่งไม่สำเร็จ / failed: '+(e&&e.message||e)); });
 }
 
+/* ── Prepayment slips (André 11.10.) ──
+   A customer who pays in advance transfers to KP's company account and sends the slip to
+   the partner; the partner uploads it here (to the order request). KP sees it in the
+   owner inbox, checks amount against the order and confirms. A confirmed slip rides into
+   the KP New Order as a prepayment (paid + slip photo on the order).
+   Meta  sales/slips/<uid>/<rid>   = {amount, ts, status pending|ok|bad, reason, checkedAt}
+   Image sales/slipImg/<uid>/<rid> = JPEG data URL (Storage takes no browser uploads), loaded on demand. */
+var SLIPS_ME={}, SLIPS={}, _slipData='';
+function slipOf(uid, rid){ var S=OWNER ? (SLIPS[uid]||{}) : SLIPS_ME; return S[rid]||null; }
+function ridOf(k){ return String(k||'').split('/').pop(); }
+function spSlipCompress(file){
+  return new Promise(function(res, rej){
+    if(!file || !/^image\//.test(file.type||'')){ rej(new Error('ไม่ใช่รูปภาพ / not an image')); return; }
+    var fr=new FileReader(); fr.onerror=function(){ rej(fr.error); };
+    fr.onload=function(){ var im=new Image(); im.onerror=function(){ rej(new Error('อ่านรูปไม่ได้ / cannot read image')); };
+      im.onload=function(){
+        var go=function(max, q){ var s=Math.min(1, max/Math.max(im.width, im.height)), c=document.createElement('canvas');
+          c.width=Math.round(im.width*s); c.height=Math.round(im.height*s); var x=c.getContext('2d'); x.fillStyle='#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(im,0,0,c.width,c.height);
+          return c.toDataURL('image/jpeg', q); };
+        var d=go(1400,0.72); if(d.length>600000) d=go(1000,0.6); if(d.length>600000) d=go(800,0.5); res(d);
+      }; im.src=fr.result; };
+    fr.readAsDataURL(file);
+  });
+}
+// file input → preview (order form + slip sheet share it)
+function spSlipPick(inp){
+  var f=inp.files&&inp.files[0]; if(!f) return;
+  $('slip-prev').innerHTML='⏳';
+  spSlipCompress(f).then(function(d){ _slipData=d; $('slip-prev').innerHTML='<img src="'+d+'" style="max-width:100%;max-height:260px;border-radius:12px;display:block;margin:8px auto 0">'; })
+    .catch(function(e){ _slipData=''; $('slip-prev').textContent=(e&&e.message)||'error'; });
+}
+function spSlipFields(amt){
+  _slipData='';
+  return '<div class="card pad" style="margin-top:10px;background:var(--blue-bg);border-color:transparent">'
+    +'<div style="font-weight:800">📎 สลิปโอนเงินของลูกค้า / customer\'s transfer slip</div>'
+    +'<div style="font-size:12px;color:var(--text2)">ลูกค้าโอนเข้าบัญชีบริษัท KP เท่านั้น แล้วส่งสลิปให้คุณ — อัปโหลดที่นี่ให้ KP ตรวจ<span class="en b">customer transfers to KP\'s company account only and sends you the slip — upload it here for KP to check</span></div>'
+    +'<input type="file" accept="image/*" style="margin-top:8px" onchange="spSlipPick(this)"><div id="slip-prev" style="font-size:12.5px"></div>'
+    +'<label class="l">ยอดในสลิป (บาท) / amount on the slip</label><input id="slip-amt" type="text" inputmode="decimal" value="'+(amt>0?amt:'')+'"></div>';
+}
+function spSlipAmt(){ return Math.round((parseFloat(String(($('slip-amt')||{}).value||'').replace(/[, ]/g,''))||0)*100)/100; }
+// write image first, then the meta that makes KP look at it
+function spSlipWrite(rid, amt, data){
+  var base='sales/', up={};
+  return R(base+'slipImg/'+ME.uid+'/'+rid).set(data).then(function(){
+    return R(base+'slips/'+ME.uid+'/'+rid).set({amount:amt, ts:firebase.database.ServerValue.TIMESTAMP, status:'pending'});
+  }).then(function(){ notifyOffice('💳 สลิปจากตัวแทน / partner slip: '+((MEMBER&&MEMBER.brand)||''), fmt(amt)+' ฿ — ตรวจใน Sales owner'); });
+}
+// partner: upload (or re-upload) a slip for an order request that already exists
+function spSlipSheet(k){
+  var r=MYREQ[k]; if(!r) return; var o=r.orderId?ORDERS[r.orderId]:null;
+  var due=o?Math.max(0, orderTotal(o)-(parseFloat(o.paidAmount)||0)):((r.totals||{}).total||0);
+  spSheet('📎 อัปโหลดสลิป <span class="en">upload slip</span>',
+    '<div style="font-size:13.5px"><b>'+esc((r.customer||{}).name||'')+'</b>'+(r.orderId?' · #'+esc(r.orderId):'')+' · ยอด '+fmt(due)+' ฿</div>'
+    +bankHtml()+spSlipFields(due)
+    +'<button class="btn gold w" id="slip-go" style="margin-top:12px" onclick="spSlipSend(\''+esc(k)+'\')"><i class="ti ti-upload"></i> ส่งสลิปให้ KP ตรวจ / send to KP</button>');
+}
+function spSlipSend(k){
+  var amt=spSlipAmt();
+  if(!_slipData){ toast('เลือกรูปสลิปก่อน / pick the slip photo'); return; }
+  if(!(amt>0)){ toast('ใส่ยอดในสลิป / enter the amount'); return; }
+  $('slip-go').disabled=true;
+  spSlipWrite(k, amt, _slipData).then(function(){ _slipData=''; spSheetClose(); toast('ส่งสลิปแล้ว ✓ KP จะตรวจยอด / slip sent — KP checks it', 4000); })
+    .catch(function(e){ $('slip-go').disabled=false; toast('ส่งไม่สำเร็จ / failed: '+(e&&e.code||e)); });
+}
+function slipChip(sl){
+  if(!sl) return '';
+  var M={pending:['pend','💳 สลิปรอ KP ตรวจ / slip being checked'], ok:['ok','💳 สลิปถูกต้อง ✓ / slip confirmed'], bad:['no','💳 สลิปไม่ผ่าน / slip rejected']}, m=M[sl.status]||M.pending;
+  return '<span class="st '+m[0]+'">'+m[1]+' · '+fmt(sl.amount)+' ฿</span>';
+}
+// box inside the order detail
+function spSlipBox(k, r, st){
+  var uid=r.uid, rid=ridOf(k), sl=slipOf(uid, rid), o=r.orderId?ORDERS[r.orderId]:null;
+  var closed=['rejected','cancelled','paid'].indexOf(st)>=0 || (o && isPaid(o));
+  if(!sl && (OWNER || closed)) return '';
+  var h='<div class="card pad" style="margin-bottom:12px"><div style="font-weight:800;margin-bottom:6px">💳 ชำระล่วงหน้า <span class="en">prepayment</span></div>';
+  if(sl){
+    h+=slipChip(sl)+(sl.status==='bad'&&sl.reason?'<div style="font-size:12.5px;color:var(--red);margin-top:4px">เหตุผล <span class="en">reason</span>: '+esc(sl.reason)+'</div>':'')
+      +'<div class="row" style="margin-top:8px"><button class="btn line sm" style="flex:1" onclick="spSlipShow(\''+esc(uid)+'\',\''+esc(rid)+'\')"><i class="ti ti-photo"></i> ดูสลิป / view</button>'
+      +(!OWNER && sl.status!=='ok' && !closed ? '<button class="btn dark sm" style="flex:1" onclick="spSlipSheet(\''+esc(k)+'\')"><i class="ti ti-upload"></i> ส่งใหม่ / re-upload</button>' : '')+'</div>';
+  } else h+='<div style="font-size:12.5px;color:var(--text2);margin-bottom:8px">ลูกค้าโอนเข้าบัญชี KP ก่อนส่ง? อัปโหลดสลิปให้ KP ตรวจ<span class="en b">customer paid KP in advance? upload the slip for KP to check</span></div>'
+      +'<button class="btn dark w" onclick="spSlipSheet(\''+esc(k)+'\')"><i class="ti ti-upload"></i> ลูกค้าโอนแล้ว — อัปโหลดสลิป / customer paid — upload slip</button>';
+  return h+'</div>';
+}
+// view a slip (partner: own · owner: any) — the image is only downloaded here
+function spSlipShow(uid, rid){
+  var sl=slipOf(uid, rid); if(!sl) return;
+  var r=OWNER ? ALLREQ[uid+'/'+rid] : MYREQ[rid]; r=r||{}; var o=r.orderId?ORDERS[r.orderId]:null;
+  var total=o?orderTotal(o):((r.totals||{}).total||0), diff=Math.round((sl.amount-total)*100)/100;
+  spSheet('💳 สลิป <span class="en">slip</span> · '+esc((r.customer||{}).name||''),
+    '<div id="slip-img" style="text-align:center;padding:10px">⏳</div>'
+    +'<div class="card pad" style="margin:10px 0;font-size:14px">'
+      +'<div style="display:flex;justify-content:space-between"><span>ยอดในสลิป / on the slip</span><b>'+fmt(sl.amount)+' ฿</b></div>'
+      +'<div style="display:flex;justify-content:space-between"><span>ยอดออเดอร์ / order total</span><b>'+fmt(total)+' ฿</b></div>'
+      +'<div style="display:flex;justify-content:space-between;font-weight:800;color:'+(Math.abs(diff)<0.5?'var(--green)':'var(--red)')+'"><span>'+(Math.abs(diff)<0.5?'ตรงกัน ✓ / matches':'ต่างกัน / difference')+'</span><span>'+(Math.abs(diff)<0.5?'':fmt(diff)+' ฿')+'</span></div>'
+      +'<div style="margin-top:6px">'+slipChip(sl)+'</div>'
+      +(sl.status==='bad'&&sl.reason?'<div style="font-size:12.5px;color:var(--red);margin-top:4px">'+esc(sl.reason)+'</div>':'')+'</div>'
+    +(OWNER && sl.status==='pending'
+      ? '<div id="slip-act" class="hide"><div style="font-size:12px;color:var(--text2);margin-bottom:8px">เช็คในแอปธนาคารว่าเงินเข้าบัญชีจริง ยอดและวันที่ตรง<span class="en b">check in the bank app that the money really arrived — amount and date</span></div>'
+        +'<div class="row"><button class="btn gold" style="flex:2" onclick="spSlipCheck(\''+esc(uid)+'\',\''+esc(rid)+'\',true)"><i class="ti ti-check"></i> ยืนยัน เงินเข้าแล้ว / confirm</button>'
+        +'<button class="btn red" style="flex:1" onclick="spSlipCheck(\''+esc(uid)+'\',\''+esc(rid)+'\',false)">ไม่ถูกต้อง / reject</button></div></div>' : '')
+    +(OWNER && sl.status==='ok' && r.orderId && !(o && (isPaid(o) || o.salesSlip)) ? '<div class="card pad" style="background:var(--amber-bg);border-color:transparent;font-size:13px">⚠ ออเดอร์ #'+esc(r.orderId)+' สร้างไว้ก่อนสลิป — บันทึกการชำระในแอป KP (Pay) ด้วย<span class="en b">the order was created before the slip — book the payment in the KP app (Pay) too</span></div>' : ''));
+  R('sales/slipImg/'+uid+'/'+rid).once('value').then(function(s){ var d=s.val(), el=$('slip-img'); if(!el) return;
+    var ok=(typeof d==='string' && /^data:image\/jpeg;base64,[A-Za-z0-9+\/=]+$/.test(d));
+    el.innerHTML=ok ? '<img src="'+d+'" style="max-width:100%;max-height:60vh;border-radius:12px">'
+      : ((o && o.salesSlip) ? 'รูปสลิปอยู่ในออเดอร์ KP แล้ว (รูปภาพ → สลิป) / the slip photo is on the KP order now' : 'ไม่มีรูป / no image');
+    var act=$('slip-act'); if(act && ok) act.classList.remove('hide'); })
+    .catch(function(e){ var el=$('slip-img'); if(el) el.textContent='Error: '+(e&&e.code||e); });
+}
+// owner: confirm / reject
+function spSlipCheck(uid, rid, ok){
+  var reason='';
+  if(!ok){ reason=prompt('เหตุผล (ตัวแทนจะเห็น) เช่น ยอดไม่ตรง / เงินยังไม่เข้า · reason (the partner sees it):',''); if(reason===null) return; reason=clean(reason).slice(0,200); }
+  R('sales/slips/'+uid+'/'+rid).update({status:ok?'ok':'bad', reason:reason, checkedAt:Date.now()}).then(function(){
+    toast(ok?'ยืนยันสลิปแล้ว ✓ / slip confirmed':'แจ้งตัวแทนแล้ว / partner informed'); spSheetClose();
+  }).catch(function(e){ toast('Error: '+(e&&e.code||e)); });
+}
+// one line on the owner inbox card
+function spSlipOwnLine(r){
+  var sl=slipOf(r.uid, ridOf(r._k)); if(!sl) return '';
+  return '<div class="row" style="margin-top:8px;align-items:center"><div style="flex:1">'+slipChip(sl)+'</div><button class="btn '+(sl.status==='pending'?'gold':'line')+' sm" onclick="spSlipShow(\''+esc(r.uid)+'\',\''+esc(ridOf(r._k))+'\')"><i class="ti ti-photo"></i> '+(sl.status==='pending'?'ตรวจสลิป / check':'ดู / view')+'</button></div>';
+}
+/* Stock floor (André 11.10.): a panel with less than 100 in stock shows as sold out for
+   partners — the rest is kept for KP's own customers. Owner can change the number. */
+function minStock(){ var n=parseInt(CONFIG.minStock,10); return n>=0 ? n : 100; }
 /* ── individual commission + chat with KP (partner side) ── */
 var _chatLastKp=0, _chatLoaded=false; window._chatOn=false;
 function spAttachChat(){
@@ -1327,6 +1463,7 @@ function spAttachChat(){
   if(!$('scr-app').classList.contains('hide')) $('chat-fab').classList.remove('hide');
   R('sales/memberRules/'+ME.uid).on('value', function(s){ MYRULE=s.val(); try{ spRenderEarn(); }catch(e){} }, function(){});
   R('sales/payouts/'+ME.uid).on('value', function(s){ MYPAY=s.val()||{}; try{ spRenderEarn(); }catch(e){} }, function(){});
+  R('sales/slips/'+ME.uid).on('value', function(s){ SLIPS_ME=s.val()||{}; try{ spRenderOrders(); }catch(e){} }, function(){});
   R('sales/chatSeen/'+ME.uid).on('value', function(s){ CHATSEEN_ME=s.val()||{}; spChatBadge(); }, function(){});
   R('sales/chat/'+ME.uid).limitToLast(200).on('value', function(s){
     CHAT=s.val()||{};
@@ -1466,7 +1603,7 @@ function spRenderOrders(){
     return '<div class="card pad" style="margin-bottom:12px" onclick="spOrdDetail(\''+r._k+'\')">'
       +'<div class="row"><div style="flex:1;min-width:0"><div style="font-weight:800">'+esc(cu.name||'—')+(r.orderId?' <span style="color:var(--text3);font-weight:600;font-size:13px">#'+esc(r.orderId)+'</span>':'')+'</div>'
       +'<div style="font-size:12.5px;color:var(--text2)">'+new Date(r.createdAt||0).toLocaleDateString('th-TH',{day:'numeric',month:'short'})+' · '+esc(cu.province||'')+' · '+fmt(o?orderTotal(o):t.total)+' ฿</div>'
-      +(extra?'<div style="font-size:12.5px;margin-top:2px">'+extra+'</div>':'')+'</div>'+stageChip(r._st)+'</div>'
+      +(extra?'<div style="font-size:12.5px;margin-top:2px">'+extra+'</div>':'')+(SLIPS_ME[r._k]?'<div style="margin-top:4px">'+slipChip(SLIPS_ME[r._k])+'</div>':'')+'</div>'+stageChip(r._st)+'</div>'
       +(r._st==='rejected'&&r.rejectReason?'<div style="font-size:12.5px;color:var(--red);margin-top:6px">เหตุผล <span class="en">reason</span>: '+esc(r.rejectReason)+'</div>':'')+'</div>';
   }).join('');
 }
@@ -1494,6 +1631,7 @@ function spOrdDetail(k){
     +'<div class="card pad" style="margin-bottom:12px">'+(o?'<div style="font-size:11.5px;color:var(--text2);margin-bottom:4px">ตามออเดอร์ KP #'+esc(r.orderId)+' / as in the KP order</div>':'')
       +((o&&o.lineItems)||r.lineItems||[]).filter(function(l){ return l && l.type!=='delivery'; }).map(function(l){ return '<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:3px 0"><span>'+esc(l.code)+' × '+fmt(l.qty)+'</span><b>'+fmt(l.amount)+' ฿</b></div>'; }).join('')
       +'<div style="display:flex;justify-content:space-between;font-size:16px;padding-top:6px;border-top:1px solid var(--border);margin-top:6px"><b>รวม <span class="en">total</span></b><b>'+fmt(o?orderTotal(o):(r.totals||{}).total)+' ฿</b></div></div>'
+    +spSlipBox(k, r, st)
     +((!OWNER && (st==='delivered'||st==='paid') && r.orderId) ? '<button class="btn red w" style="margin-bottom:10px" onclick="spClaim(\''+esc(String(r.orderId).replace(/[^A-Za-z0-9#-]/g,''))+'\')"><i class="ti ti-alert-triangle"></i> แจ้งเคลม / report damage</button>' : '')
     +(OWNER?'':'<div class="mono" style="margin-bottom:10px">'+esc(trackTxt)+'</div><div class="row"><button class="btn dark" style="flex:1" onclick="copyText(spTrackCache)"><i class="ti ti-copy"></i> คัดลอกสถานะ / copy status</button>'
       +'<button class="btn line" style="flex:1" onclick="shareText(spTrackCache)"><i class="ti ti-share"></i> แชร์ / share</button></div>'));
@@ -1804,6 +1942,7 @@ function spOwnerStart(){
     if(_ownOn) return; _ownOn=true;
     R('sales/members').on('value', function(s){ MEMBERS=s.val()||{}; spRenderTeam(); spRenderInbox(); spRenderOwnStats(); try{ spRenderChats(); }catch(e){} });
     R('sales/memberNotes').on('value', function(s){ MEMBER_NOTES=s.val()||{}; }, function(){});
+    R('sales/slips').on('value', function(s){ SLIPS=s.val()||{}; spRenderInbox(); }, function(){});
     R('sales/requests').on('value', function(s){
       var v=s.val()||{}; ALLREQ={};
       // Keys end up in onclick/href — partners choose rid, so only plain push-style keys are accepted.
@@ -1831,9 +1970,10 @@ function spRenderInbox(){
   var arr=Object.keys(ALLREQ).map(function(k){ var r=ALLREQ[k]; r._k=k; r._st=reqStage(r); return r; }).sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
   var pend=arr.filter(function(r){ return r.status==='pending'||r.status==='processing'; }).length;
   var nb=$('nb-in'); nb.textContent=pend; nb.classList.toggle('hide', !pend);
-  var F=[['pending','รอยืนยัน ('+pend+') / to confirm'],['approved','อนุมัติแล้ว / approved'],['rejected','ไม่อนุมัติ / rejected'],['all','ทั้งหมด / all']];
+  var slp=arr.filter(function(r){ var sl=slipOf(r.uid, ridOf(r._k)); return sl && sl.status==='pending'; }).length;
+  var F=[['pending','รอยืนยัน ('+pend+') / to confirm'],['slip','💳 สลิปรอตรวจ ('+slp+') / slips'],['approved','อนุมัติแล้ว / approved'],['rejected','ไม่อนุมัติ / rejected'],['all','ทั้งหมด / all']];
   $('oi-chips').innerHTML=F.map(function(f){ return '<button class="chip'+(_oiFilter===f[0]?' on':'')+'" onclick="_oiFilter=\''+f[0]+'\';spRenderInbox()">'+f[1]+'</button>'; }).join('');
-  arr=arr.filter(function(r){ return _oiFilter==='all' || r.status===_oiFilter || (_oiFilter==='pending' && r.status==='processing'); });
+  arr=arr.filter(function(r){ if(_oiFilter==='slip'){ var sl=slipOf(r.uid, ridOf(r._k)); return !!(sl && sl.status==='pending'); } return _oiFilter==='all' || r.status===_oiFilter || (_oiFilter==='pending' && r.status==='processing'); });
   if(!arr.length){ $('oi-list').innerHTML='<div class="empty"><i class="ti ti-inbox"></i>ไม่มีรายการ / nothing here</div>'; return; }
   $('oi-list').innerHTML=arr.map(function(r){
     var cu=r.customer||{}, t=r.totals||{};
@@ -1843,6 +1983,7 @@ function spRenderInbox(){
       +'<div style="font-size:13.5px;margin-top:8px;line-height:1.6"><b>'+esc(cu.name||'')+'</b> · '+esc(cu.phone||'')+' · '+esc(cu.province||'')+'<br><span style="color:var(--text2)">'+esc(cu.address||'')+'</span></div>'
       +'<div style="font-size:13px;margin-top:6px;color:var(--text2)">'+(r.lineItems||[]).map(function(l){ return esc(l.code)+'×'+fmt(l.qty); }).join(', ')+'</div>'
       +'<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:14px"><span>'+(r.payment==='transfer'?'💳 โอนแล้ว'+enSpan('paid by transfer'):'💵 ชำระปลายทาง'+enSpan('cash on delivery'))+(r.note?' · 📝 '+esc(r.note):'')+'</span><b style="white-space:nowrap;margin-left:8px">'+fmt(t.total)+' ฿</b></div>'
+      +spSlipOwnLine(r)
       +(r.status==='processing'?'<div style="font-size:12.5px;color:var(--amber);font-weight:700;margin-top:8px">⏳ เปิดอยู่ใน KP โดย '+esc(r.lockBy||'')+' / open in KP</div>':'')
       +(r.status==='pending'||r.status==='processing'
         ? '<div class="row" style="margin-top:12px"><a class="btn gold" style="flex:2;text-decoration:none" href="'+kpAppUrl(r._k)+'" target="_blank"><i class="ti ti-circle-check"></i> รับออเดอร์ → KP<span class="en">accept → New Order in KP</span></a>'
@@ -1981,7 +2122,7 @@ function spPayout(k){
   var note=prompt('หมายเหตุ (เช่น โอน SCB 1/11) / note:','')||'';
   R('sales/payouts/'+k).push({amount:n, month:mo, whtPct:w, note:note, ts:Date.now(), date:new Date(Date.now()+7*3600e3).toISOString().slice(0,10)}).then(function(){ toast('บันทึกการจ่ายแล้ว ✓ / payout saved'); });
 }
-function spFillConfig(){ if(!$('cs-mode')) return; $('cs-mode').value=CONFIG.mode||'pct'; $('cs-pct').value=CONFIG.pct; $('cs-pp').value=CONFIG.perPanel; $('cs-cycle').value=CONFIG.cycle||'monthly'; $('cs-wht').value=CONFIG.whtPct||'';
+function spFillConfig(){ if(!$('cs-mode')) return; $('cs-mode').value=CONFIG.mode||'pct'; $('cs-pct').value=CONFIG.pct; $('cs-pp').value=CONFIG.perPanel; $('cs-cycle').value=CONFIG.cycle||'monthly'; $('cs-wht').value=CONFIG.whtPct||''; $('cs-min').value=minStock();
   var c=CT(); [['phone','phone'],['line','line'],['hours','hours'],['confirm','confirm'],['dbkk','daysBkk'],['dprov','daysProv'],['album','album'],['bank','bankName'],['bno','bankNo'],['bacc','bankAcc'],['qd','quoteDays']]
     .forEach(function(x){ var e=$('cc-'+x[0]); if(e && document.activeElement!==e) e.value=c[x[1]]==null?'':c[x[1]]; }); }
 function spSaveContact(){
@@ -1992,7 +2133,7 @@ function spSaveContact(){
   R('sales/config/contact').set(c).then(function(){ toast('บันทึกแล้ว ✓ / saved'); });
 }
 function spSaveConfig(){
-  var c={mode:$('cs-mode').value, pct:parseFloat($('cs-pct').value)||0, perPanel:parseFloat($('cs-pp').value)||0, cycle:$('cs-cycle').value, whtPct:Math.max(0,Math.min(15,parseFloat($('cs-wht').value)||0)), priceMode:'list', updatedAt:Date.now()};
+  var c={mode:$('cs-mode').value, pct:parseFloat($('cs-pct').value)||0, perPanel:parseFloat($('cs-pp').value)||0, cycle:$('cs-cycle').value, whtPct:Math.max(0,Math.min(15,parseFloat($('cs-wht').value)||0)), minStock:($('cs-min').value===''?100:Math.max(0,parseInt($('cs-min').value,10)||0)), priceMode:'list', updatedAt:Date.now()};
   R('sales/config').update(c).then(function(){ toast('บันทึกแล้ว ✓ / saved'); });
 }
 
