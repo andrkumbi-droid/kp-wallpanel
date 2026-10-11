@@ -306,6 +306,11 @@ b.num,.num b{ white-space:nowrap; }
       <button class="btn-gold" id="rg-btn" onclick="spRegister()">สมัครเป็นตัวแทนขาย / Register as partner</button>
     </div>
     <div class="lx-msg" id="auth-msg"></div>
+    <!-- TEMPORARY (Okt 2026): six test partners, only in test mode (?test=1) — one tap, no password. Data lives in lagertest/. -->
+    <div id="test-partners" class="hide" style="margin-top:20px;padding:14px;border:1px dashed rgba(212,175,55,.5);border-radius:16px">
+      <div style="text-align:center;font-weight:800;color:var(--gold);margin-bottom:10px">🧪 ทดลองเป็นตัวแทน / test as partner</div>
+      <div id="test-partner-btns" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"></div>
+    </div>
     <button class="lx-link hide" id="own-door" style="margin-top:22px;color:var(--cream2)" onclick="spOwnerOpen()"><i class="ti ti-crown"></i> เจ้าของร้าน / Owner dashboard</button>
     <div class="lx-foot">KP Wallpanel · Sales Partner Program</div>
   </div>
@@ -777,6 +782,8 @@ spAcReady.then(function(){
     var dev=isKpDevice(u);   // KP device account = owner side, never a member
     if(u && (u.isAnonymous||dev) && !$('scr-pin').classList.contains('hide')) return;
     if(spOwnerSession()){ spOwnerStart(); return; }
+    var _ta=''; try{ _ta=SP_TEST ? (localStorage.getItem('kpsp-test-as')||'') : ''; }catch(e){}
+    if(_ta && u && u.isAnonymous && !OWNER_LINK){ spTestAs(_ta); return; }
     // The owner link wins over a partner login in the same browser (André tests both).
     if(OWNER_LINK){ if($('scr-pin').classList.contains('hide')){ ME=null; spOwnerOpen(); } return; }
     if(u && !u.isAnonymous && !dev){ ME=u; spMemberStart(); }
@@ -828,7 +835,30 @@ function spForgot(){
   if(!em){ spMsg('ใส่อีเมลก่อน แล้วกดอีกครั้ง / type your e-mail first'); return; }
   AUTH.sendPasswordResetEmail(em).then(function(){ spMsg('ส่งลิงก์ตั้งรหัสใหม่ไปที่อีเมลแล้ว / reset link sent', true); }).catch(function(e){ spMsg(spErr(e)); });
 }
-function spLogout(){ AUTH.signOut().then(function(){ location.reload(); }, function(){ location.reload(); }); }
+function spLogout(){ try{ localStorage.removeItem('kpsp-test-as'); }catch(e){} AUTH.signOut().then(function(){ location.reload(); }, function(){ location.reload(); }); }
+/* ── TEMPORARY test partners (test mode only) ── */
+var TEST_PARTNERS=[
+  {k:'nok',  name:'นก',    brand:'Nok Home Deco',       polite:'ka'},
+  {k:'ploy', name:'พลอย',  brand:'Ploy Interior Studio', polite:'ka'},
+  {k:'bank', name:'แบงค์', brand:'Bank Wall Design',     polite:'krub'},
+  {k:'mint', name:'มิ้นท์', brand:'Mint Living',          polite:'ka'},
+  {k:'bee',  name:'บี',    brand:'Bee Decor Shop',       polite:'ka'},
+  {k:'golf', name:'กอล์ฟ', brand:'Golf Renovate',        polite:'krub'}
+];
+function spTestAs(k){
+  var p=TEST_PARTNERS.find(function(x){ return x.k===k; }); if(!p || !SP_TEST) return;
+  (AUTH.currentUser ? Promise.resolve() : AUTH.signInAnonymously()).then(function(){
+    try{ localStorage.setItem('kpsp-test-as', k); }catch(e){}
+    ME={uid:'test_'+k, email:k+'@test.kp'};
+    return R('sales/members/'+ME.uid).once('value').then(function(sn){
+      if(!sn.val()) return R('sales/members/'+ME.uid).set({uid:ME.uid, name:p.name, brand:p.brand, phone:'08000000'+String(TEST_PARTNERS.indexOf(p)+1).padStart(2,'0'), email:ME.email, status:'active', polite:p.polite, test:true, createdAt:Date.now()});
+    });
+  }).then(function(){ spMemberStart(); }).catch(function(e){ spMsg('test: '+((e&&e.code)||e)); });
+}
+if(SP_TEST){
+  $('test-partners').classList.remove('hide');
+  $('test-partner-btns').innerHTML=TEST_PARTNERS.map(function(p){ return '<button class="btn" style="background:rgba(255,255,255,.08);color:var(--cream);border:1px solid rgba(212,175,55,.35)" onclick="spTestAs(\''+p.k+'\')">'+p.name+'<span class="en">'+p.brand+'</span></button>'; }).join('');
+}
 
 /* ═════════════ shared data ═════════════ */
 var _dataOn=false;
@@ -1443,14 +1473,14 @@ function spOwnerStart(){
     R('sales/requests').on('value', function(s){
       var v=s.val()||{}; ALLREQ={};
       // Keys end up in onclick/href — partners choose rid, so only plain push-style keys are accepted.
-      Object.keys(v).forEach(function(uid){ var g=v[uid]||{}; Object.keys(g).forEach(function(rid){ var r=g[rid]; if(r && typeof r==='object' && r.uid && /^[-_A-Za-z0-9]{1,40}$/.test(rid) && /^[A-Za-z0-9]{1,128}$/.test(uid)) ALLREQ[uid+'/'+rid]=r; }); });
+      Object.keys(v).forEach(function(uid){ var g=v[uid]||{}; Object.keys(g).forEach(function(rid){ var r=g[rid]; if(r && typeof r==='object' && r.uid && /^[-_A-Za-z0-9]{1,40}$/.test(rid) && /^[A-Za-z0-9_]{1,128}$/.test(uid)) ALLREQ[uid+'/'+rid]=r; }); });
       Object.keys(ALLREQ).forEach(function(k){ var r=ALLREQ[k]; if(r && r.orderId) spWatchOrder(r.orderId); });
       spRenderInbox(); spRenderOwnStats(); spRenderTeam(); });
     R('sales/payouts').on('value', function(s){ PAYOUTS=s.val()||{}; spRenderOwnStats(); });
     R('sales/memberRules').on('value', function(s){ MEMBER_RULES=s.val()||{}; spRenderTeam(); spRenderOwnStats(); });
     R('sales/chatSeen').on('value', function(s){ CHATSEEN=s.val()||{}; spRenderChats(); });
     R('sales/chat').on('value', function(s){
-      var v=s.val()||{}; CHATS={}; Object.keys(v).forEach(function(uid){ if(/^[A-Za-z0-9]{1,128}$/.test(uid)) CHATS[uid]=v[uid]; });
+      var v=s.val()||{}; CHATS={}; Object.keys(v).forEach(function(uid){ if(/^[A-Za-z0-9_]{1,128}$/.test(uid)) CHATS[uid]=v[uid]; });
       spRenderChats(); if(_chatOpen && _chatOpen!=='me'){ spChatRender(_chatOpen); spOwnSeen(_chatOpen); }
     });
   };
@@ -1493,7 +1523,7 @@ function spReject(k){
 }
 function spRenderTeam(){
   if(!$('ot-list')) return;
-  var arr=Object.keys(MEMBERS).filter(function(k){ return /^[A-Za-z0-9]{1,128}$/.test(k) && MEMBERS[k]; }).map(function(k){ var m=MEMBERS[k]; m._k=k; return m; }).sort(function(a,b){ var o={pending:0,active:1,blocked:2}; return (o[a.status]||0)-(o[b.status]||0) || (b.createdAt||0)-(a.createdAt||0); });
+  var arr=Object.keys(MEMBERS).filter(function(k){ return /^[A-Za-z0-9_]{1,128}$/.test(k) && MEMBERS[k]; }).map(function(k){ var m=MEMBERS[k]; m._k=k; return m; }).sort(function(a,b){ var o={pending:0,active:1,blocked:2}; return (o[a.status]||0)-(o[b.status]||0) || (b.createdAt||0)-(a.createdAt||0); });
   var pend=arr.filter(function(m){ return m.status==='pending'; }).length;
   var nb=$('nb-team'); nb.textContent=pend; nb.classList.toggle('hide', !pend);
   if(!arr.length){ $('ot-list').innerHTML='<div class="empty"><i class="ti ti-users"></i>ยังไม่มีตัวแทนสมัคร / no partners yet<br><span style="font-size:12.5px">ลิงก์สมัคร / sign-up link: '+esc(location.origin+location.pathname)+'</span></div>'; return; }
@@ -1535,7 +1565,7 @@ function spRenderChats(){
 }
 function spOwnSeen(uid){ R('sales/chatSeen/'+uid+'/kp').set(firebase.database.ServerValue.TIMESTAMP).catch(function(){}); }
 function spOwnChat(uid){
-  if(!/^[A-Za-z0-9]{1,128}$/.test(uid)) return;
+  if(!/^[A-Za-z0-9_]{1,128}$/.test(uid)) return;
   var m=MEMBERS[uid]||{};
   chatSheet('<i class="ti ti-messages"></i> '+esc(m.brand||m.name||'Partner'), uid, 'spOwnChatSend(\''+uid+'\')');
   spOwnSeen(uid);
@@ -1564,7 +1594,7 @@ function spMemberRule(k){
     +'<button class="btn gold w" style="margin-top:14px" onclick="spMemberRuleSave(\''+k+'\')"><i class="ti ti-device-floppy"></i> บันทึก / Save</button></div>');
 }
 function spMemberRuleSave(k){
-  if(!/^[A-Za-z0-9]{1,128}$/.test(k)) return;
+  if(!/^[A-Za-z0-9_]{1,128}$/.test(k)) return;
   var mode=$('mr-mode').value, ref=R('sales/memberRules/'+k), pct=parseFloat($('mr-pct').value), pp=parseFloat($('mr-pp').value);
   if(mode==='pct' && !(pct>0 && pct<=50)){ toast('ใส่ % ให้ถูกต้อง (มากกว่า 0) / enter a % above 0'); return; }
   if(mode==='perPanel' && !(pp>0 && pp<=500)){ toast('ใส่บาทต่อแผ่นให้ถูกต้อง / enter ฿ per panel above 0'); return; }
