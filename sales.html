@@ -326,6 +326,12 @@ body.qbar-on #chat-fab{ bottom:calc(92px + env(safe-area-inset-bottom)); }
   .top .nav{ flex:0 1 auto; }
   .top .kitslot{ flex:1 1 auto; min-width:0; }
 }
+/* order filters: all in one row, no scrolling (desktop/tablet); 3 per row on phones */
+.ochips{ display:grid; grid-template-columns:repeat(9, minmax(0,1fr)); gap:5px; }
+.ochips .chip{ padding:5px 4px; font-size:12px; text-align:center; line-height:1.2; border-radius:12px; min-width:0; }
+.ochips .chip .n{ font-weight:800; opacity:.75; }
+.ochips .chip .en{ font-size:10px; margin:1px 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+@media (max-width:759px){ .ochips{ grid-template-columns:repeat(3, minmax(0,1fr)); } }
 </style>
 </head>
 <body>
@@ -454,7 +460,7 @@ body.qbar-on #chat-fab{ bottom:calc(92px + env(safe-area-inset-bottom)); }
     <div id="t-orders" class="hide">
       <div class="sec-h"><h2>ออเดอร์ของฉัน / My orders</h2><select id="ord-m" style="width:auto;min-height:40px;padding:6px 10px" onchange="spRenderOrders()"></select></div>
       <div class="search"><i class="ti ti-search"></i><input id="ord-q" placeholder="ค้นหา ชื่อ / เบอร์ / เลขออเดอร์ / รหัส · search" oninput="spRenderOrders()"></div>
-      <div class="chips" id="ord-chips"></div>
+      <div class="chips ochips" id="ord-chips"></div>
       <div id="ord-list"></div>
     </div>
     <!-- sales kit -->
@@ -1744,8 +1750,11 @@ function ordDriverTxt(o){
   var d=ordDriver(o); if(!d) return '';
   return d.carrier ? '🚛 ขนส่ง / carrier: '+esc(d.carrier) : '🚚 คนขับ / driver: '+esc(d.driver)+(d.tour?' · ทัวร์ / tour '+esc(d.tour):'');
 }
-var ORD_F=[['all','ทั้งหมด / all',null],['wait','รอ KP / waiting',['sent','checking']],['conf','ยืนยันแล้ว / confirmed',['approved']],['pack','แพ็ค / packing',['packing','ready']],
-  ['way','กำลังส่ง / on the way',['loaded']],['deliv','ส่งแล้ว รอชำระ / delivered',['delivered']],['paid','ชำระแล้ว / paid',['paid']],['x','ไม่อนุมัติ·ยกเลิก / rejected',['rejected','cancelled']]];
+// [key, Thai, English, test] — "unpaid" cuts across the stages: confirmed by KP, not cancelled, money not complete yet
+function ordUnpaid(r){ if(['approved','packing','ready','loaded','delivered'].indexOf(r._st)<0) return false; var o=ORDERS[r.orderId]; return !(o && isPaid(o)); }
+var ORD_F=[['all','ทั้งหมด','all',null],['wait','รอ KP','waiting',['sent','checking']],['conf','ยืนยันแล้ว','confirmed',['approved']],['pack','แพ็ค','packing',['packing','ready']],
+  ['way','กำลังส่ง','on the way',['loaded']],['deliv','ส่งแล้ว','delivered',['delivered']],['unpaid','ยังไม่ชำระ','unpaid',ordUnpaid],['paid','ชำระแล้ว','paid',['paid']],['x','ยกเลิก','cancelled',['rejected','cancelled']]];
+function ordFOk(f, r){ var t=f[3]; return !t || (typeof t==='function' ? t(r) : t.indexOf(r._st)>=0); }
 function spReqQuote(k){ var q=null; Object.keys(QUOTES).some(function(id){ if(QUOTES[id] && QUOTES[id].reqId===k){ q=QUOTES[id]; return true; } return false; }); return q; }
 function spRenderOrders(){
   if(!$('ord-list') || !ME) return;
@@ -1766,10 +1775,11 @@ function spRenderOrders(){
     var hay=[reqNo(r,r._k),cu.name,cu.phone,cu.province,cu.address,r.orderId,'#'+(r.orderId||''),r.note,q.fb,q.line,q.name,(r.lineItems||[]).map(function(l){ return l.code; }).join(' ')].join(' ').toLowerCase();
     return hay.indexOf(qv)>=0 || (qd.length>=3 && String(cu.phone||'').indexOf(qd)>=0);
   });
-  $('ord-chips').innerHTML=ORD_F.map(function(f){ var n=f[2]?base.filter(function(r){ return f[2].indexOf(r._st)>=0; }).length:base.length;
-    return '<button class="chip'+(_ordFilter===f[0]?' on':'')+'" onclick="_ordFilter=\''+f[0]+'\';spRenderOrders()">'+f[1]+' ('+n+')</button>'; }).join('');
-  var ff=(ORD_F.find(function(f){ return f[0]===_ordFilter; })||ORD_F[0])[2];
-  var arr=base.filter(function(r){ return !ff || ff.indexOf(r._st)>=0; });
+  // one compact row: Thai label, faint English under it, count as a small number
+  $('ord-chips').innerHTML=ORD_F.map(function(f){ var n=base.filter(function(r){ return ordFOk(f,r); }).length;
+    return '<button class="chip'+(_ordFilter===f[0]?' on':'')+'" onclick="_ordFilter=\''+f[0]+'\';spRenderOrders()">'+f[1]+' <b class="n">'+n+'</b><span class="en b">'+f[2]+'</span></button>'; }).join('');
+  var fsel=ORD_F.find(function(f){ return f[0]===_ordFilter; })||ORD_F[0];
+  var arr=base.filter(function(r){ return ordFOk(fsel,r); });
   if(!arr.length){ $('ord-list').innerHTML='<div class="empty"><i class="ti ti-truck-off"></i>'+(all.length?'ไม่พบ / nothing found':'ยังไม่มีออเดอร์ / no orders yet')+'</div>'; return; }
   $('ord-list').innerHTML=arr.map(function(r){
     var cu=r.customer||{}, t=r.totals||{}, o=r.orderId?ORDERS[r.orderId]:null;
