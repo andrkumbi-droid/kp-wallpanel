@@ -332,6 +332,28 @@ body.qbar-on #chat-fab{ bottom:calc(92px + env(safe-area-inset-bottom)); }
 .ochips .chip .n{ font-weight:800; opacity:.75; }
 .ochips .chip .en{ font-size:10px; margin:1px 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 @media (max-width:759px){ .ochips{ grid-template-columns:repeat(3, minmax(0,1fr)); } }
+/* chat attachments + point/cut-out/draw stages */
+.chat-tools{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+.chat-tools .btn{ padding:6px 10px; font-size:12.5px; }
+.chat-tools .btn .en{ display:none; }
+.chat-attp{ display:flex; gap:8px; align-items:center; background:#fff; border:1px solid var(--border); border-radius:12px; padding:6px; margin-top:6px; }
+.chat-attp img{ width:56px; height:56px; object-fit:cover; border-radius:8px; }
+.bub .ctx{ display:block; font-size:11.5px; opacity:.75; font-style:italic; margin-bottom:3px; }
+.bub .chat-pic{ display:block; max-width:100%; max-height:260px; border-radius:10px; margin-top:6px; cursor:zoom-in; }
+.bub .imgbtn{ display:block; margin-top:6px; border:1px dashed currentColor; background:none; border-radius:10px; padding:6px 10px; font:inherit; font-size:12.5px; color:inherit; }
+.mk-frame{ position:fixed; z-index:400; pointer-events:none; border:2px solid #e5372a; background:rgba(229,55,42,.08); border-radius:4px; transition:all .06s; }
+.mk-pickbar{ position:fixed; left:0; right:0; top:0; z-index:401; background:#e5372a; color:#fff; padding:10px 14px; padding-top:calc(10px + env(safe-area-inset-top)); display:flex; gap:10px; align-items:center; justify-content:center; font-weight:700; font-size:14px; }
+.mk-pickbar button, .mk-bar button{ border:1px solid rgba(255,255,255,.5); background:rgba(255,255,255,.12); color:#fff; border-radius:10px; padding:6px 12px; font:inherit; font-size:13px; }
+.mk-stage{ position:fixed; inset:0; z-index:400; background:rgba(10,8,5,.94); display:flex; flex-direction:column; }
+.mk-bar{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:10px; padding-top:calc(10px + env(safe-area-inset-top)); color:#fff; font-size:13.5px; }
+.mk-bar .mk-grp{ display:flex; gap:4px; }
+.mk-bar button.on{ background:#fff; color:#1a140a; }
+.mk-bar .mk-col{ width:30px; height:30px; padding:0; border-radius:50%; }
+.mk-bar .mk-col.on{ outline:3px solid #fff; outline-offset:1px; }
+.mk-bar .mk-ok{ background:#e9c95c; color:#1a140a; border-color:#e9c95c; font-weight:800; }
+.mk-area{ flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; padding:8px; }
+.mk-area canvas{ touch-action:none; max-width:100%; max-height:100%; border-radius:6px; }
+.bub .chat-pic.big{ max-height:none; }
 </style>
 </head>
 <body>
@@ -1652,20 +1674,199 @@ function spChatRender(who){
   var box=$('chat-box'); if(!box) return;
   var mine = who==='me' ? 'partner' : 'kp', list=chatList(who==='me' ? CHAT : CHATS[who]);
   box.innerHTML = list.length ? list.map(function(m){
-    return '<div class="bub '+(m.from===mine?'me':'them')+'">'+esc(m.text)+'<span class="tm">'+(m.from==='kp'?'KP':esc(who==='me'?(MEMBER&&MEMBER.name)||'':((MEMBERS[who]||{}).brand||'')))+' · '+chatTime(m.ts)+'</span></div>';
+    var uid=who==='me'?(ME&&ME.uid):who, showTxt=(m.ctx && m.text===m.ctx) ? '' : esc(m.text);
+    return '<div class="bub '+(m.from===mine?'me':'them')+'">'+(m.ctx?'<span class="ctx">'+esc(m.ctx)+'</span>':'')+showTxt
+      +(m.img && /^[-_A-Za-z0-9]{1,40}$/.test(m._k||'') ? '<button type="button" class="imgbtn" onclick="spChatImg(this,\''+esc(uid)+'\',\''+m._k+'\')">🖼 ดูรูป / show picture</button>' : '')
+      +'<span class="tm">'+(m.from==='kp'?'KP':esc(who==='me'?(MEMBER&&MEMBER.name)||'':((MEMBERS[who]||{}).brand||'')))+' · '+chatTime(m.ts)+'</span></div>';
   }).join('') : '<div class="empty" style="padding:20px"><i class="ti ti-message-circle-2"></i>ยังไม่มีข้อความ / no messages yet</div>';
   box.scrollTop=box.scrollHeight;
 }
 function chatSheet(title, who, sendFn){
-  spSheet(title, '<div id="chat-box" class="chat"></div>'
-    +'<div class="chat-in"><textarea id="chat-txt" maxlength="2000" placeholder="พิมพ์ข้อความ… / type a message…" onkeydown="if(event.key===\'Enter\'&&(event.ctrlKey||event.metaKey)){ '+sendFn+'; event.preventDefault(); }"></textarea>'
+  if(_chatWho!==who) _chatAtt=null; _chatWho=who; _chatSendFn=sendFn;
+  spSheet(title, '<div id="chat-box" class="chat"></div>'+chatTools()
+    +'<div class="chat-in"><textarea id="chat-txt" maxlength="2000" placeholder="พิมพ์ข้อความ… / type a message…" onpaste="spChatPaste(event)" onkeydown="if(event.key===\'Enter\'&&(event.ctrlKey||event.metaKey)){ '+sendFn+'; event.preventDefault(); }"></textarea>'
     +'<button class="btn gold" onclick="'+sendFn+'"><i class="ti ti-send"></i></button></div>');
-  _chatOpen=who; spChatRender(who);
+  _chatOpen=who; spChatRender(who); spChatAttShow();
 }
 function spChatOpen(){
   if(!ME) return;
   chatSheet('<i class="ti ti-message-circle-2"></i> แชทกับทีม KP / chat with KP', 'me', 'spChatSend()');
   R('sales/chatSeen/'+ME.uid+'/partner').set(firebase.database.ServerValue.TIMESTAMP).catch(function(){});
+}
+/* ── Chat attachments (André 11.10., like the "Melden" system in Calava) ──
+   So KP sees at once what a message is about: tap a spot of the app (element + picture),
+   a screen cut-out with pen / arrow / frame (desktop), or a photo / phone screenshot.
+   Image: sales/chatImg/<uid>/<mid> (JPEG data URL, loaded only when tapped);
+   the message gets img:true and ctx = where it was ("📍 Orders › button “…”"). */
+var _chatAtt=null, _chatWho=null, _chatSendFn='';
+var MK_IMG=/^data:image\/jpeg;base64,[A-Za-z0-9+\/=]+$/;
+function chatTools(){
+  return '<div id="chat-att"></div><div class="chat-tools">'
+    +'<button type="button" class="btn line sm" onclick="spPickEl()"><i class="ti ti-pointer"></i> ชี้จุดบนจอ<span class="en">point at it</span></button>'
+    +((navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia && !/Android|iPhone|iPad/i.test(navigator.userAgent)) ? '<button type="button" class="btn line sm" onclick="spShotTab()"><i class="ti ti-screenshot"></i> จับภาพหน้าจอ<span class="en">screenshot</span></button>' : '')
+    +'<label class="btn line sm" style="cursor:pointer"><i class="ti ti-photo"></i> แนบรูป<span class="en">photo</span><input type="file" accept="image/*" style="display:none" onchange="spChatFile(this)"></label></div>';
+}
+function spChatAttShow(){
+  var el=$('chat-att'); if(!el) return; var a=_chatAtt;
+  if(!a){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="chat-attp">'+(a.img?'<img src="'+a.img+'">':(a.busy?'<span class="mk-busy">⏳</span>':''))
+    +'<div style="flex:1;min-width:0;font-size:12.5px">'+esc(a.ctx||'📷 รูปหน้าจอ / screenshot')+'</div>'
+    +'<button type="button" class="btn line sm" onclick="_chatAtt=null;spChatAttShow()">✕</button></div>';
+}
+function mkJpeg(canvas){
+  var m=Math.min(1, 1400/canvas.width, 1400/canvas.height);
+  for(var i=0;i<6;i++){
+    var c=document.createElement('canvas'); c.width=Math.max(1,Math.round(canvas.width*m)); c.height=Math.max(1,Math.round(canvas.height*m));
+    var x=c.getContext('2d'); x.fillStyle='#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(canvas,0,0,c.width,c.height);
+    var u=c.toDataURL('image/jpeg',0.8); if(u.length<600000) return u; m*=0.78;
+  }
+  return null;
+}
+function mkTabName(){ var b=document.querySelector('#scr-app .top [data-t].on, #scr-own .nav button.on'); return b ? String(b.childNodes[1]&&b.childNodes[1].nodeType===3?b.childNodes[1].textContent:b.innerText.split('\n')[0]).trim() : ''; }
+function mkDescribe(el){
+  var t=el.tagName, kind=(t==='BUTTON'||t==='A'||el.closest('button'))?'ปุ่ม':((t==='INPUT'||t==='TEXTAREA'||t==='SELECT')?'ช่อง':(t==='IMG'?'รูป':'ส่วน'));
+  var txt=String(el.innerText||el.value||el.getAttribute('placeholder')||el.getAttribute('alt')||'').replace(/\s+/g,' ').trim().slice(0,120);
+  var card=el.closest('.card'), head=card && card!==el ? String(card.innerText||'').replace(/\s+/g,' ').trim().slice(0,60) : '';
+  return '📍 '+(mkTabName()||'—')+' › '+kind+(txt?' “'+txt+'”':'')+(head&&head.indexOf(txt)!==0?' (ใน: '+head+')':'');
+}
+function mkChatHide(){ var e=$('chat-txt'); window._chatDraft=e?e.value:''; $('ov').classList.remove('on'); }
+function mkChatBack(){
+  if(_chatWho==='me') spChatOpen(); else if(_chatWho) spOwnChat(_chatWho);
+  var e=$('chat-txt'); if(e) e.value=window._chatDraft||''; spChatAttShow();
+}
+// point at a spot: hover shows a frame (desktop), a tap picks it (phone)
+function spPickEl(){
+  mkChatHide();
+  var frame=document.createElement('div'); frame.className='mk-frame mk-own';
+  var bar=document.createElement('div'); bar.className='mk-pickbar mk-own';
+  bar.innerHTML='<span>แตะ/คลิกส่วนที่ต้องการแจ้ง KP <span class="en">tap the part you mean</span></span><button type="button">ยกเลิก / cancel</button>';
+  document.body.appendChild(frame); document.body.appendChild(bar);
+  var own=function(el){ return !el || !el.closest || !!el.closest('.mk-own'); };
+  var move=function(e){ var el=document.elementFromPoint(e.clientX, e.clientY); if(own(el)||el===document.body||el===document.documentElement){ frame.style.opacity=0; return; }
+    var r=el.getBoundingClientRect(); frame.style.cssText='opacity:1;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px'; };
+  var block=function(e){ if(own(e.target)) return; e.preventDefault(); e.stopPropagation(); if(e.stopImmediatePropagation) e.stopImmediatePropagation(); };
+  var click=function(e){ if(own(e.target)) return; block(e); done(e.target); };
+  var key=function(e){ if(e.key==='Escape'){ e.preventDefault(); done(null); } };
+  var blockers=['mousedown','mouseup','pointerdown','pointerup','touchend','dblclick','contextmenu','submit'];
+  document.addEventListener('mousemove', move, true); document.addEventListener('click', click, true); document.addEventListener('keydown', key, true);
+  blockers.forEach(function(a){ document.addEventListener(a, block, true); });
+  bar.querySelector('button').onclick=function(){ done(null); };
+  function done(el){
+    document.removeEventListener('mousemove', move, true); document.removeEventListener('click', click, true); document.removeEventListener('keydown', key, true);
+    blockers.forEach(function(a){ document.removeEventListener(a, block, true); });
+    frame.remove(); bar.remove();
+    if(el){ _chatAtt={ctx:mkDescribe(el), img:null, busy:true}; var att=_chatAtt;
+      mkPhoto(el).then(function(img){ if(_chatAtt===att){ att.img=img; att.busy=false; spChatAttShow(); } }); }
+    mkChatBack();
+  }
+}
+// a picture of exactly that element (drawn from the page, no browser prompt)
+function mkPhoto(el){
+  var r=el.getBoundingClientRect(); if(r.width<2||r.height<2) return Promise.resolve(null);
+  // a tiny button alone says little — take its card / row around it when it is small
+  var tgt=el; if(r.width*r.height<20000){ var up=el.closest('.card, .li, .row, .chips, .sh-b'); if(up) tgt=up; }
+  return import('https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/+esm').then(function(m){
+    var bg='#ffffff'; for(var e=tgt;e;e=e.parentElement){ var b=getComputedStyle(e).backgroundColor; if(b && b!=='transparent' && !/rgba\(.*,\s*0\)$/.test(b)){ bg=b; break; } }
+    // skipFonts: embedding the web fonts can hang; 8 s cap so the chat never waits forever
+    return Promise.race([m.toCanvas(tgt, {pixelRatio:Math.min(2, window.devicePixelRatio||1), backgroundColor:bg, skipFonts:true, imagePlaceholder:'data:image/gif;base64,R0lGODlhAQABAAAAACw=', filter:function(n){ return !(n.classList && n.classList.contains('mk-own')); }}),
+      new Promise(function(_,no){ setTimeout(function(){ no(new Error('timeout')); }, 8000); })]);
+  }).then(function(c){ return mkJpeg(c); }).catch(function(){ return null; });
+}
+// desktop: capture this tab → choose an area → draw on it
+function spShotTab(){
+  mkChatHide();
+  setTimeout(function(){
+    navigator.mediaDevices.getDisplayMedia({video:{displaySurface:'browser', frameRate:5}, audio:false, preferCurrentTab:true, selfBrowserSurface:'include', surfaceSwitching:'exclude'})
+      .then(function(stream){
+        var v=document.createElement('video'); v.muted=true; v.playsInline=true; v.srcObject=stream;
+        return v.play().then(function(){ return new Promise(function(r){ setTimeout(r,400); }); }).then(function(){
+          var c=document.createElement('canvas'); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext('2d').drawImage(v,0,0);
+          stream.getTracks().forEach(function(t){ t.stop(); }); return c; });
+      })
+      .then(function(c){ return mkArea(c); })
+      .then(function(part){ return part ? mkDraw(part) : null; })
+      .then(function(img){ if(img) _chatAtt={img:img, ctx:'📷 '+(mkTabName()||'')}; mkChatBack(); })
+      .catch(function(){ toast('จับภาพไม่ได้ — ถ่ายหน้าจอแล้วกด แนบรูป / capture failed — take a screenshot and attach it', 5000); mkChatBack(); });
+  }, 120);
+}
+// phone: a screenshot / photo from the gallery (or pasted) → draw on it
+function spChatFile(inp){ var f=inp.files&&inp.files[0]; inp.value=''; if(f) mkFromFile(f); }
+function spChatPaste(e){ var it=[].slice.call((e.clipboardData||{}).items||[]).find(function(i){ return /^image\//.test(i.type); }); if(!it) return; e.preventDefault(); mkFromFile(it.getAsFile()); }
+function mkFromFile(f){
+  var im=new Image(); im.onload=function(){ var c=document.createElement('canvas'); c.width=im.naturalWidth; c.height=im.naturalHeight; c.getContext('2d').drawImage(im,0,0);
+    URL.revokeObjectURL(im.src); mkChatHide(); mkDraw(c).then(function(img){ if(img) _chatAtt={img:img, ctx:'📷 '+(mkTabName()||'')}; mkChatBack(); }); };
+  im.onerror=function(){ toast('อ่านรูปไม่ได้ / cannot read the image'); }; im.src=URL.createObjectURL(f);
+}
+function mkStage(barHtml){
+  var b=document.createElement('div'); b.className='mk-stage mk-own';
+  b.innerHTML='<div class="mk-bar">'+barHtml+'</div><div class="mk-area"><canvas></canvas></div>'; document.body.appendChild(b); return b;
+}
+function mkArea(src){
+  return new Promise(function(done){
+    var b=mkStage('<span>ลากเลือกส่วนที่ต้องการ <span class="en">drag over the part you mean</span></span><button type="button" data-all>ทั้งจอ / whole</button><button type="button" data-x>ยกเลิก / cancel</button>');
+    var area=b.querySelector('.mk-area'), c=b.querySelector('canvas'), x=c.getContext('2d'), k=1, s=null, e=null;
+    var fit=function(){ var r=area.getBoundingClientRect(); k=Math.min(r.width/src.width, r.height/src.height, 1); c.width=Math.round(src.width*k); c.height=Math.round(src.height*k); paint(); };
+    var rect=function(){ return [Math.min(s.x,e.x), Math.min(s.y,e.y), Math.abs(e.x-s.x), Math.abs(e.y-s.y)]; };
+    var paint=function(){ x.drawImage(src,0,0,c.width,c.height); if(!s||!e) return; var q=rect(); x.fillStyle='rgba(0,0,0,.45)';
+      x.fillRect(0,0,c.width,q[1]); x.fillRect(0,q[1]+q[3],c.width,c.height-q[1]-q[3]); x.fillRect(0,q[1],q[0],q[3]); x.fillRect(q[0]+q[2],q[1],c.width-q[0]-q[2],q[3]);
+      x.strokeStyle='#fff'; x.setLineDash([6,4]); x.strokeRect(q[0]+.5,q[1]+.5,q[2],q[3]); x.setLineDash([]); };
+    var pt=function(ev){ var r=c.getBoundingClientRect(); return {x:Math.max(0,Math.min(c.width,ev.clientX-r.left)), y:Math.max(0,Math.min(c.height,ev.clientY-r.top))}; };
+    var cut=function(l,o,w,h){ var t=document.createElement('canvas'); t.width=Math.max(1,Math.round(w/k)); t.height=Math.max(1,Math.round(h/k)); t.getContext('2d').drawImage(src,l/k,o/k,w/k,h/k,0,0,t.width,t.height); return t; };
+    var end=function(v){ window.removeEventListener('resize', fit); b.remove(); done(v); };
+    c.addEventListener('pointerdown', function(ev){ c.setPointerCapture(ev.pointerId); s=pt(ev); e=s; paint(); });
+    c.addEventListener('pointermove', function(ev){ if(s && ev.buttons){ e=pt(ev); paint(); } });
+    c.addEventListener('pointerup', function(){ if(!s) return; var q=rect(); if(q[2]<8||q[3]<8){ s=e=null; paint(); return; } end(cut(q[0],q[1],q[2],q[3])); });
+    b.querySelector('[data-all]').onclick=function(){ end(cut(0,0,c.width,c.height)); };
+    b.querySelector('[data-x]').onclick=function(){ end(null); };
+    window.addEventListener('resize', fit); requestAnimationFrame(fit);
+  });
+}
+// pen / arrow / frame, three colours, undo → JPEG data URL
+function mkDraw(base){
+  return new Promise(function(done){
+    var COL=['#e5372a','#f5b400','#1f6feb'];
+    var b=mkStage('<span class="mk-grp"><button type="button" data-tool="pen" class="on">✏️</button><button type="button" data-tool="arrow">➜</button><button type="button" data-tool="box">▢</button></span>'
+      +'<span class="mk-grp">'+COL.map(function(f,i){ return '<button type="button" class="mk-col'+(i?'':' on')+'" data-col="'+f+'" style="background:'+f+'"></button>'; }).join('')+'</span>'
+      +'<button type="button" data-undo>↶</button><span style="flex:1"></span><button type="button" data-x>ยกเลิก / cancel</button><button type="button" class="mk-ok" data-ok>✓ ใช้รูปนี้ / use</button>');
+    var area=b.querySelector('.mk-area'), c=b.querySelector('canvas'), x=c.getContext('2d'), lines=[], tool='pen', col=COL[0], k=1, cur=null;
+    var fit=function(){ var r=area.getBoundingClientRect(); k=Math.min(r.width/base.width, r.height/base.height, 1.5); c.width=Math.round(base.width*k); c.height=Math.round(base.height*k); paint(x,k); };
+    var line=function(ctx,s,m){ ctx.strokeStyle=s.col; ctx.fillStyle=s.col; ctx.lineWidth=s.w*m; ctx.lineCap='round'; ctx.lineJoin='round';
+      if(s.tool==='pen'){ ctx.beginPath(); s.p.forEach(function(p,i){ if(i) ctx.lineTo(p.x*m,p.y*m); else ctx.moveTo(p.x*m,p.y*m); }); ctx.stroke(); }
+      else if(s.tool==='box'){ ctx.strokeRect(Math.min(s.a.x,s.b.x)*m, Math.min(s.a.y,s.b.y)*m, Math.abs(s.b.x-s.a.x)*m, Math.abs(s.b.y-s.a.y)*m); }
+      else { var ax=s.a.x*m, ay=s.a.y*m, bx=s.b.x*m, by=s.b.y*m, an=Math.atan2(by-ay,bx-ax), hd=Math.max(12, s.w*m*4);
+        ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx-Math.cos(an)*hd*.6, by-Math.sin(an)*hd*.6); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx-hd*Math.cos(an-.45), by-hd*Math.sin(an-.45)); ctx.lineTo(bx-hd*Math.cos(an+.45), by-hd*Math.sin(an+.45)); ctx.closePath(); ctx.fill(); } };
+    var paint=function(ctx,m){ ctx.drawImage(base,0,0,base.width*m,base.height*m); lines.forEach(function(s){ line(ctx,s,m); }); if(cur) line(ctx,cur,m); };
+    var pt=function(ev){ var r=c.getBoundingClientRect(); return {x:(ev.clientX-r.left)/k, y:(ev.clientY-r.top)/k}; };
+    var end=function(v){ window.removeEventListener('resize', fit); b.remove(); done(v); };
+    c.addEventListener('pointerdown', function(ev){ c.setPointerCapture(ev.pointerId); var p=pt(ev); cur={tool:tool, col:col, w:3.5/k, p:[p], a:p, b:p}; });
+    c.addEventListener('pointermove', function(ev){ if(!cur) return; var p=pt(ev); if(cur.tool==='pen') cur.p.push(p); else cur.b=p; paint(x,k); });
+    c.addEventListener('pointerup', function(){ if(!cur) return; if(cur.tool==='pen' || Math.hypot(cur.b.x-cur.a.x, cur.b.y-cur.a.y)>=4) lines.push(cur); cur=null; paint(x,k); });
+    [].forEach.call(b.querySelectorAll('[data-tool]'), function(t){ t.onclick=function(){ tool=t.dataset.tool; [].forEach.call(b.querySelectorAll('[data-tool]'), function(z){ z.classList.toggle('on', z===t); }); }; });
+    [].forEach.call(b.querySelectorAll('[data-col]'), function(t){ t.onclick=function(){ col=t.dataset.col; [].forEach.call(b.querySelectorAll('[data-col]'), function(z){ z.classList.toggle('on', z===t); }); }; });
+    b.querySelector('[data-undo]').onclick=function(){ lines.pop(); paint(x,k); };
+    b.querySelector('[data-x]').onclick=function(){ end(null); };
+    b.querySelector('[data-ok]').onclick=function(){ var o=document.createElement('canvas'); o.width=base.width; o.height=base.height; paint(o.getContext('2d'),1); end(mkJpeg(o)); };
+    window.addEventListener('resize', fit); requestAnimationFrame(fit);
+  });
+}
+// send (partner or KP): image first, then the message that points at it
+function chatSendTo(uid, from, by){
+  var e=$('chat-txt'), t=clean((e||{}).value||'').slice(0,2000), a=_chatAtt;
+  if(a && a.busy){ toast('⏳ กำลังทำรูป รอสักครู่ / preparing the picture…'); return null; }
+  if(!t && !a) return null;
+  var ref=R('sales/chat/'+uid).push(), msg={from:from, text:t||(a&&a.ctx)||'📷', ts:firebase.database.ServerValue.TIMESTAMP};
+  if(by) msg.by=by;
+  if(a){ if(a.ctx) msg.ctx=String(a.ctx).slice(0,600); if(a.img && MK_IMG.test(a.img)) msg.img=true; }
+  if(e) e.value=''; _chatAtt=null; spChatAttShow();
+  var p=msg.img ? R('sales/chatImg/'+uid+'/'+ref.key).set(a.img).then(function(){ return ref.set(msg); }) : ref.set(msg);
+  return p.catch(function(err){ toast('ส่งไม่สำเร็จ / failed: '+(err&&err.code||'')); if(e) e.value=t; _chatAtt=a; spChatAttShow(); throw err; }).then(function(){ return msg; });
+}
+function spChatImg(btn, uid, mid){
+  btn.disabled=true; btn.textContent='⏳';
+  R('sales/chatImg/'+uid+'/'+mid).once('value').then(function(s){ var d=s.val();
+    if(typeof d==='string' && MK_IMG.test(d)){ var im=document.createElement('img'); im.src=d; im.className='chat-pic'; im.onclick=function(){ im.classList.toggle('big'); }; btn.replaceWith(im); }
+    else btn.textContent='ไม่มีรูป / no image'; }).catch(function(){ btn.textContent='Error'; });
 }
 // Damage claim (Pim 11.10.): photos at delivery, within 7 days, the partner passes it on → chat with the order number.
 function spClaim(oid){
@@ -1673,11 +1874,8 @@ function spClaim(oid){
   var t=$('chat-txt'); if(t){ t.value='แจ้งเคลม ออเดอร์ #'+oid+'\nสินค้าที่เสียหาย: \nจำนวน: \n(ส่งรูปตอนรับของทาง LINE ด้วย)'; t.focus(); }
 }
 function spChatSend(){
-  var e=$('chat-txt'), t=clean((e||{}).value||'').slice(0,2000); if(!t || !ME) return;
-  e.value='';
-  R('sales/chat/'+ME.uid).push({from:'partner', text:t, ts:firebase.database.ServerValue.TIMESTAMP}).then(function(){
-    notifyOffice('💬 '+((MEMBER&&MEMBER.brand)||'ตัวแทน')+' ถาม KP / partner question', t.slice(0,300));
-  }).catch(function(err){ toast('ส่งไม่สำเร็จ / failed: '+(err&&err.code||'')); if(e) e.value=t; });
+  if(!ME) return; var p=chatSendTo(ME.uid, 'partner'); if(!p) return;
+  p.then(function(m){ notifyOffice('💬 '+((MEMBER&&MEMBER.brand)||'ตัวแทน')+' ถาม KP / partner question', ((m.ctx?m.ctx+' — ':'')+(m.text===m.ctx?'':m.text)+(m.img?' 🖼':'')).slice(0,300)); }).catch(function(){});
 }
 
 /* Partner order number: <partner code>-<running no.>, e.g. NOK-0007. The code is set by KP in
@@ -2293,9 +2491,8 @@ function spOwnChat(uid){
   spOwnSeen(uid);
 }
 function spOwnChatSend(uid){
-  var e=$('chat-txt'), t=clean((e||{}).value||'').slice(0,2000); if(!t) return;
-  e.value='';
-  R('sales/chat/'+uid).push({from:'kp', text:t, ts:firebase.database.ServerValue.TIMESTAMP, by:'KP'}).then(function(){ spOwnSeen(uid); }).catch(function(err){ toast('Error: '+(err&&err.code||'')); if(e) e.value=t; });
+  var p=chatSendTo(uid, 'kp', 'KP'); if(!p) return;
+  p.then(function(){ spOwnSeen(uid); }).catch(function(){});
 }
 /* individual settings per partner (commission) — sales/memberRules/<uid>, partners can only read their own */
 function ruleLabel(rl){ return rl.mode==='perPanel' ? fmt(rl.perPanel)+' ฿/แผ่น' : (+rl.pct||0)+'%'; }
