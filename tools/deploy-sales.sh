@@ -6,4 +6,5 @@ cd "$(dirname "$0")/.."
 node tools/check-html.js sales.html fragebogen.html
 cp sales.html sales-site/index.html
 cp fragebogen.html sales-site/fragebogen.html
+cp sales-sw.js sales-site/sales-sw.js
 MSYS_NO_PATHCONV=1 firebase deploy --only hosting:kp-sales --project kp-wallpanel --non-interactive

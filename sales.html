@@ -550,6 +550,7 @@ body.qbar-on #chat-fab{ bottom:calc(92px + env(safe-area-inset-bottom)); }
         <label class="l">คำลงท้ายในข้อความถึงลูกค้า / polite ending in customer texts</label><select id="pf-polite"><option value="ka">ค่ะ (ผู้หญิง / female)</option><option value="krub">ครับ (ผู้ชาย / male)</option></select>
         <button class="btn gold w" style="margin-top:16px" onclick="spSaveProfile()"><i class="ti ti-device-floppy"></i> บันทึก / Save</button>
       </div>
+      <div style="margin-top:12px" id="pf-notif"></div>
       <div id="pf-contact" style="margin-top:12px"></div>
       <button class="btn line w" style="margin-top:12px" onclick="spLogout()"><i class="ti ti-logout"></i> ออกจากระบบ / Log out</button>
       <div style="text-align:center;font-size:11.5px;color:var(--text3);margin-top:14px" id="pf-email"></div>
@@ -575,6 +576,7 @@ body.qbar-on #chat-fab{ bottom:calc(92px + env(safe-area-inset-bottom)); }
   <div class="wrap">
     <div id="o-inbox">
       <div class="sec-h"><h2>ออเดอร์จากตัวแทน / Orders in</h2></div>
+      <div id="oi-notif"></div>
       <div class="chips" id="oi-chips"></div>
       <div id="oi-list"></div>
     </div>
@@ -1263,7 +1265,7 @@ function spTab(t){
   ['shop','quote','orders','kit','earn','me'].forEach(function(k){ $('t-'+k).classList.toggle('hide', k!==t); });
   document.querySelectorAll('#scr-app .top [data-t]').forEach(function(b){ b.classList.toggle('on', b.dataset.t===t); });
   if(t==='quote') spQView(_qView); else spQBar(); if(t==='orders') spRenderOrders(); if(t==='earn') spRenderEarn(); if(t==='kit') spRenderKit();
-  if(t==='me') $('pf-contact').innerHTML=contactHtml();
+  if(t==='me'){ $('pf-contact').innerHTML=contactHtml(); $('pf-notif').innerHTML=notifBtnHtml(); spNotifBtn(); }
   window.scrollTo(0,0);
 }
 
@@ -1683,6 +1685,32 @@ function spSlipOwnLine(r){
 /* Stock floor (André 11.10.): a panel with less than 100 in stock shows as sold out for
    partners — the rest is kept for KP's own customers. Owner can change the number. */
 function minStock(){ var n=parseInt(CONFIG.minStock,10); return n>=0 ? n : 100; }
+/* ── Alerts (André 11.10.): unread count in the browser tab title, a sound, and a system
+   notification while the page is open — also in a background tab (Android: in the status bar).
+   Real push with the app fully closed would need a server sending FCM — not built. ── */
+var BASE_TITLE=document.title, _swReg=null;
+try{ if('serviceWorker' in navigator && location.protocol==='https:') navigator.serviceWorker.register('sales-sw.js').then(function(rg){ _swReg=rg; }).catch(function(){}); }catch(e){}
+function spTitleCount(n){ document.title=(n>0?'('+n+') ':'')+(OWNER?'KP Sales · Owner':BASE_TITLE); }
+function spBeep(){
+  try{ var A=window.AudioContext||window.webkitAudioContext; if(!A) return; var c=spBeep.c||(spBeep.c=new A()); if(c.state==='suspended') c.resume();
+    [0,0.18].forEach(function(t0){ var o=c.createOscillator(), g=c.createGain(); o.type='sine'; o.frequency.value=t0?1175:880;
+      g.gain.setValueAtTime(0.0001,c.currentTime+t0); g.gain.exponentialRampToValueAtTime(0.22,c.currentTime+t0+0.02); g.gain.exponentialRampToValueAtTime(0.0001,c.currentTime+t0+0.3);
+      o.connect(g); g.connect(c.destination); o.start(c.currentTime+t0); o.stop(c.currentTime+t0+0.32); }); }catch(e){}
+}
+function spAlert(title, body, tag){
+  spBeep();
+  if(!document.hidden || !('Notification' in window) || Notification.permission!=='granted') return;
+  var opt={body:String(body||'').slice(0,200), tag:tag||'kp-sales', renotify:true, icon:KP_BASE+'pos-icon-192.png', badge:KP_BASE+'pos-icon-192.png'};
+  if(_swReg && _swReg.showNotification) _swReg.showNotification(title, opt).catch(function(){}); else { try{ new Notification(title, opt); }catch(e){} }
+}
+function spNotifAsk(){
+  if(!('Notification' in window)){ toast('เครื่องนี้ไม่รองรับ (iPhone: เพิ่มลงหน้าจอโฮมก่อน) / not supported here', 4500); return; }
+  spBeep();   // unlocks sound on phones (needs a tap)
+  Notification.requestPermission().then(function(p){ toast(p==='granted'?'เปิดการแจ้งเตือนแล้ว ✓ / notifications on':'ไม่ได้อนุญาต — เปิดในตั้งค่าเบราว์เซอร์ / not allowed', 4000); spNotifBtn(); });
+}
+function spNotifBtn(){ var on=('Notification' in window) && Notification.permission==='granted'; document.querySelectorAll('.notif-btn').forEach(function(b){ b.classList.toggle('hide', on); }); }
+function notifBtnHtml(){ return '<button class="btn line w notif-btn" style="margin-bottom:12px" onclick="spNotifAsk()"><i class="ti ti-bell-ringing"></i> เปิดแจ้งเตือนบนเครื่องนี้<span class="en">turn on notifications on this device</span></button>'; }
+
 /* ── individual commission + chat with KP (partner side) ── */
 var _chatLastKp=0, _chatLoaded=false; window._chatOn=false;
 function spAttachChat(){
@@ -1696,7 +1724,9 @@ function spAttachChat(){
   R('sales/chat/'+ME.uid).limitToLast(200).on('value', function(s){
     CHAT=s.val()||{};
     var lastKp=Object.keys(CHAT).map(function(k){ return CHAT[k]; }).filter(function(m){ return m && m.from==='kp'; }).reduce(function(a,m){ return Math.max(a, +m.ts||0); },0);
-    if(_chatLoaded && lastKp>_chatLastKp && _chatOpen!=='me') toast('💬 ข้อความใหม่จาก KP / new message from KP', 4000);
+    if(_chatLoaded && lastKp>_chatLastKp){ var lm=chatList(CHAT).filter(function(m){ return m.from==='kp'; }).pop()||{};
+      if(_chatOpen!=='me') toast('💬 ข้อความใหม่จาก KP / new message from KP', 4000);
+      spAlert('💬 KP Wallpanel', lm.text||'', 'chat'); }
     _chatLastKp=lastKp; _chatLoaded=true;
     if(_chatOpen==='me'){ spChatRender('me'); R('sales/chatSeen/'+ME.uid+'/partner').set(firebase.database.ServerValue.TIMESTAMP).catch(function(){}); }
     spChatBadge();
@@ -1707,6 +1737,7 @@ function chatTime(ts){ var d=new Date(ts||0); return d.toLocaleString('th-TH',{d
 function spChatBadge(){
   var seen=+(CHATSEEN_ME||{}).partner||0, n=chatList(CHAT).filter(function(m){ return m.from==='kp' && (m.ts||0)>seen; }).length, b=$('nb-chat-p');
   if(b){ b.textContent=n; b.classList.toggle('hide', !n); }
+  if(!OWNER) spTitleCount(n);
 }
 // who = 'me' (partner view) or a partner uid (owner view)
 function spChatRender(who){
@@ -1726,6 +1757,7 @@ function chatSheet(title, who, sendFn){
     +'<div class="chat-in"><textarea id="chat-txt" maxlength="2000" placeholder="พิมพ์ข้อความ… / type a message…" onpaste="spChatPaste(event)" onkeydown="if(event.key===\'Enter\'&&(event.ctrlKey||event.metaKey)){ '+sendFn+'; event.preventDefault(); }"></textarea>'
     +'<button class="btn gold" onclick="'+sendFn+'"><i class="ti ti-send"></i></button></div>');
   _chatOpen=who; spChatRender(who); spChatAttShow();
+  if(('Notification' in window) && Notification.permission==='default') $('sh-b').insertAdjacentHTML('afterbegin', '<button class="btn line sm w notif-btn" style="margin-bottom:8px" onclick="spNotifAsk()"><i class="ti ti-bell"></i> รับแจ้งเตือนเมื่อมีข้อความใหม่ / get notified of new messages</button>');
 }
 function spChatOpen(){
   if(!ME) return;
@@ -1947,7 +1979,8 @@ function spWatchOrder(id){
     // a customer just paid → tell the partner right away (commission now counts)
     var was=ORDERS.hasOwnProperty(id) ? isPaid(ORDERS[id]) : null, v=s.val();
     if(was===false && v && v.status==='delivered' && isPaid(v) && !OWNER){ var rq=null; Object.keys(MYREQ).some(function(k){ if(MYREQ[k]&&MYREQ[k].orderId===id){ rq=MYREQ[k]; return true; } return false; });
-      ORDERS[id]=v; toast('💚 ลูกค้าชำระแล้ว #'+id+(rq?' · ค่าคอม +'+fmt(commOf(rq))+' ฿':'')+' / customer paid', 6000); }
+      ORDERS[id]=v; toast('💚 ลูกค้าชำระแล้ว #'+id+(rq?' · ค่าคอม +'+fmt(commOf(rq))+' ฿':'')+' / customer paid', 6000);
+      spAlert('💚 ลูกค้าชำระแล้ว / customer paid', '#'+id+(rq?' · ค่าคอม +'+fmt(commOf(rq))+' ฿':''), 'paid-'+id); }
     ORDERS[id]=v; spRenderOrders(); spRenderEarn(); try{ spRenderInbox(); spRenderOwnStats(); }catch(e){} });
 }
 function orderTotal(o){ return parseFloat(String((o&&o.total)||0).replace(/[^0-9.]/g,''))||0; }
@@ -2452,27 +2485,45 @@ function spOwnerOut(){ try{ localStorage.removeItem('kpsp-owner'); }catch(e){} O
 var _ownOn=false;
 function spOwnerStart(){
   OWNER=true;
+  try{ $('oi-notif').innerHTML=notifBtnHtml(); spNotifBtn(); }catch(e){}
   var start=function(){
     spShow('own'); spAttachData();
     if(_ownOn) return; _ownOn=true;
     R('sales/members').on('value', function(s){ MEMBERS=s.val()||{}; spRenderTeam(); spRenderInbox(); spRenderOwnStats(); try{ spRenderChats(); }catch(e){} });
     R('sales/memberNotes').on('value', function(s){ MEMBER_NOTES=s.val()||{}; }, function(){});
-    R('sales/slips').on('value', function(s){ SLIPS=s.val()||{}; spRenderInbox(); }, function(){});
+    R('sales/slips').on('value', function(s){ SLIPS=s.val()||{};
+      var pend=[]; Object.keys(SLIPS).forEach(function(u){ Object.keys(SLIPS[u]||{}).forEach(function(k){ if((SLIPS[u][k]||{}).status==='pending') pend.push(u+'/'+k); }); });
+      var seen=spOwnerStart._slips; if(seen && pend.some(function(k){ return !seen[k]; })) spAlert('💳 สลิปใหม่รอตรวจ / new slip to check', ((MEMBERS[pend[0].split('/')[0]]||{}).brand||''), 'slip');
+      spOwnerStart._slips={}; pend.forEach(function(k){ spOwnerStart._slips[k]=1; });
+      spRenderInbox(); }, function(){});
     R('sales/requests').on('value', function(s){
       var v=s.val()||{}; ALLREQ={};
       // Keys end up in onclick/href — partners choose rid, so only plain push-style keys are accepted.
       Object.keys(v).forEach(function(uid){ var g=v[uid]||{}; Object.keys(g).forEach(function(rid){ var r=g[rid]; if(r && typeof r==='object' && r.uid && /^[-_A-Za-z0-9]{1,40}$/.test(rid) && /^[A-Za-z0-9_]{1,128}$/.test(uid)) ALLREQ[uid+'/'+rid]=r; }); });
       Object.keys(ALLREQ).forEach(function(k){ var r=ALLREQ[k]; if(r && r.orderId) spWatchOrder(r.orderId); });
+      var pendKeys=Object.keys(ALLREQ).filter(function(k){ return ALLREQ[k].status==='pending'; }), seenP=spOwnerStart._pend;
+      if(seenP){ var fresh=pendKeys.filter(function(k){ return !seenP[k]; }); if(fresh.length){ var fr=ALLREQ[fresh[0]]; spAlert('🤝 ออเดอร์ใหม่จากตัวแทน / new partner order', (fr.salesNo?fr.salesNo+' · ':'')+(fr.brand||'')+' · '+((fr.customer||{}).name||'')+' · '+fmt((fr.totals||{}).total)+' ฿', 'req'); } }
+      spOwnerStart._pend={}; pendKeys.forEach(function(k){ spOwnerStart._pend[k]=1; });
       spRenderInbox(); spRenderOwnStats(); spRenderTeam(); });
     R('sales/payouts').on('value', function(s){ PAYOUTS=s.val()||{}; spRenderOwnStats(); });
     R('sales/memberRules').on('value', function(s){ MEMBER_RULES=s.val()||{}; spRenderTeam(); spRenderOwnStats(); });
     R('sales/chatSeen').on('value', function(s){ CHATSEEN=s.val()||{}; spRenderChats(); });
     R('sales/chat').on('value', function(s){
       var v=s.val()||{}; CHATS={}; Object.keys(v).forEach(function(uid){ if(/^[A-Za-z0-9_]{1,128}$/.test(uid)) CHATS[uid]=v[uid]; });
+      var lastP=null; Object.keys(CHATS).forEach(function(u){ chatList(CHATS[u]).forEach(function(m){ if(m.from==='partner' && (!lastP || (m.ts||0)>(lastP.ts||0))){ lastP=m; lastP._u=u; } }); });
+      if(lastP && spOwnerStart._lastP!=null && (lastP.ts||0)>spOwnerStart._lastP) spAlert('💬 '+((MEMBERS[lastP._u]||{}).brand||'ตัวแทน'), (lastP.ctx?lastP.ctx+' — ':'')+(lastP.text||''), 'chat-'+lastP._u);
+      spOwnerStart._lastP=lastP?(lastP.ts||0):0;
       spRenderChats(); if(_chatOpen && _chatOpen!=='me'){ spChatRender(_chatOpen); spOwnSeen(_chatOpen); }
     });
   };
   spOwnerAuth().then(start).catch(function(){ spShow('auth'); });
+}
+function spOwnTitle(){
+  if(!OWNER) return;
+  var n=0; Object.keys(CHATS).forEach(function(u){ if(chatUnread(u)>0) n++; });
+  Object.keys(ALLREQ).forEach(function(k){ var r=ALLREQ[k]; if(r.status==='pending'||r.status==='processing') n++; });
+  Object.keys(SLIPS).forEach(function(u){ Object.keys(SLIPS[u]||{}).forEach(function(k){ if((SLIPS[u][k]||{}).status==='pending') n++; }); });
+  spTitleCount(n);
 }
 function spOwnTab(t){
   ['inbox','team','stats','chat','set'].forEach(function(k){ $('o-'+k).classList.toggle('hide', k!==t); });
@@ -2484,7 +2535,7 @@ function spRenderInbox(){
   if(!$('oi-list')) return;
   var arr=Object.keys(ALLREQ).map(function(k){ var r=ALLREQ[k]; r._k=k; r._st=reqStage(r); return r; }).sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
   var pend=arr.filter(function(r){ return r.status==='pending'||r.status==='processing'; }).length;
-  var nb=$('nb-in'); nb.textContent=pend; nb.classList.toggle('hide', !pend);
+  var nb=$('nb-in'); nb.textContent=pend; nb.classList.toggle('hide', !pend); spOwnTitle();
   var slp=arr.filter(function(r){ var sl=slipOf(r.uid, ridOf(r._k)); return sl && sl.status==='pending'; }).length;
   var F=[['pending','รอยืนยัน ('+pend+') / to confirm'],['slip','💳 สลิปรอตรวจ ('+slp+') / slips'],['approved','อนุมัติแล้ว / approved'],['rejected','ไม่อนุมัติ / rejected'],['all','ทั้งหมด / all']];
   $('oi-chips').innerHTML=F.map(function(f){ return '<button class="chip'+(_oiFilter===f[0]?' on':'')+'" onclick="_oiFilter=\''+f[0]+'\';spRenderInbox()">'+f[1]+'</button>'; }).join('');
@@ -2543,6 +2594,7 @@ function spRenderChats(){
   var uids=Object.keys(CHATS).filter(function(u){ return chatList(CHATS[u]).length; });
   var unreadThreads=uids.filter(function(u){ return chatUnread(u)>0; }).length, nb=$('nb-chat');
   if(nb){ nb.textContent=unreadThreads; nb.classList.toggle('hide', !unreadThreads); }
+  spOwnTitle();
   if(!uids.length){ $('oc-list').innerHTML='<div class="empty"><i class="ti ti-messages"></i>ยังไม่มีแชท / no chats yet</div>'; return; }
   uids.sort(function(a,b){ var la=chatList(CHATS[a]).pop()||{}, lb=chatList(CHATS[b]).pop()||{}; return (lb.ts||0)-(la.ts||0); });
   $('oc-list').innerHTML=uids.map(function(u){
