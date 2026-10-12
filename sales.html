@@ -1370,6 +1370,9 @@ function spCalcBox(p, withExtras){
     +'<div style="font-size:12px;color:var(--text2);margin-top:6px">ขนาดผนัง (เมตร) · เผื่อเศษ +10% และ +2 แผ่นแล้ว / wall size in metres · +10% waste and +2 spare included</div>'
     +'<div class="row" style="margin-top:8px"><div style="flex:1"><label class="l" style="margin-top:0">กว้าง / width (m)</label><input id="cw" type="text" inputmode="decimal" placeholder="4.0" oninput="spCalcRun(\''+esc(p.code)+'\')"></div>'
     +'<div style="flex:1"><label class="l" style="margin-top:0">สูง / height (m)</label><input id="ch" type="text" inputmode="decimal" placeholder="2.8" oninput="spCalcRun(\''+esc(p.code)+'\')"></div></div>'
+    // or the area straight away (customers often only know the m²) — André 12.10.
+    +'<div class="row" style="margin-top:6px;align-items:flex-end"><div style="flex:0 0 auto;padding-bottom:12px;font-size:13px;color:var(--text3)">หรือ / or</div>'
+    +'<div style="flex:1"><label class="l" style="margin-top:0">พื้นที่ ตร.ม. / area (m²)</label><input id="cq" type="text" inputmode="decimal" placeholder="11.2" oninput="spCalcRun(\''+esc(p.code)+'\',\'sqm\')"></div></div>'
     +'<div id="calc-res" style="font-size:13.5px;margin-top:8px;color:var(--text2)"></div></details>'
     +(withExtras===false ? '' : spExtrasBox(p));
 }
@@ -1387,13 +1390,17 @@ function spExtrasBox(p){
 }
 function panelW(p){ if(+p.w>0) return +p.w; var sub=(PROFILES[p.profile]||{}).sub||''; var m=String(sub).match(/^([\d.]+)/); return m?parseFloat(m[1]):16.5; }
 function numIn(id){ return parseFloat(String(($(id)||{}).value||'').replace(',','.'))||0; }
-function spCalcRun(code){
-  var p=prodOf(code), w=numIn('cw'), h=numIn('ch');
-  if(!(w>0&&h>0)){ $('calc-res').textContent=''; document.querySelectorAll('#sh-b .tq').forEach(function(e){ e.value=0; }); return; }
-  if(w>50||h>20){ $('calc-res').textContent='ตรวจขนาดอีกครั้ง (เมตร) / check the size (metres)'; return; }
-  var area=w*h, n=Math.round(Math.round(area/sqmPerPanel(panelW(p)))*1.1)+2;
+function spCalcRun(code, src){
+  var p=prodOf(code);
+  // typing m² clears width/height and the other way round — one source at a time
+  if(src==='sqm'){ if($('cw')) $('cw').value=''; if($('ch')) $('ch').value=''; } else if($('cq') && (numIn('cw')||numIn('ch'))) $('cq').value='';
+  var w=numIn('cw'), h=numIn('ch'), sq=numIn('cq');
+  if(!(w>0&&h>0) && !(sq>0)){ $('calc-res').textContent=''; document.querySelectorAll('#sh-b .tq').forEach(function(e){ e.value=0; }); return; }
+  if(w>50||h>20||sq>1000){ $('calc-res').textContent='ตรวจขนาดอีกครั้ง / check the size'; return; }
+  var area=(w>0&&h>0)?w*h:sq, n=Math.round(Math.round(area/sqmPerPanel(panelW(p)))*1.1)+2;
   var pq=$('pq'); if(pq) pq.value=n;
   $('calc-res').innerHTML='พื้นที่ <b>'+area.toFixed(2)+' ตร.ม.</b> → <b style="color:var(--gold3);font-size:16px">'+n+' แผ่น</b> · '+fmt(n*(+p.price||0))+' ฿<span class="en b">area '+area.toFixed(2)+' m² → '+n+' panels</span>';
+  if(!(w>0&&h>0)) return;   // from m² alone the wall's outline is unknown → no trim suggestion
   trimsFor(p).forEach(function(t){
     var e=$('tq-'+t.p.code);
     if(t.kind==='L'){ var sug=Math.ceil(2*(w+h)/2.9);
