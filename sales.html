@@ -1182,10 +1182,18 @@ function spRegister(){
   var em=$('rg-email').value.trim(), pw=$('rg-pw').value;
   if(!d.name||!d.brand||!d.phone||!em||!pw){ spMsg('กรอกช่องที่มี * ให้ครบ / please fill all * fields'); return; }
   $('rg-btn').disabled=true; spMsg('⏳');
-  AUTH.createUserWithEmailAndPassword(em,pw).then(function(cred){
-    d.email=em; d.uid=cred.user.uid; d.status='pending'; d.createdAt=Date.now();
-    return R('sales/members/'+cred.user.uid).set(d);
-  }).then(function(){ spMsg(''); notifyOffice('🤝 ตัวแทนใหม่สมัคร / new sales partner: '+d.brand, d.name+' · '+d.phone+' — อนุมัติใน sales.html'); }).catch(function(e){ spMsg(spErr(e)); }).finally(function(){ $('rg-btn').disabled=false; });
+  window._spRegistering=true;
+  var mkProfile=function(cred){ d.email=em; d.uid=cred.user.uid; d.status='pending'; d.createdAt=Date.now(); return R('sales/members/'+cred.user.uid).set(d); };
+  AUTH.createUserWithEmailAndPassword(em,pw).then(mkProfile, function(e){
+    if(!/email-already-in-use/.test(String(e&&e.code))) throw e;
+    // login exists (e.g. deleted by KP to start over): same password → fresh profile, else say "log in"
+    return AUTH.signInWithEmailAndPassword(em,pw).then(function(cred){
+      return R('sales/members/'+cred.user.uid).once('value').then(function(sn){
+        if(sn.exists()){ var ex=new Error('exists'); ex.code='sp/account-exists'; throw ex; }
+        return mkProfile(cred); });
+    }, function(){ var ex=new Error('in use'); ex.code='auth/email-already-in-use'; throw ex; });
+  }).then(function(){ window._spRegistering=false; spMsg(''); notifyOffice('🤝 ตัวแทนใหม่สมัคร / new sales partner: '+d.brand, d.name+' · '+d.phone+' — อนุมัติใน sales.html'); }).catch(function(e){ window._spRegistering=false;
+    spMsg(e&&e.code==='sp/account-exists' ? 'มีบัญชีนี้แล้ว กรุณาเข้าสู่ระบบ / this account exists — please log in' : (e&&e.code==='auth/email-already-in-use' ? 'อีเมลนี้มีบัญชีแล้ว — เข้าสู่ระบบ หรือกด ลืมรหัสผ่าน / e-mail already registered — log in or reset the password' : spErr(e))); }).finally(function(){ $('rg-btn').disabled=false; });
 }
 function spForgot(){
   var em=$('li-email').value.trim();
@@ -1253,6 +1261,7 @@ function stockOf(code){
 function spMemberStart(){
   R('sales/members/'+ME.uid).on('value', function(s){
     MEMBER=s.val();
+    if(!MEMBER && window._spRegistering) return;   // the registration is writing the full profile right now
     if(!MEMBER){ // signed up but the profile write failed — write a minimal one
       R('sales/members/'+ME.uid).set({uid:ME.uid, email:ME.email||'', name:(ME.email||'').split('@')[0], brand:'', status:'pending', createdAt:Date.now()});
       return;
@@ -2615,6 +2624,7 @@ function spRenderTeam(){
         +'<button class="btn line sm" onclick="spOwnChat(\''+m._k+'\')"><i class="ti ti-messages"></i> แชท / chat</button>'
         +(m.status!=='active'?'<button class="btn green sm" onclick="spMemberSet(\''+m._k+'\',\'active\')"><i class="ti ti-check"></i> อนุมัติ / approve</button>':'')
         +(m.status!=='blocked'?'<button class="btn red sm" onclick="spMemberSet(\''+m._k+'\',\'blocked\')">ระงับ / block</button>':'')
+        +'<button class="btn line sm" title="delete" onclick="spMemberDel(\''+m._k+'\')"><i class="ti ti-trash"></i> ลบ / delete</button>'
       +'</div></div>';
   }).join('');
 }
@@ -2679,6 +2689,15 @@ function spMemberRuleSave(k){
   var note=clean($('mr-note').value).slice(0,200);
   Promise.all([p, note ? R('sales/memberNotes/'+k).set({note:note, ts:Date.now()}) : R('sales/memberNotes/'+k).remove()])
     .then(function(){ toast('บันทึกแล้ว ✓ / saved'); spSheetClose(); }).catch(function(e){ toast('Error: '+(e&&e.code||'')); });
+}
+function spMemberDel(k){
+  if(!/^[A-Za-z0-9_]{1,128}$/.test(k)) return;
+  var m=MEMBERS[k]||{}, own=Object.keys(ALLREQ).filter(function(x){ return ALLREQ[x] && ALLREQ[x].uid===k; }),
+      done=own.filter(function(x){ return ALLREQ[x].status==='approved'; }).length;
+  if(done){ alert('ตัวแทนนี้มีออเดอร์ที่ยืนยันแล้ว '+done+' รายการ — ลบไม่ได้ (ประวัติค่าคอมต้องอยู่) ใช้ "ระงับ" แทน\nThis partner has '+done+' confirmed orders — cannot delete (commission history). Use "block" instead.'); return; }
+  if(!confirm('ลบตัวแทน "'+(m.brand||m.name||k)+'" ?\nโปรไฟล์ ค่าคอม ใบเสนอราคา และคำขอที่ยังไม่ยืนยันจะถูกลบ — สมัครใหม่ด้วยอีเมลเดิมได้\n\nDelete this partner? Profile, quotes and unconfirmed requests go; they can register again with the same e-mail.')) return;
+  var up={}; ['members','memberRules','memberNotes','pushTokens','quotes','slips','slipImg','requests','payouts'].forEach(function(n){ up['sales/'+n+'/'+k]=null; });
+  R('').update(up).then(function(){ toast('ลบแล้ว / deleted'); }).catch(function(e){ toast('Error: '+(e&&e.code||e)); });
 }
 function spMemberSet(k, st){
   if(st==='blocked' && !confirm('ระงับตัวแทนนี้? / block this partner?')) return;
