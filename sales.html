@@ -377,6 +377,7 @@ body.qbar-on #chat-fab{ bottom:calc(92px + env(safe-area-inset-bottom)); }
 .rp-reply{ margin-top:8px; padding:8px 10px; background:var(--green-bg); border-radius:10px; font-size:13.5px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .rp-els{ font-size:12.5px; color:var(--text2); margin-top:6px; line-height:1.55; overflow-wrap:anywhere; }
 .rp-imgs img{ max-width:100%; border-radius:10px; border:1px solid var(--border); margin-top:6px; display:block; cursor:zoom-in; }
+.rp-wait{ font-size:13px; color:var(--amber); background:var(--amber-bg); border-radius:10px; padding:8px 10px; margin-top:8px; line-height:1.5; }
 .rp-dot{ background:#dc2626; color:#fff; border-radius:9px; padding:0 6px; font-size:11px; margin-left:4px; }
 .rp-acts{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
 .rp-done{ text-align:center; padding:10px 4px; font-size:15px; line-height:1.7; }
@@ -2095,7 +2096,8 @@ function spRpOpen(view){
 }
 function rpFormHtml(){
   var c=_rp;
-  return '<div class="rp-intro"><b>ใช้ปุ่มนี้เมื่อแอปมีปัญหา</b> — เรื่องจะส่งตรงถึง<b>ผู้ดูแลระบบ (คนทำแอป)</b> เพื่อแก้ไขให้'
+  return (_rpRetry ? '<div class="rp-wait" style="margin:0 0 10px">⚠️ รูปของเรื่องที่แล้วยังส่งไม่ได้ <button type="button" class="btn gold sm" onclick="rpRetrySheet()"><i class="ti ti-photo-up"></i> ส่งรูปอีกครั้ง</button></div>' : '')
+    +'<div class="rp-intro"><b>ใช้ปุ่มนี้เมื่อแอปมีปัญหา</b> — เรื่องจะส่งตรงถึง<b>ผู้ดูแลระบบ (คนทำแอป)</b> เพื่อแก้ไขให้'
     +'<ul><li>กดแล้วไม่ทำงาน · หน้าค้าง · ตัวเลขดูผิด</li><li>กดผิดหรือลบผิด แล้วแก้เองไม่ได้</li><li>อยากให้เพิ่มหรือเปลี่ยนอะไรในแอป ให้ใช้ง่ายขึ้น</li></ul>'
     +'<div class="rp-chatnote"><span>❓ ถามเรื่อง<b>สินค้า ราคา ออเดอร์ลูกค้า</b> → ใช้แชทกับทีม KP แทน</span><button type="button" class="btn line sm" onclick="spChatOpen()"><i class="ti ti-message-circle-2"></i> เปิดแชท</button></div></div>'
     +'<div class="rp-step"><span class="rp-n">1</span>เรื่องอะไร?<small>(แตะเลือก 1 ข้อ)</small></div>'
@@ -2110,15 +2112,40 @@ function rpFormHtml(){
     +(canShot()?'<button type="button" class="rp-tool" onclick="rpSave();spShotTab()"><span class="rp-ic">🖥</span><span><b>จับภาพหน้าจอ (คอมพิวเตอร์)</b><small>เลือกส่วนของหน้าจอ แล้ววาดเพิ่มได้</small></span></button>':'')
     +'</div><div id="rp-att"></div>'
     +'<div class="rp-tip">แนบได้สูงสุด 3 อย่าง · แอปจะส่ง<b>ชื่อหน้าที่เปิดอยู่</b>และ<b>รุ่นมือถือ</b>ไปให้เอง ไม่ต้องพิมพ์</div>'
-    +'<button type="button" class="btn gold w rp-send" onclick="spRpSend()"><i class="ti ti-send"></i> ส่งเรื่องนี้ / send</button>';
+    +'<button type="button" class="btn gold w rp-send"'+(c.sending?' disabled':'')+' onclick="spRpSend()">'+(c.sending?'⏳ กำลังส่ง… / sending…':'<i class="ti ti-send"></i> ส่งเรื่องนี้ / send')+'</button>';
 }
 function rpAttShow(){
   var el=$('rp-att'); if(!el) return;
   el.innerHTML=_rp.att.map(function(a,i){ return '<div class="chat-attp">'+(a.img?'<img src="'+a.img+'">':(a.busy?'<span class="mk-busy">⏳</span>':''))
     +'<div style="flex:1;min-width:0;font-size:12.5px">'+esc(a.ctx||'📷')+'</div><button type="button" class="btn line sm" onclick="_rp.att.splice('+i+',1);rpAttShow()">✕</button></div>'; }).join('');
 }
+// Firebase never fails a write on a dead or slow connection: it waits and resends after reconnecting.
+// So no timeouts / own re-sends here — tell the partner what is happening, keep the page from being closed
+// (queued writes die with the page), and keep his screen ours until the pictures are through.
+var RP_IMG_WIN=24*3600000;   // pictures are accepted up to 24 h after the report (same number in the DB rule)
+var _spOnline=true, _rpOff=0, _rpBusy=0, _rpRetry=null;
+try{ DBR.ref('.info/connected').on('value', function(s){ _spOnline=!!s.val(); });          // DBR, not R(): .info is not under the season
+     DBR.ref('.info/serverTimeOffset').on('value', function(s){ _rpOff=+s.val()||0; }); }catch(e){}
+window.addEventListener('beforeunload', function(e){ if(_rpBusy){ e.preventDefault(); e.returnValue=''; } });
+function rpWait(p, btn, label){
+  _rpBusy++;
+  var t=setInterval(function(){ if(btn && btn.isConnected) btn.textContent=(_spOnline
+      ? '⏳ เน็ตช้า กำลังส่งต่อเอง — อย่าปิดหน้านี้ / slow internet, still sending — keep this screen open'
+      : '📵 ไม่มีสัญญาณ จะส่งต่อเองเมื่อมีเน็ต — อย่าปิดหน้านี้ / offline, sends when back online — keep this screen open')+(label?' · '+label:''); }, 12000);
+  return p.then(function(v){ clearInterval(t); _rpBusy--; return v; }, function(e){ clearInterval(t); _rpBusy--; throw e; });
+}
+// A write the server stored but whose confirmation got lost is resent on reconnect and then refused
+// (the record exists already) — read it back before calling that a failure.
+function rpSetOnce(ref, val){
+  return ref.set(val).catch(function(e){
+    if(!(e && /permission/i.test(e.code||e.message||''))) throw e;
+    return ref.once('value').then(function(s){ if(!s.exists()) throw e; }, function(){ throw e; });
+  });
+}
 function spRpSend(){
-  rpSave(); var t=clean(_rp.text||'').slice(0,3000);
+  rpSave();
+  if(_rp.sending){ toast('⏳ กำลังส่ง… / sending…'); return; }
+  var t=clean(_rp.text||'').slice(0,3000);
   if(!_rp.cat){ toast('กรุณาเลือกข้อ 1 ว่าเป็นเรื่องอะไร / pick what kind of problem first', 3800); return; }
   if(!t && !_rp.att.length){ toast('เล่าสั้น ๆ ในข้อ 2 หรือแนบรูปในข้อ 3 / write a few words or attach a picture', 4200); return; }
   if(_rp.att.some(function(a){ return a.busy; })){ toast('⏳ กำลังทำรูป รอสักครู่ / preparing the picture…'); return; }
@@ -2127,16 +2154,68 @@ function spRpSend(){
   var ref=R('sales/reports/'+ME.uid).push();
   var rec={cat:_rp.cat, text:t, imgs:imgs.length, tab:String(mkTabName()||'').slice(0,60), dev:rpDev(), status:'new', ts:firebase.database.ServerValue.TIMESTAMP};
   if(els.length) rec.els=els;
+  var job=_rp; job.sending=true;   // no second send while this one is on its way (the form can be re-drawn meanwhile)
+  var list=imgs.map(function(a,i){ return {i:i, img:a.img}; });
   var btn=document.querySelector('.rp-send'); if(btn){ btn.disabled=true; btn.textContent='⏳ กำลังส่ง… / sending…'; }
-  // report first (the DB rule only accepts pictures for an existing, new report), then its pictures
-  ref.set(rec)
-    .then(function(){ return Promise.all(imgs.map(function(a,i){ return R('sales/reportImg/'+ME.uid+'/'+ref.key+'/'+i).set(a.img); })); })
+  // report first (the DB rule only accepts pictures for an existing report), then its pictures
+  rpWait(rpSetOnce(ref, rec), btn, '')
     .then(function(){
-      _rp={cat:'', text:'', att:[], view:'mine'};
-      spSheet('<i class="ti ti-circle-check"></i> ส่งแล้ว / sent', '<div class="rp-done"><div class="big">✅</div><b>'+esc(pol('ส่งถึงผู้ดูแลระบบแล้ว ขอบคุณค่ะ'))+'</b><br>เมื่อตอบกลับหรือแก้เสร็จ จะมีแจ้งเตือน<br>และดูได้ที่ “เรื่องที่แจ้งไว้”</div>'
-        +'<button class="btn dark w" onclick="spRpOpen(\'mine\')"><i class="ti ti-clipboard-list"></i> ดูเรื่องที่แจ้งไว้ / my reports</button><button class="btn line w" style="margin-top:8px" onclick="spSheetClose()">ปิด / close</button>');
+      if(_rp===job) _rp={cat:'', text:'', att:[], view:'mine'};
+      if(!list.length) return [];
+      // its own progress sheet: the reports listener can't swap it for the list mid-upload (spSheet clears _rpOpen)
+      spSheet('<i class="ti ti-photo-up"></i> กำลังส่งรูป / sending pictures', '<div class="rp-done"><div class="big">⏳</div><b>ข้อความส่งแล้ว — กำลังส่งรูป</b><br>กรุณาอย่าปิดหน้านี้ จนกว่าจะขึ้น ✅</div>'
+        +'<button class="btn gold w" id="rp-prog" disabled>⏳</button>');
+      btn=$('rp-prog');
+      return rpUploadImgs(ref.key, list, btn);
     })
-    .catch(function(e){ toast('ส่งไม่สำเร็จ ลองใหม่อีกครั้ง / failed: '+((e&&e.code)||e), 5000); if(btn){ btn.disabled=false; btn.innerHTML='<i class="ti ti-send"></i> ส่งเรื่องนี้ / send'; } });
+    .then(function(failed){ if(failed.length) _rpRetry={key:ref.key, imgs:failed}; rpShowResult(failed, btn); })
+    .catch(function(e){ job.sending=false; toast('ส่งไม่สำเร็จ ลองใหม่อีกครั้ง / failed: '+((e&&e.code)||e), 5000);
+      var b=document.querySelector('.rp-send'); if(b){ b.disabled=false; b.innerHTML='<i class="ti ti-send"></i> ส่งเรื่องนี้ / send'; } });
+}
+// pictures one by one; a real error (not a slow line) is tried up to 3 times → the ones that still failed
+function rpUploadImgs(key, list, btn){
+  var failed=[], n=list.length;
+  var one=function(it, k){
+    var label=(k+1)+'/'+n;
+    if(btn) btn.textContent='⏳ กำลังส่งรูป '+label+'… / sending picture…';
+    var tryIt=function(left){
+      return rpWait(rpSetOnce(R('sales/reportImg/'+ME.uid+'/'+key+'/'+it.i), it.img), btn, label).catch(function(e){
+        if(e && /permission/i.test(e.code||e.message||'')){ it.denied=true; throw e; }   // a rule refusal won't change by retrying
+        if(left<=0) throw e;
+        return new Promise(function(r){ setTimeout(r, left===2?1500:4000); }).then(function(){ return tryIt(left-1); });
+      });
+    };
+    return tryIt(2).catch(function(){ failed.push(it); });
+  };
+  return list.reduce(function(p, it, k){ return p.then(function(){ return one(it, k); }); }, Promise.resolve()).then(function(){ return failed; });
+}
+// the result takes the screen only if the screen is still ours — never over a chat / order sheet the partner opened meanwhile
+function rpShowResult(failed, own){
+  var ours=!$('ov').classList.contains('on') || !!(own && own.isConnected) || (_rpOpen && _rp.view==='mine');
+  if(ours){ if(failed.length) rpRetrySheet(); else rpSentSheet(); }
+  else toast(failed.length ? '⚠️ รูปยังส่งไม่ได้ — กด “แจ้งปัญหา” เพื่อส่งอีกครั้ง / picture not sent — open “report” to try again' : '✅ ส่งเรื่องแล้ว / report sent', 6000);
+}
+function rpSentSheet(){
+  spSheet('<i class="ti ti-circle-check"></i> ส่งแล้ว / sent', '<div class="rp-done"><div class="big">✅</div><b>'+esc(pol('ส่งถึงผู้ดูแลระบบแล้ว ขอบคุณค่ะ'))+'</b><br>เมื่อตอบกลับหรือแก้เสร็จ จะมีแจ้งเตือน<br>และดูได้ที่ “เรื่องที่แจ้งไว้”</div>'
+    +'<button class="btn dark w" onclick="spRpOpen(\'mine\')"><i class="ti ti-clipboard-list"></i> ดูเรื่องที่แจ้งไว้ / my reports</button><button class="btn line w" style="margin-top:8px" onclick="spSheetClose()">ปิด / close</button>');
+}
+function rpRetrySheet(){
+  var late=_rpRetry && _rpRetry.imgs.some(function(it){ return it.denied; });
+  spSheet('<i class="ti ti-alert-triangle"></i> รูปยังส่งไม่ได้ / picture not sent', '<div class="rp-done"><div class="big">⚠️</div><b>ข้อความส่งถึงผู้ดูแลแล้ว แต่รูปยังส่งไม่ได้</b><br>'
+    +(late ? 'เกินเวลาส่งรูปของเรื่องนี้แล้ว — กรุณาแจ้งเรื่องใหม่พร้อมรูปอีกครั้ง'
+           : 'สัญญาณอินเทอร์เน็ตอาจไม่ดี — ลองต่อ Wi-Fi หรือไปที่สัญญาณดีกว่า แล้วกดปุ่มด้านล่าง')+'</div>'
+    +(late ? '' : '<button class="btn gold w rp-send" onclick="rpRetryImgs(this)"><i class="ti ti-photo-up"></i> ส่งรูปอีกครั้ง / send the picture again</button>')
+    +'<button class="btn line w" style="margin-top:8px" onclick="_rpRetry=null;spSheetClose()">ปิด (ไม่ส่งรูป) / close without picture</button>');
+}
+function rpRetryImgs(btn){
+  if(!_rpRetry || _rpRetry.running) return; var job=_rpRetry; job.running=true; if(btn) btn.disabled=true;
+  rpUploadImgs(job.key, job.imgs, btn).then(function(failed){
+    job.running=false;
+    if(_rpRetry!==job) return;   // closed with "close without picture" meanwhile
+    _rpRetry=failed.length ? {key:job.key, imgs:failed} : null;
+    rpShowResult(failed, btn);
+    if(failed.length) toast('ยังส่งไม่ได้ ลองอีกครั้ง / still failing — try again', 4000);
+  });
 }
 function rpList(src){ return Object.keys(src||{}).map(function(k){ var r=src[k]||{}; if(!r._k) r._k=k; return r; }).filter(function(r){ return r && r.ts; }).sort(function(a,b){ return (b.ts||0)-(a.ts||0); }); }
 function rpLast(r){ return Math.max(+((r.reply||{}).ts)||0, +r.doneAt||0); }
@@ -2206,19 +2285,41 @@ function rpSetStatus(key, s){
 }
 function rpDelete(key){
   if(!rpRec(key) || !confirm('ลบเรื่องนี้? / Meldung löschen?')) return;
-  var u={}; u[rpPath(key)]=null; u['sales/reportImg/'+key]=null;
+  var u={}; u[rpPath(key)]=null; u['sales/reportImg/'+key]=null; rpImgsDrop(key);
   R('').update(u).catch(function(e){ toast('Error: '+((e&&e.code)||e)); });
 }
+// Pictures load only when tapped (download quota), then stay LIVE: the partner writes the report first and
+// the pictures right after, so on slow mobile internet a picture can arrive seconds later (André 12.10.:
+// "show pictures" said "no picture" for good because an early, empty answer was cached).
+var _rpImgSub={};
 function rpLoadImgs(key){
-  var box=$('rpi-'+key.replace('/','__')); if(!box) return; box.innerHTML='⏳';
-  R('sales/reportImg/'+key).once('value').then(function(s){
-    var v=s.val()||{}, L=Object.keys(v).sort().map(function(i){ return v[i]; }).filter(function(d){ return typeof d==='string' && MK_IMG.test(d); });
-    _rpImgs[key]=L; box.innerHTML=rpImgsHtml(key);
-  }).catch(function(){ box.textContent='Error'; });
+  if(!rpRec(key)) return;
+  if(!_rpImgSub[key]){
+    var L0=[]; L0._loaded=false; _rpImgs[key]=L0;
+    _rpImgSub[key]=R('sales/reportImg/'+key);
+    _rpImgSub[key].on('value', function(s){
+      var v=s.val()||{}, L=Object.keys(v).sort().map(function(i){ return v[i]; }).filter(function(d){ return typeof d==='string' && MK_IMG.test(d); });
+      L._loaded=true; _rpImgs[key]=L; rpImgsPaint(key);
+    }, function(){ var L=[]; L._loaded=true; L._err=true; _rpImgs[key]=L; rpImgsPaint(key); });
+  }
+  rpImgsPaint(key);
 }
+function rpImgsPaint(key){ var box=$('rpi-'+key.replace('/','__')); if(box) box.innerHTML=rpImgsHtml(key); }
+var _rpImgT={};
+function rpImgsDrop(key){ clearTimeout(_rpImgT[key]); delete _rpImgT[key]; if(_rpImgSub[key]){ _rpImgSub[key].off(); delete _rpImgSub[key]; } delete _rpImgs[key]; }
 function rpImgsHtml(key){
-  var L=_rpImgs[key]||[];
-  return L.length ? L.map(function(d,i){ return '<img src="'+d+'"><button class="btn line sm" style="margin-top:4px" onclick="rpCopyImg(this,\''+key+'\','+i+')"><i class="ti ti-copy"></i> Bild kopieren</button>'; }).join('') : 'ไม่มีรูป / no picture';
+  var L=_rpImgs[key]||[], r=REPORTS[key]||{}, want=+r.imgs||0;
+  var h=L.map(function(d,i){ return '<img src="'+d+'"><button class="btn line sm" style="margin-top:4px" onclick="rpCopyImg(this,\''+key+'\','+i+')"><i class="ti ti-copy"></i> Bild kopieren</button>'; }).join('');
+  if(L._err) return h+'<div class="rp-wait">⚠ โหลดรูปไม่ได้ / could not load — <button class="btn line sm" onclick="rpImgsDrop(\''+key+'\');rpLoadImgs(\''+key+'\')">↻</button></div>';
+  if(!L._loaded) return '<div class="rp-wait">⏳ กำลังโหลดรูป… / loading…</div>';
+  if(L.length<want){
+    var left=(+r.ts||0)+RP_IMG_WIN-(Date.now()+_rpOff), fresh=left>0;
+    clearTimeout(_rpImgT[key]);
+    if(fresh) _rpImgT[key]=setTimeout(function(){ delete _rpImgT[key]; if(_rpImgSub[key]) rpImgsPaint(key); }, Math.min(left+5000, 2000000000));
+    h+='<div class="rp-wait">'+(fresh ? '⏳ รูปยังมาไม่ครบ ('+L.length+'/'+want+') — ขึ้นเองเมื่อตัวแทนส่งสำเร็จ / not arrived yet — appears by itself when the upload finishes'
+                                       : '⚠ รูปไม่มาถึง ('+L.length+'/'+want+') — ตัวแทนส่งรูปไม่สำเร็จ / picture never arrived')+'</div>';
+  }
+  return h || 'ไม่มีรูป / no picture';
 }
 // copy a picture as PNG so it can be pasted straight into the Claude chat
 function rpCopyImg(btn, key, i){
