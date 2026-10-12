@@ -18,8 +18,9 @@
 (function(){
   var EMAIL = 'kp-device@kp-wallpanel.firebaseapp.com';
   var ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';           // no 0/O/1/I/L — easy to type
-  function A(){ return firebase.auth(); }
-  function D(p){ return firebase.database().ref(p); }
+  // A page may pick another Firebase app (sales.html keeps owner/partner/test logins apart).
+  function A(){ return (window.KP_AUTH_APP||firebase).auth(); }
+  function D(p){ return (window.KP_AUTH_APP||firebase).database().ref(p); }
   function isDev(u){ return !!(u && !u.isAnonymous && String(u.email||'').toLowerCase()===EMAIL); }
   function norm(c){ return String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
   function fmtCode(c){ return norm(c).replace(/(.{4})(?=.)/g,'$1-'); }
