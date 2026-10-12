@@ -8,4 +8,5 @@ cp sales.html sales-site/index.html
 cp fragebogen.html sales-site/fragebogen.html
 cp sales-sw.js sales-site/sales-sw.js
 cp help.html sales-site/help.html
+cp help-en.html sales-site/help-en.html
 MSYS_NO_PATHCONV=1 firebase deploy --only hosting:kp-sales --project kp-wallpanel --non-interactive
