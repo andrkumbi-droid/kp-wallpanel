@@ -6728,7 +6728,7 @@ function stLogRender(){
       +'</div></div>';
   }).join('');
 }
-function saveSM(){const code=document.getElementById('sm-code').value.trim().toUpperCase();if(!code){alert('Enter a code');return;}const qty=parseInt(document.getElementById('sm-qty').value)||0,dmg=parseInt(document.getElementById('sm-dmg').value)||0,type=document.getElementById('sm-type').value,notes=document.getElementById('sm-notes').value,pcsPerCtn=parseInt(document.getElementById('sm-ctn-per').value)||0;if(editSM){const s=stockItems.find(x=>x.code===editSM);const _aQty=parseInt(s.qty)||0,_aDmg=parseInt(s.damaged)||0;const _o=window._smOpen||{a:_aQty,b:_aDmg};const d=qty-_o.a;const db=dmg-_o.b;s.qty=Math.max(0,_aQty+d);s.damaged=Math.max(0,_aDmg+db);if(d)stockTxn(s,'qty',d);if(db)stockTxn(s,'damaged',db);s.type=type;s.notes=notes;if(pcsPerCtn>0)s.pcsPerCtn=pcsPerCtn;if(d!==0)addLog(code+' '+(d>0?'+'+d:d)+' pcs',d>0?'+':'-');if(db!==0)addLog(code+' Grade B '+(db>0?'+'+db:db)+' pcs',db>0?'+':'-');
+function saveSM(){const code=document.getElementById('sm-code').value.trim().toUpperCase();if(!code){alert('Enter a code');return;}const qty=parseInt(document.getElementById('sm-qty').value)||0,dmg=parseInt(document.getElementById('sm-dmg').value)||0,type=document.getElementById('sm-type').value,notes=document.getElementById('sm-notes').value,pcsPerCtn=parseInt(document.getElementById('sm-ctn-per').value)||0;if(editSM){const s=stockItems.find(x=>x.code===editSM);const _aQty=parseInt(s.qty)||0,_aDmg=parseInt(s.damaged)||0;const _o=window._smOpen||{a:_aQty,b:_aDmg};const d=qty-_o.a;const db=dmg-_o.b;s.qty=Math.max(0,_aQty+d);s.damaged=Math.max(0,_aDmg+db);if(d)stockTxn(s,'qty',d);if(db)stockTxn(s,'damaged',db);const _sl=stockItems.find(x=>x.code===editSM)||s;_sl.type=type;_sl.notes=notes;if(pcsPerCtn>0)_sl.pcsPerCtn=pcsPerCtn;if(d!==0)addLog(code+' '+(d>0?'+'+d:d)+' pcs',d>0?'+':'-');if(db!==0)addLog(code+' Grade B '+(db>0?'+'+db:db)+' pcs',db>0?'+':'-');
     // One audit line per save, saying what actually changed and by how much.
     // Grade C is not here on purpose — it is edited in the Stock tab's pre-cut area.
     if(d!==0||db!==0) stAudit('edit', code,
@@ -9255,7 +9255,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261011010;
+var KP_BUILD = 20261013001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -27549,12 +27549,15 @@ function poConvert(id){
      Bestellzeile "L44" fand die Lagerzeile "L044" nicht und buchte still
      nichts ab — die Ware war verkauft, der Bestand blieb stehen. Ausserdem
      ging Grade B und Grade C (Zuschnitt) auf Grade A. */
+  var _poMiss=[];
   li.forEach(function(x){
     if(['panel','lcorner','tedge','uedge','ttrim','utrim'].indexOf(x.type)<0) return;
     var _q=parseInt(x.qty)||0; if(!x.code || !_q) return;
-    stockBucketDeduct(x.code, _q, x.grade, x.cutLen);
+    // a line without stock row is flagged like in New Order — it used to vanish silently
+    if(!stockBucketDeduct(x.code, _q, x.grade, x.cutLen)) _poMiss.push(x.code);
     addLog(x.code+' -'+_q+' pcs'+(x.grade==='B'?' (B)':'')+' (order '+no+')','-');
   });
+  if(_poMiss.length) o._stockMiss=_poMiss;
   // mark pre-order converted (kept for history)
   p.status='converted'; p.convertedId=no; p.convertedAt=Date.now();
   try{ sheetsSyncPreOrders([p]); }catch(e){}
@@ -36596,17 +36599,20 @@ function clArrived(id) {
     if(existing) {
       existing.qty = (parseInt(existing.qty)||0) + qty;   // incoming is always Grade A
       stockTxn(existing, 'qty', qty);
-      if(per>0) existing.pcsPerCtn = per;
+      // stockTxn has just rebuilt stockItems (see clStockNewRow) — 'existing' is a detached
+      // copy now, so the carton size goes to the server by path, not onto that object.
+      if(per>0) clStockField(existing.code, 'pcsPerCtn', per);
       addLog(code+' +'+qty.toLocaleString()+' pcs (Container '+c.supplier+')','+');
     } else {
-      var _ni={code:code, type:type, qty:qty, damaged:0, notes:c.supplier};
+      var _ni={code:code, type:type, qty:qty, damaged:0, precut:0, notes:c.supplier};
       if(per>0) _ni.pcsPerCtn=per;
-      stockItems.push(_ni);
+      clStockNewRow(_ni);
       addLog(code+' added '+qty.toLocaleString()+' pcs (Container '+c.supplier+')','+');
     }
   });
   window.fbDB.ref('containerLog/'+id).set(c);
   syncStockItems();
+  clArrivedCheck(c);
   clRender();
   mgStock();
   // The truck has just been emptied — this is the one moment the counted cartons
@@ -36618,6 +36624,47 @@ function clArrived(id) {
         +'นับได้กี่ลัง · ใครมาลงของ · กี่โมงเสร็จ\nhow many cartons were counted, who unloaded, when it was done')) clChkOpen(id);
     },80);
   }
+}
+
+/* A NEW product from a container goes to the server at once, under its own key.
+   Until 13.10.2026 it only went into the local list and waited for syncStockItems()
+   after the loop — but stockTxn() for a later product that already had a row makes
+   Firebase fire the stockItems listener synchronously, and the listener rebuilds the
+   list from the server copy: every row still waiting was gone, without a trace and
+   without an error. Vladimir 13 + KYN 1 (10.10.) lost all 11 new products that way and
+   every sale of them deducted nothing. A transaction also merges with a row another
+   device created meanwhile instead of overwriting it. */
+function clStockNewRow(ni){
+  var key=_fbKey(ni.code);
+  if(!window.fbDB || !key){ stockItems.push(ni); return; }
+  window.fbDB.ref('stockItems/'+key).transaction(function(cur){
+    if(cur && typeof cur==='object'){
+      cur.qty=(parseInt(cur.qty)||0)+(parseInt(ni.qty)||0);
+      if(ni.pcsPerCtn) cur.pcsPerCtn=ni.pcsPerCtn;
+      if(!cur.code) cur.code=ni.code;
+      if(!cur.type) cur.type=ni.type;
+      return cur;
+    }
+    return ni;
+  });
+}
+function clStockField(code, field, val){
+  try{ if(window.fbDB && code) window.fbDB.ref('stockItems/'+_fbKey(code)+'/'+field).set(val); }catch(e){ console.error('clStockField', e); }
+}
+// After booking in: every product of the container must really be in the server's stock
+// list. If one is not, say so at once — the 10.10. loss stayed invisible for three days.
+function clArrivedCheck(c){
+  if(!window.fbDB || !c || !c.items) return;
+  setTimeout(function(){
+    window.fbDB.ref('stockItems').once('value', function(snap){
+      var have={}; Object.values(snap.val()||{}).forEach(function(r){ if(r && r.code) have[ofNormCode(r.code)]=1; });
+      var lost=c.items.filter(function(i){ return i && i.code && (parseInt(i.qty)||0)>0 && !have[ofNormCode(i.code)]; }).map(function(i){ return i.code; });
+      if(!lost.length) return;
+      try{ stAudit('arrive', lost.join(', '), '⚠️ NOT in stock after booking in · '+(c.supplier||'')+(c.containerNo?' '+c.containerNo:''), {containerId:c.id}); }catch(e){}
+      alert('⚠️ สินค้าบางรายการยังไม่เข้าสต็อก / some products are NOT in stock after booking in:\n\n'+lost.join(', ')
+        +'\n\nกรุณาแจ้ง André / please tell André (Office → Stock)');
+    });
+  }, 4000);
 }
 
 function clRenderStats() {
