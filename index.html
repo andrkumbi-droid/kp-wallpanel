@@ -1540,7 +1540,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
      no old one: the device is already unlocked and Management can read/reset it. -->
 <div id="kp-pinchg" onclick="if(event.target===this)kpClosePinChange()" style="display:none;position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.55);align-items:center;justify-content:center;padding:16px">
   <div style="width:100%;max-width:340px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:18px">
-    <div style="font-size:16px;font-weight:800;margin-bottom:2px">🔑 Change PIN / เปลี่ยนรหัส</div>
+    <div id="kp-pinchg-title" style="font-size:16px;font-weight:800;margin-bottom:2px">🔑 Change PIN / เปลี่ยนรหัส</div>
     <div id="kp-pinchg-who" style="font-size:12px;color:var(--text2);margin-bottom:14px"></div>
     <label class="fl" style="margin-top:0">New PIN (min 4 digits) / รหัสใหม่</label>
     <input type="number" id="kp-pinchg-new" inputmode="numeric" autocomplete="off" placeholder="••••" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text);font-size:16px">
@@ -4068,18 +4068,25 @@ function kpRenderMenu(){
 // Change my own PIN: the new one twice, no old one. Writes ONLY staffList/<id>/pin
 // instead of the whole list, so two people changing their PIN at the same time
 // cannot overwrite each other (and nothing else in the record is touched).
-function kpOpenPinChange(){
-  if(!kpUser){ alert('Please log in first / กรุณาเข้าสู่ระบบก่อน'); return; }
+// drFirst = a driver without a PIN on the login screen: nobody is logged in yet, so
+// the same window works on his staff record instead of kpUser (see drSelectStaff).
+var _kpPinFirst=null, _kpPinSaving=false;
+function kpOpenPinChange(drFirst){
+  _kpPinFirst=drFirst||null;
+  var u=_kpPinFirst||kpUser;
+  if(!u){ alert('Please log in first / กรุณาเข้าสู่ระบบก่อน'); return; }
   var w=document.getElementById('kp-pinchg'); if(!w) return;
+  var tt=document.getElementById('kp-pinchg-title');
+  if(tt) tt.textContent=_kpPinFirst?'🔑 Choose your PIN / ตั้งรหัสของคุณ':'🔑 Change PIN / เปลี่ยนรหัส';
   var who=document.getElementById('kp-pinchg-who');
-  if(who) who.textContent=kpName(kpUser.name||'')+(kpUser.role?' · '+kpUser.role:'');
+  if(who) who.textContent=kpName(u.name||'')+(u.role?' · '+u.role:'');
   document.getElementById('kp-pinchg-new').value='';
   document.getElementById('kp-pinchg-rep').value='';
   var m=document.getElementById('kp-pinchg-msg'); if(m){ m.style.display='none'; m.textContent=''; }
   w.style.display='flex';
   setTimeout(function(){ try{ document.getElementById('kp-pinchg-new').focus(); }catch(e){} },50);
 }
-function kpClosePinChange(){ var w=document.getElementById('kp-pinchg'); if(w) w.style.display='none'; }
+function kpClosePinChange(){ _kpPinFirst=null; var w=document.getElementById('kp-pinchg'); if(w) w.style.display='none'; }
 
 // ── MY PAY ──────────────────────────────────────────────────────────────────
 // Everybody may look at their own current month — the same numbers the office
@@ -4159,23 +4166,41 @@ function myPayRender(){
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ try{ kpRenderMenu(); kpUpdMenuUser(); }catch(e){} });
 else { try{ kpRenderMenu(); kpUpdMenuUser(); }catch(e){} }
 function kpSavePinChange(){
-  if(!kpUser) return;
+  var first=_kpPinFirst, u=first||kpUser;
+  if(!u || _kpPinSaving) return;
   var a=(document.getElementById('kp-pinchg-new').value||'').trim();
   var b=(document.getElementById('kp-pinchg-rep').value||'').trim();
   var m=document.getElementById('kp-pinchg-msg');
   function say(t,col){ if(!m) return; m.style.display='block'; m.style.color=col; m.textContent=t; }
   if(!/^[0-9]{4,}$/.test(a)) return say('PIN must be at least 4 digits / รหัสต้องมีอย่างน้อย 4 หลัก','var(--red)');
   if(a!==b) return say('The two PINs do not match / รหัสไม่ตรงกัน','var(--red)');
+  // POS finds a person BY the PIN alone, so a duplicate books to the wrong name. No
+  // name in the message: a driver has no business learning whose PIN this is.
+  if(first && (staffList||[]).some(function(x){ return x && x.id!==first.id && String(x.pin==null?'':x.pin)===a; }))
+    return say('This PIN cannot be used — choose another / ใช้รหัสนี้ไม่ได้ เลือกรหัสอื่น','var(--red)');
+  // The window may have stood open while he set a PIN on another device: never replace it.
+  if(first){
+    var cur=(staffList||[]).find(function(x){ return x && x.id===first.id; });
+    if(cur && String(cur.pin==null?'':cur.pin).trim()!=='')
+      return say('A PIN is already set — log in with it / ตั้งรหัสแล้ว ใช้รหัสนั้นเข้าระบบ','var(--red)');
+  }
   if(!window.fbDB) return say('No connection — try again / ไม่มีสัญญาณ ลองใหม่','var(--red)');
-  var uid=kpUser.id, nm=kpUser.name||'';
+  var uid=u.id, nm=u.name||'';
+  // Without signal set() simply waits, so the window has to say so itself.
+  _kpPinSaving=true;
+  var slow=setTimeout(function(){ _kpPinSaving=false; say('No connection — try again / ไม่มีสัญญาณ ลองใหม่','var(--red)'); },8000);
   window.fbDB.ref('staffList/'+uid+'/pin').set(a).then(function(){
+    clearTimeout(slow); _kpPinSaving=false;
     if(kpUser && kpUser.id===uid) kpUser.pin=a;
     var s=(staffList||[]).find(function(x){ return x && x.id===uid; }); if(s) s.pin=a;
     try{ rebuildDrivers(); }catch(e){}   // driver login reads the pin from here
-    try{ auditAdd({type:'pin', action:'change', orderId:'🔑 '+nm, by:nm, detail:'Staff changed their own PIN'}); }catch(e){}
+    try{ auditAdd({type:'pin', action:'change', orderId:'🔑 '+nm, by:nm, detail:first?'Driver chose their first PIN':'Staff changed their own PIN'}); }catch(e){}
+    // Cancelled while the write was waiting for signal: somebody else may be on this
+    // device by now, so the late answer must not log anybody in.
+    if(first){ if(_kpPinFirst===first){ kpClosePinChange(); drPinLoginDone(first.driverId||first.id); } return; }
     say('PIN changed / เปลี่ยนรหัสแล้ว','var(--green)');
     setTimeout(kpClosePinChange, 1200);
-  }).catch(function(e){ say('Save failed / บันทึกไม่สำเร็จ','var(--red)'); });
+  }).catch(function(e){ clearTimeout(slow); _kpPinSaving=false; say('Save failed / บันทึกไม่สำเร็จ','var(--red)'); });
 }
 var staffList = [];
 var pinEntry = "";
@@ -6304,7 +6329,8 @@ function drEnter(){
   }
   var id=null; try{ id=localStorage.getItem('kp-driver-session'); }catch(e){}
   var d = id && (drivers||[]).find(function(x){return x.id===id;});
-  if(d){ drLogin(id); } else { document.getElementById('s-driver').classList.add('active'); drLoginRender(); }
+  // A driver without a PIN does not ride in on an old sticky login: picker → choose one.
+  if(d && String(d.pin==null?'':d.pin).trim()!==''){ drLogin(id); } else { document.getElementById('s-driver').classList.add('active'); drLoginRender(); }
 }
 // ← from the tour. Office/management → back to the driver picker (switch freely, as
 // before). A real driver → back to the main hub, KEEPING their sticky session.
@@ -9257,7 +9283,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261021002;
+var KP_BUILD = 20261105001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -29403,7 +29429,13 @@ function drSelectStaff(id){
   var d=(drivers||[]).find(function(x){return x.id===id;});
   var pin=(d&&d.pin!=null)?d.pin:null;
   if(pin==null){ var st=(staffList||[]).find(function(s){return s.isDriver&&((s.driverId||s.id)===id);}); if(st) pin=st.pin; }
-  if(pin==null || String(pin).trim()===''){ drLogin(id); return; }   // no PIN set → legacy direct login
+  if(pin==null || String(pin).trim()===''){
+    // No PIN yet → he picks his own before the first login, so nobody in the office has
+    // to know it and the name stops being an open door. Cancel stays on this screen.
+    var st0=(staffList||[]).find(function(s){return s.isDriver&&((s.driverId||s.id)===id);});
+    if(st0) kpOpenPinChange(st0); else drLogin(id);
+    return;
+  }
   pinMode='driver'; pinTargetDriverId=id; pinEntry='';
   var nm=document.getElementById('dr-pin-name'); if(nm) nm.textContent='Hello '+((d&&d.name)||'')+' / สวัสดี '+((d&&d.name)||'');
   document.getElementById('dr-login-step1').style.display='none';
@@ -29426,17 +29458,20 @@ function drCheckPin(){
   document.getElementById('dr-login-step1').style.display='block';
   document.getElementById('dr-login-step2').style.display='none';
   pinEntry='';
-  // A driver who typed their own PIN gets the same 4h session as everyone else,
-  // so the hub can offer any other space their staff record allows.
+  drPinLoginDone(pinTargetDriverId);
+}
+// A driver who typed (or just chose) their own PIN gets the same 4h session as everyone
+// else, so the hub can offer any other space their staff record allows.
+function drPinLoginDone(id){
   try{
-    var st=(staffList||[]).find(function(s){ return s.isDriver && ((s.driverId||s.id)===pinTargetDriverId); });
+    var st=(staffList||[]).find(function(s){ return s.isDriver && ((s.driverId||s.id)===id); });
     if(st){
       kpUser=st; kpActingAs=null; currentStaffId=st.id; try{ currentStaffName=st.name||''; }catch(e){}
       kpSessionSave(st);
       kpUpdMenuUser(); kpRenderMenu();
     }
   }catch(e){}
-  drLogin(pinTargetDriverId);
+  drLogin(id);
 }
 // Back from the driver PIN keypad to the name picker.
 function drLoginBack(){
