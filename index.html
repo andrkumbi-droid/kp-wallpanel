@@ -4068,11 +4068,12 @@ function kpRenderMenu(){
 // Change my own PIN: the new one twice, no old one. Writes ONLY staffList/<id>/pin
 // instead of the whole list, so two people changing their PIN at the same time
 // cannot overwrite each other (and nothing else in the record is touched).
-// drFirst = a driver without a PIN on the login screen: nobody is logged in yet, so
-// the same window works on his staff record instead of kpUser (see drSelectStaff).
-var _kpPinFirst=null, _kpPinSaving=false;
-function kpOpenPinChange(drFirst){
-  _kpPinFirst=drFirst||null;
+// drFirst = somebody without a PIN on a login screen: nobody is logged in yet, so the
+// same window works on that staff record instead of kpUser (see drSelectStaff and
+// whSelectStaff). door = where they go afterwards: 'warehouse', otherwise the driver door.
+var _kpPinFirst=null, _kpPinDoor='', _kpPinSaving=false;
+function kpOpenPinChange(drFirst, door){
+  _kpPinFirst=drFirst||null; _kpPinDoor=door||'';
   var u=_kpPinFirst||kpUser;
   if(!u){ alert('Please log in first / กรุณาเข้าสู่ระบบก่อน'); return; }
   var w=document.getElementById('kp-pinchg'); if(!w) return;
@@ -4086,7 +4087,7 @@ function kpOpenPinChange(drFirst){
   w.style.display='flex';
   setTimeout(function(){ try{ document.getElementById('kp-pinchg-new').focus(); }catch(e){} },50);
 }
-function kpClosePinChange(){ _kpPinFirst=null; var w=document.getElementById('kp-pinchg'); if(w) w.style.display='none'; }
+function kpClosePinChange(){ _kpPinFirst=null; _kpPinDoor=''; var w=document.getElementById('kp-pinchg'); if(w) w.style.display='none'; }
 
 // ── MY PAY ──────────────────────────────────────────────────────────────────
 // Everybody may look at their own current month — the same numbers the office
@@ -4181,7 +4182,9 @@ function kpSavePinChange(){
   // The window may have stood open while he set a PIN on another device: never replace it.
   if(first){
     var cur=(staffList||[]).find(function(x){ return x && x.id===first.id; });
-    if(cur && String(cur.pin==null?'':cur.pin).trim()!=='')
+    // Record removed while the window stood open: writing the pin would create a nameless one.
+    if(!cur) return say('This name is no longer in the list / ไม่พบชื่อนี้ในระบบ','var(--red)');
+    if(String(cur.pin==null?'':cur.pin).trim()!=='')
       return say('A PIN is already set — log in with it / ตั้งรหัสแล้ว ใช้รหัสนั้นเข้าระบบ','var(--red)');
   }
   if(!window.fbDB) return say('No connection — try again / ไม่มีสัญญาณ ลองใหม่','var(--red)');
@@ -4194,10 +4197,17 @@ function kpSavePinChange(){
     if(kpUser && kpUser.id===uid) kpUser.pin=a;
     var s=(staffList||[]).find(function(x){ return x && x.id===uid; }); if(s) s.pin=a;
     try{ rebuildDrivers(); }catch(e){}   // driver login reads the pin from here
-    try{ auditAdd({type:'pin', action:'change', orderId:'🔑 '+nm, by:nm, detail:first?'Driver chose their first PIN':'Staff changed their own PIN'}); }catch(e){}
+    try{ auditAdd({type:'pin', action:'change', orderId:'🔑 '+nm, by:nm, detail:first?'Chose their first PIN':'Staff changed their own PIN'}); }catch(e){}
     // Cancelled while the write was waiting for signal: somebody else may be on this
     // device by now, so the late answer must not log anybody in.
-    if(first){ if(_kpPinFirst===first){ kpClosePinChange(); drPinLoginDone(first.driverId||first.id); } return; }
+    if(first){
+      if(_kpPinFirst===first){
+        var door=_kpPinDoor; kpClosePinChange();
+        if(door==='warehouse'){ pinMode='warehouse'; kpPinLoginDone(s||first); }
+        else drPinLoginDone(first.driverId||first.id);
+      }
+      return;
+    }
     say('PIN changed / เปลี่ยนรหัสแล้ว','var(--green)');
     setTimeout(kpClosePinChange, 1200);
   }).catch(function(e){ clearTimeout(slow); _kpPinSaving=false; say('Save failed / บันทึกไม่สำเร็จ','var(--red)'); });
@@ -4313,7 +4323,8 @@ function checkPin() {
   if(pinMode==='driver'){ drCheckPin(); return; }   // driver login has its own target + handler
   const s = staffList.find(x => x.id === pinTargetStaffId);
   if(!s) return;
-  if(pinEntry !== String(s.pin)) {
+  // !pinEntry: a record whose PIN is still empty must not open on an empty keypad.
+  if(!pinEntry || pinEntry !== String(s.pin)) {
     var errId = pinMode==='warehouse' ? 'wh-pin-error' : pinMode==='acct' ? 'ac-pin-error' : 'of-pin-error';
     var dispId = pinMode==='warehouse' ? 'wh-pin-display' : pinMode==='acct' ? 'ac-pin-display' : 'of-pin-display';
     var eEl=document.getElementById(errId); if(eEl) eEl.textContent='Wrong PIN / รหัสไม่ถูกต้อง ลองใหม่';
@@ -4321,6 +4332,10 @@ function checkPin() {
     var disp=document.getElementById(dispId); if(disp){ disp.style.background='#FEE2E2'; setTimeout(function(){ if(disp) disp.style.background=''; },600); }
     return;
   }
+  kpPinLoginDone(s);
+}
+// Right PIN typed, or a first PIN just chosen: session, then on through the door in pinMode.
+function kpPinLoginDone(s){
   currentStaffId = s.id;
   try{ currentStaffName = s.name; }catch(e){}
   kpUser = s; // SSO session — lets the user switch areas without re-entering PIN
@@ -9283,7 +9298,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261105001;
+var KP_BUILD = 20261106001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -11400,7 +11415,7 @@ function requireStaffPin(actionLabel){
   var entered = prompt('🔒 ' + (actionLabel||'') + '\n\nEnter your PIN to confirm / ใส่รหัส PIN เพื่อยืนยัน:');
   if(entered === null) return null;                 // cancelled
   entered = String(entered).trim();
-  var s = (staffList||[]).find(function(x){ return x && x.pin != null && String(x.pin) === entered; });
+  var s = entered && (staffList||[]).find(function(x){ return x && x.pin != null && String(x.pin) === entered; });
   if(!s){ alert('❌ Wrong PIN / รหัสไม่ถูกต้อง'); return null; }
   return s.name || 'Staff';
 }
@@ -29053,6 +29068,8 @@ function whSelectStaff(id){
   if(kpUser && kpCanImpersonate()){ kpEnterAs(s,'warehouse'); return; }
   pinMode = 'warehouse';
   pinTargetStaffId = id;
+  // No PIN yet: they choose their own, same window as the driver door.
+  if(s && String(s.pin==null?'':s.pin).trim()===''){ kpOpenPinChange(s,'warehouse'); return; }
   document.getElementById('wh-pin-name').textContent = 'Hello ' + (s?s.name:'') + ' / สวัสดี ' + (s?s.name:'');
   document.getElementById('wh-login-step1').style.display = 'none';
   document.getElementById('wh-login-step2').style.display = 'block';
@@ -29232,7 +29249,7 @@ function updatePackingAlert(){
 
 // Warehouse: capture one or more pack photos for an order.
 // Packer names (who physically packs the order) — multi-select per order.
-var PACKERS = ['Way Aung','Rack Khan (Pit)','Aung Lay','Mon','Mong','Soe','Lift','Amy','Petch','Sai','La','Uoo'];
+var PACKERS = ['Way Aung','Rack Khan (Pit)','Aung Lay','Mon','Mong','Soe','Lift','Amy','Petch','Sai','La','Uoo','Khun Than Aung','Khun Htun Hla'];
 var whPackerSel = {}; // orderId -> [names] selected during packing
 function whTogglePacker(id, btn){
   var nm = btn.getAttribute('data-name');
