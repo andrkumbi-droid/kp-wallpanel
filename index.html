@@ -174,6 +174,9 @@ textarea{resize:none}
 .abtn{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:var(--blue);background:none;border:1.5px dashed var(--blue-l);border-radius:var(--rs);padding:8px 12px;cursor:pointer;width:100%;margin-top:4px;-webkit-tap-highlight-color:transparent}
 .abtn-e{color:var(--orange);border-color:var(--orange)}
 .clipbox{background:var(--bg2);border-radius:var(--rs);padding:10px 12px;margin-top:10px}
+.noclip-btn{display:block;width:100%;min-height:44px;margin:0 0 10px;padding:8px 10px;border:1.5px dashed var(--border);border-radius:var(--rs);background:var(--bg);color:var(--text2);font-size:13px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.noclip-btn.on{border:1.5px solid var(--red);background:var(--red-l);color:var(--red-t)}
+#of-free-minus:disabled,#of-free-clips:disabled,#of-clip-packs:disabled,#co-free-minus:disabled,#co-free-clips:disabled,#co-clip-packs:disabled{opacity:.4}
 .clip-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .clip-extra{display:grid;grid-template-columns:1fr 80px 52px;gap:8px;align-items:center;padding-top:8px;border-top:1px solid var(--border)}
 .sumbox{background:var(--bg2);border-radius:var(--rs);padding:10px 12px;margin-top:10px}
@@ -2328,6 +2331,7 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
     <div id="of-edges"></div>
     <button type="button" class="abtn abtn-e" onclick="ofAddE()"><i class="ti ti-plus"></i> Add edge strip / เพิ่มขอบ</button>
     <div class="clipbox">
+      <button type="button" id="of-noclips" class="noclip-btn" aria-pressed="false" onclick="ofNoClipsToggle()">🚫 No clips / ไม่เอาคลิป</button>
       <div class="clip-row"><span style="font-size:13px"><i class="ti ti-tool" style="font-size:14px;vertical-align:-2px;margin-right:4px"></i>Free clips / คลิปฟรี</span><span style="font-size:13px;font-weight:600" id="of-free">0</span></div>
       <div class="clip-extra" style="margin-bottom:6px"><span style="font-size:12px;color:var(--text2)">Deduct free clips (−)<br>หักคลิปฟรี</span><input type="number" id="of-free-minus" min="0" placeholder="0" oninput="ofCalc()"><span style="font-size:12px;color:var(--text2);text-align:right">หัก</span></div>
       <div class="clip-extra" style="margin-bottom:6px"><span style="font-size:12px;color:var(--text2)">Free clips 🎁 (ฟรี)<br>คลิปของขวัญ</span><input type="number" id="of-free-clips" min="0" placeholder="0" oninput="ofCalc()"><span style="font-size:12px;color:var(--text2);text-align:right">ฟรี</span></div>
@@ -3582,7 +3586,10 @@ body.dark #kp-goal-bg .kpg{opacity:.75}
   <button type="button" class="abtn" onclick="coAddE()"><i class="ti ti-plus"></i> Add edge / เพิ่มขอบ</button>
 
   <div class="stit" style="font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 4px">Clips / คลิป</div>
+  <button type="button" id="co-noclips" class="noclip-btn" aria-pressed="false" onclick="coNoClipsToggle()">🚫 No clips / ไม่เอาคลิป</button>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div><label class="fl" style="margin-top:0">Free clips (auto) / คลิปฟรี</label><div id="co-free" style="font-size:15px;font-weight:700;padding:9px 0">0</div></div>
+    <div><label class="fl" style="margin-top:0">Deduct free clips (−) / หักคลิปฟรี</label><input type="number" id="co-free-minus" min="0" placeholder="0" oninput="coCalc()"></div>
     <div><label class="fl" style="margin-top:0">Clip packs ×199 / แพ็ค</label><input type="number" id="co-clip-packs" min="0" placeholder="0" oninput="coCalc()"></div>
     <div><label class="fl" style="margin-top:0">Free gift clips 🎁 / ฟรี (pcs)</label><input type="number" id="co-free-clips" min="0" placeholder="0" oninput="coCalc()"></div>
   </div>
@@ -9298,7 +9305,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261106001;
+var KP_BUILD = 20261107001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -11886,11 +11893,57 @@ function ofLogout(){
 var _ofShipManual=false;
 function ofShipEdit(){ _ofShipManual=true; ofCalc(); }
 function ofShipReset(){ _ofShipManual=false; ofCalc(); }
+/* ── Keine Clips ─────────────────────────────────────────────────────────────
+   Ein Kunde kann die Clips ablehnen. o.noClips haelt das fest; die Clip-Zeilen
+   fehlen dann in der Bestellung, also auch auf Rechnung, Packliste und TV.
+   Change Order und das Edit-Fenster bauen die Zeilen neu — bis 07.11.2026 stur
+   mit 10 je Paneel, dadurch kamen abgezogene Clips wieder (Order 1-314). Beide
+   lesen jetzt kpClipState(): was die Bestellung gerade hat, nicht was sie
+   haben koennte. deduct = wie viele der automatischen Clips abgezogen wurden. */
+function kpClipState(o){
+  var s={panels:0,auto:0,gift:0,packs:0,deduct:0,none:false};
+  ((o&&o.lineItems)||[]).forEach(function(li){
+    if(!li) return;
+    var q=parseInt(li.qty)||0;
+    // Zaehlt wie Change Order: ein H10 in der Paneelzeile der New-Order-Maske ist kein Paneel.
+    if(li.type==='panel'){ if(mirrorClassify(li.code)==='panel') s.panels+=q; }
+    else if(li.type==='free-clips'){ if(/🎁/.test(li.code||'')) s.gift+=q; else s.auto+=q; }   // Pre-Order schreibt das Geschenk als free-clips
+    else if(li.type==='free-gift-clips') s.gift+=q;
+    else if(li.type==='clips') s.packs+=q;
+  });
+  if(!s.auto && !s.gift) s.auto=parseInt(o&&o.clips)||0;      // aeltere Auftraege ohne Clip-Zeilen
+  // Der Haken streicht keine Packs oder Geschenk-Clips: die kann nur ein alter Tab danach
+  // eingetragen haben, und bezahlte Ware verschwindet hier nicht still.
+  s.none=(!!(o&&o.noClips) && !s.gift && !s.packs) || (s.panels>0 && !s.auto && !s.gift && !s.packs);
+  s.deduct=s.none?0:Math.max(0,s.panels*10-s.auto);
+  return s;
+}
+function kpNoClipsPaint(btnId,fieldIds,on,restore){
+  var b=document.getElementById(btnId);
+  if(b){
+    b.classList.toggle('on',on); b.setAttribute('aria-pressed',on?'true':'false');
+    b.textContent=on?'✓ 🚫 No clips for this order / ออเดอร์นี้ไม่เอาคลิป':'🚫 No clips / ไม่เอาคลิป';
+  }
+  // Wer sich vertippt und den Knopf wieder loest, bekommt Abzug, Geschenk und Packs zurueck.
+  fieldIds.forEach(function(id){
+    var e=document.getElementById(id); if(!e) return;
+    if(on){ e._kpWas=e.value; e.value=''; }
+    else { if(restore&&e._kpWas) e.value=e._kpWas; e._kpWas=''; }
+    e.disabled=on;
+  });
+}
+var _ofNoClips=false;
+function ofNoClipsSet(on,restore){
+  _ofNoClips=!!on;
+  kpNoClipsPaint('of-noclips',['of-free-minus','of-free-clips','of-clip-packs'],_ofNoClips,restore);
+  try{ ofCalc(); }catch(e){}
+}
+function ofNoClipsToggle(){ ofNoClipsSet(!_ofNoClips,true); }
 function ofCalc(){
   let pq=0,pp=0,ep=0;
   document.querySelectorAll('#of-panels .pline').forEach(l=>{const i=l.querySelectorAll('input');pp+=(parseFloat(i[2].value)||0)*(parseInt(i[1].value)||0);pq+=parseInt(i[1].value)||0;});
   document.querySelectorAll('#of-edges .eline').forEach(l=>{const i=l.querySelectorAll('input');ep+=(parseFloat(i[2].value)||0)*(parseInt(i[1].value)||0);});
-  const freeAuto=pq*10;
+  const freeAuto=_ofNoClips?0:pq*10;
   // Office can deduct from the auto free clips (customer wants fewer / none)
   const freeDeduct=Math.min(freeAuto, parseInt((document.getElementById('of-free-minus')||{}).value)||0);
   const freeNet=Math.max(0, freeAuto-freeDeduct);
@@ -11974,7 +12027,7 @@ function ofCalc(){
       if(oval) oval.textContent = Math.max(0, grandFinal-pre).toLocaleString('en-US')+' ฿';
     })();
     // Total clips = auto free + gift clips (packs don't count as individual clips)
-    const totalClips = freeAuto + freeGift;
+    const totalClips = freeNet + freeGift;
     const stcEl = document.getElementById('of-stc');
     const stcvEl = document.getElementById('of-stcv');
     if(stcEl) stcEl.style.display = totalClips > 0 ? 'flex' : 'none';
@@ -12753,10 +12806,10 @@ function ofCreate(){
     const code=inputs[0].value.trim().toUpperCase(),qty=parseInt(inputs[1].value)||0,price=parseFloat(inputs[2].value)||0;
     if(code&&qty){la.push(code+' × '+qty);lineItems.push({type:etype,code,qty,unitPrice:price,amount:price*qty});}
   });
-  const clipPacks=parseInt((document.getElementById('of-clip-packs')||{}).value)||0;
-  const freeGiftClips=parseInt((document.getElementById('of-free-clips')||{}).value)||0;
-  const freeDeduct=Math.min(tq*10, parseInt((document.getElementById('of-free-minus')||{}).value)||0);
-  const freeAutoNet=Math.max(0, tq*10-freeDeduct);
+  const clipPacks=_ofNoClips?0:parseInt((document.getElementById('of-clip-packs')||{}).value)||0;
+  const freeGiftClips=_ofNoClips?0:parseInt((document.getElementById('of-free-clips')||{}).value)||0;
+  const freeDeduct=_ofNoClips?0:Math.min(tq*10, parseInt((document.getElementById('of-free-minus')||{}).value)||0);
+  const freeAutoNet=_ofNoClips?0:Math.max(0, tq*10-freeDeduct);
   const clips=freeAutoNet+freeGiftClips;
   const discount=parseInt((document.getElementById('of-discount')||{}).value)||0;
   const grand=document.getElementById('of-st').textContent||'—';
@@ -12780,6 +12833,7 @@ function ofCreate(){
   const o={id:no,receiptNum:assignedReceiptNum,date:document.getElementById('of-date').value||new Date().toISOString().split('T')[0],zone,customer:document.getElementById('of-cust').value||'—',phone:document.getElementById('of-phone').value||'—',address:document.getElementById('of-addr').value||'—',province:(document.getElementById('of-province').value||'').trim(),location:document.getElementById('of-loc').value||'',panels:panStr,lcorner:lcStr,clips,boxes:Math.max(1,Math.ceil(tq/10)),total:grand,status:'new',notes:'',contact:ofContactVal(),deliveryRound:document.getElementById('of-deliveround').value||'',reqDate:document.getElementById('of-reqdate').value||'',reqNote:(document.getElementById('of-reqnote').value||'').trim(),custRaw:((document.getElementById('of-paste')||{}).value||'').trim(),createdBy,editedBy:'',lineItems,_stockDeducted:true,_editTs:Date.now(),
   priority:_ofPriority,priorityReason:_ofPriorityReason,priorityBy:_ofPriority?createdBy:'',priorityAt:_ofPriority?Date.now():0,
   statusLog:[{status:'new',time:ts,by:createdBy}]};
+  if(_ofNoClips || (tq>0 && !clips && !clipPacks)) o.noClips=true;
   // Prepayment taken while writing the order: money already in, so it lands as
   // paidAmount with the method that was PICKED — never a default, because a guessed
   // 'cash' on a bank transfer is exactly the kind of error nobody spots later. Covers
@@ -12864,7 +12918,7 @@ function ofCreate(){
   // A prepayment left in the box would silently attach itself to the NEXT order.
   var _pp=document.getElementById('of-prepaid'); if(_pp) _pp.value='';
   var _pm=document.getElementById('of-prepaid-method'); if(_pm) _pm.value='cash';
-  _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofReorderClose();}catch(e){}try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
+  _ofPreSlips=[]; try{ ofPreSlipRender(); }catch(e){}try{ofNoClipsSet(false);}catch(e){}document.getElementById('of-free-clips').value='';var _fm=document.getElementById('of-free-minus');if(_fm)_fm.value='';var _exL=document.getElementById('of-extra-label');if(_exL)_exL.value='';var _exP=document.getElementById('of-extra-price');if(_exP)_exP.value='';var _exC=document.getElementById('of-extracost');if(_exC)_exC.textContent='0 ฿';_ofDirectSold=false;_ofInstoreMode='';try{ofUpdateDirectSoldBtn();}catch(e){};document.getElementById('of-panels').innerHTML='<div class="pline"><input type="text" placeholder="KP009" oninput="this.value=this.value.toUpperCase();ofCalc()"><input type="number" min="0" placeholder="0" oninput="ofCalc()"><input type="number" min="0" placeholder="179" oninput="ofCalc()">'+gradeSelHTML('A')+'<button type="button" class="xbtn" onclick="rmLine(this)"><i class="ti ti-x"></i></button></div>';document.getElementById('of-edges').innerHTML='';document.getElementById('of-sum').style.display='block';document.getElementById('of-sres').style.display='none';document.getElementById('of-free').textContent='0';document.getElementById('of-clipcost').textContent='0 ฿';document.getElementById('of-date').value = kpTodayStr();try{ofReorderClose();}catch(e){}try{ofCalc();}catch(e){}  /* summary stays open → reset its numbers too */
   if(_ofPriority){ try{ pushSend('warehouse','⭐ Priority order: '+no, _ofPriorityReason||'Important order', {tag:'priority'}); }catch(e){} }
   _ofPriority=false;_ofPriorityReason='';try{ofUpdatePriorityBtn();}catch(e){}
   // POS draft approved → tell the tablet (it shows "✓ ออกเลข <no>") and bump the
@@ -13276,6 +13330,7 @@ function posPendFill(key){
   });
   if(!ph.children.length) ofAddP();
   var t=p.totals||{};
+  ofNoClipsSet(false);
   set('of-clip-packs',t.packs||''); set('of-free-clips',t.gift||''); set('of-free-minus',t.freeMinus||'');
   set('of-discount',t.discount||''); set('of-delivery',t.delivery||'');
   _ofShipManual = !!t.delivery;   // uebernommener Betrag zaehlt als gesetzt
@@ -13332,6 +13387,7 @@ function salesReqFill(id, r){
       else { ofAddE(); var le=eh.lastElementChild, ie=le.querySelectorAll('input'); var sel=le.querySelector('select'); if(sel) sel.value=li.type; ie[0].value=li.code; ie[1].value=li.qty; ie[2].value=li.unitPrice; }
     });
     if(!ph.children.length) ofAddP();
+    ofNoClipsSet(false);
     set('of-clip-packs', packs||''); set('of-discount','');
     set('of-delivery', (r.totals||{}).delivery||0); _ofShipManual=true;
     var note=document.getElementById('of-reorder-note');
@@ -13489,7 +13545,7 @@ function ofOrderCard(o, sfx){
   if(o.salesBrand) s += '<div style="font-size:12px;font-weight:800;color:#8a6d1f;background:#fbf3d9;border:1px solid #ecd78f;border-radius:var(--rs);padding:3px 9px;margin:3px 0;display:inline-block">🤝 '+(o.salesNo?_esc(o.salesNo)+' · ':'Sales: ')+_esc(o.salesBrand)+(o.salesSeller?' · '+_esc(o.salesSeller):'')+'</div> ';
   if(o._stockMiss && o._stockMiss.length && o.status!=='cancelled') s += '<div style="font-size:12px;font-weight:700;color:#dc2626;background:#fee2e2;border-radius:var(--rs);padding:4px 8px;margin:3px 0;display:inline-block">⚠ ไม่ได้หักสต็อก / stock NOT deducted: '+o._stockMiss.map(function(x){return _esc(String(x));}).join(', ')+' — รหัสไม่ตรงกับสต็อก / code not in the stock list</div>';
   s += '<div style="display:flex;align-items:flex-start;gap:8px;margin-top:4px">'
-    +'<div style="font-size:13px;flex:1;min-width:0">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':'')+(_clipPacks>0?' · 🛍️ '+_clipPacks+' คลิปแพ็ค / clip pack'+(_clipPacks>1?'s':''):'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+(o.bundle&&o.bundle>0?' <span style="background:#fff7ed;color:#ea580c;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">🧶 '+o.bundle+' มัด</span>':'')+'</div>'
+    +'<div style="font-size:13px;flex:1;min-width:0">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' · '+o.lcorner:'')+(o.clips&&o.clips>0?' · 📎 '+o.clips+' clips':'')+((o.noClips&&!(o.clips>0))?' · 🚫 No clips / ไม่เอาคลิป':'')+(_clipPacks>0?' · 🛍️ '+_clipPacks+' คลิปแพ็ค / clip pack'+(_clipPacks>1?'s':''):'')+(o.ctn&&o.ctn>0?' <span style="background:#DCFCE7;color:#16A34A;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">📦 '+o.ctn+' CTN</span>':'')+(o.bundle&&o.bundle>0?' <span style="background:#fff7ed;color:#ea580c;border-radius:12px;padding:2px 8px;font-size:11px;font-weight:600;margin-left:4px">🧶 '+o.bundle+' มัด</span>':'')+'</div>'
     +'<button type="button" class="btnsm" onclick="ofCopyPack(\''+o.id+'\',this)" title="Copy pack list / คัดลอก" style="flex-shrink:0;padding:4px 8px"><i class="ti ti-copy"></i></button>'
     // Same customer, new order — everything about them is already here.
     +(window.ofReadOnly?'':'<button type="button" class="btnsm" onclick="ofReorder(\''+o.id+'\')" title="สั่งซ้ำ ลูกค้าเดิม / Order again — same customer, new order number" style="flex-shrink:0;padding:4px 8px;font-size:13px;line-height:1">🔁</button>')
@@ -13988,6 +14044,7 @@ function ofReorder(id){
   // These belonged to that delivery, not to this one.
   ['of-deliveround','of-reqdate','of-reqnote','of-paste','of-free-clips','of-free-minus',
    'of-clip-packs','of-extra-label','of-extra-price','of-discount','of-delivery'].forEach(function(k){ set(k,''); });
+  ofNoClipsSet(false);
   _ofShipManual=false;   // neues Formular -> der Vorschlag greift wieder
   var d=document.getElementById('of-date'); if(d) d.value=kpTodayStr();
   // Same zone → and with it the next free number of that zone. An in-store-locked
@@ -20890,11 +20947,13 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
     else if(t==='lcorner'||t==='tedge'||t==='uedge'){ emLa.push(code+' × '+qty); }
     emItems.push(item);
   });
-  var emFreeGift=0;
+  var emFreeGift=0, emCs=kpClipState(o);
   (o.lineItems||[]).forEach(function(li){
-    if(li.type==='delivery'||li.type==='clips'||li.type==='free-gift-clips'){ emItems.push(li); if(li.type==='free-gift-clips') emFreeGift+=parseInt(li.qty)||0; }
+    var emGift=li.type==='free-gift-clips'||(li.type==='free-clips'&&/🎁/.test(li.code||''));
+    if(li.type==='delivery'||li.type==='clips'||emGift){ emItems.push(li); if(emGift) emFreeGift+=parseInt(li.qty)||0; }
   });
-  if(emTq>0) emItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)',qty:emTq*10,unitPrice:0,amount:0});
+  var emAuto=emCs.none?0:((emTq===emCs.panels||(emCs.panels>0&&!emCs.auto))?emCs.auto:Math.max(0,emTq*10-emCs.deduct));
+  if(emAuto>0) emItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)'+(emCs.deduct>0?' −'+emCs.deduct:''),qty:emAuto,unitPrice:0,amount:0});
   // Discount from the edit field (replaces any previous discount line) → lowers total
   var emExtra=kpExtraLine('em-extra-label','em-extra-price');
   if(emExtra) emItems.push(emExtra);
@@ -20903,7 +20962,7 @@ function saveEM(){const o=orders.find(x=>x.id===editId);if(!o)return;const old=o
   o.lineItems=emItems;
   o.panels=emPa.length?emPa.join(' · '):'—';
   o.lcorner=emLa.length?emLa.join(' · '):'—';
-  o.clips=emTq*10+emFreeGift;
+  o.clips=emAuto+emFreeGift;
   o.boxes=Math.max(1,Math.ceil(emTq/10));
   o.total=emItems.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0).toLocaleString('en-US')+' ฿';
   // Already-delivered order whose total changed (e.g. a discount added at payment):
@@ -20948,12 +21007,17 @@ function coDiffText(cr){
   }).join(', ');
 }
 function coProdText(items){
-  var pa=[],la=[];
+  var pa=[],la=[],pcs=0,packs=0;
   (items||[]).forEach(function(li){
     if(li.type==='panel')pa.push(li.code+' × '+li.qty+gradeTag(li.grade, li.cutLen));
     else if(li.type==='lcorner'||li.type==='tedge'||li.type==='uedge'||li.type==='ttrim'||li.type==='utrim')la.push(li.code+' × '+li.qty);
+    else if(li.type==='free-clips'||li.type==='free-gift-clips')pcs+=parseInt(li.qty)||0;
+    else if(li.type==='clips')packs+=parseInt(li.qty)||0;
   });
-  return pa.concat(la).join(' · ')||'—';
+  var out=pa.concat(la);
+  if(pcs>0)out.push('📎 '+pcs.toLocaleString()+' clips');
+  if(packs>0)out.push('🛍️ '+packs.toLocaleString()+' คลิปแพ็ค');
+  return out.join(' · ')||'—';
 }
 // Delivery-fee rule (matches the quote tool): under 25 panels → 400 ฿, ≥25 → free.
 var coShipManual=false;
@@ -20975,12 +21039,10 @@ function openCO(btn){
   var wrap=document.getElementById('co-lines'); wrap.innerHTML='';
   var edges=document.getElementById('co-edges'); edges.innerHTML='';
   var EDGE={lcorner:1,tedge:1,uedge:1,ttrim:1,utrim:1};
-  var clipPacks=0,giftClips=0,deliv=0,disc=0;
+  var deliv=0,disc=0;
   (o.lineItems||[]).forEach(function(li){
     if(li.type==='panel') coAddLine(li.code, li.unitPrice, li.qty, li.grade, li.cutLen);
     else if(EDGE[li.type]) coAddE(li.type, li.code, li.unitPrice, li.qty);
-    else if(li.type==='clips') clipPacks+=parseInt(li.qty)||0;
-    else if(li.type==='free-gift-clips') giftClips+=parseInt(li.qty)||0;
     else if(li.type==='delivery') deliv+=parseFloat(li.amount)||0;
     else if(li.type==='discount') disc-=parseFloat(li.amount)||0;   // stored negative
   });
@@ -20989,8 +21051,11 @@ function openCO(btn){
   var _ex=kpExtraOf(o);
   var exL=document.getElementById('co-extra-label'); if(exL) exL.value=_ex.label;
   var exP=document.getElementById('co-extra-price'); if(exP) exP.value=_ex.amount>0?_ex.amount:'';
-  document.getElementById('co-clip-packs').value=clipPacks||'';
-  document.getElementById('co-free-clips').value=giftClips||'';
+  var _cs=kpClipState(o);
+  document.getElementById('co-clip-packs').value=_cs.packs||'';
+  document.getElementById('co-free-clips').value=_cs.gift||'';
+  document.getElementById('co-free-minus').value=_cs.deduct||'';
+  coNoClipsSet(_cs.none);
   // Delivery: keep a custom fee as manual; auto-track it when it matches the rule.
   var sugg=coSuggestShip();
   coShipManual=(deliv>0 && deliv!==sugg);
@@ -20999,6 +21064,31 @@ function openCO(btn){
   document.getElementById('change-modal').classList.add('open');
 }
 function closeCO(){document.getElementById('change-modal').classList.remove('open');coId=null;}
+var _coNoClips=false;
+function coNoClipsSet(on,restore){
+  _coNoClips=!!on;
+  kpNoClipsPaint('co-noclips',['co-free-minus','co-free-clips','co-clip-packs'],_coNoClips,restore);
+}
+function coNoClipsToggle(){ coNoClipsSet(!_coNoClips,true); coCalc(); }
+/* Die Clips, die das Formular gerade verlangt — gerechnet wie beim Speichern.
+   Bleiben Paneele und Abzug gleich, bleibt auch die Stueckzahl der Bestellung:
+   nach einer Ruecknahme stehen dort mehr als 10 je Paneel, und das darf ein
+   reiner Preis-Change nicht still umschreiben. */
+function coClipPlan(o){
+  var cs=kpClipState(o), no=!!_coNoClips, tq=0;
+  document.querySelectorAll('#co-lines .pline').forEach(function(l){
+    var i=l.querySelectorAll('input'), c=String(i[0].value||'').trim().toUpperCase(), q=parseInt(i[1].value)||0;
+    if(c&&q&&mirrorClassify(c)==='panel') tq+=q;
+  });
+  var val=function(id){ return no?0:(parseInt((document.getElementById(id)||{}).value)||0); };
+  var typed=val('co-free-minus'), deduct=Math.min(tq*10,typed), gift=val('co-free-clips'), packs=val('co-clip-packs');
+  // Alles abgezogen bleibt auch bei mehr Paneelen null, sonst kaeme die Differenz zurueck.
+  var keep=!cs.none&&typed===cs.deduct&&(tq===cs.panels||(cs.panels>0&&!cs.auto));
+  var auto=no?0:(keep?cs.auto:Math.max(0,tq*10-deduct));
+  return {cs:cs,no:no,tq:tq,deduct:deduct,auto:auto,gift:gift,packs:packs,
+    oldPcs:cs.auto+cs.gift, newPcs:auto+gift,
+    changed:(auto+gift)!==(cs.auto+cs.gift)||packs!==cs.packs};
+}
 function coAddLine(code,price,qty,grade,cutLen){
   var wrap=document.getElementById('co-lines'); if(!wrap)return;
   var div=document.createElement('div'); div.className='pline';
@@ -21037,11 +21127,7 @@ function coGoodsChanged(){
   });
   var codes={}; Object.keys(oldMap).forEach(function(c){codes[c]=1;}); Object.keys(newMap).forEach(function(c){codes[c]=1;});
   Object.keys(codes).forEach(function(c){ if((oldMap[c]||0)!==(newMap[c]||0)) changed=true; });
-  var sumBy=function(pred,f){ return (o.lineItems||[]).reduce(function(s,li){ return pred(li)?s+(f(li)||0):s; },0); };
-  var clipPacks=parseInt((document.getElementById('co-clip-packs')||{}).value)||0;
-  var gift=parseInt((document.getElementById('co-free-clips')||{}).value)||0;
-  if(clipPacks!==sumBy(function(li){return li.type==='clips';},function(li){return parseInt(li.qty)||0;})) changed=true;
-  if(gift!==sumBy(function(li){return li.type==='free-gift-clips';},function(li){return parseInt(li.qty)||0;})) changed=true;
+  if(coClipPlan(o).changed) changed=true;
   return changed;
 }
 function coCalc(){
@@ -21053,6 +21139,8 @@ function coCalc(){
     var i=l.querySelectorAll('input'); sum+=(parseInt(i[1].value)||0)*(parseFloat(i[2].value)||0);
   });
   sum+=(parseInt((document.getElementById('co-clip-packs')||{}).value)||0)*199;
+  var _coO=orders.find(function(x){return x.id===coId;}), _coFree=document.getElementById('co-free');
+  if(_coO&&_coFree) _coFree.textContent=coClipPlan(_coO).auto.toLocaleString();
   // Delivery: auto-suggest by panel qty unless the user overrode the field.
   var shipEl=document.getElementById('co-delivery');
   if(shipEl && !coShipManual){ var s=coSuggestShip(); shipEl.value=s?s:''; }
@@ -21101,12 +21189,12 @@ function submitCO(){
     if(!code||!qty)return;
     newItems.push({type:etype,code:code,qty:qty,unitPrice:price,amount:price*qty});
   });
-  // Clips: paid packs (×199) + free gift clips — from the dedicated fields.
-  var clipPacks=parseInt((document.getElementById('co-clip-packs')||{}).value)||0;
-  freeGift=parseInt((document.getElementById('co-free-clips')||{}).value)||0;
+  // Clips: paid packs (×199), gift clips and the auto clips minus the deduction.
+  var cp=coClipPlan(o), clipPacks=cp.packs;
+  freeGift=cp.gift;
   if(clipPacks>0)newItems.push({type:'clips',code:'Clip Pack / คลิปแพ็ค',qty:clipPacks,unitPrice:199,amount:clipPacks*199});
   if(freeGift>0)newItems.push({type:'free-gift-clips',code:'Free Clips 🎁 / ของขวัญ',qty:freeGift,unitPrice:0,amount:0});
-  if(tq>0)newItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)',qty:tq*10,unitPrice:0,amount:0});
+  if(cp.auto>0)newItems.push({type:'free-clips',code:'Free Clips / คลิปฟรี (อัตโนมัติ)'+(cp.deduct>0?' −'+cp.deduct:''),qty:cp.auto,unitPrice:0,amount:0});
   // Delivery: recomputed from the (auto-suggested/editable) field.
   var deliv=parseFloat((document.getElementById('co-delivery')||{}).value)||0;
   if(deliv>0)newItems.push({type:'delivery',code:'Delivery / ค่าจัดส่ง',qty:1,unitPrice:deliv,amount:deliv});
@@ -21123,10 +21211,11 @@ function submitCO(){
   newItems.forEach(function(li){if(PROD[li.type])newMap[li.code]=(newMap[li.code]||0)+(parseInt(li.qty)||0);});
   var codes={};Object.keys(oldMap).forEach(function(c){codes[c]=1;});Object.keys(newMap).forEach(function(c){codes[c]=1;});
   var diff=[];Object.keys(codes).forEach(function(c){var ov=oldMap[c]||0,nv=newMap[c]||0;if(ov!==nv)diff.push({code:c,old:ov,'new':nv});});
+  // The warehouse reads this list to know what to take out or add, so clips belong on it.
+  if(cp.oldPcs!==cp.newPcs)diff.push({code:'Clips / คลิป',old:cp.oldPcs,'new':cp.newPcs});
+  if(cp.cs.packs!==clipPacks)diff.push({code:'Clip packs / คลิปแพ็ค',old:cp.cs.packs,'new':clipPacks});
   // A change can also be clips/gift/delivery/price-only (no panel/edge qty delta) — detect those too.
   var sumBy=function(list,pred,f){return (list||[]).reduce(function(s,li){return pred(li)?s+(f(li)||0):s;},0);};
-  var oldClipPacks=sumBy(o.lineItems,function(li){return li.type==='clips';},function(li){return parseInt(li.qty)||0;});
-  var oldGift=sumBy(o.lineItems,function(li){return li.type==='free-gift-clips';},function(li){return parseInt(li.qty)||0;});
   var oldDeliv=sumBy(o.lineItems,function(li){return li.type==='delivery';},function(li){return parseFloat(li.amount)||0;});
   var oldTotalNum=sumBy(o.lineItems,function(){return true;},function(li){return parseFloat(li.amount)||0;});
   var newTotalNum=sumBy(newItems,function(){return true;},function(li){return parseFloat(li.amount)||0;});
@@ -21135,12 +21224,12 @@ function submitCO(){
   var _oldEx=kpExtraOf(o), _newExLabel=((document.getElementById('co-extra-label')||{}).value||'').trim();
   var extraChanged=(Math.round(_oldEx.amount)!==Math.round(coExtra?coExtra.amount:0))
                    || (_newExLabel!==_oldEx.label);
-  var otherChange=(clipPacks!==oldClipPacks)||(freeGift!==oldGift)||(deliv!==oldDeliv)||extraChanged||(Math.round(newTotalNum)!==Math.round(oldTotalNum));
+  var otherChange=(deliv!==oldDeliv)||extraChanged||(Math.round(newTotalNum)!==Math.round(oldTotalNum));
   if(!diff.length&&!otherChange){alert('No changes / ไม่มีการเปลี่ยนแปลง');return;}
   // Did the GOODS change? Only then does the warehouse have to re-pack and confirm.
   // A price / discount / delivery-fee correction is money only — it is applied
   // straight away and never lands on the warehouse screen.
-  var goodsChanged=(diff.length>0)||(clipPacks!==oldClipPacks)||(freeGift!==oldGift);
+  var goodsChanged=diff.length>0;
   var who=(staffList.find(function(x){return x.id===currentStaffId;})||{}).name||'Office';
   // snapshot original BEFORE applying (for the warehouse before/after view)
   var oldItems=(o.lineItems||[]).map(function(li){return li;});
@@ -21155,7 +21244,8 @@ function submitCO(){
   o.lineItems=newItems;
   o.panels=pa.length?pa.join(' · '):'—';
   o.lcorner=la.length?la.join(' · '):'—';
-  o.clips=tq*10+freeGift;
+  o.clips=cp.newPcs;
+  if(cp.no || (tq>0 && !cp.newPcs && !clipPacks)) o.noClips=true; else delete o.noClips;
   o.boxes=Math.max(1,Math.ceil(tq/10));
   o.total=newItems.reduce(function(s,li){return s+(parseFloat(li.amount)||0);},0).toLocaleString('en-US')+' ฿';
   try{ deductOrderStock(o); syncStockItems(); syncPrecut(); }catch(e){}
@@ -21233,6 +21323,7 @@ var WHTX = {
   lbl_panels:    {th:'Panels / แผ่น', en:'Panels', my:'ပြားချပ်'},
   lbl_edges:     {th:'Edge strips', en:'Edge strips', my:'အနားသတ်'},
   lbl_clips:     {th:'Clips', en:'Clips', my:'ကလစ်'},
+  no_clips:      {th:'🚫 No clips / ไม่เอาคลิป', en:'🚫 No clips', my:'🚫 ကလစ် မထည့်ပါ'},
   btn_accept:    {th:'รับออเดอร์ / Accept', en:'Accept', my:'အော်ဒါ လက်ခံမည်'},
   all_packed:    {th:'All packed! / แพ็คครบแล้ว 🎉', en:'All packed! 🎉', my:'အားလုံး ထုပ်ပြီးပါပြီ 🎉'},
   no_packed:     {th:'No packed orders yet / ยังไม่มีออเดอร์ที่แพ็ค', en:'No packed orders yet', my:'ထုပ်ပြီး အော်ဒါ မရှိသေးပါ'},
@@ -21286,6 +21377,8 @@ function whClipPacks(o){
    und die Pack-Zeile nur, wenn es welche gibt. */
 function whClipRows(o){
   var pcs=whClipPcs(o), packs=whClipPacks(o);
+  if(o&&o.noClips&&!pcs&&!packs)
+    return '<div class="pkrow"><span class="pklbl" style="color:var(--red);font-weight:800">'+wtx('no_clips')+'</span></div>';
   return '<div class="pkrow"><span class="pklbl">'+wtx('lbl_clips')+'</span>'
        +   '<span class="pkval">'+pcs.toLocaleString()+'</span></div>'
        + (packs>0
@@ -21695,7 +21788,7 @@ function drReady(){
           '<div class="chklist">'+
           ckr('p',rc.p)+'<span class="chklbl">Panels / แผ่น</span><span class="chkval">'+o.panels+'</span></div>'+
           ckr('l',rc.l)+'<span class="chklbl">L-Corner</span><span class="chkval">'+(o.lcorner||'—')+'</span></div>'+
-          ckr('c',rc.c)+'<span class="chklbl">Clips</span><span class="chkval">'+((o.clips||0).toLocaleString())+'</span></div>'+
+          ckr('c',rc.c)+'<span class="chklbl">Clips</span><span class="chkval">'+((o.noClips&&!(o.clips>0))?'🚫 No clips / ไม่เอาคลิป':(o.clips||0).toLocaleString())+'</span></div>'+
           (o.ctn?'<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--green-bg);border-radius:var(--rs);margin-top:4px"><span style="font-size:13px;font-weight:700">📦 CTN</span><span style="font-size:16px;font-weight:800;color:var(--green)">'+o.ctn+' ลัง</span></div>':'')+(o.bundle?'<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#fff7ed;border-radius:var(--rs);margin-top:4px"><span style="font-size:13px;font-weight:700">🧶 Bundle</span><span style="font-size:16px;font-weight:800;color:#ea580c">'+o.bundle+' มัด</span></div>':'')+
           '</div></details>';
         html += '<button type="button" id="drck-load-'+o.id+'" '+(allChecked?'class="btn btng" onclick="drLoadBtn(this)" data-id="'+o.id+'"':'class="btn" style="opacity:0.4;cursor:not-allowed;background:#ccc;border-color:#ccc;color:#666" disabled')+'><i class="ti ti-truck"></i> Load on truck / ขึ้นรถ</button>';
@@ -21861,7 +21954,7 @@ function drTour(){
             +(d?'<div style="font-weight:600;margin-top:2px">'+d+'</div>':'')
           +'</div>';
         })()+
-        '<div style="font-size:13px;margin-bottom:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' &middot; '+o.lcorner:'')+(o.clips&&o.clips>0?' &middot; 📎 '+o.clips+' clips':'')+(o.ctn?' &middot; <span style="color:var(--green);font-weight:700">📦 '+o.ctn+' CTN</span>':'')+(o.bundle?' &middot; <span style="color:#ea580c;font-weight:700">🧶 '+o.bundle+' มัด</span>':'')+'</div>'+
+        '<div style="font-size:13px;margin-bottom:4px">'+o.panels+(o.lcorner&&o.lcorner!=='—'?' &middot; '+o.lcorner:'')+((liveO||o).clips>0?' &middot; 📎 '+(liveO||o).clips+' clips':'')+(o.ctn?' &middot; <span style="color:var(--green);font-weight:700">📦 '+o.ctn+' CTN</span>':'')+(o.bundle?' &middot; <span style="color:#ea580c;font-weight:700">🧶 '+o.bundle+' มัด</span>':'')+'</div>'+
         '<div class="crow"><i class="ti ti-user" style="font-size:13px;color:var(--text2)"></i><span style="font-size:13px">'+o.customer+'</span></div>'+
         '<div class="crow"><i class="ti ti-phone" style="font-size:13px;color:var(--text2)"></i><span>'+phoneLinks(o.phone,'var(--blue)')+'</span></div>'+
         '<div class="crow"><i class="ti ti-map-pin" style="font-size:13px;color:var(--text2)"></i><a class="clink" href="'+murl+'" target="_blank">'+o.address+'</a></div>'+
@@ -22443,7 +22536,7 @@ function openDeliveryModal(id, shipMode){
     var _rows = '';
     if(_src.panels && _src.panels!=='—')   _rows += _row('📦 Panels / แผ่น', _src.panels);
     if(_src.lcorner && _src.lcorner!=='—') _rows += _row('L / T / U · เส้น', _src.lcorner);
-    if(_src.clips)  _rows += _row('📎 Clips', (_src.clips).toLocaleString());
+    if(full.clips)  _rows += _row('📎 Clips', (full.clips).toLocaleString());
     if(_src.ctn)    _rows += _row('📦 CTN / ลัง', _src.ctn+' ลัง', 'var(--green)');
     if(_src.bundle) _rows += _row('🧶 Bundle / มัด', _src.bundle+' มัด', '#ea580c');
     _itemsEl.innerHTML = _rows
@@ -31805,6 +31898,7 @@ function qtToOrder(){
     ins[0].value=x.code; ins[1].value=x.qty; ins[2].value=x.price;
   });
   function set(id,v){ var e=document.getElementById(id); if(e) e.value=(v==null?'':v); }
+  ofNoClipsSet(false);
   set('of-clip-packs', packs||'');
   set('of-discount', disc||'');
   set('of-delivery', ship+extraShip);
