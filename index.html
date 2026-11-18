@@ -6805,7 +6805,7 @@ function delDM(){if(!confirm('Remove this driver?'))return;drivers=drivers.filte
 // Management view "End tour". It never archived the tour, so a tour ended here was
 // missing from the Drivers tab entirely — archiveTour is idempotent, so calling it
 // from both end paths is safe.
-function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!tourEndOpenGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndShipWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}try{tourAdvBook(t);}catch(e){}try{ tourReleaseLoaded(t); }catch(e){}var _rid=t&&t.id;var _oids=(t.orders||[]).slice();activeTours.splice(i,1);fbRemoveTour(_rid);try{var _ch=false;_oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; });if(_ch) syncOrders();}catch(e){}mgRender();ofRenderTour();syncTours();}
+function endTour(i){const t=activeTours[i];if(!lalaInfoGuard(t))return;if(!tourEndOpenGuard(t))return;if(!confirm('End '+t.driverName+"'s tour?"+tourEndPaySummary(t)+tourEndShipWarn(t)))return;if(!ofSlipGuard(t))return;try{ auditTour('end','🚚 '+t.driverName,'Tour ended · '+((t.orders&&t.orders.length)||0)+' orders'); }catch(e){}try{ archiveTour(t); }catch(e){}try{endTourPayroll(t);}catch(e){}try{tourAdvBook(t);}catch(e){}try{ tourReleaseLoaded(t); }catch(e){}var _rid=t&&t.id;var _oids=(t.orders||[]).slice();activeTours.splice(i,1);fbRemoveTour(_rid);try{var _ch=false;_oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; if(tourUnstampOrder(id, t.tid)) _ch=true; });if(_ch) syncOrders();}catch(e){}mgRender();ofRenderTour();syncTours();}
 
 function openRM(){document.getElementById('rm-id').value='';document.getElementById('rm-cust').value='';document.getElementById('rm-amt').value='';document.getElementById('rm-date').value = kpTodayStr();document.getElementById('rm-modal').classList.add('open');}
 function closeRM(){document.getElementById('rm-modal').classList.remove('open');}
@@ -9305,7 +9305,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261113001;
+var KP_BUILD = 20261118001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -11462,7 +11462,7 @@ function ofEndTourFromDetail() {
   fbRemoveTour(_rid);
   // Orders that were never delivered leave the tour with it → clear their driver
   // from the sheet's "Delivered by" (col AC). Delivered ones keep it.
-  try{ var _ch=false; _oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; }); if(_ch) syncOrders(); }catch(e){}
+  try{ var _ch=false; _oids.forEach(function(id){ if(ofSyncOrderDriver(id)) _ch=true; if(tourUnstampOrder(id, t.tid)) _ch=true; }); if(_ch) syncOrders(); }catch(e){}
   closeTourDetail();
   ofRenderTour();
   mgRender();
@@ -17441,6 +17441,20 @@ function tourStampOrders(t){
     if(o && o.tourNo!==t.tid) o.tourNo=t.tid;
   });
 }
+// The other direction: an order that leaves a tour WITHOUT being delivered on it
+// drops that tour's ID. Otherwise its card kept "261117-1 · 🚚 Jai" for a driver
+// who no longer had it (✕ ลบ on the tour card, 18.11.2026). Only OPEN orders (they
+// will go out again) lose it; delivered, shipped and cancelled ones keep it as the
+// tour's history. Only clears the ID of THIS tour, never one the order has since
+// been given by another tour.
+function tourUnstampOrder(orderId, tid){
+  var o=(orders||[]).find(function(x){return x.id===orderId;});
+  if(!o || !o.tourNo || (tid && o.tourNo!==tid)) return false;
+  if(['new','packing','ready','loaded'].indexOf(o.status)<0) return false;
+  if((o.statusLog||[]).some(function(e){ return e && e.status==='delivered'; })) return false;
+  delete o.tourNo;
+  return true;
+}
 function tourRegRec(id){ return (tourReg||{})[String(id||'')]||null; }
 // The name behind a tour ID. While the tour runs it comes off the tour itself;
 // afterwards from the registry, which keeps the ID's driver for good — an order
@@ -19894,8 +19908,10 @@ function rmFromTour(btn) { var tourId=btn.getAttribute("data-tid"), orderId=btn.
     activeTours = activeTours.filter(function(x){return x.id!==tourId;});
     fbRemoveTour(tourId);
   } else { try{ tourRegUpsert(t); }catch(e){} }
-  // Order is off the tour → its driver leaves the sheet's "Delivered by" too.
+  // Order is off the tour → its driver leaves the sheet's "Delivered by" too,
+  // and the tour ID + driver chip leave its order card.
   try{ ofSyncOrderDriver(orderId); }catch(e){}
+  try{ tourUnstampOrder(orderId, t.tid); }catch(e){}
   ofRenderTour();
   ofRenderOrders();
   syncTours();
