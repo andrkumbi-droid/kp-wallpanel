@@ -1209,7 +1209,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
    payFeed, orderPhotos, auditLog, pushQueue) so office/warehouse/kiosk
    pick everything up without changes. Season-scoped via PDB (v2/).
    ═══════════════════════════════════════════════════════════════════════ */
-var POS_BUILD='pos-1.6.9';
+var POS_BUILD='pos-1.7.0';
 document.getElementById('pos-ver').textContent=POS_BUILD;
 try{ document.getElementById('hist-ver').textContent=POS_BUILD; }catch(e){}
 var KP_DEV_ID='pos'+Math.random().toString(36).slice(2,9)+Date.now().toString(36);
@@ -3526,8 +3526,11 @@ function posCustSearch(){
     el.innerHTML='<div style="text-align:center;color:var(--text2);padding:26px;line-height:1.7">ไม่พบลูกค้าเบอร์นี้ / no customer with this number<br><small>ลูกค้าใหม่ — ขายได้ตามปกติ / a new customer, just sell as usual</small></div>';
     return;
   }
+  _custPick={};
   el.innerHTML=list.slice(0,8).map(function(c){
     var ords=c.orders.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+    var addrs=posCustAddrs(ords);
+    _custPick[c.phone]={name:c.name||'', addrs:addrs};
     return '<div class="opt-card" style="padding:14px 16px">'
       +'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">'
         +'<div><b style="font-size:17px">'+esc(c.name||'—')+'</b>'
@@ -3535,6 +3538,24 @@ function posCustSearch(){
         +'<div style="text-align:right"><div style="font-size:12.5px;color:var(--text2)">'+c.orders.length+' ครั้ง / orders</div>'
           +'<b class="num" style="font-size:16px">'+fmtB(c.total)+'</b></div>'
       +'</div>'
+      // Where the goods went before: newest first, each address once. With more
+      // than one, each gets its own button, so the seller picks the right one.
+      +(addrs.length
+        ? '<div style="margin-top:10px;border:1px solid var(--border);border-radius:12px;padding:6px 12px">'
+          +'<div style="font-size:12px;font-weight:700;color:var(--text2);padding-top:4px">📦 ที่อยู่จัดส่ง / delivery address</div>'
+          +addrs.slice(0,3).map(function(x,i){
+            return '<div style="display:flex;gap:10px;align-items:center;padding:7px 0'+(i?';border-top:1px dashed var(--border)':'')+'">'
+              +'<div style="flex:1;min-width:0;font-size:14px;line-height:1.5;white-space:pre-line;word-break:break-word">'+esc(x.a)
+                +(x.p && x.a.indexOf(x.p)<0 ? ' · <b>'+esc(x.p)+'</b>' : '')
+                +'<div style="font-size:11.5px;color:var(--text2)">'+(i===0?'ล่าสุด / latest':'เคยใช้ / used before')+(x.d?' · '+esc(x.d):'')+'</div></div>'
+              +(addrs.length>1
+                ? '<button class="btn btn-ghost press" style="flex-shrink:0;min-height:40px;padding:6px 12px;font-size:13px" onclick="posCustUse(\''+c.phone+'\','+i+')">ใช้ที่อยู่นี้ / use</button>'
+                : '')
+            +'</div>';
+          }).join('')
+          +(addrs.length>3?'<div style="font-size:12px;color:var(--text2);padding-bottom:4px">+ อีก '+(addrs.length-3)+' ที่อยู่ / more</div>':'')
+        +'</div>'
+        : '<div style="margin-top:8px;font-size:12.5px;color:var(--text2)">📦 ยังไม่มีที่อยู่จัดส่ง / no delivery address yet</div>')
       +'<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">'
         +ords.slice(0,8).map(function(o){
           var st=o.status==='delivered'?'<span class="st-pill st-delivered">ส่งแล้ว</span>'
@@ -3552,7 +3573,7 @@ function posCustSearch(){
         }).join('')
         +(ords.length>8?'<div style="font-size:12px;color:var(--text2);padding-top:6px">+ อีก '+(ords.length-8)+' ออเดอร์ / more</div>':'')
       +'</div>'
-      +'<button class="btn btn-gold press" style="width:100%;margin-top:12px;min-height:50px" onclick="posCustUse(\''+c.phone+'\',\''+esc(String(c.name||'').replace(/['"\\]/g,''))+'\')">'
+      +'<button class="btn btn-gold press" style="width:100%;margin-top:12px;min-height:50px" onclick="posCustUse(\''+c.phone+'\',0)">'
         +'ใช้ลูกค้ารายนี้ / use this customer</button>'
     +'</div>';
   }).join('');
@@ -3561,12 +3582,37 @@ function fmtPhone(p){
   var d=normPhoneP(p);
   return d.length===10 ? d.slice(0,3)+'-'+d.slice(3,6)+'-'+d.slice(6) : d;
 }
-// carry the customer straight into the checkout form
-function posCustUse(phone, name){
+// The delivery addresses a customer's orders went to, newest first, each once.
+// A walk-in sale carries '—'; the province comes from the order, or from the
+// address the office app recognised (_addr.prov) on older orders without one.
+var _custPick={};
+function posCustAddrs(ords){
+  var seen={}, out=[];
+  ords.forEach(function(o){
+    var a=String(o.address||'').trim();
+    if(!a || a==='—' || a==='-') return;
+    var k=a.replace(/\s+/g,' ');
+    if(seen[k]) return; seen[k]=1;
+    out.push({ a:a, p:String(o.province||(o._addr&&o._addr.prov)||'').trim(), d:o.date||'' });
+  });
+  return out;
+}
+// carry the customer straight into the checkout form: name, phone and the
+// chosen delivery address (index ai, 0 = the latest) with its province
+function posCustUse(phone, ai){
+  var c=_custPick[phone]||{};
   $('ck-phone').value=phone;
-  if(name) $('ck-cust').value=name;
+  if(c.name) $('ck-cust').value=c.name;
+  var ad=(c.addrs||[])[ai||0];
+  if(ad){
+    $('ck-addr').value=ad.a;
+    if(ad.p) $('ck-province').value=ad.p;
+    try{ posZoneCheck(); }catch(e){}
+  }
+  try{ saveDraft(); }catch(e){}
   posCustClose();
-  toast('✓ ใส่ข้อมูลลูกค้าแล้ว / customer filled in');
+  toast(ad ? '✓ ใส่ชื่อ เบอร์ และที่อยู่แล้ว / name, phone + address filled in'
+           : '✓ ใส่ข้อมูลลูกค้าแล้ว / customer filled in');
 }
 
 /* ═══════════════ MY SALES + PENDING ═══════════════ */
