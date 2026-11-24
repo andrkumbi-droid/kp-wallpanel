@@ -9305,7 +9305,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261118001;
+var KP_BUILD = 20261124001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -10426,9 +10426,11 @@ function buildReceiptItems(order) {
 }
 
 function openReceiptBtn(btn) { openReceiptForOrder(btn.getAttribute("data-id")); }
+var _rcptOrderId = null;   // the order the receipt window is showing — doPrint prints this one
 function openReceiptForOrder(orderId) {
   const order = orders.find(x => x.id === orderId);
   if(!order) return;
+  _rcptOrderId = orderId;
 
   // Fill receipt fields
   // Use order's assigned receipt number, fallback to current
@@ -10496,80 +10498,104 @@ function closeReceiptModal() {
   document.getElementById('receipt-modal').classList.remove('open');
 }
 
-// A receipt is a fixed 145×200 mm box with overflow hidden, padded to 11 table rows.
-// A deposit (two more total rows), a long address or a notes line pushed REMAINING
-// and the signatures off the bottom (order #558, 09.11.2026). So: drop blank rows
-// until it fits; if the real rows alone are still too tall, shrink the content.
-function kpRcptFit(page){
-  if(!page) return;
-  var kids=[].slice.call(page.children);
-  kids.forEach(function(c){ c.style.zoom=''; });
-  var over=function(){ return page.scrollHeight>page.clientHeight+1; };
-  var empties=[].slice.call(page.querySelectorAll('tr.empty-row'));
-  while(over() && empties.length){ var r=empties.pop(); r.parentNode.removeChild(r); }
-  for(var k=0.95; over() && k>=0.6; k-=0.05){ kids.forEach(function(c){ c.style.zoom=k; }); }
+// ── RECEIPT = THE POS RECEIPT ───────────────────────────────────────────────
+// Since 24.11.2026 the office prints the very receipt the POS tablet prints
+// (pos.html receiptCore / receiptFromOrder): a plain list on A4, as long as the
+// order needs. The staff found it clearer than the old "บิลเงินสด / CASH SALE"
+// form, and that form's fixed 145×200 mm box with eleven ruled rows is what cut
+// order #558 off at the bottom. Same head, same columns, same footer — when one
+// of the two changes, change the other with it.
+// Additions the POS does not need: the delivery address and the order note
+// (both were on the old form, the driver hands this paper over at the door).
+var RECEIPT_POS_CSS =
+ "@page{margin:8mm}"
++"body{margin:0;background:#fff;color:#111;font-size:13px;padding:2mm;"
++"font-family:'Prompt','Leelawadee UI','Noto Sans Thai',system-ui,sans-serif}"
++".rc-sheet{page-break-after:always}.rc-sheet:last-child{page-break-after:auto}"
++".rc-head{text-align:center;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:10px}"
++".rc-head .kp{font-size:24px;font-weight:800;letter-spacing:1px}"
++".rc-head .tt{font-size:15px;font-weight:700;margin-top:2px}"
++".rc-head .sub{font-size:11px;color:#444}"
++"table{width:100%;border-collapse:collapse;margin:8px 0}"
++"th{text-align:left;border-bottom:1.5px solid #111;padding:4px 6px;font-size:12px}"
++"th:last-child,td:last-child{text-align:right}"
++"td{padding:4px 6px;border-bottom:1px dashed #bbb;vertical-align:top}"
++".num{font-variant-numeric:tabular-nums}"
++".rc-tot td{border-bottom:none;font-weight:800;font-size:16px;padding-top:8px}"
++".rc-meta{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;gap:8px}"
++".rc-foot{text-align:center;font-size:11px;color:#444;margin-top:14px;border-top:1px solid #ccc;padding-top:8px}";
+function _rcFmt(n){ return (Math.round((+n||0)*100)/100).toLocaleString('en-US'); }
+function _rcFmtB(n){ return _rcFmt(n)+' ฿'; }
+function _rcThDate(ymd){
+  var p=String(ymd||'').split('-');
+  return p.length===3 ? (+p[2])+'/'+(+p[1])+'/'+(+p[0]+543) : String(ymd||'');
+}
+function kpReceiptHTML(o, num){
+  var e=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var val=function(s){ s=String(s==null?'':s).trim(); return (s==='—'||s==='-')?'':s; };
+  // products first, then clip packs, free clips, extras, discount, delivery — the
+  // order the POS prints them in; within a group the order stays as entered
+  var rank=function(t){ return t==='clips'?1 : /^free/.test(t)?2 : t==='extra'?3 : t==='discount'?4 : t==='delivery'?5 : 0; };
+  var li=(o.lineItems||[]).map(function(x,i){ return {x:x||{},i:i}; })
+    .sort(function(a,b){ return (rank(a.x.type||'')-rank(b.x.type||'')) || (a.i-b.i); })
+    .map(function(a){ return a.x; });
+  var rows=[], sum=0;
+  li.forEach(function(x){
+    var amt=+x.amount||0, t=x.type||''; sum+=amt;
+    if(t==='discount'){
+      rows.push('<tr><td>ส่วนลด / Discount</td><td></td><td></td><td class="num">−'+_rcFmt(Math.abs(amt))+'</td></tr>'); return;
+    }
+    if(/^free/.test(t)){
+      rows.push('<tr><td>'+e(x.code||'คลิปฟรี / Free clips')+'</td><td class="num">'+_rcFmt(x.qty||0)+'</td><td>—</td><td>ฟรี</td></tr>'); return;
+    }
+    var nm='';
+    if(t==='panel'||t==='lcorner'||/trim|edge/.test(t)){
+      var k=ofNormCode(x.code);
+      var p=(window.QT_PRODUCTS||[]).find(function(q){ return q && ofNormCode(q.code)===k; });
+      nm=(p&&p.name)||'';
+    }
+    rows.push('<tr><td>'+e(x.code)+(x.grade&&x.grade!=='A'?' ('+e(x.grade)+')':'')
+      +(nm?'<br><span style="font-size:11px;color:#555">'+e(nm)+'</span>':'')+'</td>'
+      +'<td class="num">'+(x.qty!=null&&x.qty!==''?_rcFmt(x.qty):'')+'</td>'
+      +'<td class="num">'+_rcFmt(x.unitPrice||0)+'</td><td class="num">'+_rcFmt(amt)+'</td></tr>');
+  });
+  if(!li.length){   // very old orders: no line items, only the "KP036×20 · …" text
+    buildReceiptItems(o).forEach(function(r){
+      rows.push('<tr><td>'+e(r.desc)+'</td><td class="num">'+(r.qty?_rcFmt(r.qty):'')+'</td><td></td><td></td></tr>');
+    });
+  }
+  var grand=ofOrderTotalNum(o)||sum;
+  rows.push('<tr class="rc-tot"><td colspan="3">ยอดรวมทั้งหมด / GRAND TOTAL</td><td class="num">'+_rcFmtB(grand)+'</td></tr>');
+  var paid=Math.max(+o.paidAmount||0, +o.deposit||0), m=o.payMethod||o.payMethodPartial||'', payLine;
+  if(paid>0){
+    var mtxt = m==='split' ? ('💵 เงินสด '+_rcFmtB(o.paidCash||0)+' + 🏦 โอน '+_rcFmtB(o.paidOnline||0))
+             : m==='online' ? 'โอน / transfer' : 'เงินสด / cash';
+    payLine='ชำระแล้ว / paid: '+_rcFmtB(paid)+' ('+mtxt+')'
+      +(paid<grand-0.5?' · <b>คงเหลือ / remaining '+_rcFmtB(grand-paid)+'</b>':'');
+  } else {
+    payLine='<b>ยอดที่ต้องชำระ / amount due: '+_rcFmtB(grand)+'</b>';
+  }
+  var cust=val(o.customer), phone=val(o.phone), addr=val(o.address), note=val(o.notes);
+  return '<div class="rc-head"><div class="kp">KP WALLPANEL</div><div class="tt">ใบเสร็จรับเงิน / RECEIPT</div>'
+    +'<div class="sub">บริษัท พิมมิแกรนด์ จำกัด · โทร 063 749 8655 · kp-wallpanel.com</div></div>'
+    +'<div class="rc-meta"><span>เลขที่ใบเสร็จ / Receipt No: <b>'+e(num||'—')+'</b></span><span>ออเดอร์ / Order: <b>'+e(o.id||'')+'</b></span></div>'
+    +'<div class="rc-meta"><span>วันที่ / Date: '+e(_rcThDate(o.date))+'</span>'
+    +(cust?'<span>ลูกค้า / Customer: '+e(cust)+(phone?' · '+e(phone):'')+'</span>':'<span></span>')+'</div>'
+    +(addr?'<div class="rc-meta"><span>ที่อยู่ / Address: '+e(addr)+'</span></div>':'')
+    +(note?'<div class="rc-meta"><span>หมายเหตุ / Note: '+e(note)+'</span></div>':'')
+    +'<table><tr><th>รายการ / Item</th><th>จำนวน</th><th>฿/หน่วย</th><th>รวม</th></tr>'+rows.join('')+'</table>'
+    +'<div style="font-size:12.5px;margin-top:4px">'+payLine+'</div>'
+    +'<div class="rc-foot">ขอบคุณที่อุดหนุน / Thank you!<br>โอนชำระ: SCB ไทยพาณิชย์ · บริษัท พิมมิแกรนด์ จำกัด · 330-282-3788</div>';
 }
 
 function doPrint() {
   closeReceiptModal();
-  setTimeout(() => {
-    const rcpt = document.getElementById('print-receipt');
-    rcpt.style.display = 'block';
-    document.body.classList.remove('printing-delivery');
-    document.body.classList.add('printing-receipt');
-    // Add portrait style for receipt
-    let portraitStyle = document.getElementById('portrait-style');
-    if(portraitStyle) portraitStyle.remove();
-    portraitStyle = document.createElement('style');
-    portraitStyle.id = 'portrait-style';
-    portraitStyle.textContent = '@page { size: 145mm 200mm !important; margin: 0 !important; }';
-    document.head.appendChild(portraitStyle);
-    // Small delay to ensure render
-    setTimeout(() => {
-      try{ kpRcptFit(rcpt); }catch(e){}
-      window.print();
-      // After print dialog closes
-      setTimeout(() => {
-        rcpt.style.display = 'none';
-        document.body.classList.remove('printing-receipt');
-        const ps = document.getElementById('portrait-style');
-        if(ps) ps.remove();
-        // Number was already assigned when order was created - don't increment here
-      }, 1500);
-    }, 200);
-  }, 300);
-}
-
-// Build one full receipt page (markup string) for an order — used for bulk tour printing
-function buildReceiptPageHTML(order, num) {
-  var rNum = num != null ? num : (order.receiptNum || currentReceiptNum);
-  var d = order.date ? new Date(order.date + 'T00:00:00') : new Date();
-  var dateStr = d.toLocaleDateString('th-TH', {day:'numeric',month:'long',year:'numeric'});
-  var items = buildReceiptItems(order);
-  var totalRows = 11;
-  var itemsHTML = '';
-  items.forEach(function(item){
-    var qtyStr = (item.qty||0) > 0 ? (item.qty).toLocaleString() : '';
-    var priceStr = item.unitPrice && item.unitPrice !== '' ? item.unitPrice : '';
-    var amtStr = item.amount && item.amount !== '' ? item.amount : '';
-    itemsHTML += '<tr><td class="qty">'+qtyStr+'</td><td>'+item.desc+'</td><td class="price">'+priceStr+'</td><td class="amount">'+amtStr+'</td></tr>';
-  });
-  for(var i=items.length;i<totalRows;i++){ itemsHTML += '<tr class="empty-row"><td></td><td></td><td></td><td></td></tr>'; }
-  return '<div class="rcpt-page">'
-    +'<div class="rcpt-header"><div class="rcpt-logo">KP<span>Wallpanel</span></div>'
-    +'<div class="rcpt-company"><div class="rcpt-company-name">KP Wallpanel ไม้เทียมเกรดพรีเมี่ยม</div>'
-    +'<div class="rcpt-company-sub">1128/60 ถนนเลียบคลองรังสิต ต.ประชาธิปัตย์ อ.ธัญบุรี จ.ปทุมธานี 12130<br>เลขประจำตัวผู้เสียภาษีอากร 0 1355 53000 95 4 &nbsp;&nbsp; โทร. 063-749-8655</div></div></div>'
-    +'<div class="rcpt-title-row"><div class="rcpt-title">บิลเงินสด / CASH SALE</div>'
-    +'<div style="text-align:right"><div style="font-size:8pt;color:#ccc">เลขที่ / NO.</div><div class="rcpt-num">'+rNum+'</div></div></div>'
-    +'<div class="rcpt-info-row"><div class="rcpt-info-field" style="flex:2"><div class="rcpt-info-label">นาม / Customer</div><div class="rcpt-info-value">'+(order.customer||'')+'</div></div>'
-    +'<div class="rcpt-info-field" style="flex:1"><div class="rcpt-info-label">วันที่ / Date</div><div class="rcpt-info-value">'+dateStr+'</div></div></div>'
-    +'<div class="rcpt-info-row"><div class="rcpt-info-field" style="flex:2"><div class="rcpt-info-label">ที่อยู่ / Address</div><div class="rcpt-info-value">'+(order.address||'')+'</div></div>'
-    +'<div class="rcpt-info-field" style="flex:1"><div class="rcpt-info-label">เลขออเดอร์ / Order No.</div><div class="rcpt-info-value" style="font-weight:700;color:#000">'+(order.id||'')+'</div></div></div>'
-    +(function(){ var _nt=(order.notes||'').trim(); if(!_nt) return ''; return '<div class="rcpt-info-row"><div class="rcpt-info-field" style="flex:1"><div class="rcpt-info-label">หมายเหตุ / Notes</div><div class="rcpt-info-value">'+_nt+'</div></div></div>'; })()
-    +'<table class="rcpt-table"><thead><tr><th style="width:18mm">จำนวน<br>QUANTITY</th><th>รายการ<br>DESCRIPTION</th><th style="width:22mm">หน่วยละ<br>UNIT PRICE</th><th style="width:22mm">จำนวนเงิน<br>AMOUNT</th></tr></thead><tbody>'+itemsHTML+'</tbody></table>'
-    +'<div class="rcpt-total-row"><div class="rcpt-total-box"><div class="rcpt-total-label">รวมเงิน / TOTAL</div><div class="rcpt-total-value">'+(order.total||'')+'</div></div></div>'
-    +(function(){ var _dep=parseFloat(order.deposit)||0; if(_dep<=0) return ''; var _tot=parseFloat(String(order.total||'').replace(/[^0-9]/g,''))||0; return '<div class="rcpt-total-row"><div class="rcpt-total-box"><div class="rcpt-total-label">มัดจำ / DEPOSIT</div><div class="rcpt-total-value">-'+_dep.toLocaleString()+' ฿</div></div></div>'+'<div class="rcpt-total-row"><div class="rcpt-total-box"><div class="rcpt-total-label">คงเหลือ / REMAINING</div><div class="rcpt-total-value">'+Math.max(0,_tot-_dep).toLocaleString()+' ฿</div></div></div>'; })()
-    +'</div>';
+  var o=orders.find(function(x){ return x.id===_rcptOrderId; });
+  if(!o){ alert('Order not found / ไม่พบออเดอร์'); return; }
+  // Off-screen iframe, like every other print in the app — window.print() on the
+  // live page printed blank or cut off on phones.
+  printReceiptDoc('<div class="rc-sheet">'+kpReceiptHTML(o, o.receiptNum||currentReceiptNum)+'</div>',
+    RECEIPT_POS_CSS, '210mm', '297mm', 'KP-receipt-'+o.id);
 }
 
 // Receipts for a tour — the list first, then print. It used to be one Yes/No for
@@ -10630,12 +10656,12 @@ function trcptGo(ti){
     if(!o.receiptNum){ currentReceiptNum=(parseInt(currentReceiptNum)||0)+1; o.receiptNum=currentReceiptNum; changed=true; }
   });
   if(changed){ try{ syncOrders(); syncReceiptNum(); }catch(e){} }
-  var pages = ords.map(function(o){ return '<div class="rcpt-sheet">'+buildReceiptPageHTML(o, o.receiptNum)+'</div>'; }).join('');
+  var pages = ords.map(function(o){ return '<div class="rc-sheet">'+kpReceiptHTML(o, o.receiptNum)+'</div>'; }).join('');
   trcptClose();
   // Print from a dedicated off-screen iframe holding a full standalone document.
   // The old approach (body>* {display:none} + a live #print-all-receipts block) prints
   // blank on mobile Chrome/Safari; a self-contained iframe document is reliable everywhere.
-  printReceiptDoc(pages);
+  printReceiptDoc(pages, RECEIPT_POS_CSS, '210mm', '297mm', 'KP-receipts-'+(t.tid||t.id||'tour'));
 }
 // Receipt CSS mirrored from the main stylesheet, inlined into the print-iframe document
 // so the pages render standalone (parent @font-face / rules do NOT reach the iframe).
@@ -10963,7 +10989,6 @@ function _kpPrintFrame(docHTML, w, h, _t){
       try{ window.addEventListener('afterprint', function(){ setTimeout(_back, 2000); }, {once:true}); }catch(e){}
       setTimeout(_back, 30000);
     }
-    try{ [].forEach.call(iw.document.querySelectorAll('.rcpt-page'), kpRcptFit); }catch(e){}
     try{ iw.focus(); iw.print(); }catch(e){ try{ window.print(); }catch(_){} }
   }
   // Give the iframe a beat to lay out (fonts/tables) before printing.
@@ -21381,7 +21406,11 @@ var WHTX = {
   cancel_note_new:{th:'ออเดอร์ถูกยกเลิก — ยังไม่ได้แพ็ค แค่รับทราบ / Order cancelled — nothing packed, just acknowledge', en:'Order cancelled — nothing packed, just acknowledge', my:'အော်ဒါ ပယ်ဖျက်ပြီး — မထုပ်ရသေးပါ၊ သိမှတ်ရုံ'},
   cancel_accept: {th:'รับทราบ / Accept', en:'Accept', my:'လက်ခံမည်'},
   cancel_unpack: {th:'แกะออกแล้ว / Unpacked', en:'Unpacked ✓', my:'ပြန်ဖြုတ်ပြီး ✓'},
-  cancel_seen:   {th:'เห็นแล้ว / Seen', en:'Seen ✓', my:'တွေ့ပြီး ✓'}
+  cancel_seen:   {th:'เห็นแล้ว / Seen', en:'Seen ✓', my:'တွေ့ပြီး ✓'},
+  cancel_photo_need:{th:'📷 แกะฟิล์ม/กล่องออกแล้ว ถ่ายรูปก่อนกดยืนยัน / Photo of the unpacked goods first', en:'📷 Take a photo of the unpacked goods first', my:'📷 ပြန်ဖြုတ်ထားသော ပစ္စည်း ဓာတ်ပုံ အရင်ရိုက်ပါ'},
+  cancel_photo_have:{th:'✓ มีรูปแกะของแล้ว / unpack photo taken', en:'✓ Unpack photo taken', my:'✓ ပြန်ဖြုတ်ပုံ ရိုက်ပြီး'},
+  cancel_photo_btn: {th:'ถ่ายรูปของที่แกะแล้ว / Photo of unpacked goods', en:'Photo of unpacked goods', my:'ပြန်ဖြုတ်ထားသော ပစ္စည်း ဓာတ်ပုံရိုက်ရန်'},
+  cancel_photo_first:{th:'ต้องถ่ายรูปของที่แกะฟิล์ม/กล่องออกแล้วก่อน จึงกดยืนยันได้\nPlease take a photo of the unpacked goods first.', en:'Please take a photo of the unpacked goods first.', my:'ပြန်ဖြုတ်ထားသော ပစ္စည်း ဓာတ်ပုံ အရင်ရိုက်ပါ။'}
 };
 function wtx(k){ var e=WHTX[k]; if(!e) return k; return e[WH_LANG]||e.th; }
 
@@ -21564,16 +21593,36 @@ function whUnpack(id){const o=wOrders.find(x=>x.id===id);if(!o)return;o.packed=f
 // A cancelled order surfaces (silently, no sound) in the warehouse so staff can act
 // on the physical goods. mode: 'accept' (was packed → move to Packing to unpack),
 // 'unpack' (in Packing → confirm unpacked), 'seen' (never packed → just acknowledge).
+// Packed goods that come back must be unwrapped again (film, carton) before they go
+// back on the shelf — and mostly they were not. Since 24.11.2026 the warehouse can
+// only clear such a cancellation after a photo of the unpacked goods (orderPhotos
+// type 'unpack'). "Touched" = it was packed (ready/loaded) or packing had started;
+// an order cancelled while still untouched in To Pack is just acknowledged.
+function whCancelNeedsPhoto(o){
+  if(!o) return false;
+  if(o.cancelWasPacked || o.whCancelStage==='unpack') return true;
+  return (o.statusLog||[]).some(function(e){ return e && ['packing','ready','loaded'].indexOf(e.status)>=0; });
+}
 function whCancelCard(o, mode){
   var panels = (o.lineItems||[]).filter(function(i){return i.type==='panel';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
   var edges = (o.lineItems||[]).filter(function(i){return i.type==='lcorner'||i.type==='utrim'||i.type==='ttrim'||i.type==='uedge'||i.type==='tedge';}).map(function(i){return i.code+'×'+i.qty+gradeMarkHTML(i);}).join(', ')||'—';
-  var note = (mode==='seen') ? wtx('cancel_note_new') : wtx('cancel_note_packed');
-  var bStyle = 'background:#dc2626;color:#fff;border:none;margin-top:10px;width:100%;min-height:52px;font-size:15px;font-weight:700;-webkit-tap-highlight-color:transparent;touch-action:manipulation';
+  var needPh = mode!=='accept' && whCancelNeedsPhoto(o);
+  var pc = needPh ? orderPhotoCount(o.id,'unpack') : 0;
+  var note = (mode==='seen' && !needPh) ? wtx('cancel_note_new') : wtx('cancel_note_packed');
+  var bStyle = 'background:#dc2626;color:#fff;border:none;margin-top:10px;width:100%;min-height:52px;font-size:15px;font-weight:700;-webkit-tap-highlight-color:transparent;touch-action:manipulation'
+    + (needPh && !pc ? ';opacity:.45' : '');
   var btn = (mode==='accept')
     ? '<button type="button" class="btn" style="'+bStyle+'" onclick="whCancelAccept(this)" data-id="'+o.id+'"><i class="ti ti-hand-stop"></i> '+wtx('cancel_accept')+'</button>'
-    : (mode==='unpack')
+    : (mode==='unpack' || needPh)
       ? '<button type="button" class="btn" style="'+bStyle+'" onclick="whCancelDone(this)" data-id="'+o.id+'"><i class="ti ti-package-off"></i> '+wtx('cancel_unpack')+'</button>'
       : '<button type="button" class="btn" style="'+bStyle+'" onclick="whCancelDone(this)" data-id="'+o.id+'"><i class="ti ti-eye-check"></i> '+wtx('cancel_seen')+'</button>';
+  if(needPh){
+    btn = '<input type="file" accept="image/*" capture="environment" id="whccam-'+o.id+'" style="display:none" onchange="whCancelPhoto(this,\''+o.id+'\')">'
+      + '<div style="margin-top:10px;font-size:12.5px;font-weight:800;color:'+(pc?'#166534':'#991b1b')+'">'+(pc?wtx('cancel_photo_have')+' ('+pc+')':wtx('cancel_photo_need'))+'</div>'
+      + '<button type="button" class="btn" style="margin-top:6px;width:100%;min-height:48px;background:'+(pc?'#dcfce7':'#fef3c7')+';color:'+(pc?'#166534':'#92400e')+';border:none;font-weight:700" onclick="document.getElementById(\'whccam-'+o.id+'\').click()"><i class="ti ti-camera"></i> '+wtx('cancel_photo_btn')+(pc?' ('+pc+')':'')+'</button>'
+      + '<div id="whcprog-'+o.id+'" style="display:none;font-size:12px;color:var(--text2);text-align:center;margin-top:4px">'+wtx('uploading')+'</div>'
+      + btn;
+  }
   return '<div class="card" style="background:#fef2f2;border:2px solid #dc2626">'+
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
     '<span style="font-size:18px;font-weight:700;text-decoration:line-through;color:#991b1b">'+o.id+'</span>'+
@@ -21600,13 +21649,37 @@ function whCancelAccept(btn){
 // Warehouse confirms a cancelled order handled (unpacked or just seen) → clears it
 function whCancelDone(btn){
   var id=btn.getAttribute('data-id'); var o=orders.find(function(x){return x.id===id;}); if(!o) return;
+  var _needPh=whCancelNeedsPhoto(o), _pc=orderPhotoCount(id,'unpack');
+  if(_needPh && _pc<1){ alert(wtx('cancel_photo_first')); return; }
   o.whCancelAck=true; o.whCancelStage='done';
   o.whCancelAckBy=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Warehouse'; o.whCancelAckAt=Date.now();
   try{ auditAdd({type:'cancel',orderId:id,by:o.whCancelAckBy,
-    detail:(o.cancelWasPacked?'📦 แกะของแล้ว / unpacked and put back':'✔️ รับทราบการยกเลิก / cancellation acknowledged')
+    detail:(_needPh?'📦 แกะของแล้ว / unpacked and put back · 📷 '+_pc:'✔️ รับทราบการยกเลิก / cancellation acknowledged')
       +(o.packedBy&&o.packedBy!==o.whCancelAckBy?' · แพ็คโดย / packed by '+o.packedBy:'')}); }catch(e){}
   try{addLog('Cancelled order '+id+' acknowledged in warehouse','~');}catch(e){}
   try{whRender();}catch(e){} try{whRenderPacking();}catch(e){} syncOrders();
+}
+// Photo proof that a cancelled, packed order was unwrapped again (see whCancelNeedsPhoto).
+// Camera only — no gallery, so an old packing photo cannot stand in for it.
+function whCancelPhoto(input, id){
+  if(!input.files || !input.files.length) return;
+  var files=[].slice.call(input.files), left=files.length, okN=0;
+  var prog=document.getElementById('whcprog-'+id); if(prog) prog.style.display='block';
+  var staff=(typeof currentStaffName!=='undefined'&&currentStaffName)?currentStaffName:'Warehouse';
+  var fin=function(ok){
+    if(ok) okN++;
+    if(--left>0) return;
+    input.value='';
+    if(prog) prog.style.display='none';
+    if(!okN) alert('Upload failed — please try again / อัปโหลดไม่สำเร็จ ลองใหม่');
+    try{ whRender(); }catch(e){} try{ whRenderPacking(); }catch(e){}
+  };
+  files.forEach(function(f){
+    compressPhotoFile(f, function(dataUrl){
+      if(!dataUrl){ fin(false); return; }
+      addOrderPhoto(id, 'unpack', dataUrl, staff, fin);
+    });
+  });
 }
 
 // DRIVER
@@ -26640,7 +26713,8 @@ function orderPhotoCount(orderId, type){
 var OF_PHOTO_KINDS=[['warehouse','📦 คลัง / Warehouse','#16a34a'],
                     ['delivery','🚚 ส่งของ / Delivery','#1d4ed8'],
                     ['slip','💳 สลิปโอน / Transfer slip','#b45309'],
-                    ['shipreceipt','🧾 ใบเสร็จค่าส่ง / Shipping receipt','#4f46e5']];
+                    ['shipreceipt','🧾 ใบเสร็จค่าส่ง / Shipping receipt','#4f46e5'],
+                    ['unpack','📦❌ แกะของคืน (ยกเลิก) / Unpacked after cancel','#dc2626']];
 function ofPhotoCountAll(id){
   var n=0;
   OF_PHOTO_KINDS.forEach(function(k){ try{ n+=orderPhotoCount(id,k[0])||0; }catch(e){} });
@@ -26674,6 +26748,7 @@ function _ofPhotosRender(id,out){
   OF_PHOTO_KINDS.forEach(function(k){
     var data=out[k[0]]||{};
     var keys=Object.keys(data).sort(function(a,b){ return (data[a].ts||0)-(data[b].ts||0); });
+    if(k[0]==='unpack' && !keys.length) return;   // only cancelled orders have these
     total+=keys.length;
     h+='<div style="margin-bottom:12px">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:5px">'
@@ -32916,12 +32991,12 @@ function calcViz() {
     </div>
     <!-- Mini preview -->
     <div style="background:#f9f9f9;border:1px solid var(--border);border-radius:var(--rs);padding:12px;font-size:12px;color:var(--text)">
-      <div style="font-weight:700;font-size:13px;margin-bottom:6px">KP Wallpanel — บิลเงินสด / CASH SALE</div>
+      <div style="font-weight:700;font-size:13px;margin-bottom:6px">KP WALLPANEL — ใบเสร็จรับเงิน / RECEIPT</div>
       <div id="rcpt-preview-content" style="font-size:12px;line-height:1.8;color:var(--text2)"></div>
     </div>
     <div style="font-size:12px;color:var(--text2);margin-top:8px;margin-bottom:4px;text-align:center">
       <i class="ti ti-info-circle" style="font-size:12px;vertical-align:-1px"></i>
-      Set printer to 145×200mm / 100% scale
+      A4 · 100% scale
     </div>
     <div class="print-btn-row">
       <button type="button" class="btn btng" style="margin-top:0;flex:1;padding:13px" onclick="doPrint()"><i class="ti ti-printer"></i> Print / พิมพ์</button>
@@ -37073,7 +37148,8 @@ var KP_PHOTO_WHERE={
   delivery   :'🚚 ส่งของ / Delivery',
   slip       :'💳 สลิปโอน / Transfer slip',
   shipreceipt:'🧾 ใบเสร็จค่าส่ง / Shipping receipt',
-  preslip    :'💳 สลิปมัดจำ / Pre-order slip'
+  preslip    :'💳 สลิปมัดจำ / Pre-order slip',
+  unpack     :'📦❌ แกะของคืน / Unpacked after cancel'
 };
 function _photoWhere(t){ return KP_PHOTO_WHERE[t] || ('📷 '+(t||'photo')); }
 function _photoWho(){
