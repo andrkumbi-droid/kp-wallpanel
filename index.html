@@ -5975,7 +5975,7 @@ function skToQuote(){
     var p=(window.QT_PRODUCTS||[]).find(function(x){ return String(x.code).toUpperCase()===c; });
     var ex=qtItems.find(function(x){ return String(x.code).toUpperCase()===c; });
     if(ex){ ex.qty=(parseInt(ex.qty)||0)+tally[c]; }
-    else { var isPanel=p&&(p.mat==='WPC'||p.mat==='PVC'), isPVC=p&&p.mat==='PVC'; qtItems.push({id:++qtItemId, code:(p?p.code:c), qty:tally[c], customPrice:p?p.price:0, lcornerQty:0,lcornerPrice:89,hasLcorner:!!isPanel, tQty:0,tPrice:89,uQty:0,uPrice:89,hasTU:!!isPVC}); }
+    else { var isPanel=p&&(p.mat==='WPC'||p.mat==='PVC'), isPVC=p&&p.mat==='PVC', wt=(p&&p.mat==='WPC')?qtWpcTrim(p.code):null; qtItems.push({id:++qtItemId, code:(p?p.code:c), qty:tally[c], customPrice:p?p.price:0, lcornerQty:0,lcornerPrice:89,hasLcorner:!!isPanel, tQty:0,tPrice:wt?(+wt.price||89):89,uQty:0,uPrice:89,hasTU:!!isPVC, hasT:!!wt, tCode:wt?wt.code:''}); }
   });
   // marked trims → offer to add U-profiles for the finishing edges
   var st=skComputeStats();
@@ -7408,9 +7408,11 @@ function ofNormCode(code){
   if((m=c.match(/^L-?P-?(\d+)$/)))   return 'L-P-'+pad(m[1],2);
   if((m=c.match(/^KP-?(\d+)$/)))     return 'KP'+pad(m[1],3);
   if((m=c.match(/^L-?(\d+)$/)))      return 'L'+pad(m[1],2);
-  // Aus T-Trim wurde H-Profile (12.09.2026). Der Code faltet mit: alte Zeilen,
-  // alte Zettel und das Sheet sagen weiter T11 und finden trotzdem H11.
-  if((m=c.match(/^[TH]-?(\d+)$/)))   return 'H'+pad(m[1],2);
+  // T and H are one family: old lines, old notes and the sheet still say T11 and
+  // find H11. The letter follows the panel (Thai team, 25.11.2026): PVC = H
+  // (K-PVC-02…24 → H02…H24), WPC = T (KP053 → T53, KP078 → T78). The number
+  // ranges do not overlap today: PVC trims stay below 50, WPC trims start at 53.
+  if((m=c.match(/^[TH]-?(\d+)$/)))   return (parseInt(m[1],10)>=50?'T':'H')+pad(m[1],2);
   if((m=c.match(/^U-?(\d+)$/)))      return 'U'+pad(m[1],2);
   return c;
 }
@@ -7764,6 +7766,13 @@ function invLoadSnaps(cb){
   if(!window.fbDB){ cb&&cb(); return; }
   window.fbDB.ref('stockSnap').once('value').then(function(s){
     INV_SNAP=s.val()||{};
+    // Codes are stored normalised as on the day of the snapshot. Re-key them with
+    // today's rule so a renamed family still lines up (H53 → T53, 27.11.2026).
+    Object.keys(INV_SNAP).forEach(function(mk){
+      var r=INV_SNAP[mk]; if(!r || !r.codes) return; var c={};
+      Object.keys(r.codes).forEach(function(k){ var n=ofNormCode(k); c[n]=(c[n]||0)+(+r.codes[k]||0); });
+      r.codes=c;
+    });
     cb&&cb();
   }).catch(function(){ cb&&cb(); });
 }
@@ -9305,7 +9314,7 @@ function appRefresh(btn){
 // once by hand (the round KP button, bottom right).
 // Keep in step with BUILD in sw.js — that file's bytes must change too, otherwise the
 // browser never starts an update and the devices nobody touches stay on the old code.
-var KP_BUILD = 20261124001;
+var KP_BUILD = 20261127001;
 var _kpReloading = false;
 var _kpBannerBuild = 0, _kpBannerDismissed = 0;
 
@@ -31011,7 +31020,7 @@ var QT_PRODUCTS = [
     QT_PRODUCTS.push({code:c, name:'L-Corner WPC', price:89, w:0, mat:'ACC', profile:'L'});
   });
   ['H02','H03','H04','H05','H06','H07','H08','H09','H10','H11','H12','H13'].forEach(function(c){
-    QT_PRODUCTS.push({code:c, name:'H-Profile WPC', price:89, w:0, mat:'ACC', profile:'H'});
+    QT_PRODUCTS.push({code:c, name:'H-Profile PVC', price:89, w:0, mat:'ACC', profile:'H'});
   });
   ['U02','U03','U04','U05','U06','U44','U45'].forEach(function(c){
     QT_PRODUCTS.push({code:c, name:'U-Profile WPC', price:89, w:0, mat:'ACC', profile:'U'});
@@ -31053,17 +31062,17 @@ function qtRebuildProducts(){
 }
 
 // Trims from the stock list that the catalog does not have yet. Code as the office
-// writes it (T16 → H16, U044 → U44); codes that are no L/L-P/H/U profile are left out.
+// writes it (T16 → H16, H53 → T53, U044 → U44); codes that are no L/L-P/H/T/U profile are left out.
 function qtStockTrims(list){
   var have={}, out=[];
   (list||[]).forEach(function(p){ if(p&&p.code) have[ofNormCode(p.code)]=1; });
   (typeof stockItems!=='undefined'?stockItems:[]).forEach(function(s){
     if(!s || !s.code || ['lcorner','ttrim','utrim'].indexOf(s.type)<0) return;
     var n=ofNormCode(s.code), fam='';
-    if(/^L-P-\d+$/.test(n)) fam='LP'; else if(/^L\d+$/.test(n)) fam='L'; else if(/^H\d+$/.test(n)) fam='H'; else if(/^U\d+$/.test(n)) fam='U';
+    if(/^L-P-\d+$/.test(n)) fam='LP'; else if(/^L\d+$/.test(n)) fam='L'; else if(/^H\d+$/.test(n)) fam='H'; else if(/^T\d+$/.test(n)) fam='T'; else if(/^U\d+$/.test(n)) fam='U';
     if(!fam || have[n]) return;
     have[n]=1;
-    out.push({code:n, name:{L:'L-Corner WPC', LP:'L-Corner PVC', H:'H-Profile', U:'U-Profile'}[fam], price:89, w:0, mat:'ACC', profile:fam, _fromStock:true});
+    out.push({code:n, name:{L:'L-Corner WPC', LP:'L-Corner PVC', H:'H-Profile PVC', T:'T-Profile WPC', U:'U-Profile'}[fam], price:89, w:0, mat:'ACC', profile:fam, _fromStock:true});
   });
   return out;
 }
@@ -31163,7 +31172,7 @@ function publishChatCatalog(){
     var profiles={};
     items.forEach(function(it){
       var k=it.profile; if(!k || profiles[k]) return;
-      var d=(k==='trim') ? {label:'ขอบ L · H · U', en:'Edge profiles', sub:'', mat:'ACC'} : QT_PROFILES[k]; if(!d) return;
+      var d=(k==='trim') ? {label:'ขอบ L · H · T · U', en:'Edge profiles', sub:'', mat:'ACC'} : QT_PROFILES[k]; if(!d) return;
       profiles[k]={label:d.label||k, en:d.en||'', sub:d.sub||'', mat:d.mat||it.mat};
     });
     try{ window.fbRootDb.ref('pub/chatCatalog').set({ items:items, n:items.length, profiles:profiles, updatedAt:Date.now() }); }catch(e){}
@@ -31284,7 +31293,8 @@ var QT_PROFILES = {
   'clip':   {label:'Clips',            en:'Cliplock',          sub:'',           mat:'ACC'},
   'L':      {label:'L-Corner',         en:'L-Corner WPC',      sub:'L01–L77',    mat:'ACC'},
   'LP':     {label:'L-P-Corner',       en:'L-Corner PVC',      sub:'L-P-03…13',       mat:'ACC'},
-  'H':      {label:'H-Profile',         en:'H-Profile WPC',     sub:'H02–H13',    mat:'ACC'},
+  'H':      {label:'H-Profile',         en:'H-Profile PVC',     sub:'H02–H24',    mat:'ACC'},
+  'T':      {label:'T-Profile',         en:'T-Profile WPC',     sub:'T53 · T78–T82', mat:'ACC'},
   'U':      {label:'U-Trim',           en:'U-Profile WPC',     sub:'U02–U45',    mat:'ACC'},
 };
 
@@ -31653,9 +31663,11 @@ function qtSelectProduct(code) {
   if(!p) return;
   var isPanel = p.mat==='WPC'||p.mat==='PVC';
   var isPVC   = p.mat==='PVC';
+  var wt = p.mat==='WPC' ? qtWpcTrim(p.code) : null;
   qtItems.push({id:++qtItemId, code:p.code, qty:25, customPrice:p.price,
     lcornerQty:0, lcornerPrice:89, hasLcorner:isPanel,
-    tQty:0, tPrice:89, uQty:0, uPrice:89, hasTU:isPVC});
+    tQty:0, tPrice:wt?(+wt.price||89):89, uQty:0, uPrice:89, hasTU:isPVC,
+    hasT:!!wt, tCode:wt?wt.code:''});
   qtShipManual = false;   // a new line brings 25 pcs along — recalculate
   document.getElementById('qt-search').value = '';
   document.getElementById('qt-suggestions').innerHTML = '';
@@ -31785,6 +31797,15 @@ function qtRenderItems() {
           +'<input type="number" min="0" value="'+item.uPrice+'" oninput="qtItemChange('+item.id+',\'uPrice\',this.value)" class="finp" style="padding:4px 6px;font-size:12px"></div>'
           +'</div>'
         : '')
+      +(item.hasT
+        ? '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;display:grid;grid-template-columns:auto 1fr 1fr;gap:6px;align-items:center">'
+          +'<div style="font-size:11px;color:var(--text2);font-weight:700;white-space:nowrap">📏 '+_esc(item.tCode)+'</div>'
+          +'<div><label class="fl" style="margin-bottom:2px;font-size:10px">Qty</label>'
+          +'<input type="number" min="0" value="'+item.tQty+'" oninput="qtItemChange('+item.id+',\'tQty\',this.value)" class="finp" style="padding:4px 6px;font-size:12px" placeholder="0"></div>'
+          +'<div><label class="fl" style="margin-bottom:2px;font-size:10px">Price (฿) <span style="font-weight:400">(ปกติ 89฿)</span></label>'
+          +'<input type="number" min="0" value="'+item.tPrice+'" oninput="qtItemChange('+item.id+',\'tPrice\',this.value)" class="finp" style="padding:4px 6px;font-size:12px"></div>'
+          +'</div>'
+        : '')
       +'</div>'
       +'<div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">'
       +'<button type="button" onclick="qtShareProductImg(\''+p.code+'\',this)" style="background:var(--blue-bg);border:none;color:var(--blue);font-size:18px;cursor:pointer;padding:4px;border-radius:6px" title="Copy image / คัดลอกรูป"><i class="ti ti-copy"></i></button>'
@@ -31859,6 +31880,12 @@ function qtRenderResult() {
       subtotal += tTotal;
       lines.push('H-Profile '+item.code.replace('K-PVC-','H'));
       lines.push('   '+item.tQty+' เส้น × '+item.tPrice+'฿ = '+tTotal.toLocaleString()+'฿');
+    }
+    if(item.hasT && item.tQty > 0) {
+      var wtTotal = item.tQty * item.tPrice;
+      subtotal += wtTotal;
+      lines.push('T-Profile '+item.tCode);
+      lines.push('   '+item.tQty+' เส้น × '+item.tPrice+'฿ = '+wtTotal.toLocaleString()+'฿');
     }
     if(item.hasTU && item.uQty > 0) {
       var uTotal = item.uQty * item.uPrice;
@@ -31966,6 +31993,7 @@ function qtToOrder(){
     else if(q>0) panels.push({code:code, qty:q, price:pr});
     if(item.hasLcorner && item.lcornerQty>0) edge('lcorner', qtLcornerName(code), parseInt(item.lcornerQty)||0, +item.lcornerPrice||0);
     if(item.hasTU && item.tQty>0) edge('ttrim', code.replace('K-PVC-','H'), parseInt(item.tQty)||0, +item.tPrice||0);
+    if(item.hasT && item.tQty>0) edge('ttrim', item.tCode, parseInt(item.tQty)||0, +item.tPrice||0);
     if(item.hasTU && item.uQty>0) edge('utrim', code.replace('K-PVC-','U'), parseInt(item.uQty)||0, +item.uPrice||0);
   });
   var num=function(id){ return Math.max(0, parseFloat((document.getElementById(id)||{}).value)||0); };
@@ -32027,6 +32055,13 @@ function qtIsLcorner(code) {
   var p = QT_PRODUCTS.find(function(x){ return x.code===code; });
   if(p && (p.profile==='L' || p.profile==='LP')) return true;
   return /^L\d/i.test(code) || /^L-P-/i.test(code);
+}
+// A WPC panel's own T profile (KP053 → T53, KP078 → T078), when the catalogue or the
+// stock knows it; null otherwise. Numbers below 50 are PVC H profiles, never a T.
+function qtWpcTrim(code){
+  var m=/^KP0*(\d+)$/i.exec(String(code||'').trim()); if(!m) return null;
+  var key=ofNormCode('T'+m[1]); if(key.charAt(0)!=='T') return null;
+  return (QT_PRODUCTS||[]).find(function(x){ return x && x.mat==='ACC' && ofNormCode(x.code)===key; }) || null;
 }
 function qtLcornerName(code) {
   if(/^KP(\d+)$/i.test(code)) return 'L' + code.replace(/^KP/i,'');   // KP028 → L028
