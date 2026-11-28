@@ -916,14 +916,14 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
     </div>
 
     <div class="formcard hidden" id="card-delivery">
-      <h4>📦 ที่อยู่จัดส่ง <small style="color:var(--text2);font-weight:500">/ delivery address</small></h4>
+      <h4 id="addr-h">📦 ที่อยู่จัดส่ง <small style="color:var(--text2);font-weight:500">/ delivery address</small></h4>
       <div class="fgrid">
         <div class="full" id="f-addr"><label class="fl">ที่อยู่ <small>/ address</small></label><textarea id="ck-addr" rows="3" placeholder="บ้านเลขที่ หมู่ ตำบล อำเภอ"></textarea><div class="err-t">กรุณาใส่ที่อยู่จัดส่ง</div></div>
         <div id="f-prov"><label class="fl">จังหวัด <small>/ province</small></label><input type="text" id="ck-province" list="prov-list" placeholder="เช่น ลำปาง" oninput="posZoneCheck()"><datalist id="prov-list"></datalist><div class="err-t">กรุณาใส่จังหวัด</div></div>
         <!-- no maps-link field on the POS — the office adds the pin later in the app -->
         <div class="full"><div class="zone-note zone-warn" id="zone-note" style="display:none"></div></div>
-        <div><label class="fl">รอบจัดส่ง <small>(ไม่บังคับ)</small></label><input type="text" id="ck-round" placeholder="เช่น รอบเหนือ"></div>
-        <div><label class="fl">วันที่ลูกค้าต้องการ <small>(ไม่บังคับ)</small></label><input type="date" id="ck-reqdate"></div>
+        <div class="del-only"><label class="fl">รอบจัดส่ง <small>(ไม่บังคับ)</small></label><input type="text" id="ck-round" placeholder="เช่น รอบเหนือ"></div>
+        <div class="del-only"><label class="fl">วันที่ลูกค้าต้องการ <small>(ไม่บังคับ)</small></label><input type="date" id="ck-reqdate"></div>
       </div>
     </div>
 
@@ -1209,7 +1209,7 @@ input:focus,select:focus,textarea:focus{ border-color:var(--gold3); box-shadow:0
    payFeed, orderPhotos, auditLog, pushQueue) so office/warehouse/kiosk
    pick everything up without changes. Season-scoped via PDB (v2/).
    ═══════════════════════════════════════════════════════════════════════ */
-var POS_BUILD='pos-1.7.0';
+var POS_BUILD='pos-1.7.1';
 document.getElementById('pos-ver').textContent=POS_BUILD;
 try{ document.getElementById('hist-ver').textContent=POS_BUILD; }catch(e){}
 var KP_DEV_ID='pos'+Math.random().toString(36).slice(2,9)+Date.now().toString(36);
@@ -2396,12 +2396,20 @@ function posFulfil(f){
   ck.fulfil=f;
   $('ff-pickup').classList.toggle('on', f==='pickup');
   $('ff-delivery').classList.toggle('on', f==='delivery');
-  $('card-delivery').classList.toggle('hidden', f!=='delivery');
+  // The address card shows for an in-store sale too: the customer's address is
+  // kept on the order (and found again by phone), only optional and without the
+  // delivery round, wanted date and zone check.
+  $('card-delivery').classList.remove('hidden');
+  $('addr-h').innerHTML = f==='delivery'
+    ? '📦 ที่อยู่จัดส่ง <small style="color:var(--text2);font-weight:500">/ delivery address</small>'
+    : '🏠 ที่อยู่ลูกค้า <small style="color:var(--text2);font-weight:500">/ customer address (ไม่บังคับ / optional)</small>';
+  Array.prototype.forEach.call(document.querySelectorAll('#card-delivery .del-only'), function(el){ el.style.display = f==='delivery' ? '' : 'none'; });
+  if(f!=='delivery') $('zone-note').style.display='none';
+  fillProvList();
   $('cart-delivery-row').style.display = f==='delivery' ? 'flex' : 'none';
   $('cust-opt').textContent = f==='delivery' ? '' : '(ไม่บังคับ / optional)';
   ck.insMode='pack';   // in-store sales always go through packing
   if(f==='delivery'){
-    fillProvList();
     // auto delivery tariff like the quotation tool: ≥25 panels free, else 400 ฿
     var t=cartTotals();
     if($('cart-delivery').value===''){ $('cart-delivery').value = t.pq>=25 ? 0 : 400; }
@@ -2421,7 +2429,7 @@ function fillProvList(){
 function posZoneCheck(){
   var note=$('zone-note');
   var pv=($('ck-province').value||'').trim();
-  if(!pv){ note.style.display='none'; return ''; }
+  if(!pv || ck.fulfil!=='delivery'){ note.style.display='none'; return pv?provZone(pv):''; }
   var z=provZone(pv);
   note.style.display='flex';
   if(z){
@@ -2703,8 +2711,8 @@ function posCreate(){
   var o={
     date:todayStr(), zone:zone,
     customer:cust||'—', phone:phone||'—',
-    address: isDel ? ($('ck-addr').value||'—') : '—',
-    province: isDel ? ($('ck-province').value||'').trim() : '',
+    address: ($('ck-addr').value||'').trim() || '—',      // in-store too, when given
+    province: ($('ck-province').value||'').trim(),
     location:'',   // pin is added later by the office (ตรวจหมุด)
     panels: b.pa.length? b.pa.join(' · ') : '—',
     lcorner: b.la.length? b.la.join(' · ') : '—',
